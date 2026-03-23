@@ -16,9 +16,11 @@ permissions:
 
 env:
   IMAGE_NAME: tib-daail-evo1-poc-query-engine
+  IMAGE_REPOSITORY: docker.io/svabra/tib-daail-evo1-poc-query-engine
+  IMAGE_ARCHIVE: /tmp/tib-daail-evo1-poc-query-engine.tar
 
 jobs:
-  docker:
+  build:
     runs-on: ubuntu-latest
 
     steps:
@@ -29,7 +31,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: docker.io/${{ vars.DOCKERHUB_NAMESPACE || vars.DOCKERHUB_USERNAME || 'svabra' }}/${{ env.IMAGE_NAME }}
+          images: ${{ env.IMAGE_REPOSITORY }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=tag
@@ -38,34 +40,63 @@ jobs:
             org.opencontainers.image.title=${{ env.IMAGE_NAME }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 
-      - name: Log in to Docker Hub
-        if: github.event_name != 'pull_request'
-        uses: docker/login-action@v4
-        with:
-          username: ${{ vars.DOCKERHUB_USERNAME || 'svabra' }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Write Docker image tags
+        shell: bash
+        run: |
+          printf '%s\n' "${{ steps.meta.outputs.tags }}" > /tmp/docker-tags.txt
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Build Docker image
+      - name: Build Docker image archive
         uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64
-          load: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=docker,dest=${{ env.IMAGE_ARCHIVE }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Upload Docker image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: |
+            ${{ env.IMAGE_ARCHIVE }}
+            /tmp/docker-tags.txt
+          if-no-files-found: error
+          retention-days: 1
+
+  upload:
+    if: github.event_name != 'pull_request'
+    needs:
+      - build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download Docker image artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+          path: /tmp/docker-image
+
+      - name: Load Docker image archive
+        run: docker load -i /tmp/docker-image/tib-daail-evo1-poc-query-engine.tar
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: svabra
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Upload Docker image
-        if: github.event_name != 'pull_request'
         shell: bash
         run: |
           while IFS= read -r tag; do
             if [ -n "$tag" ]; then
               docker push "$tag"
             fi
-          done <<< "${{ steps.meta.outputs.tags }}"
+          done < /tmp/docker-image/docker-tags.txt
