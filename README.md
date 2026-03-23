@@ -44,6 +44,35 @@ Build with an explicit DuckDB version:
 docker build --build-arg DUCKDB_VERSION=1.5.0 -t tib-daail-evo1-poc-query-engine:1.5.0 .
 ```
 
+## Publish to Docker Hub
+
+GitHub Actions workflow:
+
+- [`.github/workflows/docker-publish.yml`](./.github/workflows/docker-publish.yml)
+
+Required GitHub repository settings:
+
+- Actions secret: `DOCKERHUB_TOKEN`
+- Actions variable: `DOCKERHUB_USERNAME`
+- Optional Actions variable: `DOCKERHUB_NAMESPACE`
+
+Image target:
+
+```text
+docker.io/<DOCKERHUB_NAMESPACE or DOCKERHUB_USERNAME>/tib-daail-evo1-poc-query-engine
+```
+
+Trigger behavior:
+
+- `push` to `main`: build and push
+- `push` of tags matching `v*`: build and push
+- `pull_request` to `main`: build only
+- `workflow_dispatch`: manual run
+
+Docker Hub repository visibility is controlled on Docker Hub.
+If the repository does not exist yet, `docker push` creates it with the namespace default repository privacy.
+For a public image, either create the repository as public first or set the namespace default repository privacy to public.
+
 ## Start the image
 
 Run the container and publish the DuckDB UI on port `4213`:
