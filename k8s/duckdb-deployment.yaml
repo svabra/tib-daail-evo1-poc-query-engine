@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tib-daail-evo1-poc-query-engine
+  namespace: daai-brs-d
+  labels:
+    app.kubernetes.io/name: tib-daail-evo1-poc-query-engine
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: tib-daail-evo1-poc-query-engine
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: tib-daail-evo1-poc-query-engine
+    spec:
+      containers:
+        - name: duckdb
+          image: docker.io/replace-me/tib-daail-evo1-poc-query-engine:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 4213
+          envFrom:
+            - configMapRef:
+                name: tib-daail-evo1-poc-query-engine-config
+            - secretRef:
+                name: tib-daail-evo1-poc-query-engine-secret
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+          readinessProbe:
+            httpGet:
+              path: /info
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /info
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+      volumes:
+        - name: workspace
+          emptyDir: {}

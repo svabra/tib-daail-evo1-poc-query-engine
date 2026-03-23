@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: tib-daail-evo1-poc-query-engine-config
+  namespace: daai-brs-d
+  labels:
+    app.kubernetes.io/name: tib-daail-evo1-poc-query-engine
+data:
+  DUCKDB_UI_PORT: "4213"
+  DUCKDB_DATABASE: /workspace/workspace.duckdb
+  DUCKDB_EXTRA_EXTENSIONS: httpfs,postgres
+  DUCKDB_EXTENSION_DIRECTORY: /workspace/.duckdb/extensions
+  S3_ENDPOINT: replace-me.example
+  S3_REGION: eu-central-1
+  S3_BUCKET: vat-smoke-test
+  S3_URL_STYLE: path
+  S3_USE_SSL: "true"
+  S3_STARTUP_VIEW_SCHEMA: s3
+  # Example:
+  # S3_STARTUP_VIEWS: vat_smoke=parquet:s3://vat-smoke-test/startup/vat_smoke.parquet
+  PG_HOST: replace-me-postgres-service
+  PG_PORT: "5432"
+  PG_OLTP_DATABASE: evo1_oltp
+  PG_OLAP_DATABASE: evo1_olap
