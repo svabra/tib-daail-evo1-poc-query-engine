@@ -16,7 +16,7 @@ permissions:
 
 env:
   IMAGE_NAME: tib-daail-evo1-poc-query-engine
-  IMAGE_REPOSITORY: docker-hub.nexus.bit.admin.ch/tib-daail-evo1-poc-query-engine
+  IMAGE_REPOSITORY: docker.io/svabra/tib-daail-evo1-poc-query-engine
   IMAGE_ARCHIVE: /tmp/tib-daail-evo1-poc-query-engine.tar
 
 jobs:
