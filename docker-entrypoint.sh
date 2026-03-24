@@ -3,26 +3,9 @@ set -euo pipefail
 
 run_ui() {
     local public_port="${DUCKDB_UI_PORT:-4213}"
-    local bind_address="${DUCKDB_UI_BIND_ADDRESS:-}"
+    local bind_address="${DUCKDB_UI_BIND_ADDRESS:-0.0.0.0}"
 
     mkdir -p /workspace
-
-    if [[ -z "${bind_address}" ]]; then
-        bind_address="$(python - <<'PY'
-import socket
-
-try:
-    print(socket.gethostbyname(socket.gethostname()))
-except Exception:
-    print("")
-PY
-)"
-    fi
-
-    if [[ -z "${bind_address}" || "${bind_address}" == "127.0.0.1" ]]; then
-        echo "Could not determine a non-loopback container IP for the DuckDB UI proxy." >&2
-        exit 1
-    fi
 
     python /usr/local/bin/start_duckdb_ui.py &
     local ui_pid=$!

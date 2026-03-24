@@ -18,7 +18,7 @@ spec:
       containers:
         - name: duckdb
           image: docker-hub.nexus.bit.admin.ch/svabra/tib-daail-evo1-poc-query-engine:latest
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: Always
           ports:
             - name: http
               containerPort: 4213
@@ -30,18 +30,27 @@ spec:
           volumeMounts:
             - name: workspace
               mountPath: /workspace
+          startupProbe:
+            httpGet:
+              path: /info
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
           readinessProbe:
             httpGet:
               path: /info
               port: http
-            initialDelaySeconds: 5
             periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /info
               port: http
-            initialDelaySeconds: 15
             periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
       volumes:
         - name: workspace
           emptyDir: {}
