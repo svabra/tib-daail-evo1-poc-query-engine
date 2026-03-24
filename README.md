@@ -27,6 +27,7 @@ For Kubernetes/OpenShift, the same connection values should come from `ConfigMap
 - Python 3.12
 - `duckdb` Python package
 - `duckdb-cli`
+- preinstalled DuckDB extensions: `ui`, `httpfs`, `postgres`
 - a small Python launcher that starts the DuckDB UI server
 - `socat`, to rebind the DuckDB UI port from loopback to the container's non-loopback interface without changing the browser-visible port
 

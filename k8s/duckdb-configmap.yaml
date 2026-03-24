@@ -9,7 +9,7 @@ data:
   DUCKDB_UI_PORT: "4213"
   DUCKDB_DATABASE: /workspace/workspace.duckdb
   DUCKDB_EXTRA_EXTENSIONS: httpfs,postgres
-  DUCKDB_EXTENSION_DIRECTORY: /workspace/.duckdb/extensions
+  DUCKDB_EXTENSION_DIRECTORY: /opt/duckdb/extensions
   S3_ENDPOINT: replace-me.example
   S3_REGION: eu-central-1
   S3_BUCKET: vat-smoke-test
