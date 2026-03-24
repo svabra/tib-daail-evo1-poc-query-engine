@@ -50,6 +50,7 @@ docker build --build-arg DUCKDB_VERSION=1.5.0 -t tib-daail-evo1-poc-query-engine
 GitHub Actions workflow:
 
 - [`.github/workflows/docker-publish.yml`](./.github/workflows/docker-publish.yml)
+- [`VERSION`](./VERSION) controls the short immutable release tag used for deployment
 
 Required GitHub repository settings:
 
@@ -69,6 +70,12 @@ Trigger behavior:
 - `push` of tags matching `v*`: build and push
 - `pull_request` to `main`: build only
 - `workflow_dispatch`: manual run
+
+Published tags:
+
+- `latest`
+- value from [`VERSION`](./VERSION), for example `0.1.0`
+- `sha-<git-sha>`
 
 Docker Hub repository visibility is controlled on Docker Hub.
 If the repository does not exist yet, `docker push` creates it with the namespace default repository privacy.
@@ -319,7 +326,7 @@ Before applying:
 - replace the placeholder secret values
 - replace the placeholder image reference in `k8s/duckdb-deployment.yaml`
 - replace `S3_ENDPOINT`, `PG_HOST`, `PG_OLTP_DATABASE`, `PG_OLAP_DATABASE`, and other environment values in `k8s/duckdb-configmap.yaml`
-- the deployment currently uses `emptyDir` for `/workspace`, so the local DuckDB database file is ephemeral unless you replace it with a PVC (as Jakob hot to order a PVC)
+- the deployment currently uses `emptyDir` for `/workspace`, so the local DuckDB database file is ephemeral unless you replace it with a PVC
 
 ## Environment Variable Consumption
 
@@ -378,7 +385,7 @@ The container supports a few runtime settings:
 ```text
 DUCKDB_DATABASE=/workspace/workspace.duckdb
 DUCKDB_UI_PORT=4213
-DUCKDB_EXTENSION_DIRECTORY=/workspace/.duckdb/extensions
+DUCKDB_EXTENSION_DIRECTORY=/opt/duckdb/extensions
 DUCKDB_EXTRA_EXTENSIONS=
 ```
 
