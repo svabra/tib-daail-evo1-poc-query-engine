@@ -6,6 +6,7 @@ metadata:
   labels:
     app.kubernetes.io/name: tib-daail-evo1-poc-query-engine
 data:
+  HOME: /tmp
   DUCKDB_UI_PORT: "4213"
   DUCKDB_DATABASE: /workspace/workspace.duckdb
   DUCKDB_EXTRA_EXTENSIONS: httpfs,postgres

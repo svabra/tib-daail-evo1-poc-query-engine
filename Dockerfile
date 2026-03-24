@@ -4,6 +4,7 @@ ARG DUCKDB_VERSION=1.5.0
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
+    HOME=/tmp \
     DUCKDB_DATABASE=/workspace/workspace.duckdb \
     DUCKDB_UI_PORT=4213 \
     DUCKDB_EXTENSION_DIRECTORY=/opt/duckdb/extensions
@@ -23,7 +24,7 @@ RUN pip install \
         "duckdb==${DUCKDB_VERSION}" \
         "duckdb-cli==${DUCKDB_VERSION}"
 
-RUN mkdir -p /opt/duckdb/extensions /root/.duckdb/extension_data
+RUN mkdir -p /opt/duckdb/extensions /tmp/.duckdb/extension_data
 
 RUN python - <<'PY'
 from pathlib import Path

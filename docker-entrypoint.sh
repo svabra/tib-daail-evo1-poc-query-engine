@@ -6,7 +6,10 @@ run_ui() {
     local bind_address="${DUCKDB_UI_BIND_ADDRESS:-0.0.0.0}"
     local proxy_target=""
 
+    export HOME="${HOME:-/tmp}"
+
     mkdir -p /workspace
+    mkdir -p "${HOME}/.duckdb/extension_data"
 
     python /usr/local/bin/start_duckdb_ui.py &
     local ui_pid=$!
