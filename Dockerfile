@@ -24,7 +24,8 @@ RUN pip install \
         "duckdb==${DUCKDB_VERSION}" \
         "duckdb-cli==${DUCKDB_VERSION}"
 
-RUN mkdir -p /opt/duckdb/extensions /tmp/.duckdb/extension_data
+RUN rm -rf /tmp/.duckdb \
+    && mkdir -p /opt/duckdb/extensions
 
 RUN python - <<'PY'
 from pathlib import Path
