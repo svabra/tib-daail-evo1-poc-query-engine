@@ -318,7 +318,7 @@ Before applying:
 - replace the placeholder secret values
 - replace the placeholder image reference in `k8s/duckdb-deployment.yaml`
 - replace `S3_ENDPOINT`, `PG_HOST`, `PG_OLTP_DATABASE`, `PG_OLAP_DATABASE`, and other environment values in `k8s/duckdb-configmap.yaml`
-- the deployment currently uses `emptyDir` for `/workspace`, so the local DuckDB database file is ephemeral unless you replace it with a PVC
+- the deployment currently uses `emptyDir` for `/workspace`, so the local DuckDB database file is ephemeral unless you replace it with a PVC (as Jakob hot to order a PVC)
 
 ## Environment Variable Consumption
 
