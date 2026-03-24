@@ -17,11 +17,35 @@ spec:
     spec:
       containers:
         - name: duckdb
-          image: docker-hub.nexus.bit.admin.ch/svabra/tib-daail-evo1-poc-query-engine:0.1.1
+          image: docker-hub.nexus.bit.admin.ch/svabra/tib-daail-evo1-poc-query-engine:0.1.2
           imagePullPolicy: Always
           ports:
             - name: http
               containerPort: 4213
+          resources:
+            requests:
+              cpu: "4"
+              memory: 8Gi
+            limits:
+              cpu: "32"
+              memory: 64Gi
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
           envFrom:
             - configMapRef:
                 name: tib-daail-evo1-poc-query-engine-config

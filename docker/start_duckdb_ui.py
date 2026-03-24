@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import re
 import signal
+import socket
 import sys
 import time
 from pathlib import Path
@@ -20,6 +21,97 @@ STOP = False
 def env(name: str, default: str) -> str:
     value = os.getenv(name, default).strip()
     return value or default
+
+
+def read_text_file(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+
+def format_bytes(value: int | None) -> str:
+    if value is None:
+        return "unlimited/unknown"
+
+    units = ["B", "KiB", "MiB", "GiB", "TiB"]
+    size = float(value)
+    for unit in units:
+        if size < 1024 or unit == units[-1]:
+            if unit == "B":
+                return f"{int(size)} {unit}"
+            return f"{size:.1f} {unit}"
+        size /= 1024
+
+    return f"{value} B"
+
+
+def detect_memory_limit_bytes() -> int | None:
+    cgroup_v2 = read_text_file(Path("/sys/fs/cgroup/memory.max"))
+    if cgroup_v2 and cgroup_v2 != "max":
+        return int(cgroup_v2)
+
+    cgroup_v1 = read_text_file(Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"))
+    if cgroup_v1:
+        limit = int(cgroup_v1)
+        if limit < 1 << 60:
+            return limit
+
+    return None
+
+
+def detect_cpu_limit() -> str:
+    cgroup_v2 = read_text_file(Path("/sys/fs/cgroup/cpu.max"))
+    if cgroup_v2:
+        quota, period = cgroup_v2.split()
+        if quota == "max":
+            return "unlimited"
+        return f"{float(quota) / float(period):.2f} CPUs"
+
+    quota = read_text_file(Path("/sys/fs/cgroup/cpu/cpu.cfs_quota_us"))
+    period = read_text_file(Path("/sys/fs/cgroup/cpu/cpu.cfs_period_us"))
+    if quota and period:
+        quota_value = int(quota)
+        period_value = int(period)
+        if quota_value < 0:
+            return "unlimited"
+        return f"{float(quota_value) / float(period_value):.2f} CPUs"
+
+    return "unknown"
+
+
+def print_runtime_diagnostics(
+    *,
+    database_path: Path,
+    extension_dir: Path,
+    ui_port: str,
+) -> None:
+    home = Path(env("HOME", "/tmp"))
+    extension_data_dir = home / ".duckdb" / "extension_data"
+    pod_name = env_optional("POD_NAME")
+    pod_namespace = env_optional("POD_NAMESPACE")
+    pod_ip = env_optional("POD_IP")
+    node_name = env_optional("NODE_NAME")
+
+    print(f"Image version: {env('IMAGE_VERSION', 'dev')}", flush=True)
+    print(f"DuckDB version: {duckdb.__version__}", flush=True)
+    print(f"Hostname: {socket.gethostname()}", flush=True)
+    if pod_name is not None:
+        print(f"Pod name: {pod_name}", flush=True)
+    if pod_namespace is not None:
+        print(f"Pod namespace: {pod_namespace}", flush=True)
+    if pod_ip is not None:
+        print(f"Pod IP: {pod_ip}", flush=True)
+    if node_name is not None:
+        print(f"Node name: {node_name}", flush=True)
+    print(f"UID:GID: {os.getuid()}:{os.getgid()}", flush=True)
+    print(f"HOME: {home}", flush=True)
+    print(f"DuckDB database path: {database_path}", flush=True)
+    print(f"DuckDB extension directory: {extension_dir}", flush=True)
+    print(f"DuckDB extension data directory: {extension_data_dir}", flush=True)
+    print(f"DuckDB UI port: {ui_port}", flush=True)
+    print(f"Memory limit: {format_bytes(detect_memory_limit_bytes())}", flush=True)
+    print(f"CPU limit: {detect_cpu_limit()}", flush=True)
 
 
 def sql_string(value: str) -> str:
@@ -336,6 +428,11 @@ def main() -> int:
     signal.signal(signal.SIGINT, handle_signal)
     signal.signal(signal.SIGTERM, handle_signal)
 
+    print_runtime_diagnostics(
+        database_path=database_path,
+        extension_dir=extension_dir,
+        ui_port=ui_port,
+    )
     print(f"Opening DuckDB database at {database_path}.", flush=True)
     conn = duckdb.connect(str(database_path))
 
