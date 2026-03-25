@@ -27,7 +27,7 @@ spec:
               cpu: "4"
               memory: 8Gi
             limits:
-              cpu: "32"
+              cpu: "24"
               memory: 64Gi
           env:
             - name: POD_NAME
