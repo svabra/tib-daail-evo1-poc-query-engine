@@ -27,19 +27,18 @@ jobs:
             build_context: .
             image_archive: /tmp/tib-daail-evo1-poc-query-engine.tar
             artifact_name: duckdb-image
-            tag_rules: |
-              type=raw,value=${{ steps.version.outputs.version }}
-              type=raw,value=latest,enable={{is_default_branch}}
-              type=ref,event=tag
-              type=sha,prefix=sha-
+            include_latest: true
+            include_ref_tag: true
+            include_sha: true
           - image_name: bit-data-workbench
             image_repository: docker.io/svabra/bit-data-workbench
             dockerfile: ./bdw/Dockerfile
             build_context: .
             image_archive: /tmp/bit-data-workbench.tar
             artifact_name: bit-data-workbench-image
-            tag_rules: |
-              type=raw,value=${{ steps.version.outputs.version }}
+            include_latest: false
+            include_ref_tag: false
+            include_sha: false
 
     steps:
       - name: Checkout
@@ -56,12 +55,31 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      - name: Prepare Docker tag rules
+        id: tag_rules
+        shell: bash
+        run: |
+          {
+            echo 'rules<<EOF'
+            echo "type=raw,value=${{ steps.version.outputs.version }}"
+            if [ "${{ matrix.image.include_latest }}" = "true" ]; then
+              echo "type=raw,value=latest,enable={{is_default_branch}}"
+            fi
+            if [ "${{ matrix.image.include_ref_tag }}" = "true" ]; then
+              echo "type=ref,event=tag"
+            fi
+            if [ "${{ matrix.image.include_sha }}" = "true" ]; then
+              echo "type=sha,prefix=sha-"
+            fi
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
       - name: Extract Docker image metadata
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ${{ matrix.image.image_repository }}
-          tags: ${{ matrix.image.tag_rules }}
+          tags: ${{ steps.tag_rules.outputs.rules }}
           labels: |
             org.opencontainers.image.title=${{ matrix.image.image_name }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
