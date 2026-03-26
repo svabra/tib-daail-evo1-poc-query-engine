@@ -3,10 +3,13 @@ kind: Route
 metadata:
   name: evo1-bdw
   namespace: daai-brs-d
+  annotations:
+    openshift.io/host.generated: "true"
   labels:
     app.kubernetes.io/name: evo1-bdw
     ros.bit.admin.ch/ingress: extern
 spec:
+  path: /
   to:
     kind: Service
     name: evo1-bdw

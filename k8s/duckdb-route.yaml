@@ -5,8 +5,10 @@ metadata:
   namespace: daai-brs-d
   annotations:
     openshift.io/host.generated: "true"
+  labels:
+    app.kubernetes.io/name: tib-daail-evo1-poc-query-engine
+    ros.bit.admin.ch/ingress: extern
 spec:
-  host: evo1-daai-brs-d.apps.p-szb-ros-nopi-npr-01.cloud.admin.ch
   path: /
   to:
     kind: Service
