@@ -1,0 +1,20 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: evo1
+  namespace: daai-brs-d
+  annotations:
+    openshift.io/host.generated: "true"
+spec:
+  host: evo1-daai-brs-d.apps.p-szb-ros-nopi-npr-01.cloud.admin.ch
+  path: /
+  to:
+    kind: Service
+    name: tib-daail-evo1-poc-query-engine
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None

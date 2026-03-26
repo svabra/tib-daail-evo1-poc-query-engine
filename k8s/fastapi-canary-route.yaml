@@ -1,0 +1,19 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: evo1-canary
+  namespace: daai-brs-d
+  labels:
+    app.kubernetes.io/name: evo1-fastapi-canary
+    ros.bit.admin.ch/ingress: extern
+spec:
+  to:
+    kind: Service
+    name: evo1-fastapi-canary
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
