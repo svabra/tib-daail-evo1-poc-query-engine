@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from fastapi import FastAPI, Request
 
 
-app = FastAPI(title="evo1-fastapi-canary")
+app = FastAPI(title="bit-data-workbench")
 
 
 def env(name: str, default: str = "") -> str:
@@ -17,7 +17,7 @@ def env(name: str, default: str = "") -> str:
 
 def runtime_info() -> dict[str, str]:
     return {
-        "service": "evo1-fastapi-canary",
+        "service": "bit-data-workbench",
         "image_version": env("IMAGE_VERSION", "dev"),
         "hostname": socket.gethostname(),
         "pod_name": env("POD_NAME", "unknown"),
@@ -32,7 +32,7 @@ def runtime_info() -> dict[str, str]:
 def root() -> dict[str, object]:
     return {
         "ok": True,
-        "message": "FastAPI canary is reachable.",
+        "message": "Bit Data Workbench is reachable.",
         "runtime": runtime_info(),
     }
 

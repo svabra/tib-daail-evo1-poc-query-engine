@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-ARG IMAGE_VERSION=0.1.0
+ARG IMAGE_VERSION=0.1.3
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -9,11 +9,11 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-COPY fastapi-canary/requirements.txt /tmp/requirements.txt
+COPY bdw/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt \
     && rm -f /tmp/requirements.txt
 
-COPY fastapi-canary/app.py /app/app.py
+COPY bdw/app.py /app/app.py
 
 EXPOSE 8000
 

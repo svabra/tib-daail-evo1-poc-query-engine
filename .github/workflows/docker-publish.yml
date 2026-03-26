@@ -14,14 +14,25 @@ on:
 permissions:
   contents: read
 
-env:
-  IMAGE_NAME: tib-daail-evo1-poc-query-engine
-  IMAGE_REPOSITORY: docker.io/svabra/tib-daail-evo1-poc-query-engine
-  IMAGE_ARCHIVE: /tmp/tib-daail-evo1-poc-query-engine.tar
-
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - image_name: tib-daail-evo1-poc-query-engine
+            image_repository: docker.io/svabra/tib-daail-evo1-poc-query-engine
+            dockerfile: ./Dockerfile
+            build_context: .
+            image_archive: /tmp/tib-daail-evo1-poc-query-engine.tar
+            artifact_name: duckdb-image
+          - image_name: bit-data-workbench
+            image_repository: docker.io/svabra/bit-data-workbench
+            dockerfile: ./bdw/Dockerfile
+            build_context: .
+            image_archive: /tmp/bit-data-workbench.tar
+            artifact_name: bit-data-workbench-image
 
     steps:
       - name: Checkout
@@ -42,14 +53,14 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.IMAGE_REPOSITORY }}
+          images: ${{ matrix.image.image_repository }}
           tags: |
             type=raw,value=${{ steps.version.outputs.version }}
             type=raw,value=latest,enable={{is_default_branch}}
             type=ref,event=tag
             type=sha,prefix=sha-
           labels: |
-            org.opencontainers.image.title=${{ env.IMAGE_NAME }}
+            org.opencontainers.image.title=${{ matrix.image.image_name }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
 
       - name: Write Docker image tags
@@ -63,23 +74,23 @@ jobs:
       - name: Build Docker image archive
         uses: docker/build-push-action@v7
         with:
-          context: .
-          file: ./Dockerfile
+          context: ${{ matrix.image.build_context }}
+          file: ${{ matrix.image.dockerfile }}
           platforms: linux/amd64
           build-args: |
             IMAGE_VERSION=${{ steps.version.outputs.version }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          outputs: type=docker,dest=${{ env.IMAGE_ARCHIVE }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          outputs: type=docker,dest=${{ matrix.image.image_archive }}
+          cache-from: type=gha,scope=${{ matrix.image.image_name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image.image_name }}
 
       - name: Upload Docker image artifact
         uses: actions/upload-artifact@v7
         with:
-          name: docker-image
+          name: ${{ matrix.image.artifact_name }}
           path: |
-            ${{ env.IMAGE_ARCHIVE }}
+            ${{ matrix.image.image_archive }}
             /tmp/docker-tags.txt
           if-no-files-found: error
           retention-days: 1
@@ -89,16 +100,26 @@ jobs:
     needs:
       - build
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - image_name: tib-daail-evo1-poc-query-engine
+            image_archive_name: tib-daail-evo1-poc-query-engine.tar
+            artifact_name: duckdb-image
+          - image_name: bit-data-workbench
+            image_archive_name: bit-data-workbench.tar
+            artifact_name: bit-data-workbench-image
 
     steps:
       - name: Download Docker image artifact
         uses: actions/download-artifact@v8
         with:
-          name: docker-image
+          name: ${{ matrix.image.artifact_name }}
           path: /tmp/docker-image
 
       - name: Load Docker image archive
-        run: docker load -i /tmp/docker-image/tib-daail-evo1-poc-query-engine.tar
+        run: docker load -i /tmp/docker-image/${{ matrix.image.image_archive_name }}
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v4

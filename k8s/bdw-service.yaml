@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: evo1-fastapi-canary
+  name: evo1-bdw
   namespace: daai-brs-d
   labels:
-    app.kubernetes.io/name: evo1-fastapi-canary
+    app.kubernetes.io/name: evo1-bdw
 spec:
   selector:
-    app.kubernetes.io/name: evo1-fastapi-canary
+    app.kubernetes.io/name: evo1-bdw
   ports:
     - name: http
       port: 8000
