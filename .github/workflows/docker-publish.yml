@@ -27,12 +27,19 @@ jobs:
             build_context: .
             image_archive: /tmp/tib-daail-evo1-poc-query-engine.tar
             artifact_name: duckdb-image
+            tag_rules: |
+              type=raw,value=${{ steps.version.outputs.version }}
+              type=raw,value=latest,enable={{is_default_branch}}
+              type=ref,event=tag
+              type=sha,prefix=sha-
           - image_name: bit-data-workbench
             image_repository: docker.io/svabra/bit-data-workbench
             dockerfile: ./bdw/Dockerfile
             build_context: .
             image_archive: /tmp/bit-data-workbench.tar
             artifact_name: bit-data-workbench-image
+            tag_rules: |
+              type=raw,value=${{ steps.version.outputs.version }}
 
     steps:
       - name: Checkout
@@ -54,11 +61,7 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ${{ matrix.image.image_repository }}
-          tags: |
-            type=raw,value=${{ steps.version.outputs.version }}
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=tag
-            type=sha,prefix=sha-
+          tags: ${{ matrix.image.tag_rules }}
           labels: |
             org.opencontainers.image.title=${{ matrix.image.image_name }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
