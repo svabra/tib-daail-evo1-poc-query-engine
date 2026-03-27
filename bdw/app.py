@@ -18,7 +18,7 @@ def env(name: str, default: str = "") -> str:
 def runtime_info() -> dict[str, str]:
     return {
         "service": "bit-data-workbench",
-        "image_version": env("IMAGE_VERSION", "dev"),
+        "image_version": env("IMAGE_VERSION", "unknown"),
         "hostname": socket.gethostname(),
         "pod_name": env("POD_NAME", "unknown"),
         "pod_namespace": env("POD_NAMESPACE", "unknown"),
@@ -32,7 +32,7 @@ def runtime_info() -> dict[str, str]:
 def root() -> dict[str, object]:
     return {
         "ok": True,
-        "message": "Bit Data Workbench is reachable.",
+        "message": "BIT Data Workbench is reachable.",
         "runtime": runtime_info(),
     }
 
