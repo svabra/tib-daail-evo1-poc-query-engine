@@ -9,9 +9,6 @@ from fastapi.templating import Jinja2Templates
 
 from ..backend.service import WorkbenchService
 from ..dependencies import get_workbench_service
-from ..models import QueryResult
-
-
 router = APIRouter(include_in_schema=False)
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "templates"))
 
@@ -32,12 +29,10 @@ def index(
             "catalogs": service.catalogs(),
             "notebooks": notebooks,
             "notebook_tree": service.notebook_tree(),
+            "source_options": service.source_options(),
+            "source_options_json": json.dumps(service.source_options()),
             "active_notebook_id": active_notebook.notebook_id if active_notebook else None,
             "active_notebook": active_notebook,
-            "query_result": QueryResult(
-                sql=active_notebook.sql if active_notebook else "",
-                message="Run the notebook to inspect the configured data source.",
-            ),
             "completion_schema_json": json.dumps(service.completion_schema()),
         },
     )
@@ -59,9 +54,6 @@ def notebook_workspace(
         name="partials/workspace.html",
         context={
             "active_notebook": notebook,
-            "query_result": QueryResult(
-                sql=notebook.sql,
-                message="Run the notebook to inspect the configured data source.",
-            ),
+            "source_options": service.source_options(),
         },
     )

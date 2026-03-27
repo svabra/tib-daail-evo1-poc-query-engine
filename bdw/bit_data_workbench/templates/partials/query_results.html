@@ -1,12 +1,28 @@
-<section id="query-results" class="result-panel">
+<section id="query-results-{{ cell_id }}" class="result-panel" data-cell-result>
   <header class="result-header">
-    <div>
+    <div class="result-header-copy">
       <h3>Result</h3>
       <p class="result-meta">{{ "%.1f"|format(query_result.duration_ms) }} ms</p>
     </div>
-    {% if query_result.message %}
-      <span class="result-badge">{{ query_result.message }}</span>
-    {% endif %}
+    <div class="result-header-actions">
+      {% if query_result.message %}
+        <span class="result-badge">{{ query_result.message }}</span>
+      {% endif %}
+      <div class="result-download-actions" aria-label="Result download actions">
+        <button
+          type="button"
+          class="result-action-button"
+          data-result-download-json
+          title="Download result as JSON"
+        >JSON</button>
+        <button
+          type="button"
+          class="result-action-button"
+          data-result-download-csv
+          title="Download result as CSV"
+        >CSV</button>
+      </div>
+    </div>
   </header>
 
   {% if query_result.error %}
@@ -37,7 +53,7 @@
     </div>
   {% else %}
     <div class="result-empty">
-      <p>{{ query_result.message or "Run a query to inspect the attached data sources." }}</p>
+      <p>{{ query_result.message or "Run this cell to inspect the selected data sources." }}</p>
     </div>
   {% endif %}
 </section>

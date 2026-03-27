@@ -2,82 +2,219 @@
 <aside
   id="sidebar"
   class="sidebar"
+  data-sidebar
   {% if sidebar_oob %}hx-swap-oob="outerHTML"{% endif %}
 >
-  <div class="sidebar-search">
-    <label class="sidebar-label" for="sidebar-search-input">Search</label>
-    <input
-      id="sidebar-search-input"
-      class="search-input"
-      type="search"
-      placeholder="Search notebooks and data sources"
-      data-sidebar-search
-    >
+  <div class="sidebar-body" data-sidebar-body>
+    <div class="sidebar-search">
+      <label class="sidebar-label" for="sidebar-search-input">Search</label>
+      <input
+        id="sidebar-search-input"
+        class="search-input"
+        type="search"
+        placeholder="Search notebooks and data sources"
+        data-sidebar-search
+      >
+    </div>
+
+    <details class="sidebar-section notebook-section" data-notebook-section>
+      <summary class="section-heading section-summary">
+        <h2>Notebooks</h2>
+        <div class="section-tools">
+          <button
+            type="button"
+            class="tree-add-button"
+            data-collapse-tree
+            title="Collapse notebook structure"
+            aria-label="Collapse notebook structure"
+          >
+            <svg class="tree-action-glyph tree-action-glyph-structure" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M2.5 3.5h3.4"></path>
+              <path d="M2.5 8h6.5"></path>
+              <path d="M2.5 12.5h3.4"></path>
+              <path d="M11.4 3.5v9"></path>
+              <path d="M9.3 8h4.2"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="tree-add-button"
+            data-expand-tree
+            title="Expand notebook structure"
+            aria-label="Expand notebook structure"
+          >
+            <svg class="tree-action-glyph tree-action-glyph-structure" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M2.5 3.5h3.4"></path>
+              <path d="M2.5 8h6.5"></path>
+              <path d="M2.5 12.5h3.4"></path>
+              <path d="M11.4 3.5v9"></path>
+              <path d="M9.3 8h4.2"></path>
+              <path d="M11.4 5.9v4.2"></path>
+            </svg>
+          </button>
+          <span
+            class="info-badge"
+            title="Notebook folders and drag-and-drop order are currently stored locally in this browser. Subject to change: will be stored by-user and remotely."
+            aria-label="Notebook tree storage information"
+          >
+            i
+          </span>
+          <span class="section-count">{{ notebooks | length }}</span>
+          <button
+            type="button"
+            class="tree-add-button"
+            data-create-notebook
+            title="Create notebook"
+            aria-label="Create notebook"
+          >
+            <svg class="tree-action-glyph" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M4 2.2h5.2l2.8 2.8v8.8H4z"></path>
+              <path d="M9.2 2.2v2.7h2.8"></path>
+              <path d="M8 6.9v4.2M5.9 9h4.2"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="tree-add-button"
+            data-add-tree-item
+            title="Add folder"
+            aria-label="Add folder"
+          >
+            +
+          </button>
+        </div>
+      </summary>
+      <div class="notebook-tree tree-children" data-notebook-tree data-tree-children>
+        {% for node in notebook_tree %}
+          {% include "partials/notebook_tree_node.html" %}
+        {% endfor %}
+      </div>
+    </details>
+
+    <div class="sidebar-divider" aria-hidden="true"></div>
+
+    <details class="sidebar-section" data-data-sources-section>
+      <summary class="section-heading section-summary">
+        <h2>Data Sources</h2>
+        <div class="section-tools">
+          <button
+            type="button"
+            class="tree-add-button"
+            data-collapse-sources
+            title="Collapse data source structure"
+            aria-label="Collapse data source structure"
+          >
+            <svg class="tree-action-glyph tree-action-glyph-structure" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M2.5 3.5h3.4"></path>
+              <path d="M2.5 8h6.5"></path>
+              <path d="M2.5 12.5h3.4"></path>
+              <path d="M11.4 3.5v9"></path>
+              <path d="M9.3 8h4.2"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="tree-add-button"
+            data-expand-sources
+            title="Expand data source structure"
+            aria-label="Expand data source structure"
+          >
+            <svg class="tree-action-glyph tree-action-glyph-structure" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M2.5 3.5h3.4"></path>
+              <path d="M2.5 8h6.5"></path>
+              <path d="M2.5 12.5h3.4"></path>
+              <path d="M11.4 3.5v9"></path>
+              <path d="M9.3 8h4.2"></path>
+              <path d="M11.4 5.9v4.2"></path>
+            </svg>
+          </button>
+          <span class="section-count">{{ catalogs | length }}</span>
+        </div>
+      </summary>
+      <div class="source-tree">
+        {% for catalog in catalogs %}
+          <details class="source-catalog" data-source-catalog>
+            <summary data-searchable-item="{{ catalog.name }}">
+              <span class="source-node-label">
+                <svg class="source-icon source-icon-catalog" viewBox="0 0 16 16" aria-hidden="true">
+                  <ellipse cx="8" cy="3.3" rx="4.8" ry="1.9"></ellipse>
+                  <path d="M3.2 3.3v8c0 1 2.15 1.9 4.8 1.9s4.8-.9 4.8-1.9v-8"></path>
+                  <path d="M3.2 7c0 1 2.15 1.9 4.8 1.9s4.8-.9 4.8-1.9"></path>
+                </svg>
+                <span>{{ catalog.name }}</span>
+              </span>
+            </summary>
+            {% for schema in catalog.schemas %}
+              <details class="source-schema" data-source-schema>
+                <summary data-searchable-item="{{ schema.name }}">
+                  <span class="source-node-label">
+                    <svg class="source-icon source-icon-schema" viewBox="0 0 16 16" aria-hidden="true">
+                      <rect x="1.6" y="1.8" width="3.7" height="3.7" rx="0.7"></rect>
+                      <rect x="10.7" y="1.8" width="3.7" height="3.7" rx="0.7"></rect>
+                      <rect x="10.7" y="10.5" width="3.7" height="3.7" rx="0.7"></rect>
+                      <path d="M5.3 3.7h2.8a2 2 0 0 1 2 2v1.5"></path>
+                      <path d="M10.1 8H7.4a2 2 0 0 0-2 2v.5"></path>
+                    </svg>
+                    <span>{{ schema.name }}</span>
+                  </span>
+                </summary>
+                <ul class="source-object-list">
+                  {% for source_object in schema.objects %}
+                    <li
+                      class="source-object source-object-{{ source_object.kind }}"
+                      data-searchable-item="{{ source_object.name }} {{ source_object.relation }}"
+                    >
+                      <span class="source-node-label">
+                        {% if source_object.kind == "view" %}
+                          <svg
+                            class="source-icon source-icon-object source-icon-object-view"
+                            viewBox="0 0 16 16"
+                            aria-hidden="true"
+                          >
+                            <rect x="2.4" y="3" width="11.2" height="9.6" rx="1.1"></rect>
+                            <path d="M4.2 5.2h7.6M4.2 7.7h7.6"></path>
+                            <path d="M3.2 10.7c1.5-1.7 3.1-2.6 4.8-2.6s3.3.9 4.8 2.6"></path>
+                            <circle cx="8" cy="10.2" r="1"></circle>
+                          </svg>
+                        {% else %}
+                          <svg
+                            class="source-icon source-icon-object source-icon-object-table"
+                            viewBox="0 0 16 16"
+                            aria-hidden="true"
+                          >
+                            <rect x="2.1" y="2.3" width="11.8" height="11.1" rx="1.1"></rect>
+                            <path d="M2.8 6.1h10.4M2.8 9.4h10.4M6 2.9v9.8M10 2.9v9.8"></path>
+                          </svg>
+                        {% endif %}
+                        <span>{{ source_object.name }}</span>
+                      </span>
+                      <small>{{ source_object.kind }}</small>
+                    </li>
+                  {% endfor %}
+                </ul>
+              </details>
+            {% endfor %}
+          </details>
+        {% endfor %}
+      </div>
+    </details>
   </div>
 
-  <details class="sidebar-section notebook-section" data-notebook-section>
-    <summary class="section-heading section-summary">
-      <h2>Notebooks</h2>
-      <div class="section-tools">
-        <span
-          class="info-badge"
-          title="Notebook folders and drag-and-drop order are currently stored locally in this browser. Subject to change: will be stored by-user and remotely."
-          aria-label="Notebook tree storage information"
-        >
-          i
-        </span>
-        <span class="section-count">{{ notebooks | length }}</span>
-        <button
-          type="button"
-          class="tree-add-button"
-          data-add-tree-item
-          title="Add folder"
-          aria-label="Add folder"
-        >
-          +
-        </button>
-      </div>
-    </summary>
-    <div class="notebook-tree tree-children" data-notebook-tree data-tree-children>
-      {% for node in notebook_tree %}
-        {% include "partials/notebook_tree_node.html" %}
-      {% endfor %}
-    </div>
-  </details>
-
-  <div class="sidebar-divider" aria-hidden="true"></div>
-
-  <details class="sidebar-section" data-data-sources-section>
-    <summary class="section-heading section-summary">
-      <h2>Data Sources</h2>
-      <span class="section-count">{{ catalogs | length }}</span>
-    </summary>
-    <div class="source-tree">
-      {% for catalog in catalogs %}
-        <details class="source-catalog" data-source-catalog>
-          <summary data-searchable-item="{{ catalog.name }}">
-            <span>{{ catalog.name }}</span>
-          </summary>
-          {% for schema in catalog.schemas %}
-            <details class="source-schema" data-source-schema>
-              <summary data-searchable-item="{{ schema.name }}">
-                <span>{{ schema.name }}</span>
-              </summary>
-              <ul class="source-object-list">
-                {% for source_object in schema.objects %}
-                  <li
-                    class="source-object source-object-{{ source_object.kind }}"
-                    data-searchable-item="{{ source_object.name }} {{ source_object.relation }}"
-                  >
-                    <span>{{ source_object.name }}</span>
-                    <small>{{ source_object.kind }}</small>
-                  </li>
-                {% endfor %}
-              </ul>
-            </details>
-          {% endfor %}
-        </details>
-      {% endfor %}
-    </div>
-  </details>
+  <div class="sidebar-footer">
+    <button
+      type="button"
+      class="sidebar-toggle"
+      data-sidebar-toggle
+      aria-expanded="true"
+      aria-controls="sidebar"
+      title="Collapse navigation"
+    >
+      <span class="sidebar-toggle-icon" aria-hidden="true">‹</span>
+      <span class="sidebar-toggle-label">Collapse navigation</span>
+    </button>
+    <dl class="runtime-pill runtime-pill-sidebar" aria-label="Application version">
+      <dt>DAAIFL Data Workbench</dt>
+      <dd>V{{ runtime.image_version }}</dd>
+    </dl>
+  </div>
 </aside>

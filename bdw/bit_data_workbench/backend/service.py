@@ -9,7 +9,7 @@ import duckdb
 
 from ..config import Settings
 from ..models import NotebookDefinition, QueryResult, SourceCatalog, SourceObject, SourceSchema
-from .notebooks import build_completion_schema, build_notebook_tree, build_notebooks
+from .notebooks import build_completion_schema, build_notebook_tree, build_notebooks, build_source_options
 
 
 SUPPORTED_S3_VIEW_FORMATS = {"parquet", "csv", "json"}
@@ -97,6 +97,7 @@ class WorkbenchService:
         self._catalogs: list[SourceCatalog] = []
         self._notebooks: list[NotebookDefinition] = []
         self._completion_schema: dict[str, object] = {}
+        self._source_options: list[dict[str, str]] = []
 
     def start(self) -> None:
         self.settings.duckdb_database.parent.mkdir(parents=True, exist_ok=True)
@@ -143,6 +144,10 @@ class WorkbenchService:
     def completion_schema(self) -> dict[str, object]:
         with self._lock:
             return dict(self._completion_schema)
+
+    def source_options(self) -> list[dict[str, str]]:
+        with self._lock:
+            return [dict(option) for option in self._source_options]
 
     def notebook_tree(self):
         with self._lock:
@@ -409,3 +414,4 @@ class WorkbenchService:
         self._catalogs = catalogs
         self._notebooks = build_notebooks(catalogs)
         self._completion_schema = build_completion_schema(catalogs)
+        self._source_options = build_source_options(catalogs)

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from ..models import NotebookDefinition, NotebookFolder, SourceCatalog
+from ..models import NotebookCellDefinition, NotebookDefinition, NotebookFolder, SourceCatalog
 
 
 def _find_relation(
@@ -56,8 +56,13 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
             notebook_id="s3-smoke-test",
             title="S3 Smoke Test",
             summary="Reads the preconfigured smoke-test object through DuckDB.",
-            target_label="MinIO / S3",
-            sql=s3_sql,
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="s3-smoke-test-cell-1",
+                    data_sources=["workspace.s3"],
+                    sql=s3_sql,
+                )
+            ],
             tags=["smoke", "s3"],
             tree_path=("Smoke Tests", "Object Storage"),
             can_edit=False,
@@ -67,14 +72,40 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
             notebook_id="postgres-smoke-test",
             title="PostgreSQL Smoke Test",
             summary="Queries the OLTP reference table through the attached PostgreSQL database.",
-            target_label="PostgreSQL OLTP",
-            sql=postgres_sql,
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="postgres-smoke-test-cell-1",
+                    data_sources=["pg_oltp"],
+                    sql=postgres_sql,
+                )
+            ],
             tags=["smoke", "postgres"],
             tree_path=("Smoke Tests", "Relational"),
             can_edit=False,
             can_delete=False,
         ),
     ]
+
+
+def build_source_options(catalogs: list[SourceCatalog]) -> list[dict[str, str]]:
+    options: list[dict[str, str]] = []
+
+    for catalog in catalogs:
+        if catalog.name == "workspace":
+            if any(schema.name == "s3" and schema.objects for schema in catalog.schemas):
+                options.append({"source_id": "workspace.s3", "label": "MinIO / S3"})
+            elif catalog.schemas:
+                options.append({"source_id": "workspace", "label": "Workspace"})
+            continue
+
+        if catalog.name == "pg_oltp":
+            options.append({"source_id": "pg_oltp", "label": "PostgreSQL OLTP"})
+            continue
+
+        if catalog.name == "pg_olap":
+            options.append({"source_id": "pg_olap", "label": "PostgreSQL OLAP"})
+
+    return options
 
 
 def build_completion_schema(catalogs: list[SourceCatalog]) -> dict[str, object]:

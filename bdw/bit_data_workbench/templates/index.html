@@ -16,10 +16,9 @@
             <h1>{{ title }}</h1>
           </div>
         </div>
-        <dl class="runtime-pill">
-          <dt>Image</dt>
-          <dd>{{ runtime.image_version }}</dd>
-        </dl>
+        <button type="button" class="topbar-action-button" data-create-notebook>
+          Create Notebook
+        </button>
       </header>
 
       <section id="workspace-panel">
@@ -27,4 +26,5 @@
       </section>
     </main>
   </div>
+  <script id="source-options" type="application/json">{{ source_options_json | safe }}</script>
 {% endblock %}

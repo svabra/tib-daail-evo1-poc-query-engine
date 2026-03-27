@@ -24,6 +24,7 @@ def run_query(
     request: Request,
     sql: str = Form(""),
     notebook_id: str = Form(""),
+    cell_id: str = Form(""),
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> HTMLResponse:
     result = service.execute_query(sql)
@@ -32,6 +33,8 @@ def run_query(
         name="partials/query_payload.html",
         context={
             "query_result": result,
+            "cell_id": cell_id,
+            "runtime": service.runtime_info(),
             "notebooks": service.notebooks(),
             "notebook_tree": service.notebook_tree(),
             "catalogs": service.catalogs(),

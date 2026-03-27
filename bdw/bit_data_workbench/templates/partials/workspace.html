@@ -1,76 +1,305 @@
-<article class="workspace-card" data-workspace-notebook>
+<article
+  class="workspace-card"
+  data-workspace-notebook
+  data-notebook-meta
+  data-notebook-id="{{ active_notebook.notebook_id }}"
+  data-can-edit="{{ 'true' if active_notebook.can_edit else 'false' }}"
+  data-can-delete="{{ 'true' if active_notebook.can_delete else 'false' }}"
+  data-default-title="{{ active_notebook.title }}"
+  data-default-summary="{{ active_notebook.summary }}"
+  data-default-cells='{{ active_notebook.cells_payload | tojson }}'
+  data-default-tags="{{ active_notebook.tags | join('||') }}"
+>
   <header class="workspace-header">
-    <div>
-      <p class="workspace-kicker">{{ active_notebook.target_label }}</p>
-      <h2>{{ active_notebook.title }}</h2>
-      <p class="workspace-summary">{{ active_notebook.summary }}</p>
-      <section
-        class="workspace-tags"
-        data-notebook-meta
-        data-notebook-id="{{ active_notebook.notebook_id }}"
-        data-can-edit="{{ 'true' if active_notebook.can_edit else 'false' }}"
-        data-can-delete="{{ 'true' if active_notebook.can_delete else 'false' }}"
-      >
-        <span class="workspace-tags-label">Tags</span>
-        <div class="workspace-tag-editor">
+    <div class="workspace-title-block">
+      <div class="workspace-title-row">
+        <h2
+          class="workspace-notebook-title{% if active_notebook.can_edit %} is-editable{% endif %}"
+          data-notebook-title-display
+          {% if active_notebook.can_edit %}
+            data-rename-notebook-title
+            tabindex="0"
+            role="button"
+            title="Click to rename the notebook"
+          {% endif %}
+        >{{ active_notebook.title }}</h2>
+        <span
+          class="workspace-access-badge"
+          data-access-badge
+          title="{{ active_notebook.access_mode_hint }}"
+        >{{ active_notebook.access_mode }}</span>
+      </div>
+      <div class="workspace-summary-field" data-summary-container>
+        <p
+          class="workspace-summary-display{% if active_notebook.can_edit %} is-editable{% endif %}"
+          data-summary-display
+          {% if active_notebook.can_edit %}
+            tabindex="0"
+            role="button"
+            title="Click to edit the notebook description"
+          {% endif %}
+        >{{ active_notebook.summary }}</p>
+        <textarea
+          class="workspace-summary-input"
+          data-summary-input
+          rows="3"
+          placeholder="Notebook description"
+          {% if not active_notebook.can_edit %}disabled{% endif %}
+        >{{ active_notebook.summary }}</textarea>
+      </div>
+      <div class="workspace-header-tags">
+        <div class="workspace-tag-toolbar">
           <div class="workspace-tag-list" data-tag-list>
             {% for tag in active_notebook.tags %}
-              <button type="button" class="workspace-tag-chip" data-tag-value="{{ tag }}">
+              <button type="button" class="workspace-tag-chip" data-tag-remove="{{ tag }}">
                 <span>{{ tag }}</span>
-                <span class="workspace-tag-remove" aria-hidden="true">×</span>
+                <span class="workspace-tag-remove" aria-hidden="true">x</span>
               </button>
             {% endfor %}
           </div>
-          <div class="workspace-tag-controls">
-            <input
-              class="workspace-tag-input"
-              type="text"
-              placeholder="Add tag"
-              data-tag-input
-            >
-            <button class="workspace-tag-add" type="button" data-tag-add>Add</button>
-          </div>
+          <button
+            type="button"
+            class="workspace-tag-badge workspace-tag-badge-add{% if not active_notebook.can_edit %} is-action-disabled{% endif %}"
+            data-tag-toggle
+            {% if not active_notebook.can_edit %}disabled{% endif %}
+            title="{% if active_notebook.can_edit %}Add tag{% else %}This notebook cannot be edited.{% endif %}"
+            aria-label="Add tag"
+          >+</button>
         </div>
-      </section>
+        <div class="workspace-tag-controls workspace-tag-controls-inline" data-tag-controls hidden>
+          <input
+            class="workspace-tag-input workspace-tag-input-inline"
+            type="text"
+            placeholder="Add tag"
+            data-tag-input
+            {% if not active_notebook.can_edit %}disabled{% endif %}
+          >
+          <button
+            class="workspace-tag-add workspace-tag-add-inline"
+            type="button"
+            data-tag-add
+            {% if not active_notebook.can_edit %}disabled{% endif %}
+          >
+            Add
+          </button>
+        </div>
+      </div>
     </div>
     <div class="workspace-actions">
-      {% if not active_notebook.can_edit or not active_notebook.can_delete %}
-        <div class="workspace-item-tools" aria-hidden="true">
-          {% if not active_notebook.can_edit %}
-            <span class="tree-add-button tree-add-button-inline notebook-action-pill is-action-disabled">Edit</span>
-          {% endif %}
-          {% if not active_notebook.can_delete %}
-            <span class="tree-add-button tree-add-button-inline notebook-action-pill is-action-disabled">Delete</span>
-          {% endif %}
+      <details class="workspace-action-menu" data-workspace-action-menu>
+        <summary
+          class="workspace-action-menu-toggle"
+          aria-label="Notebook actions"
+          title="Notebook actions"
+        >
+          <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
+        </summary>
+        <div class="workspace-action-menu-panel">
+          <button
+            type="button"
+            class="workspace-action-menu-item{% if not active_notebook.can_edit %} is-action-disabled{% endif %}"
+            data-rename-notebook
+            {% if not active_notebook.can_edit %}disabled{% endif %}
+            title="{% if active_notebook.can_edit %}Rename notebook{% else %}This notebook cannot be renamed.{% endif %}"
+          >
+            Rename
+          </button>
+          <button
+            type="button"
+            class="workspace-action-menu-item{% if not active_notebook.can_edit %} is-action-disabled{% endif %}"
+            data-edit-notebook
+            {% if not active_notebook.can_edit %}disabled{% endif %}
+            title="{% if active_notebook.can_edit %}Edit notebook metadata{% else %}This notebook cannot be edited.{% endif %}"
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            class="workspace-action-menu-item"
+            data-copy-notebook
+            title="Create a copy of this notebook"
+          >
+            Copy notebook
+          </button>
+          <button
+            type="button"
+            class="workspace-action-menu-item workspace-action-menu-item-danger{% if not active_notebook.can_delete %} is-action-disabled{% endif %}"
+            data-delete-notebook
+            {% if not active_notebook.can_delete %}disabled{% endif %}
+            title="{% if active_notebook.can_delete %}Delete notebook{% else %}This notebook cannot be deleted.{% endif %}"
+          >
+            Delete
+          </button>
         </div>
-      {% endif %}
+      </details>
     </div>
   </header>
 
-  <form
-    class="query-form"
-    hx-post="/api/query"
-    hx-target="#query-results"
-    hx-swap="outerHTML"
-  >
-    <input type="hidden" name="notebook_id" value="{{ active_notebook.notebook_id }}">
-    <div class="query-divider" aria-hidden="true"></div>
-    <div class="query-toolbar">
-      <div class="query-heading">
-        <span class="query-label">SQL Notebook</span>
-        <span class="hint">Run with Ctrl/Cmd + Enter</span>
+  <section class="workspace-version-strip" data-version-strip>
+    <div class="workspace-version-strip-header">
+      <div class="workspace-version-strip-copy">
+        <span class="workspace-tags-label">Versions</span>
+        <button
+          type="button"
+          class="workspace-version-current"
+          data-version-toggle
+          aria-expanded="false"
+          title="Expand version history"
+        >
+          <span class="workspace-version-current-copy" data-version-current>
+            <span class="workspace-version-current-empty">No saved versions yet.</span>
+          </span>
+          <span class="workspace-version-toggle-icon" data-version-toggle-icon aria-hidden="true">›</span>
+        </button>
       </div>
-      <button class="run-button" type="submit">Run Query</button>
+      <button
+        type="button"
+        class="workspace-version-save"
+        data-save-version
+        {% if not active_notebook.can_edit %}disabled{% endif %}
+      >
+        Save version
+      </button>
     </div>
-
-    <div
-      class="editor-frame"
-      data-editor-root
-      data-editor-name="sql"
-    >
-      <textarea name="sql" data-editor-source spellcheck="false">{{ active_notebook.sql }}</textarea>
+    <div class="workspace-version-panel" data-version-panel hidden>
+      <div class="workspace-version-list" data-version-list></div>
     </div>
-  </form>
+  </section>
 
-  {% include "partials/query_results.html" %}
+  <section class="workspace-cells" data-cell-list>
+    {% for cell in active_notebook.cells %}
+      <article
+        class="workspace-cell"
+        data-query-cell
+        data-cell-id="{{ cell.cell_id }}"
+        data-default-cell-sources="{{ cell.data_sources | join('||') }}"
+      >
+        <form
+          class="query-form query-form-cell"
+          hx-post="/api/query"
+          hx-target="#query-results-{{ cell.cell_id }}"
+          hx-swap="outerHTML"
+        >
+          <input type="hidden" name="notebook_id" value="{{ active_notebook.notebook_id }}">
+          <input type="hidden" name="cell_id" value="{{ cell.cell_id }}">
+          <div class="query-divider" aria-hidden="true"></div>
+          <div class="cell-toolbar">
+            <div class="cell-heading">
+              <span class="cell-label">Cell {{ loop.index }}</span>
+              <span
+                class="workspace-access-badge workspace-access-badge-small"
+                data-cell-access-badge
+                title="{{ cell.access_mode_hint }}"
+              >{{ cell.access_mode }}</span>
+              <details class="cell-source-picker" data-cell-source-picker>
+                <summary class="cell-source-picker-toggle" data-cell-source-summary>
+                  {% if cell.data_sources %}
+                    {{ cell.data_sources | length }} source{% if cell.data_sources | length != 1 %}s{% endif %}
+                  {% else %}
+                    Select sources
+                  {% endif %}
+                </summary>
+                <div class="cell-source-selection" data-cell-source-selection>
+                  {% for source in source_options %}
+                    <label class="workspace-source-option cell-source-option{% if source.source_id in cell.data_sources %} is-selected{% endif %}">
+                      <input
+                        class="workspace-source-checkbox"
+                        type="checkbox"
+                        value="{{ source.source_id }}"
+                        data-cell-source-option
+                        {% if source.source_id in cell.data_sources %}checked{% endif %}
+                        {% if not active_notebook.can_edit %}disabled{% endif %}
+                      >
+                      <span>{{ source.label }}</span>
+                    </label>
+                  {% endfor %}
+                </div>
+              </details>
+            </div>
+            <div class="cell-actions">
+              <span class="hint">Run with Ctrl/Cmd + Enter</span>
+              <button class="run-button" type="submit">Run Cell</button>
+              <details class="workspace-action-menu cell-action-menu" data-cell-action-menu>
+                <summary
+                  class="workspace-action-menu-toggle"
+                  aria-label="Cell actions"
+                  title="Cell actions"
+                >
+                  <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
+                </summary>
+                <div class="workspace-action-menu-panel">
+                  <button
+                    type="button"
+                    class="workspace-action-menu-item{% if not active_notebook.can_edit %} is-action-disabled{% endif %}"
+                    data-copy-cell
+                    {% if not active_notebook.can_edit %}disabled{% endif %}
+                    title="{% if active_notebook.can_edit %}Copy cell{% else %}This notebook cannot be edited.{% endif %}"
+                  >
+                    Copy cell
+                  </button>
+                  <button
+                    type="button"
+                    class="workspace-action-menu-item workspace-action-menu-item-danger{% if not active_notebook.can_edit %} is-action-disabled{% endif %}"
+                    data-delete-cell
+                    {% if not active_notebook.can_edit %}disabled{% endif %}
+                    title="{% if active_notebook.can_edit %}Delete cell{% else %}This notebook cannot be edited.{% endif %}"
+                  >
+                    Delete cell
+                  </button>
+                </div>
+              </details>
+            </div>
+          </div>
+
+          <div
+            class="editor-frame"
+            data-editor-root
+            data-editor-name="sql-{{ cell.cell_id }}"
+          >
+            <textarea
+              name="sql"
+              data-editor-source
+              data-default-sql="{{ cell.sql }}"
+              spellcheck="false"
+            >{{ cell.sql }}</textarea>
+          </div>
+        </form>
+
+        <section id="query-results-{{ cell.cell_id }}" class="result-panel" data-cell-result hidden>
+          <header class="result-header">
+            <div class="result-header-copy">
+              <h3>Result</h3>
+              <p class="result-meta">0.0 ms</p>
+            </div>
+            <div class="result-header-actions">
+              <span class="result-badge">Run this cell to inspect the selected data sources.</span>
+              <div class="result-download-actions" aria-label="Result download actions">
+                <button
+                  type="button"
+                  class="result-action-button"
+                  data-result-download-json
+                  title="Download result as JSON"
+                >JSON</button>
+                <button
+                  type="button"
+                  class="result-action-button"
+                  data-result-download-csv
+                  title="Download result as CSV"
+                >CSV</button>
+              </div>
+            </div>
+          </header>
+          <div class="result-empty">
+            <p>Run this cell to inspect the selected data sources.</p>
+          </div>
+        </section>
+      </article>
+    {% endfor %}
+  </section>
+
+  {% if active_notebook.can_edit %}
+    <div class="workspace-cell-footer">
+      <button type="button" class="workspace-cell-add-button" data-add-cell>Add Cell</button>
+    </div>
+  {% endif %}
 </article>
