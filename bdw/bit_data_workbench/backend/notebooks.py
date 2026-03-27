@@ -1,0 +1,128 @@
+from __future__ import annotations
+
+from typing import Iterable
+
+from ..models import NotebookDefinition, NotebookFolder, SourceCatalog
+
+
+def _find_relation(
+    catalogs: Iterable[SourceCatalog],
+    *,
+    catalog_name: str,
+    schema_name: str | None = None,
+) -> str | None:
+    for catalog in catalogs:
+        if catalog.name != catalog_name:
+            continue
+        for schema in catalog.schemas:
+            if schema_name is not None and schema.name != schema_name:
+                continue
+            if schema.objects:
+                return schema.objects[0].relation
+    return None
+
+
+def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
+    s3_relation = _find_relation(catalogs, catalog_name="workspace", schema_name="s3")
+    postgres_relation = _find_relation(catalogs, catalog_name="pg_oltp", schema_name="public")
+
+    s3_sql = (
+        "SELECT\n"
+        "  vat_id,\n"
+        "  canton_code,\n"
+        "  category\n"
+        f"FROM {s3_relation}\n"
+        "ORDER BY vat_id\n"
+        "LIMIT 100;"
+        if s3_relation
+        else "SELECT 'Configure S3_STARTUP_VIEWS to expose a smoke-test object.' AS status;"
+    )
+
+    postgres_sql = (
+        "SELECT\n"
+        "  vat_id,\n"
+        "  canton_code,\n"
+        "  category,\n"
+        "  effective_from\n"
+        f"FROM {postgres_relation}\n"
+        "ORDER BY vat_id\n"
+        "LIMIT 100;"
+        if postgres_relation
+        else "SELECT 'Configure PG_* variables to attach PostgreSQL OLTP.' AS status;"
+    )
+
+    return [
+        NotebookDefinition(
+            notebook_id="s3-smoke-test",
+            title="S3 Smoke Test",
+            summary="Reads the preconfigured smoke-test object through DuckDB.",
+            target_label="MinIO / S3",
+            sql=s3_sql,
+            tags=["smoke", "s3"],
+            tree_path=("Smoke Tests", "Object Storage"),
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="postgres-smoke-test",
+            title="PostgreSQL Smoke Test",
+            summary="Queries the OLTP reference table through the attached PostgreSQL database.",
+            target_label="PostgreSQL OLTP",
+            sql=postgres_sql,
+            tags=["smoke", "postgres"],
+            tree_path=("Smoke Tests", "Relational"),
+            can_edit=False,
+            can_delete=False,
+        ),
+    ]
+
+
+def build_completion_schema(catalogs: list[SourceCatalog]) -> dict[str, object]:
+    schema: dict[str, object] = {}
+
+    for catalog in catalogs:
+        if catalog.name == "workspace":
+            for source_schema in catalog.schemas:
+                schema[source_schema.name] = [item.name for item in source_schema.objects]
+            continue
+
+        schema[catalog.name] = {
+            source_schema.name: [item.name for item in source_schema.objects]
+            for source_schema in catalog.schemas
+        }
+
+    return schema
+
+
+def build_notebook_tree(notebooks: list[NotebookDefinition]) -> list[NotebookFolder]:
+    roots: list[NotebookFolder] = []
+    folder_index: dict[tuple[str, ...], NotebookFolder] = {}
+
+    for notebook in notebooks:
+        if not notebook.tree_path:
+            continue
+
+        path_key: tuple[str, ...] = ()
+        parent_folder: NotebookFolder | None = None
+
+        for segment in notebook.tree_path:
+            path_key = (*path_key, segment)
+            folder = folder_index.get(path_key)
+            if folder is None:
+                is_protected_path = bool(path_key) and path_key[0] == "Smoke Tests"
+                folder = NotebookFolder(
+                    folder_id="-".join(part.lower().replace(" ", "-") for part in path_key),
+                    name=segment,
+                    can_edit=not is_protected_path,
+                    can_delete=not is_protected_path,
+                )
+                folder_index[path_key] = folder
+                if parent_folder is None:
+                    roots.append(folder)
+                else:
+                    parent_folder.folders.append(folder)
+            parent_folder = folder
+
+        parent_folder.notebooks.append(notebook)
+
+    return roots

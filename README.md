@@ -1,246 +1,133 @@
 # tib-daail-evo1-poc-query-engine
 
-This repository builds a small Docker image that provides:
+This repository now contains the `DAAIFL Data Workbench` web UI and the supporting local integration stack.
 
-- the DuckDB CLI
-- the DuckDB UI extension
-- a default startup mode that keeps the DuckDB UI reachable over HTTP
+`DAAIFL Data Workbench` is a small FastAPI application that:
 
-The image is intended as a local development and PoC base. By default it starts the DuckDB UI. You can still use the CLI or a shell via `docker exec` or by overriding the command.
+- serves a notebook-style SQL UI with Jinja2, HTMX and CodeMirror 6
+- executes SQL through DuckDB in the backend
+- exposes S3/MinIO and PostgreSQL as configured data sources
+- ships two preinstalled smoke-test notebooks for S3 and PostgreSQL
 
-## Scope of this image
-
-This image only packages the DuckDB runtime and UI.
-
-It does not embed PostgreSQL or S3/MinIO.
-
-PostgreSQL and S3/MinIO are only needed when you want to test integrations:
-
-- S3/MinIO for reading and writing object storage data
-- PostgreSQL for later cross-system query tests
-
-For local development, this repository provides these systems via `docker compose`.
-For Kubernetes/OpenShift, the same connection values should come from `ConfigMap` and `Secret` objects.
-
-## What the image contains
-
-- Python 3.12
-- `duckdb` Python package
-- `duckdb-cli`
-- preinstalled DuckDB extensions: `ui`, `httpfs`, `postgres`
-- a small Python launcher that starts the DuckDB UI server
-- `socat`, to rebind the DuckDB UI port from loopback to the container's non-loopback interface without changing the browser-visible port
-
-## Build the image
-
-Build with the default DuckDB version:
-
-```bash
-docker build -t tib-daail-evo1-poc-query-engine:latest .
-```
-
-Build with an explicit DuckDB version:
-
-```bash
-docker build --build-arg DUCKDB_VERSION=1.5.0 -t tib-daail-evo1-poc-query-engine:1.5.0 .
-```
-
-## Publish to Docker Hub
-
-GitHub Actions workflow:
-
-- [`.github/workflows/docker-publish.yml`](./.github/workflows/docker-publish.yml)
-- [`VERSION`](./VERSION) controls the short immutable release tag used for deployment
-
-Required GitHub repository settings:
-
-- Actions secret: `DOCKERHUB_TOKEN`
-- Actions variable: `DOCKERHUB_USERNAME`
-- Optional Actions variable: `DOCKERHUB_NAMESPACE`
-
-Image target:
+## Architecture
 
 ```text
-docker.io/<DOCKERHUB_NAMESPACE or DOCKERHUB_USERNAME>/tib-daail-evo1-poc-query-engine
++---------+      HTMX / HTTP       +--------------------+
+| Browser | ---------------------> | FastAPI web + api  |
++---------+                        +--------------------+
+                                          |
+                                          | Python call
+                                          v
+                                  +--------------------+
+                                  | WorkbenchService   |
+                                  | DuckDB connection  |
+                                  +--------------------+
+                                    |              |
+                                    |              |
+                                    v              v
+                             +-------------+   +------------+
+                             | S3 / MinIO  |   | PostgreSQL |
+                             +-------------+   +------------+
 ```
 
-Trigger behavior:
+The application is intentionally split into:
 
-- `push` to `main`: build and push
-- `push` of tags matching `v*`: build and push
-- `pull_request` to `main`: build only
-- `workflow_dispatch`: manual run
+- `bdw/bit_data_workbench/web`: HTML routes and page composition
+- `bdw/bit_data_workbench/api`: query execution and health endpoints
+- `bdw/bit_data_workbench/backend`: DuckDB bootstrap, query execution and metadata
 
-Published tags:
+This keeps the FastAPI interface separate from the backend data-processing layer from the start.
 
-- `latest`
-- value from [`VERSION`](./VERSION), for example `0.1.0`
-- `sha-<git-sha>`
+## Local Development
 
-Docker Hub repository visibility is controlled on Docker Hub.
-If the repository does not exist yet, `docker push` creates it with the namespace default repository privacy.
-For a public image, either create the repository as public first or set the namespace default repository privacy to public.
-
-## Start the image
-
-Run the container and publish the DuckDB UI on port `4213`:
+Create the virtual environment:
 
 ```bash
-docker run --rm -d \
-  --name tib-daail-evo1-poc-query-engine \
-  -p 4213:4213 \
-  -v "$(pwd)/workspace:/workspace" \
-  tib-daail-evo1-poc-query-engine:latest
+python -m venv .venv
+.\.venv\Scripts\python -m pip install -r bdw\requirements.txt
 ```
 
-What this does:
+Start only the local integration dependencies:
 
-- stores the DuckDB database file under `/workspace`
-- starts the DuckDB UI server inside the container
-- exposes the UI on `http://localhost:4213`
+```bash
+docker compose up -d minio minio-init minio-seed postgres
+```
 
-## Access the UI
+Start the FastAPI application locally with auto-reload:
 
-Open this URL in the browser:
+```powershell
+.\scripts\start-bdw-dev.ps1
+```
+
+Optional custom port:
+
+```powershell
+.\scripts\start-bdw-dev.ps1 -Port 8011
+```
+
+This starts `uvicorn --reload`, so Python, template, CSS and JS changes are picked up without a manual restart. The script uses port `8000` by default and frees that port first by stopping the local `bit-data-workbench` Docker container or any remaining listener process on the same port.
+
+If you want the full app inside Docker instead:
+
+```bash
+docker compose up -d --build bit-data-workbench
+```
+
+Open the UI:
 
 ```text
-http://localhost:4213
+http://localhost:8000
 ```
 
-The UI runs against the database file defined by `DUCKDB_DATABASE`. By default that is:
+Local services:
 
-```text
-/workspace/workspace.duckdb
-```
-
-## Access the CLI
-
-Open the DuckDB CLI inside the running container:
-
-```bash
-docker exec -it tib-daail-evo1-poc-query-engine duckdb
-```
-
-Open a shell first:
-
-```bash
-docker exec -it tib-daail-evo1-poc-query-engine bash
-```
-
-Start the image directly in CLI mode instead of UI mode:
-
-```bash
-docker run --rm -it \
-  -v "$(pwd)/workspace:/workspace" \
-  tib-daail-evo1-poc-query-engine:latest cli /workspace/workspace.duckdb
-```
-
-To access the same file-backed database from the CLI, stop the UI container first or use a separate database file. DuckDB does not support general multi-process read/write access to the same database file.
-
-## Local test stack with MinIO and PostgreSQL
-
-For local integration tests, the repository also contains a `docker compose` stack with:
-
-- the DuckDB UI container from this repository
-- MinIO as an S3-compatible object store
-- PostgreSQL 17
-- a small MinIO init step that creates the `vat-smoke-test` bucket
-- a small MinIO seed step that uploads `startup/vat_smoke.csv`
-
-These services are for local testing only. They are not part of the actual image.
-
-Start the stack:
-
-```bash
-docker compose up -d --build
-```
-
-Stop the stack:
-
-```bash
-docker compose down
-```
-
-Stop the stack and remove volumes:
-
-```bash
-docker compose down -v
-```
-
-Services exposed locally:
-
-- DuckDB UI: `http://localhost:4213`
-- MinIO S3 endpoint: `http://localhost:9000`
-- MinIO console: `http://localhost:9001`
-- PostgreSQL: `localhost:5432`
+- `http://localhost:8000` -> DAAIFL Data Workbench local dev server
+- `http://localhost:9000` -> MinIO S3 endpoint
+- `http://localhost:9001` -> MinIO console
+- `localhost:5432` -> PostgreSQL
 
 Default local credentials:
 
 ```text
 MinIO root user: minioadmin
 MinIO root password: minioadmin
-PostgreSQL instance: postgres
-PostgreSQL OLTP database: evo1_oltp
-PostgreSQL OLAP database: evo1_olap
 PostgreSQL user: evo1
 PostgreSQL password: evo1
+PostgreSQL OLTP database: evo1_oltp
+PostgreSQL OLAP database: evo1_olap
 S3 bucket: vat-smoke-test
 ```
 
-Open a shell in the DuckDB container:
+## Application Behavior
 
-```bash
-docker exec -it tib-daail-evo1-poc-query-engine bash
-```
+At startup the backend:
 
-Example S3 query flow inside the DuckDB container:
+- opens the local DuckDB database file
+- loads the `httpfs` and `postgres` extensions
+- creates the S3 secret from `S3_*`
+- creates startup views from `S3_STARTUP_VIEWS`
+- attaches PostgreSQL as `pg_oltp` and `pg_olap`
+- introspects available schemas, tables and views for the sidebar and SQL completion
 
-```sql
-INSTALL httpfs;
-LOAD httpfs;
-SET s3_endpoint='minio:9000';
-SET s3_use_ssl=false;
-SET s3_url_style='path';
-SET s3_access_key_id='minioadmin';
-SET s3_secret_access_key='minioadmin';
-SELECT * FROM 's3://vat-smoke-test/example.parquet';
-```
+The UI ships two preinstalled notebooks:
 
-In the local Compose stack, a startup view named `vat_smoke` is created automatically from:
+- `S3 Smoke Test`
+- `PostgreSQL Smoke Test`
 
-```text
-s3://vat-smoke-test/startup/vat_smoke.csv
-```
+The left navigation shows the currently available sources:
 
-That view appears in the DuckDB UI under `workspace.s3`.
+- `workspace.s3.*` for S3-backed startup views
+- `pg_oltp.*` for the PostgreSQL source database
+- `pg_olap.*` for the PostgreSQL target database
 
-Example PostgreSQL query flow inside the DuckDB container:
+## Environment Variables
 
-```sql
-INSTALL postgres;
-LOAD postgres;
-ATTACH 'dbname=evo1_oltp host=postgres user=evo1 password=evo1 port=5432' AS pg_oltp (TYPE postgres, READ_ONLY);
-ATTACH 'dbname=evo1_olap host=postgres user=evo1 password=evo1 port=5432' AS pg_olap (TYPE postgres);
-SELECT * FROM pg_oltp.public.vat_smoke_test_reference;
-```
-
-## Environment variable strategy
-
-Configuration model:
-
-- localhost/dev: `docker compose` sets environment variables that point to the local MinIO and PostgreSQL containers
-- Kubernetes/OpenShift: a `ConfigMap` provides non-sensitive values and a `Secret` provides credentials, but they are injected into the container under the same environment variable names
-
-That keeps the image environment-agnostic. The image does not need to know whether it is running locally or in the cluster.
-
-Config split:
-
-- `ConfigMap`: hosts, ports, bucket names, region, database names
-- `Secret`: usernames, passwords, access keys, secret keys
-
-Suggested variable names:
+The same environment variable names are used locally and in Kubernetes/OpenShift:
 
 ```text
+DUCKDB_DATABASE
+DUCKDB_EXTENSION_DIRECTORY
+MAX_RESULT_ROWS
 S3_ENDPOINT
 S3_REGION
 S3_BUCKET
@@ -248,6 +135,7 @@ S3_ACCESS_KEY_ID
 S3_SECRET_ACCESS_KEY
 S3_URL_STYLE
 S3_USE_SSL
+S3_SESSION_TOKEN
 S3_STARTUP_VIEW_SCHEMA
 S3_STARTUP_VIEWS
 PG_HOST
@@ -258,177 +146,76 @@ PG_OLTP_DATABASE
 PG_OLAP_DATABASE
 ```
 
-Local/dev example:
+Local values are provided by `compose.yaml`.
 
-```text
-S3_ENDPOINT=minio:9000
-S3_REGION=us-east-1
-S3_BUCKET=vat-smoke-test
-S3_ACCESS_KEY_ID=minioadmin
-S3_SECRET_ACCESS_KEY=minioadmin
-S3_URL_STYLE=path
-S3_USE_SSL=false
-S3_STARTUP_VIEW_SCHEMA=s3
-S3_STARTUP_VIEWS=vat_smoke=csv:s3://vat-smoke-test/startup/vat_smoke.csv
-PG_HOST=postgres
-PG_PORT=5432
-PG_USER=evo1
-PG_PASSWORD=evo1
-PG_OLTP_DATABASE=evo1_oltp
-PG_OLAP_DATABASE=evo1_olap
-```
+In Kubernetes/OpenShift the BDW deployment currently reads them from:
 
-Kubernetes/OpenShift example:
+- `tib-daail-evo1-poc-query-engine-config`
+- `tib-daail-evo1-poc-query-engine-secret`
 
-```text
-S3_ENDPOINT=your-object-store.example
-S3_REGION=eu-central-1
-S3_BUCKET=vat-smoke-test
-S3_ACCESS_KEY_ID=<from-secret>
-S3_SECRET_ACCESS_KEY=<from-secret>
-S3_URL_STYLE=path
-S3_USE_SSL=true
-S3_STARTUP_VIEW_SCHEMA=s3
-S3_STARTUP_VIEWS=vat_data=parquet:s3://vat-smoke-test/path/to/data.parquet
-PG_HOST=your-postgres-service
-PG_PORT=5432
-PG_USER=<from-secret>
-PG_PASSWORD=<from-secret>
-PG_OLTP_DATABASE=evo1_oltp
-PG_OLAP_DATABASE=evo1_olap
-```
+via `envFrom`.
 
-Minimal Kubernetes/OpenShift manifests are provided under [`k8s/`](./k8s):
+## Build the BDW Image
 
-- [`duckdb-configmap.yaml`](./k8s/duckdb-configmap.yaml) for non-sensitive settings
-- [`duckdb-secret.example.yaml`](./k8s/duckdb-secret.example.yaml) as a secret template
-- [`duckdb-deployment.yaml`](./k8s/duckdb-deployment.yaml) for the DuckDB pod
-- [`duckdb-service.yaml`](./k8s/duckdb-service.yaml) for in-cluster HTTP access on port `4213`
-
-The deployment intentionally uses the same environment variable names as local `docker compose`.
-That means:
-
-- local/dev: values come from `compose.yaml`
-- cluster: values come from `ConfigMap` and `Secret`
-
-Apply flow:
+Build locally:
 
 ```bash
-kubectl apply -f k8s/duckdb-configmap.yaml
-kubectl apply -f k8s/duckdb-secret.yaml
-kubectl apply -f k8s/duckdb-deployment.yaml
-kubectl apply -f k8s/duckdb-service.yaml
+docker build -f bdw/Dockerfile -t bit-data-workbench:0.2.0 .
 ```
 
-Before applying:
-
-- copy `k8s/duckdb-secret.example.yaml` to `k8s/duckdb-secret.yaml`
-- replace the placeholder secret values
-- replace the placeholder image reference in `k8s/duckdb-deployment.yaml`
-- replace `S3_ENDPOINT`, `PG_HOST`, `PG_OLTP_DATABASE`, `PG_OLAP_DATABASE`, and other environment values in `k8s/duckdb-configmap.yaml`
-- the deployment currently uses `emptyDir` for `/workspace`, so the local DuckDB database file is ephemeral unless you replace it with a PVC
-
-## Environment Variable Consumption
-
-The container receives all connection values via environment variables. DuckDB does not automatically map arbitrary environment variables into S3 `SET` statements or PostgreSQL `ATTACH` statements.
-
-The runtime behavior is split into two layers:
-
-1. Container configuration
-   The container reads environment variables made available by Docker Compose or Kubernetes.
-
-2. DuckDB session setup
-   You still need to translate those values into DuckDB commands such as:
-
-   - `SET s3_endpoint=...`
-   - `SET s3_access_key_id=...`
-   - `ATTACH 'dbname=... host=... user=... password=...' AS ... (TYPE postgres)`
-
-The startup script performs the bootstrap step:
-
-- it creates a temporary DuckDB S3 secret from the `S3_*` environment variables
-- it optionally creates startup views in `workspace.<schema>` from `S3_STARTUP_VIEWS`
-- it attaches the PostgreSQL source database as `pg_oltp` in read-only mode
-- it attaches the PostgreSQL target database as `pg_olap` in read-write mode
-
-PostgreSQL databases are immediately visible in the DuckDB UI under attached databases.
-S3 credentials are also ready immediately, but S3 itself does not appear as an attached database in the UI tree because object storage is not a database attachment in DuckDB.
-`S3_STARTUP_VIEWS` creates UI-visible views from explicit S3 paths at startup.
-A DuckDB database file stored on S3 can be attached directly with `ATTACH 's3://.../file.duckdb' AS ...`.
-
-In the local `docker compose` setup, `pg_oltp` and `pg_olap` use one PostgreSQL instance with two logical databases.
-The same pattern can be used in Kubernetes/OpenShift.
-
-`S3_STARTUP_VIEWS` syntax:
-
-```text
-view_name=s3://bucket/path/file.parquet
-view_name=format:s3://bucket/path/file.csv
-```
-
-Multiple views can be separated with semicolons or newlines:
-
-```text
-vat_smoke=csv:s3://vat-smoke-test/startup/vat_smoke.csv;
-vat_data=parquet:s3://vat-smoke-test/data/vat_data.parquet
-```
-
-The same image behavior applies in both environments:
-
-- local: values come from `docker compose`
-- cluster: values come from `ConfigMap` and `Secret`
-
-## Useful environment variables
-
-The container supports a few runtime settings:
-
-```text
-DUCKDB_DATABASE=/workspace/workspace.duckdb
-DUCKDB_UI_PORT=4213
-DUCKDB_EXTENSION_DIRECTORY=/opt/duckdb/extensions
-DUCKDB_EXTRA_EXTENSIONS=
-```
-
-Example with a custom database path and extra extensions:
+Run directly without Compose-managed service wiring:
 
 ```bash
-docker run --rm -d \
-  --name tib-daail-evo1-poc-query-engine \
-  -p 4213:4213 \
-  -e DUCKDB_DATABASE=/workspace/demo.duckdb \
-  -e DUCKDB_EXTRA_EXTENSIONS=httpfs,postgres \
-  -v "$(pwd)/workspace:/workspace" \
-  tib-daail-evo1-poc-query-engine:latest
+docker run --rm -d ^
+  --name bit-data-workbench ^
+  -p 8000:8000 ^
+  -v "%cd%\\workspace:/workspace" ^
+  -e IMAGE_VERSION=0.2.0 ^
+  -e DUCKDB_DATABASE=/workspace/bit-data-workbench.duckdb ^
+  -e DUCKDB_EXTENSION_DIRECTORY=/opt/duckdb/extensions ^
+  -e S3_ENDPOINT=minio:9000 ^
+  -e S3_REGION=us-east-1 ^
+  -e S3_BUCKET=vat-smoke-test ^
+  -e S3_ACCESS_KEY_ID=minioadmin ^
+  -e S3_SECRET_ACCESS_KEY=minioadmin ^
+  -e S3_URL_STYLE=path ^
+  -e S3_USE_SSL=false ^
+  -e S3_STARTUP_VIEW_SCHEMA=s3 ^
+  -e S3_STARTUP_VIEWS=vat_smoke=csv:s3://vat-smoke-test/startup/vat_smoke.csv ^
+  -e PG_HOST=postgres ^
+  -e PG_PORT=5432 ^
+  -e PG_USER=evo1 ^
+  -e PG_PASSWORD=evo1 ^
+  -e PG_OLTP_DATABASE=evo1_oltp ^
+  -e PG_OLAP_DATABASE=evo1_olap ^
+  bit-data-workbench:0.2.0
 ```
 
-## How the UI is exposed
+## Kubernetes / OpenShift
 
-DuckDB's UI server is started on `localhost:${DUCKDB_UI_PORT}` inside the container. A lightweight TCP proxy then binds the same port on the container's non-loopback interface, so Docker can publish it without changing the browser-visible origin.
+Relevant manifests:
 
-## About `.dockerignore`
+- `k8s/bdw-deployment.yaml`
+- `k8s/bdw-service.yaml`
+- `k8s/bdw-route.yaml`
 
-`compose.yaml`, Kubernetes manifests, SQL init scripts, and helper shell scripts should stay in the repository. They are part of the project, but they are not "inside the image" unless the `Dockerfile` copies them into the image.
+The route is an OpenShift `edge` route and exposes the HTTP service externally through the cluster ingress.
 
-What belongs in `.dockerignore` is mostly:
+Current image:
 
-- local runtime state such as `workspace/`
-- caches and virtual environments
-- large generated files
-- local-only test data directories if you create them later
+```text
+docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.2.0
+```
 
-What does not need to be in `.dockerignore` just because it helps local tests:
+## Verification
 
-- `compose.yaml`
-- MinIO/PostgreSQL init scripts
-- Kubernetes YAML files
-- documentation
+Local backend verification already covered:
 
-For the local Compose stack, the bucket uses `vat-smoke-test` instead of `vat_smoke_test`, because MinIO enforces standard S3 bucket naming rules and rejects underscores.
+- S3 startup view query against `s3.vat_smoke`
+- PostgreSQL query against `pg_oltp.public.vat_smoke_test_reference`
 
-## Notes and limitations
+Health endpoint:
 
-- The DuckDB UI is tied to the running DuckDB instance. If the container stops, the UI stops.
-- A second DuckDB process should not be treated as a general shared read/write session against the same `.duckdb` file.
-- The browser-visible port must match `DUCKDB_UI_PORT`, because DuckDB UI validates the local browser origin for `/localToken` and `/ddb/*`.
-- The UI frontend is fetched by DuckDB from `https://ui.duckdb.org`. The container therefore needs outbound HTTPS access to that host.
-- Additional DuckDB extensions installed at runtime may require outbound access to DuckDB's extension download endpoint as well.
+```text
+http://localhost:8000/info
+```

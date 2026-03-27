@@ -1,0 +1,83 @@
+{% set sidebar_oob = sidebar_oob | default(false) %}
+<aside
+  id="sidebar"
+  class="sidebar"
+  {% if sidebar_oob %}hx-swap-oob="outerHTML"{% endif %}
+>
+  <div class="sidebar-search">
+    <label class="sidebar-label" for="sidebar-search-input">Search</label>
+    <input
+      id="sidebar-search-input"
+      class="search-input"
+      type="search"
+      placeholder="Search notebooks and data sources"
+      data-sidebar-search
+    >
+  </div>
+
+  <details class="sidebar-section notebook-section" data-notebook-section>
+    <summary class="section-heading section-summary">
+      <h2>Notebooks</h2>
+      <div class="section-tools">
+        <span
+          class="info-badge"
+          title="Notebook folders and drag-and-drop order are currently stored locally in this browser. Subject to change: will be stored by-user and remotely."
+          aria-label="Notebook tree storage information"
+        >
+          i
+        </span>
+        <span class="section-count">{{ notebooks | length }}</span>
+        <button
+          type="button"
+          class="tree-add-button"
+          data-add-tree-item
+          title="Add folder"
+          aria-label="Add folder"
+        >
+          +
+        </button>
+      </div>
+    </summary>
+    <div class="notebook-tree tree-children" data-notebook-tree data-tree-children>
+      {% for node in notebook_tree %}
+        {% include "partials/notebook_tree_node.html" %}
+      {% endfor %}
+    </div>
+  </details>
+
+  <div class="sidebar-divider" aria-hidden="true"></div>
+
+  <details class="sidebar-section" data-data-sources-section>
+    <summary class="section-heading section-summary">
+      <h2>Data Sources</h2>
+      <span class="section-count">{{ catalogs | length }}</span>
+    </summary>
+    <div class="source-tree">
+      {% for catalog in catalogs %}
+        <details class="source-catalog" data-source-catalog>
+          <summary data-searchable-item="{{ catalog.name }}">
+            <span>{{ catalog.name }}</span>
+          </summary>
+          {% for schema in catalog.schemas %}
+            <details class="source-schema" data-source-schema>
+              <summary data-searchable-item="{{ schema.name }}">
+                <span>{{ schema.name }}</span>
+              </summary>
+              <ul class="source-object-list">
+                {% for source_object in schema.objects %}
+                  <li
+                    class="source-object source-object-{{ source_object.kind }}"
+                    data-searchable-item="{{ source_object.name }} {{ source_object.relation }}"
+                  >
+                    <span>{{ source_object.name }}</span>
+                    <small>{{ source_object.kind }}</small>
+                  </li>
+                {% endfor %}
+              </ul>
+            </details>
+          {% endfor %}
+        </details>
+      {% endfor %}
+    </div>
+  </details>
+</aside>

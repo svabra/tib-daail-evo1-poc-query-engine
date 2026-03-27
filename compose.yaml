@@ -1,4 +1,46 @@
 services:
+  bit-data-workbench:
+    build:
+      context: .
+      dockerfile: bdw/Dockerfile
+    image: bit-data-workbench:local
+    container_name: bit-data-workbench
+    depends_on:
+      minio:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+      minio-seed:
+        condition: service_completed_successfully
+    environment:
+      IMAGE_VERSION: "0.2.0"
+      PORT: "8000"
+      MAX_RESULT_ROWS: "200"
+      DUCKDB_DATABASE: /workspace/bit-data-workbench.duckdb
+      DUCKDB_EXTENSION_DIRECTORY: /opt/duckdb/extensions
+      S3_ENDPOINT: minio:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: vat-smoke-test
+      S3_ACCESS_KEY_ID: minioadmin
+      S3_SECRET_ACCESS_KEY: minioadmin
+      S3_URL_STYLE: path
+      S3_USE_SSL: "false"
+      S3_STARTUP_VIEW_SCHEMA: s3
+      S3_STARTUP_VIEWS: vat_smoke=csv:s3://vat-smoke-test/startup/vat_smoke.csv
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_USER: evo1
+      PG_PASSWORD: evo1
+      PG_OLTP_DATABASE: evo1_oltp
+      PG_OLAP_DATABASE: evo1_olap
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./workspace:/workspace
+    restart: unless-stopped
+
   tib-daail-evo1-poc-query-engine:
     build:
       context: .

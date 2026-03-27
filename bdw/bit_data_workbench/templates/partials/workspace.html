@@ -1,0 +1,76 @@
+<article class="workspace-card" data-workspace-notebook>
+  <header class="workspace-header">
+    <div>
+      <p class="workspace-kicker">{{ active_notebook.target_label }}</p>
+      <h2>{{ active_notebook.title }}</h2>
+      <p class="workspace-summary">{{ active_notebook.summary }}</p>
+      <section
+        class="workspace-tags"
+        data-notebook-meta
+        data-notebook-id="{{ active_notebook.notebook_id }}"
+        data-can-edit="{{ 'true' if active_notebook.can_edit else 'false' }}"
+        data-can-delete="{{ 'true' if active_notebook.can_delete else 'false' }}"
+      >
+        <span class="workspace-tags-label">Tags</span>
+        <div class="workspace-tag-editor">
+          <div class="workspace-tag-list" data-tag-list>
+            {% for tag in active_notebook.tags %}
+              <button type="button" class="workspace-tag-chip" data-tag-value="{{ tag }}">
+                <span>{{ tag }}</span>
+                <span class="workspace-tag-remove" aria-hidden="true">×</span>
+              </button>
+            {% endfor %}
+          </div>
+          <div class="workspace-tag-controls">
+            <input
+              class="workspace-tag-input"
+              type="text"
+              placeholder="Add tag"
+              data-tag-input
+            >
+            <button class="workspace-tag-add" type="button" data-tag-add>Add</button>
+          </div>
+        </div>
+      </section>
+    </div>
+    <div class="workspace-actions">
+      {% if not active_notebook.can_edit or not active_notebook.can_delete %}
+        <div class="workspace-item-tools" aria-hidden="true">
+          {% if not active_notebook.can_edit %}
+            <span class="tree-add-button tree-add-button-inline notebook-action-pill is-action-disabled">Edit</span>
+          {% endif %}
+          {% if not active_notebook.can_delete %}
+            <span class="tree-add-button tree-add-button-inline notebook-action-pill is-action-disabled">Delete</span>
+          {% endif %}
+        </div>
+      {% endif %}
+    </div>
+  </header>
+
+  <form
+    class="query-form"
+    hx-post="/api/query"
+    hx-target="#query-results"
+    hx-swap="outerHTML"
+  >
+    <input type="hidden" name="notebook_id" value="{{ active_notebook.notebook_id }}">
+    <div class="query-divider" aria-hidden="true"></div>
+    <div class="query-toolbar">
+      <div class="query-heading">
+        <span class="query-label">SQL Notebook</span>
+        <span class="hint">Run with Ctrl/Cmd + Enter</span>
+      </div>
+      <button class="run-button" type="submit">Run Query</button>
+    </div>
+
+    <div
+      class="editor-frame"
+      data-editor-root
+      data-editor-name="sql"
+    >
+      <textarea name="sql" data-editor-source spellcheck="false">{{ active_notebook.sql }}</textarea>
+    </div>
+  </form>
+
+  {% include "partials/query_results.html" %}
+</article>

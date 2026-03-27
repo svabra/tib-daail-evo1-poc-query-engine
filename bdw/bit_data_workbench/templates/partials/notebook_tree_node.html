@@ -1,0 +1,89 @@
+<details
+  class="tree-folder"
+  data-tree-folder
+  data-folder-id="{{ node.folder_id }}"
+  data-can-edit="{{ 'true' if node.can_edit else 'false' }}"
+  data-can-delete="{{ 'true' if node.can_delete else 'false' }}"
+>
+  <summary class="tree-folder-summary" data-searchable-item="{{ node.name }}">
+    <span class="tree-folder-label">{{ node.name }}</span>
+    <span class="tree-folder-tools">
+      <button
+        type="button"
+        class="tree-add-button tree-add-button-inline{% if not node.can_edit %} is-action-disabled{% endif %}"
+        data-rename-tree-folder
+        title="{% if node.can_edit %}Rename folder{% else %}This folder cannot be renamed.{% endif %}"
+        aria-label="Rename folder"
+        {% if not node.can_edit %}disabled{% endif %}
+      >
+        Edit
+      </button>
+      <button
+        type="button"
+        class="tree-add-button tree-add-button-inline tree-delete-button{% if not node.can_delete %} is-action-disabled{% endif %}"
+        data-delete-tree-folder
+        title="{% if node.can_delete %}Delete folder. Notebooks will be moved to the unassigned folder.{% else %}This folder cannot be deleted.{% endif %}"
+        aria-label="Delete folder"
+        {% if not node.can_delete %}disabled{% endif %}
+      >
+        Delete
+      </button>
+      <button
+        type="button"
+        class="tree-add-button tree-add-button-inline"
+        data-add-tree-item
+        title="Add subfolder"
+        aria-label="Add subfolder"
+      >
+        +
+      </button>
+      <span class="tree-folder-count">{{ node.notebook_count }}</span>
+    </span>
+  </summary>
+  <div class="tree-children" data-tree-children>
+    {% for child_folder in node.folders %}
+      {% with node=child_folder %}
+        {% include "partials/notebook_tree_node.html" %}
+      {% endwith %}
+    {% endfor %}
+    {% for notebook in node.notebooks %}
+      <a
+        href="/notebooks/{{ notebook.notebook_id }}"
+        class="notebook-link notebook-tree-leaf{% if notebook.notebook_id == active_notebook_id %} is-active{% endif %}"
+        data-notebook-id="{{ notebook.notebook_id }}"
+        data-notebook-title="{{ notebook.title }}"
+        data-notebook-summary="{{ notebook.summary }}"
+        data-can-edit="{{ 'true' if notebook.can_edit else 'false' }}"
+        data-can-delete="{{ 'true' if notebook.can_delete else 'false' }}"
+        data-searchable-item="{{ notebook.title }} {{ notebook.summary }} {{ notebook.tags | join(' ') }}"
+        data-draggable-notebook
+        draggable="true"
+        hx-get="/notebooks/{{ notebook.notebook_id }}"
+        hx-target="#workspace-panel"
+        hx-swap="innerHTML"
+      >
+        <span class="notebook-title-row">
+          <span class="notebook-title">{{ notebook.title }}</span>
+          {% if not notebook.can_edit or not notebook.can_delete %}
+            <span class="notebook-item-tools" aria-hidden="true">
+              {% if not notebook.can_edit %}
+                <span class="tree-add-button tree-add-button-inline notebook-action-pill is-action-disabled">Edit</span>
+              {% endif %}
+              {% if not notebook.can_delete %}
+                <span class="tree-add-button tree-add-button-inline notebook-action-pill is-action-disabled">Delete</span>
+              {% endif %}
+            </span>
+          {% endif %}
+        </span>
+        <span class="notebook-summary">{{ notebook.summary }}</span>
+        {% if notebook.tags %}
+          <span class="notebook-tags">
+            {% for tag in notebook.tags %}
+              <small class="notebook-tag">{{ tag }}</small>
+            {% endfor %}
+          </span>
+        {% endif %}
+      </a>
+    {% endfor %}
+  </div>
+</details>

@@ -1,0 +1,30 @@
+{% extends "layout.html" %}
+
+{% block body %}
+  <div class="shell">
+    {% include "partials/sidebar.html" %}
+
+    <main class="workspace-shell">
+      <header class="topbar">
+        <div class="brand">
+          <img
+            class="brand-mark"
+            src="{{ request.url_for('static', path='img/swiss-confederation-logo.png') }}"
+            alt="Schweizerische Eidgenossenschaft"
+          >
+          <div class="brand-copy">
+            <h1>{{ title }}</h1>
+          </div>
+        </div>
+        <dl class="runtime-pill">
+          <dt>Image</dt>
+          <dd>{{ runtime.image_version }}</dd>
+        </dl>
+      </header>
+
+      <section id="workspace-panel">
+        {% include "partials/workspace.html" %}
+      </section>
+    </main>
+  </div>
+{% endblock %}
