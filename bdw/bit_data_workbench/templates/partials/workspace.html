@@ -1,3 +1,4 @@
+{% set current_version = active_notebook.versions[0] if active_notebook.versions else none %}
 <article
   class="workspace-card"
   data-workspace-notebook
@@ -8,6 +9,7 @@
   data-default-title="{{ active_notebook.title }}"
   data-default-summary="{{ active_notebook.summary }}"
   data-default-cells='{{ active_notebook.cells_payload | tojson }}'
+  data-default-versions='{{ active_notebook.versions_payload | tojson }}'
   data-default-tags="{{ active_notebook.tags | join('||') }}"
 >
   <header class="workspace-header">
@@ -23,11 +25,6 @@
             title="Click to rename the notebook"
           {% endif %}
         >{{ active_notebook.title }}</h2>
-        <span
-          class="workspace-access-badge"
-          data-access-badge
-          title="{{ active_notebook.access_mode_hint }}"
-        >{{ active_notebook.access_mode }}</span>
       </div>
       <div class="workspace-summary-field" data-summary-container>
         <p
@@ -144,10 +141,21 @@
           class="workspace-version-current"
           data-version-toggle
           aria-expanded="false"
-          title="Expand version history"
+          title="{{ 'Expand version history' if current_version else 'No saved versions yet.' }}"
+          {% if not current_version %}disabled{% endif %}
         >
           <span class="workspace-version-current-copy" data-version-current>
-            <span class="workspace-version-current-empty">No saved versions yet.</span>
+            {% if current_version %}
+              <span class="workspace-version-current-stack">
+                <span class="workspace-version-current-primary">
+                  <span class="workspace-version-current-timestamp">{{ current_version.created_at }}</span>
+                  <span class="workspace-version-current-name">{{ current_version.title or 'Notebook version' }}</span>
+                </span>
+                <span class="workspace-version-current-secondary">{{ current_version.summary or 'No description saved.' }}</span>
+              </span>
+            {% else %}
+              <span class="workspace-version-current-empty">No saved versions yet.</span>
+            {% endif %}
           </span>
           <span class="workspace-version-toggle-icon" data-version-toggle-icon aria-hidden="true">›</span>
         </button>
@@ -162,7 +170,25 @@
       </button>
     </div>
     <div class="workspace-version-panel" data-version-panel hidden>
-      <div class="workspace-version-list" data-version-list></div>
+      <div class="workspace-version-list" data-version-list>
+        {% if current_version %}
+          <button
+            type="button"
+            class="workspace-version-item"
+            data-version-id="{{ current_version.version_id }}"
+            data-version-load
+            title="Load this saved version"
+          >
+            <div class="workspace-version-title">
+              <span class="workspace-version-timestamp">{{ current_version.created_at }}</span>
+              <span class="workspace-version-name">{{ current_version.title or 'Notebook version' }}</span>
+            </div>
+            <span class="workspace-version-description">{{ current_version.summary or 'No description saved.' }}</span>
+          </button>
+        {% else %}
+          <div class="workspace-version-empty">No saved versions yet.</div>
+        {% endif %}
+      </div>
     </div>
   </section>
 
@@ -191,6 +217,10 @@
                 data-cell-access-badge
                 title="{{ cell.access_mode_hint }}"
               >{{ cell.access_mode }}</span>
+              <span
+                class="workspace-access-badge workspace-access-badge-small workspace-access-badge-static"
+                title="Your data is exclusivly stored and processed in Swiss Government facilities. Hybrid or 3rd-party storage will be available with the Swiss Government Cloud for insensitive data."
+              >CHE Data Souvereignity</span>
               <details class="cell-source-picker" data-cell-source-picker>
                 <summary class="cell-source-picker-toggle" data-cell-source-summary>
                   {% if cell.data_sources %}

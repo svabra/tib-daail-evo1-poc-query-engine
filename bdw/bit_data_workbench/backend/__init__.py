@@ -1,1 +1,1 @@
-"""Backend services for the DAAIFL Data Workbench."""
+"""Backend services for the DAAIFL Query Workbench."""

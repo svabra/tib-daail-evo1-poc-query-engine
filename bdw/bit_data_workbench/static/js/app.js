@@ -434,6 +434,19 @@ function parseCellsPayload(value) {
   }
 }
 
+function parseVersionsPayload(value) {
+  if (!value) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map((version) => normalizeVersionEntry(version)).filter(Boolean) : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
 function normalizeCellEntry(cell, fallback = {}) {
   if (!cell || typeof cell !== "object" || Array.isArray(cell)) {
     return null;
@@ -529,6 +542,7 @@ function readNotebookDefaults(notebookId) {
   const linkTags = parseDefaultTags(link?.dataset.defaultNotebookTags);
   const metaCells = parseCellsPayload(metaRoot?.dataset.defaultCells);
   const linkCells = parseCellsPayload(link?.dataset.defaultNotebookCells);
+  const metaVersions = parseVersionsPayload(metaRoot?.dataset.defaultVersions);
   const metaDataSources = parseDefaultDataSources(metaRoot?.dataset.defaultDataSources);
   const linkDataSources = parseDefaultDataSources(link?.dataset.defaultNotebookDataSources);
   const legacyDataSource = sourceIdFromLegacyTargetLabel(
@@ -574,9 +588,11 @@ function readNotebookDefaults(notebookId) {
     canEdit: (metaRoot?.dataset.canEdit ?? link?.dataset.canEdit ?? "true") !== "false",
     canDelete: (metaRoot?.dataset.canDelete ?? link?.dataset.canDelete ?? "true") !== "false",
     deleted: false,
-    versions: [],
+    versions: metaVersions,
   };
-  defaults.versions = [createInitialNotebookVersion(notebookId, defaults)];
+  if (!defaults.versions.length) {
+    defaults.versions = [createInitialNotebookVersion(notebookId, defaults)];
+  }
   return defaults;
 }
 
@@ -710,6 +726,8 @@ function cellSourceSummaryText(dataSources) {
 
 function buildCellMarkup(notebookId, cell, index, canEdit) {
   const selectedSources = normalizeDataSources(cell.dataSources);
+  const sovereigntyHint =
+    "Your data is exclusivly stored and processed in Swiss Government facilities. Hybrid or 3rd-party storage will be available with the Swiss Government Cloud for insensitive data.";
   const sourceOptionsMarkup =
     readSourceOptions()
       .map((option) => {
@@ -745,6 +763,7 @@ function buildCellMarkup(notebookId, cell, index, canEdit) {
           <div class="cell-heading">
             <span class="cell-label">Cell ${index + 1}</span>
             <span class="workspace-access-badge workspace-access-badge-small" data-cell-access-badge title="${escapeHtml(accessModeHintForDataSources(selectedSources))}">${escapeHtml(accessModeForDataSources(selectedSources))}</span>
+            <span class="workspace-access-badge workspace-access-badge-small workspace-access-badge-static" title="${escapeHtml(sovereigntyHint)}">CHE Data Souvereignity</span>
             <details class="cell-source-picker" data-cell-source-picker>
               <summary class="cell-source-picker-toggle" data-cell-source-summary>${escapeHtml(cellSourceSummaryText(selectedSources))}</summary>
               <div class="cell-source-selection" data-cell-source-selection>
@@ -786,8 +805,6 @@ function buildWorkspaceMarkup(notebookId, metadata) {
       `
     )
     .join("");
-  const accessMode = notebookAccessMode(metadata);
-  const accessModeHint = notebookAccessModeHint(metadata);
   const currentVersion = metadata.versions?.[0] ?? null;
   const versionSummaryMarkup = currentVersion
     ? `
@@ -819,13 +836,24 @@ function buildWorkspaceMarkup(notebookId, metadata) {
         dataSources: normalizeDataSources(cell.dataSources),
         sql: cell.sql,
       }))))}'
+      data-default-versions='${escapeHtml(JSON.stringify((metadata.versions ?? []).map((version) => ({
+        versionId: version.versionId,
+        createdAt: version.createdAt,
+        title: version.title,
+        summary: version.summary,
+        tags: normalizeTags(version.tags),
+        cells: normalizeNotebookCells(version.cells).map((cell) => ({
+          cellId: cell.cellId,
+          dataSources: normalizeDataSources(cell.dataSources),
+          sql: cell.sql,
+        })),
+      }))))}'
       data-default-tags="${escapeHtml(metadata.tags.join("||"))}"
     >
       <header class="workspace-header">
         <div class="workspace-title-block">
           <div class="workspace-title-row">
             <h2 class="workspace-notebook-title is-editable" data-notebook-title-display data-rename-notebook-title tabindex="0" role="button" title="Click to rename the notebook">${escapeHtml(metadata.title)}</h2>
-            <span class="workspace-access-badge" data-access-badge title="${escapeHtml(accessModeHint)}">${escapeHtml(accessMode)}</span>
           </div>
           <div class="workspace-summary-field" data-summary-container>
             <p class="workspace-summary-display is-editable" data-summary-display tabindex="0" role="button" title="Click to edit the notebook description">${escapeHtml(metadata.summary)}</p>
@@ -1466,6 +1494,7 @@ function createEditor(root) {
         sql({
           dialect: PostgreSQL,
           schema,
+          upperCaseKeywords: true,
         }),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
@@ -1763,6 +1792,16 @@ function closeCellActionMenus() {
   document.querySelectorAll("[data-cell-action-menu][open]").forEach((menu) => {
     menu.removeAttribute("open");
   });
+}
+
+function closeCellSourcePicker(cellRoot) {
+  const picker = cellRoot?.querySelector("[data-cell-source-picker]");
+  if (!picker) {
+    return;
+  }
+
+  picker.open = false;
+  picker.removeAttribute("open");
 }
 
 function applyWorkspaceCellState(workspaceRoot, cell, index, editable) {
@@ -3281,6 +3320,7 @@ document.body.addEventListener("change", (event) => {
     (option) => option.value
   );
   setCellDataSources(notebookId, cellId, selectedSources);
+  closeCellSourcePicker(cellRoot);
 });
 
 document.body.addEventListener(

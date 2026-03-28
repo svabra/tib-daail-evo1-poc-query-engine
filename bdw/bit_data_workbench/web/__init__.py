@@ -1,1 +1,1 @@
-"""HTML routes for the DAAIFL Data Workbench."""
+"""HTML routes for the DAAIFL Query Workbench."""

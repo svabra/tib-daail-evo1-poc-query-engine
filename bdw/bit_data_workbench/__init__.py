@@ -1,1 +1,1 @@
-"""DAAIFL Data Workbench application package."""
+"""DAAIFL Query Workbench application package."""

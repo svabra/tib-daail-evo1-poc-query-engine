@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any
 
 
@@ -49,6 +50,27 @@ class NotebookCellDefinition:
 
 
 @dataclass(slots=True)
+class NotebookVersionDefinition:
+    version_id: str
+    created_at: str
+    title: str
+    summary: str
+    tags: list[str] = field(default_factory=list)
+    cells: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {
+            "versionId": self.version_id,
+            "createdAt": self.created_at,
+            "title": self.title,
+            "summary": self.summary,
+            "tags": list(self.tags),
+            "cells": list(self.cells),
+        }
+
+
+@dataclass(slots=True)
 class NotebookDefinition:
     notebook_id: str
     title: str
@@ -58,6 +80,7 @@ class NotebookDefinition:
     tree_path: tuple[str, ...] = ()
     can_edit: bool = True
     can_delete: bool = True
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     @property
     def data_sources(self) -> list[str]:
@@ -88,6 +111,25 @@ class NotebookDefinition:
         if any(len(cell.data_sources) > 1 for cell in self.cells):
             return "At least one cell selects multiple sources and stays in query-only mode."
         return "All current cells are configured for single-source read/write execution."
+
+    @property
+    def initial_version(self) -> NotebookVersionDefinition:
+        return NotebookVersionDefinition(
+            version_id=f"initial-{self.notebook_id}",
+            created_at=self.created_at,
+            title=self.title,
+            summary=self.summary,
+            tags=list(self.tags),
+            cells=self.cells_payload,
+        )
+
+    @property
+    def versions(self) -> list[NotebookVersionDefinition]:
+        return [self.initial_version]
+
+    @property
+    def versions_payload(self) -> list[dict[str, Any]]:
+        return [version.payload for version in self.versions]
 
     @property
     def cells_payload(self) -> list[dict[str, Any]]:

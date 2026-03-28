@@ -191,6 +191,12 @@ docker run --rm -d ^
   bit-data-workbench:0.2.0
 ```
 
+### TODO
+
+- Decide how frontend dependencies should be packaged into the image build:
+  - keep the vendored CodeMirror / `lang-sql` tree in `bdw/bit_data_workbench/static/vendor/**` for a simple self-contained image build without npm/CDN dependencies
+  - or switch to an npm/pnpm-based frontend build step for a cleaner repository and generate the browser assets during CI / image build
+
 ## Kubernetes / OpenShift
 
 Relevant manifests:

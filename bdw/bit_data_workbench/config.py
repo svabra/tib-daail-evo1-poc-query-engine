@@ -68,7 +68,7 @@ class Settings:
     def from_env(cls) -> "Settings":
         return cls(
             service_name="bit-data-workbench",
-            ui_title="DAAIFL Data Workbench",
+            ui_title="DAAIFL Query Workbench",
             image_version=env("IMAGE_VERSION", "unknown"),
             port=int(env("PORT", "8000")),
             duckdb_database=Path(env("DUCKDB_DATABASE", "/workspace/workspace.duckdb")),

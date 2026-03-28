@@ -630,6 +630,14 @@ details:not([open]) > .source-schema > summary::before {
   padding: 26px 32px 18px;
 }
 
+.topbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
 .brand {
   display: flex;
   align-items: center;
@@ -684,6 +692,10 @@ details:not([open]) > .source-schema > summary::before {
 }
 
 .topbar-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   padding: 11px 16px;
@@ -694,9 +706,33 @@ details:not([open]) > .source-schema > summary::before {
   cursor: pointer;
 }
 
+.topbar-action-button-icon-only {
+  width: 46px;
+  height: 46px;
+  padding: 0;
+}
+
+.topbar-action-icon {
+  width: 18px;
+  height: 18px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.45;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .topbar-action-button:hover {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+.topbar-action-button-muted,
+.topbar-action-button-muted:hover {
+  border-color: rgba(123, 138, 153, 0.28);
+  background: rgba(237, 242, 247, 0.92);
+  color: #7b8a99;
+  cursor: not-allowed;
 }
 
 #workspace-panel {
@@ -781,6 +817,12 @@ details:not([open]) > .source-schema > summary::before {
   font-weight: 700;
   white-space: nowrap;
   cursor: help;
+}
+
+.workspace-access-badge-static {
+  border-color: rgba(96, 110, 128, 0.2);
+  background: rgba(96, 110, 128, 0.08);
+  color: var(--text-muted);
 }
 
 .workspace-summary-field {

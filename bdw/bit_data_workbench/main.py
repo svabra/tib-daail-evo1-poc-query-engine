@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
         workbench.stop()
 
 
-app = FastAPI(title="DAAIFL Data Workbench", lifespan=lifespan)
+app = FastAPI(title="DAAIFL Query Workbench", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.mount("/node", StaticFiles(directory=BASE_DIR / "static" / "vendor" / "node"), name="node")
 app.include_router(api_router)

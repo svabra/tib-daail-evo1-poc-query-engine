@@ -16,9 +16,38 @@
             <h1>{{ title }}</h1>
           </div>
         </div>
-        <button type="button" class="topbar-action-button" data-create-notebook>
-          Create Notebook
-        </button>
+        <div class="topbar-actions">
+          <button
+            type="button"
+            class="topbar-action-button topbar-action-button-muted topbar-action-button-icon-only"
+            aria-disabled="true"
+            aria-label="Ingestion Workbench"
+            title="Ingestion Workbench"
+          >
+            <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M3 3.2h10v3.3H3z"></path>
+              <path d="M5.1 8.1v2.6a2 2 0 0 0 2 2h1.8a2 2 0 0 0 2-2V8.1"></path>
+              <path d="M8 2.1v6.2"></path>
+              <path d="M5.9 6.2 8 8.3l2.1-2.1"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="topbar-action-button topbar-action-button-muted topbar-action-button-icon-only"
+            aria-disabled="true"
+            aria-label="Governance Workbench"
+            title="Governance Workbench"
+          >
+            <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M8 1.7 12.8 3v3.6c0 3.2-1.7 5.2-4.8 7.7C4.9 11.8 3.2 9.8 3.2 6.6V3z"></path>
+              <path d="M8 5.1v5.4"></path>
+              <path d="M5.8 7.3h4.4"></path>
+            </svg>
+          </button>
+          <button type="button" class="topbar-action-button" data-create-notebook>
+            Create Notebook
+          </button>
+        </div>
       </header>
 
       <section id="workspace-panel">
