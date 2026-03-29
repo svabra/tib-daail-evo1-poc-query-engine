@@ -238,12 +238,14 @@
                 {% endif %}
                 <summary class="cell-source-picker-toggle" data-cell-source-summary>
                   <span class="cell-source-summary-label" data-cell-source-summary-label>{{ source_summary.label }}</span>
-                  <span class="cell-source-classification" data-cell-source-classification>Classification: {{ source_summary.classification }}</span>
-                  <span
-                    class="cell-source-computation-mode"
-                    data-cell-source-computation-mode
-                    title="{{ computation_mode_tooltip | safe }}"
-                  >Computation Mode: {{ source_summary.computation_mode }}</span>
+                  {% if cell.data_sources %}
+                    <span class="cell-source-classification" data-cell-source-classification>Classification: {{ source_summary.classification }}</span>
+                    <span
+                      class="cell-source-computation-mode"
+                      data-cell-source-computation-mode
+                      title="{{ computation_mode_tooltip | safe }}"
+                    >Processing Mode: {{ source_summary.computation_mode }}</span>
+                  {% endif %}
                 </summary>
                 <div class="cell-source-selection" data-cell-source-selection>
                   {% for source in source_options %}
@@ -263,8 +265,7 @@
               </details>
             </div>
             <div class="cell-actions">
-              <span class="hint">Run with Ctrl/Cmd + Enter</span>
-              <button class="run-button" type="submit">Run Cell</button>
+              <button class="run-button" type="submit" title="Run with Ctrl/Cmd + Enter">Run Cell</button>
               <details class="workspace-action-menu cell-action-menu" data-cell-action-menu>
                 <summary
                   class="workspace-action-menu-toggle"
@@ -274,6 +275,40 @@
                   <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
                 </summary>
                 <div class="workspace-action-menu-panel">
+                  <button
+                    type="button"
+                    class="workspace-action-menu-item{% if not active_notebook.can_edit %} is-action-disabled{% endif %}"
+                    data-format-cell-sql
+                    {% if not active_notebook.can_edit %}disabled{% endif %}
+                    title="{% if active_notebook.can_edit %}Format SQL{% else %}This notebook cannot be edited.{% endif %}"
+                  >
+                    Format SQL
+                  </button>
+                  <button
+                    type="button"
+                    class="workspace-action-menu-item workspace-action-menu-item-placeholder is-action-disabled"
+                    disabled
+                    title="Coming soon."
+                  >
+                    Optimize SQL
+                  </button>
+                  <button
+                    type="button"
+                    class="workspace-action-menu-item workspace-action-menu-item-placeholder is-action-disabled"
+                    disabled
+                    title="Coming soon."
+                  >
+                    Explain SQL Execution Plan
+                  </button>
+                  <button
+                    type="button"
+                    class="workspace-action-menu-item workspace-action-menu-item-placeholder is-action-disabled"
+                    disabled
+                    title="Coming soon."
+                  >
+                    Explain Semantics of this Query
+                  </button>
+                  <div class="workspace-action-menu-separator" aria-hidden="true"></div>
                   <button
                     type="button"
                     class="workspace-action-menu-item{% if not active_notebook.can_edit or loop.first %} is-action-disabled{% endif %}"
@@ -293,15 +328,6 @@
                     Move down
                   </button>
                   <div class="workspace-action-menu-separator" aria-hidden="true"></div>
-                  <button
-                    type="button"
-                    class="workspace-action-menu-item{% if not active_notebook.can_edit %} is-action-disabled{% endif %}"
-                    data-format-cell-sql
-                    {% if not active_notebook.can_edit %}disabled{% endif %}
-                    title="{% if active_notebook.can_edit %}Format SQL{% else %}This notebook cannot be edited.{% endif %}"
-                  >
-                    Format SQL
-                  </button>
                   <button
                     type="button"
                     class="workspace-action-menu-item{% if not active_notebook.can_edit %} is-action-disabled{% endif %}"
@@ -343,6 +369,7 @@
               name="sql"
               data-editor-source
               data-default-sql="{{ cell.sql }}"
+              rows="3"
               spellcheck="false"
             >{{ cell.sql }}</textarea>
           </div>

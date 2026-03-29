@@ -2,6 +2,7 @@ import { EditorView, basicSetup } from "../vendor/codemirror.bundle.mjs";
 import { sql, PostgreSQL } from "../vendor/lang-sql.bundle.mjs";
 
 const editorRegistry = new WeakMap();
+const editorSizingRegistry = new WeakMap();
 let draggedNotebook = null;
 let restoreController = null;
 let applyingNotebookState = false;
@@ -572,7 +573,7 @@ function sourceClassificationDisplayText(dataSources) {
 }
 
 function sourceComputationModeDisplayText(dataSources) {
-  return `Computation Mode: ${sourceComputationModeForIds(dataSources)}`;
+  return `Processing Mode: ${sourceComputationModeForIds(dataSources)}`;
 }
 
 function sourceComputationModeTooltipText() {
@@ -1306,10 +1307,17 @@ function cellSourceSummaryText(dataSources) {
 }
 
 function cellSourceSummaryMarkup(dataSources) {
+  const selectedSources = normalizeDataSources(dataSources);
+  const metadataMarkup = selectedSources.length
+    ? `
+        <span class="cell-source-classification" data-cell-source-classification>${escapeHtml(sourceClassificationDisplayText(selectedSources))}</span>
+        <span class="cell-source-computation-mode" data-cell-source-computation-mode title="${escapeHtml(sourceComputationModeTooltipText())}">${escapeHtml(sourceComputationModeDisplayText(selectedSources))}</span>
+      `
+    : "";
+
   return `
     <span class="cell-source-summary-label" data-cell-source-summary-label>${escapeHtml(cellSourceSummaryText(dataSources))}</span>
-    <span class="cell-source-classification" data-cell-source-classification>${escapeHtml(sourceClassificationDisplayText(dataSources))}</span>
-    <span class="cell-source-computation-mode" data-cell-source-computation-mode title="${escapeHtml(sourceComputationModeTooltipText())}">${escapeHtml(sourceComputationModeDisplayText(dataSources))}</span>
+    ${metadataMarkup}
   `;
 }
 
@@ -1362,13 +1370,17 @@ function buildCellMarkup(notebookId, cell, index, canEdit, totalCells) {
             </details>
           </div>
           <div class="cell-actions">
-            <span class="hint">Run with Ctrl/Cmd + Enter</span>
-            <button class="run-button" type="submit">Run Cell</button>
+            <button class="run-button" type="submit" title="Run with Ctrl/Cmd + Enter">Run Cell</button>
             <details class="workspace-action-menu cell-action-menu" data-cell-action-menu>
               <summary class="workspace-action-menu-toggle" aria-label="Cell actions" title="Cell actions">
                 <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
               </summary>
               <div class="workspace-action-menu-panel">
+                <button type="button" class="workspace-action-menu-item${canEdit ? "" : " is-action-disabled"}" data-format-cell-sql ${canEdit ? "" : "disabled"} title="${canEdit ? "Format SQL" : "This notebook cannot be edited."}">Format SQL</button>
+                <button type="button" class="workspace-action-menu-item workspace-action-menu-item-placeholder is-action-disabled" disabled title="Coming soon.">Optimize SQL</button>
+                <button type="button" class="workspace-action-menu-item workspace-action-menu-item-placeholder is-action-disabled" disabled title="Coming soon.">Explain SQL Execution Plan</button>
+                <button type="button" class="workspace-action-menu-item workspace-action-menu-item-placeholder is-action-disabled" disabled title="Coming soon.">Explain Semantics of this Query</button>
+                <div class="workspace-action-menu-separator" aria-hidden="true"></div>
                 <button type="button" class="workspace-action-menu-item${canMoveUp ? "" : " is-action-disabled"}" data-move-cell-up ${canMoveUp ? "" : "disabled"} title="${
                   canMoveUp
                     ? "Move cell up"
@@ -1384,7 +1396,6 @@ function buildCellMarkup(notebookId, cell, index, canEdit, totalCells) {
                       : "This notebook cannot be edited."
                 }">Move down</button>
                 <div class="workspace-action-menu-separator" aria-hidden="true"></div>
-                <button type="button" class="workspace-action-menu-item${canEdit ? "" : " is-action-disabled"}" data-format-cell-sql ${canEdit ? "" : "disabled"} title="${canEdit ? "Format SQL" : "This notebook cannot be edited."}">Format SQL</button>
                 <button type="button" class="workspace-action-menu-item${canEdit ? "" : " is-action-disabled"}" data-add-cell-after ${canEdit ? "" : "disabled"} title="${canEdit ? "Add cell below" : "This notebook cannot be edited."}">Add cell</button>
                 <button type="button" class="workspace-action-menu-item${canEdit ? "" : " is-action-disabled"}" data-copy-cell ${canEdit ? "" : "disabled"} title="${canEdit ? "Copy cell" : "This notebook cannot be edited."}">Copy cell</button>
                 <button type="button" class="workspace-action-menu-item workspace-action-menu-item-danger${canEdit ? "" : " is-action-disabled"}" data-delete-cell ${canEdit ? "" : "disabled"} title="${canEdit ? "Delete cell" : "This notebook cannot be edited."}">Delete cell</button>
@@ -1393,7 +1404,7 @@ function buildCellMarkup(notebookId, cell, index, canEdit, totalCells) {
           </div>
         </div>
         <div class="editor-frame" data-editor-root data-editor-name="sql-${escapeHtml(cell.cellId)}">
-          <textarea name="sql" data-editor-source data-default-sql="${escapeHtml(cell.sql)}" spellcheck="false">${escapeHtml(cell.sql)}</textarea>
+          <textarea name="sql" data-editor-source data-default-sql="${escapeHtml(cell.sql)}" rows="3" spellcheck="false">${escapeHtml(cell.sql)}</textarea>
         </div>
       </form>
       ${emptyQueryResultsMarkup(cell.cellId)}
@@ -2111,6 +2122,122 @@ function deleteCell(notebookId, cellId) {
   );
 }
 
+function numericCssValue(styles, property) {
+  return Number.parseFloat(styles?.[property] ?? "") || 0;
+}
+
+function editorHeightMetrics(root) {
+  const editor = editorRegistry.get(root);
+  if (editor) {
+    const editorStyles = window.getComputedStyle(editor.dom);
+    const scroller = editor.dom.querySelector(".cm-scroller");
+    const scrollerStyles = scroller ? window.getComputedStyle(scroller) : null;
+    const lineHeight =
+      editor.defaultLineHeight ||
+      numericCssValue(editorStyles, "lineHeight") ||
+      numericCssValue(scrollerStyles, "lineHeight") ||
+      22;
+    const borderHeight =
+      numericCssValue(editorStyles, "borderTopWidth") +
+      numericCssValue(editorStyles, "borderBottomWidth");
+    const scrollerPadding =
+      numericCssValue(scrollerStyles, "paddingTop") +
+      numericCssValue(scrollerStyles, "paddingBottom");
+    const minHeight = Math.ceil(lineHeight * 3 + scrollerPadding + borderHeight);
+    const maxAutoHeight = Math.ceil(lineHeight * 10 + scrollerPadding + borderHeight);
+    const contentHeight = Math.ceil((scroller?.scrollHeight ?? editor.dom.scrollHeight) + borderHeight);
+    return {
+      minHeight,
+      nextHeight: Math.max(minHeight, Math.min(contentHeight, maxAutoHeight)),
+    };
+  }
+
+  const textarea = root.querySelector("[data-editor-source]");
+  if (!textarea) {
+    return null;
+  }
+
+  const styles = window.getComputedStyle(textarea);
+  const lineHeight = numericCssValue(styles, "lineHeight") || 22;
+  const chromeHeight =
+    numericCssValue(styles, "paddingTop") +
+    numericCssValue(styles, "paddingBottom") +
+    numericCssValue(styles, "borderTopWidth") +
+    numericCssValue(styles, "borderBottomWidth");
+  const minHeight = Math.ceil(lineHeight * 3 + chromeHeight);
+  const maxAutoHeight = Math.ceil(lineHeight * 10 + chromeHeight);
+
+  const previousHeight = textarea.style.height;
+  textarea.style.height = "auto";
+  const contentHeight = Math.ceil(textarea.scrollHeight);
+  textarea.style.height = previousHeight;
+
+  return {
+    minHeight,
+    nextHeight: Math.max(minHeight, Math.min(contentHeight, maxAutoHeight)),
+  };
+}
+
+function editorSizingState(root) {
+  let state = editorSizingRegistry.get(root);
+  if (!state) {
+    state = {
+      applying: false,
+      autoHeight: 0,
+      manual: false,
+      observer: null,
+    };
+    editorSizingRegistry.set(root, state);
+  }
+  return state;
+}
+
+function observeEditorResize(root) {
+  if (!(root instanceof Element) || typeof window.ResizeObserver !== "function") {
+    return;
+  }
+
+  const state = editorSizingState(root);
+  if (state.observer) {
+    return;
+  }
+
+  state.observer = new window.ResizeObserver((entries) => {
+    const nextHeight = entries[0]?.contentRect?.height ?? 0;
+    if (!nextHeight || state.applying || !state.autoHeight) {
+      return;
+    }
+
+    state.manual = Math.abs(nextHeight - state.autoHeight) > 2;
+  });
+  state.observer.observe(root);
+}
+
+function autosizeEditor(root) {
+  if (!(root instanceof Element)) {
+    return;
+  }
+
+  observeEditorResize(root);
+  const state = editorSizingState(root);
+  if (state.manual) {
+    return;
+  }
+
+  const metrics = editorHeightMetrics(root);
+  if (!metrics) {
+    return;
+  }
+
+  state.autoHeight = metrics.nextHeight;
+  state.applying = true;
+  root.style.minHeight = `${metrics.minHeight}px`;
+  root.style.height = `${metrics.nextHeight}px`;
+  window.setTimeout(() => {
+    state.applying = false;
+  }, 0);
+}
+
 function createEditor(root) {
   if (editorRegistry.has(root)) {
     return editorRegistry.get(root);
@@ -2140,6 +2267,7 @@ function createEditor(root) {
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             textarea.value = update.state.doc.toString();
+            autosizeEditor(root);
             const workspaceRoot = root.closest("[data-workspace-notebook]") ?? root;
             const notebookId = workspaceNotebookId(workspaceRoot);
             const cellId = root.closest("[data-query-cell]")?.dataset.cellId;
@@ -2162,10 +2290,12 @@ function createEditor(root) {
 
     root.classList.add("editor-ready");
     editorRegistry.set(root, editor);
+    autosizeEditor(root);
     return editor;
   } catch (error) {
     shell.remove();
     console.error("Failed to initialize CodeMirror. Falling back to textarea.", error);
+    autosizeEditor(root);
     return null;
   }
 }
@@ -2398,7 +2528,26 @@ function activeEditableNotebookId() {
   return metadata.canEdit && !metadata.deleted ? notebookId : null;
 }
 
-function querySourceInCurrentNotebook(sourceObjectRoot) {
+function requestCellRun(cellId) {
+  if (!cellId) {
+    return false;
+  }
+
+  window.requestAnimationFrame(() => {
+    const cellRoot = document.querySelector(`[data-query-cell][data-cell-id="${cellId}"]`);
+    const form = cellRoot?.querySelector("form.query-form-cell");
+    if (!cellRoot || !form) {
+      return;
+    }
+
+    setActiveCell(cellRoot);
+    form.requestSubmit();
+  });
+
+  return true;
+}
+
+function insertSourceQueryIntoCurrentNotebook(sourceObjectRoot, { runImmediately = false } = {}) {
   const sourceDescriptor = sourceQueryDescriptor(sourceObjectRoot);
   const notebookId = activeEditableNotebookId();
   if (!sourceDescriptor || !notebookId) {
@@ -2409,7 +2558,18 @@ function querySourceInCurrentNotebook(sourceObjectRoot) {
   const nextCell = createSourceQueryCellState(sourceDescriptor);
   activeCellId = nextCell.cellId;
   setNotebookCells(notebookId, [...metadata.cells, nextCell], { rerender: true });
+  if (runImmediately) {
+    requestCellRun(nextCell.cellId);
+  }
   return true;
+}
+
+function querySourceInCurrentNotebook(sourceObjectRoot) {
+  return insertSourceQueryIntoCurrentNotebook(sourceObjectRoot);
+}
+
+function viewSourceData(sourceObjectRoot) {
+  return insertSourceQueryIntoCurrentNotebook(sourceObjectRoot, { runImmediately: true });
 }
 
 function querySourceInNewNotebook(sourceObjectRoot) {
@@ -2461,6 +2621,7 @@ function updateWorkspaceCellEditor(cellRoot, sqlText) {
     },
   });
   applyingNotebookState = false;
+  autosizeEditor(editorRoot);
 }
 
 function formatCellSql(notebookId, cellId) {
@@ -2540,8 +2701,18 @@ function closeCellActionMenus() {
 function syncSourceActionMenu(menu) {
   const currentNotebookId = currentActiveNotebookId();
   const currentNotebook = currentNotebookId ? notebookMetadata(currentNotebookId) : null;
+  const currentNotebookEditable = Boolean(currentNotebook?.canEdit && !currentNotebook?.deleted);
+  syncWorkspaceActionButton(menu?.querySelector("[data-view-source-data]"), {
+    allowed: currentNotebookEditable,
+    enabledTitle: currentNotebook
+      ? `Insert and run a SELECT * query in "${currentNotebook.title}"`
+      : "Insert and run a SELECT * query in the current notebook",
+    disabledTitle: currentNotebookId
+      ? "The current notebook cannot be edited. Use 'Query in new notebook' instead."
+      : "No notebook is currently selected.",
+  });
   syncWorkspaceActionButton(menu?.querySelector("[data-query-source-current]"), {
-    allowed: Boolean(currentNotebook?.canEdit && !currentNotebook?.deleted),
+    allowed: currentNotebookEditable,
     enabledTitle: currentNotebook
       ? `Insert a query into "${currentNotebook.title}"`
       : "Insert a query into the current notebook",
@@ -3704,6 +3875,18 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const viewSourceDataButton = event.target.closest("[data-view-source-data]");
+  if (viewSourceDataButton) {
+    event.preventDefault();
+    closeSourceActionMenus();
+
+    const sourceObjectRoot = viewSourceDataButton.closest("[data-source-object]");
+    if (!viewSourceData(sourceObjectRoot)) {
+      window.alert("Open an editable notebook first, or use 'Query in new notebook'.");
+    }
+    return;
+  }
+
   const querySourceNewButton = event.target.closest("[data-query-source-new]");
   if (querySourceNewButton) {
     event.preventDefault();
@@ -4175,6 +4358,7 @@ document.body.addEventListener("input", (event) => {
     const workspaceRoot = editorSource.closest("[data-workspace-notebook]");
     const notebookId = workspaceNotebookId(workspaceRoot);
     const cellId = editorSource.closest("[data-query-cell]")?.dataset.cellId;
+    autosizeEditor(editorSource.closest("[data-editor-root]"));
     if (!notebookId || !cellId) {
       return;
     }

@@ -1035,6 +1035,12 @@ details:not([open]) > .source-schema > summary::before {
   cursor: not-allowed;
 }
 
+.workspace-action-menu-item-placeholder:disabled,
+.workspace-action-menu-item-placeholder.is-action-disabled {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
 .workspace-action-menu-item:disabled:hover,
 .workspace-action-menu-item.is-action-disabled:hover {
   background: transparent;
@@ -1359,15 +1365,6 @@ details:not([open]) > .source-schema > summary::before {
   flex-wrap: wrap;
 }
 
-.cell-actions .hint {
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition:
-    opacity 0.16s ease,
-    visibility 0.16s ease;
-}
-
 .cell-actions .run-button {
   opacity: 0;
   visibility: hidden;
@@ -1375,13 +1372,6 @@ details:not([open]) > .source-schema > summary::before {
   transition:
     opacity 0.16s ease,
     visibility 0.16s ease;
-}
-
-.workspace-cell:hover .cell-actions .hint,
-.workspace-cell.is-active .cell-actions .hint,
-.workspace-cell:focus-within .cell-actions .hint {
-  opacity: 1;
-  visibility: visible;
 }
 
 .workspace-cell:hover .cell-actions .run-button,
@@ -1419,6 +1409,7 @@ details:not([open]) > .source-schema > summary::before {
 .cell-action-menu .workspace-action-menu-panel {
   right: 0;
   left: auto;
+  min-width: 248px;
 }
 
 .workspace-cell-footer {
@@ -1804,16 +1795,20 @@ details:not([open]) > .source-schema > summary::before {
 .editor-frame {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
+  min-height: 92px;
   overflow: hidden;
   background: #fbfcfe;
+  resize: vertical;
 }
 
 .editor-frame textarea {
   width: 100%;
-  min-height: 260px;
-  padding: 16px;
+  height: 100%;
+  min-height: 92px;
+  padding: 10px 12px;
   border: none;
   resize: vertical;
+  overflow: auto;
   font: 0.95rem/1.5 var(--font-mono);
   color: var(--text);
   background: transparent;
@@ -1824,7 +1819,7 @@ details:not([open]) > .source-schema > summary::before {
 }
 
 .editor-shell .cm-editor {
-  min-height: 260px;
+  height: 100%;
   font-family: var(--font-mono);
   font-size: 0.95rem;
 }
@@ -1833,7 +1828,12 @@ details:not([open]) > .source-schema > summary::before {
   outline: none;
 }
 
+.editor-shell {
+  height: 100%;
+}
+
 .editor-shell .cm-scroller {
+  height: 100%;
   overflow: auto;
 }
 
