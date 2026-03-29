@@ -208,7 +208,6 @@
         >
           <input type="hidden" name="notebook_id" value="{{ active_notebook.notebook_id }}">
           <input type="hidden" name="cell_id" value="{{ cell.cell_id }}">
-          <div class="query-divider" aria-hidden="true"></div>
           <div class="cell-toolbar">
             <div class="cell-heading">
               <span class="cell-label">Cell {{ loop.index }}</span>
@@ -222,12 +221,29 @@
                 title="Your data is exclusivly stored and processed in Swiss Government facilities. Hybrid or 3rd-party storage will be available with the Swiss Government Cloud for insensitive data."
               >CHE Data Souvereignity</span>
               <details class="cell-source-picker" data-cell-source-picker>
+                {% set computation_mode_tooltip = "MPP = Massive Parallel Processing. Distributed query execution across multiple workers and partitions for larger-scale data processing.&#10;VMTP = Vectorized Multi-Threaded Processing. Single-node vectorized execution across multiple CPU threads for fast local analytical queries." %}
+                {% set source_summary = namespace(label="Select sources", classification="NA", computation_mode="NA") %}
+                {% if cell.data_sources | length == 1 %}
+                  {% for source in source_options %}
+                    {% if source.source_id == cell.data_sources[0] %}
+                      {% set source_summary.label = source.label %}
+                      {% set source_summary.classification = source.classification %}
+                      {% set source_summary.computation_mode = source.computation_mode %}
+                    {% endif %}
+                  {% endfor %}
+                {% elif cell.data_sources %}
+                  {% set source_summary.label = cell.data_sources | length ~ " sources" %}
+                  {% set source_summary.classification = "Mixed" %}
+                  {% set source_summary.computation_mode = "Mixed" %}
+                {% endif %}
                 <summary class="cell-source-picker-toggle" data-cell-source-summary>
-                  {% if cell.data_sources %}
-                    {{ cell.data_sources | length }} source{% if cell.data_sources | length != 1 %}s{% endif %}
-                  {% else %}
-                    Select sources
-                  {% endif %}
+                  <span class="cell-source-summary-label" data-cell-source-summary-label>{{ source_summary.label }}</span>
+                  <span class="cell-source-classification" data-cell-source-classification>Classification: {{ source_summary.classification }}</span>
+                  <span
+                    class="cell-source-computation-mode"
+                    data-cell-source-computation-mode
+                    title="{{ computation_mode_tooltip | safe }}"
+                  >Computation Mode: {{ source_summary.computation_mode }}</span>
                 </summary>
                 <div class="cell-source-selection" data-cell-source-selection>
                   {% for source in source_options %}
@@ -258,6 +274,43 @@
                   <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
                 </summary>
                 <div class="workspace-action-menu-panel">
+                  <button
+                    type="button"
+                    class="workspace-action-menu-item{% if not active_notebook.can_edit or loop.first %} is-action-disabled{% endif %}"
+                    data-move-cell-up
+                    {% if not active_notebook.can_edit or loop.first %}disabled{% endif %}
+                    title="{% if not active_notebook.can_edit %}This notebook cannot be edited.{% elif loop.first %}This cell is already first.{% else %}Move cell up{% endif %}"
+                  >
+                    Move up
+                  </button>
+                  <button
+                    type="button"
+                    class="workspace-action-menu-item{% if not active_notebook.can_edit or loop.last %} is-action-disabled{% endif %}"
+                    data-move-cell-down
+                    {% if not active_notebook.can_edit or loop.last %}disabled{% endif %}
+                    title="{% if not active_notebook.can_edit %}This notebook cannot be edited.{% elif loop.last %}This cell is already last.{% else %}Move cell down{% endif %}"
+                  >
+                    Move down
+                  </button>
+                  <div class="workspace-action-menu-separator" aria-hidden="true"></div>
+                  <button
+                    type="button"
+                    class="workspace-action-menu-item{% if not active_notebook.can_edit %} is-action-disabled{% endif %}"
+                    data-format-cell-sql
+                    {% if not active_notebook.can_edit %}disabled{% endif %}
+                    title="{% if active_notebook.can_edit %}Format SQL{% else %}This notebook cannot be edited.{% endif %}"
+                  >
+                    Format SQL
+                  </button>
+                  <button
+                    type="button"
+                    class="workspace-action-menu-item{% if not active_notebook.can_edit %} is-action-disabled{% endif %}"
+                    data-add-cell-after
+                    {% if not active_notebook.can_edit %}disabled{% endif %}
+                    title="{% if active_notebook.can_edit %}Add cell below{% else %}This notebook cannot be edited.{% endif %}"
+                  >
+                    Add cell
+                  </button>
                   <button
                     type="button"
                     class="workspace-action-menu-item{% if not active_notebook.can_edit %} is-action-disabled{% endif %}"

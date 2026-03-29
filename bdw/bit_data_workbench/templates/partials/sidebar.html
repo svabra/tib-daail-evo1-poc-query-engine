@@ -160,9 +160,22 @@
                 </summary>
                 <ul class="source-object-list">
                   {% for source_object in schema.objects %}
+                    {% if catalog.name == "workspace" %}
+                      {% if schema.name == "s3" %}
+                        {% set source_option_id = "workspace.s3" %}
+                      {% else %}
+                        {% set source_option_id = "workspace" %}
+                      {% endif %}
+                    {% else %}
+                      {% set source_option_id = catalog.name %}
+                    {% endif %}
                     <li
                       class="source-object source-object-{{ source_object.kind }}"
                       data-searchable-item="{{ source_object.name }} {{ source_object.relation }}"
+                      data-source-object
+                      data-source-object-name="{{ source_object.name }}"
+                      data-source-object-relation="{{ source_object.relation }}"
+                      data-source-option-id="{{ source_option_id }}"
                     >
                       <span class="source-node-label">
                         {% if source_object.kind == "view" %}
@@ -188,7 +201,36 @@
                         {% endif %}
                         <span>{{ source_object.name }}</span>
                       </span>
-                      <small>{{ source_object.kind }}</small>
+                      <span class="source-object-meta">
+                        <small>{{ source_object.kind }}</small>
+                        <details class="workspace-action-menu source-action-menu" data-source-action-menu>
+                          <summary
+                            class="workspace-action-menu-toggle"
+                            aria-label="Source actions"
+                            title="Source actions"
+                          >
+                            <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
+                          </summary>
+                          <div class="workspace-action-menu-panel">
+                            <button
+                              type="button"
+                              class="workspace-action-menu-item"
+                              data-query-source-current
+                              title="Insert a query into the current notebook"
+                            >
+                              Query in current notebook
+                            </button>
+                            <button
+                              type="button"
+                              class="workspace-action-menu-item"
+                              data-query-source-new
+                              title="Create a new notebook with this query"
+                            >
+                              Query in new notebook
+                            </button>
+                          </div>
+                        </details>
+                      </span>
                     </li>
                   {% endfor %}
                 </ul>

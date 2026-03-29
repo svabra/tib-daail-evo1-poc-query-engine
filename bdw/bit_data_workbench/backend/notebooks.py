@@ -87,23 +87,37 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
     ]
 
 
+def _source_option(
+    source_id: str,
+    label: str,
+    classification: str = "Internal",
+    computation_mode: str = "VMTP",
+) -> dict[str, str]:
+    return {
+        "source_id": source_id,
+        "label": label,
+        "classification": classification,
+        "computation_mode": computation_mode,
+    }
+
+
 def build_source_options(catalogs: list[SourceCatalog]) -> list[dict[str, str]]:
     options: list[dict[str, str]] = []
 
     for catalog in catalogs:
         if catalog.name == "workspace":
             if any(schema.name == "s3" and schema.objects for schema in catalog.schemas):
-                options.append({"source_id": "workspace.s3", "label": "MinIO / S3"})
+                options.append(_source_option("workspace.s3", "MinIO / S3"))
             elif catalog.schemas:
-                options.append({"source_id": "workspace", "label": "Workspace"})
+                options.append(_source_option("workspace", "Workspace"))
             continue
 
         if catalog.name == "pg_oltp":
-            options.append({"source_id": "pg_oltp", "label": "PostgreSQL OLTP"})
+            options.append(_source_option("pg_oltp", "PostgreSQL OLTP"))
             continue
 
         if catalog.name == "pg_olap":
-            options.append({"source_id": "pg_olap", "label": "PostgreSQL OLAP"})
+            options.append(_source_option("pg_olap", "PostgreSQL OLAP"))
 
     return options
 

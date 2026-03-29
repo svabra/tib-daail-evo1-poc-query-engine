@@ -12,9 +12,9 @@
   --shadow: 0 18px 40px rgba(17, 33, 51, 0.08);
   --sidebar-width: clamp(360px, 26vw, 440px);
   --sidebar-collapsed-width: 56px;
-  --radius-lg: 10px;
-  --radius-md: 7px;
-  --radius-sm: 5px;
+  --radius-lg: 3px;
+  --radius-md: 1px;
+  --radius-sm: 1px;
   --radius-pill: 9px;
   --radius-control: 6px;
   --disclosure-size: 16px;
@@ -589,6 +589,7 @@ details:not([open]) > .source-schema > summary::before {
 }
 
 .source-object {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -597,6 +598,11 @@ details:not([open]) > .source-schema > summary::before {
   border-radius: var(--radius-sm);
   background: var(--panel-alt);
   color: var(--text-muted);
+}
+
+.source-object:hover,
+.source-object:focus-within {
+  z-index: 3;
 }
 
 .source-object .source-node-label {
@@ -610,10 +616,53 @@ details:not([open]) > .source-schema > summary::before {
   white-space: nowrap;
 }
 
+.source-object-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
 .source-object small {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+.source-action-menu {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 0.16s ease,
+    visibility 0.16s ease,
+    transform 0.16s ease;
+  transform: translateY(-1px);
+}
+
+.source-object:hover .source-action-menu,
+.source-object:focus-within .source-action-menu,
+.source-action-menu[open] {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.source-action-menu .workspace-action-menu-toggle {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+}
+
+.source-action-menu .workspace-action-menu-panel {
+  right: 0;
+  left: auto;
+  min-width: 238px;
+}
+
+.source-action-menu[open] {
+  z-index: 6;
 }
 
 .workspace-shell {
@@ -995,6 +1044,12 @@ details:not([open]) > .source-schema > summary::before {
   color: var(--accent-deep);
 }
 
+.workspace-action-menu-separator {
+  height: 1px;
+  margin: 4px 0;
+  background: linear-gradient(90deg, transparent 0%, var(--border) 14%, var(--border) 86%, transparent 100%);
+}
+
 .workspace-meta-grid {
   display: grid;
   grid-template-columns:
@@ -1138,12 +1193,55 @@ details:not([open]) > .source-schema > summary::before {
 
 .workspace-cells {
   display: grid;
-  gap: 18px;
+  gap: 0;
 }
 
 .workspace-cell {
+  position: relative;
   display: grid;
   gap: 12px;
+  padding: 12px 14px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  transition:
+    border-color 0.18s ease,
+    background-color 0.18s ease,
+    box-shadow 0.18s ease;
+}
+
+.workspace-cell + .workspace-cell {
+  margin-top: 18px;
+  padding-top: 18px;
+}
+
+.workspace-cell + .workspace-cell::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 14px;
+  right: 14px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, var(--border) 14%, var(--border) 86%, transparent 100%);
+}
+
+.workspace-cell:hover:not(.is-active):not(:focus-within) {
+  background: linear-gradient(180deg, rgba(247, 249, 251, 0.96) 0%, rgba(255, 255, 255, 0.98) 100%);
+  border-style: dashed;
+  border-color: var(--border);
+  box-shadow:
+    0 0 0 1px rgba(192, 202, 212, 0.28),
+    0 12px 24px rgba(17, 33, 51, 0.08);
+}
+
+.workspace-cell.is-active,
+.workspace-cell:focus-within {
+  background: linear-gradient(180deg, rgba(247, 249, 251, 0.96) 0%, rgba(255, 255, 255, 0.98) 100%);
+  border-style: solid;
+  border-color: var(--border);
+  box-shadow:
+    0 0 0 1px rgba(192, 202, 212, 0.28),
+    0 12px 24px rgba(17, 33, 51, 0.08);
 }
 
 .query-form-cell {
@@ -1186,18 +1284,51 @@ details:not([open]) > .source-schema > summary::before {
 .cell-source-picker-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 8px;
   padding: 6px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-control);
   background: #fff;
-  color: var(--text-muted);
+  color: var(--text);
   cursor: pointer;
   list-style: none;
 }
 
 .cell-source-picker-toggle::-webkit-details-marker {
   display: none;
+}
+
+.cell-source-summary-label {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.cell-source-classification {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border: 1px solid rgba(192, 202, 212, 0.9);
+  border-radius: var(--radius-pill);
+  background: rgba(247, 249, 251, 0.96);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.cell-source-computation-mode {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border: 1px solid rgba(192, 202, 212, 0.9);
+  border-radius: var(--radius-pill);
+  background: rgba(247, 249, 251, 0.96);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: help;
 }
 
 .cell-source-selection {
@@ -1219,11 +1350,70 @@ details:not([open]) > .source-schema > summary::before {
 }
 
 .cell-actions {
+  position: relative;
+  z-index: 2;
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.cell-actions .hint {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 0.16s ease,
+    visibility 0.16s ease;
+}
+
+.cell-actions .run-button {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 0.16s ease,
+    visibility 0.16s ease;
+}
+
+.workspace-cell:hover .cell-actions .hint,
+.workspace-cell.is-active .cell-actions .hint,
+.workspace-cell:focus-within .cell-actions .hint {
+  opacity: 1;
+  visibility: visible;
+}
+
+.workspace-cell:hover .cell-actions .run-button,
+.workspace-cell.is-active .cell-actions .run-button,
+.workspace-cell:focus-within .cell-actions .run-button {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.cell-action-menu {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-1px);
+  transition:
+    opacity 0.16s ease,
+    visibility 0.16s ease,
+    transform 0.16s ease;
+}
+
+.workspace-cell:hover .cell-action-menu,
+.workspace-cell:focus-within .cell-action-menu,
+.cell-action-menu[open] {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.cell-action-menu[open] {
+  z-index: 6;
 }
 
 .cell-action-menu .workspace-action-menu-panel {
@@ -1594,12 +1784,6 @@ details:not([open]) > .source-schema > summary::before {
 .query-form {
   display: grid;
   gap: 10px;
-}
-
-.query-divider {
-  height: 1px;
-  margin: 2px 0 6px;
-  background: linear-gradient(90deg, transparent 0%, var(--border) 14%, var(--border) 86%, transparent 100%);
 }
 
 .run-button {

@@ -5,6 +5,7 @@ const editorRegistry = new WeakMap();
 let draggedNotebook = null;
 let restoreController = null;
 let applyingNotebookState = false;
+let activeCellId = null;
 
 const notebookTreeStorageKey = "bdw.notebookTree.v1";
 const notebookMetadataStorageKey = "bdw.notebookMeta.v1";
@@ -13,6 +14,129 @@ const sidebarCollapsedStorageKey = "bdw.sidebarCollapsed.v1";
 const unassignedFolderName = "Unassigned";
 const localNotebookPrefix = "local-notebook-";
 const localCellPrefix = "local-cell-";
+const sqlFormatKeywordPhrases = [
+  ["LEFT", "OUTER", "JOIN"],
+  ["RIGHT", "OUTER", "JOIN"],
+  ["FULL", "OUTER", "JOIN"],
+  ["INSERT", "INTO"],
+  ["DELETE", "FROM"],
+  ["GROUP", "BY"],
+  ["ORDER", "BY"],
+  ["UNION", "ALL"],
+  ["INNER", "JOIN"],
+  ["LEFT", "JOIN"],
+  ["RIGHT", "JOIN"],
+  ["FULL", "JOIN"],
+  ["CROSS", "JOIN"],
+];
+const sqlFormatKeywords = new Set([
+  "ALL",
+  "AND",
+  "AS",
+  "ASC",
+  "BETWEEN",
+  "BY",
+  "CASE",
+  "DELETE",
+  "DESC",
+  "DISTINCT",
+  "ELSE",
+  "END",
+  "EXCEPT",
+  "EXISTS",
+  "FETCH",
+  "FROM",
+  "FULL",
+  "GROUP",
+  "HAVING",
+  "ILIKE",
+  "IN",
+  "INNER",
+  "INSERT",
+  "INTERSECT",
+  "INTO",
+  "IS",
+  "JOIN",
+  "LEFT",
+  "LIKE",
+  "LIMIT",
+  "NOT",
+  "NULL",
+  "OFFSET",
+  "ON",
+  "OR",
+  "ORDER",
+  "OUTER",
+  "QUALIFY",
+  "RETURNING",
+  "RIGHT",
+  "SELECT",
+  "SET",
+  "THEN",
+  "UNION",
+  "UPDATE",
+  "USING",
+  "VALUES",
+  "WHEN",
+  "WHERE",
+  "WINDOW",
+  "WITH",
+]);
+const sqlFormatClauseKeywords = new Set([
+  "DELETE FROM",
+  "EXCEPT",
+  "FETCH",
+  "FROM",
+  "GROUP BY",
+  "HAVING",
+  "INSERT INTO",
+  "INTERSECT",
+  "LIMIT",
+  "OFFSET",
+  "ORDER BY",
+  "QUALIFY",
+  "RETURNING",
+  "SELECT",
+  "SET",
+  "UNION",
+  "UNION ALL",
+  "UPDATE",
+  "VALUES",
+  "WHERE",
+  "WINDOW",
+  "WITH",
+]);
+const sqlFormatJoinKeywords = new Set([
+  "CROSS JOIN",
+  "FULL JOIN",
+  "FULL OUTER JOIN",
+  "INNER JOIN",
+  "JOIN",
+  "LEFT JOIN",
+  "LEFT OUTER JOIN",
+  "RIGHT JOIN",
+  "RIGHT OUTER JOIN",
+]);
+const sqlFormatBreakAfterKeywords = new Set([
+  "GROUP BY",
+  "HAVING",
+  "ORDER BY",
+  "QUALIFY",
+  "RETURNING",
+  "SELECT",
+  "SET",
+  "VALUES",
+  "WHERE",
+]);
+const sqlFormatListKeywords = new Set([
+  "GROUP BY",
+  "ORDER BY",
+  "RETURNING",
+  "SELECT",
+  "SET",
+  "VALUES",
+]);
+const sqlFormatLogicalClauses = new Set(["HAVING", "ON", "USING", "WHERE"]);
 
 function folderNameDialog() {
   return document.querySelector("[data-folder-name-dialog]");
@@ -403,12 +527,59 @@ function sourceIdFromLegacyTargetLabel(value) {
   return option?.source_id ?? null;
 }
 
+function sourceOptionForId(sourceId) {
+  return readSourceOptions().find((option) => option.source_id === sourceId) ?? null;
+}
+
 function sourceLabelForId(sourceId) {
-  return readSourceOptions().find((option) => option.source_id === sourceId)?.label ?? sourceId;
+  return sourceOptionForId(sourceId)?.label ?? sourceId;
+}
+
+function sourceClassificationForId(sourceId) {
+  return sourceOptionForId(sourceId)?.classification ?? "Internal";
+}
+
+function sourceComputationModeForId(sourceId) {
+  return sourceOptionForId(sourceId)?.computation_mode ?? "VMTP";
 }
 
 function sourceLabelsForIds(sourceIds) {
   return normalizeDataSources(sourceIds).map((sourceId) => sourceLabelForId(sourceId));
+}
+
+function sourceClassificationForIds(sourceIds) {
+  const selectedSourceIds = normalizeDataSources(sourceIds);
+  if (!selectedSourceIds.length) {
+    return "NA";
+  }
+
+  const classifications = [...new Set(selectedSourceIds.map((sourceId) => sourceClassificationForId(sourceId)))];
+  return classifications.length === 1 ? classifications[0] : "Mixed";
+}
+
+function sourceComputationModeForIds(sourceIds) {
+  const selectedSourceIds = normalizeDataSources(sourceIds);
+  if (!selectedSourceIds.length) {
+    return "NA";
+  }
+
+  const computationModes = [...new Set(selectedSourceIds.map((sourceId) => sourceComputationModeForId(sourceId)))];
+  return computationModes.length === 1 ? computationModes[0] : "Mixed";
+}
+
+function sourceClassificationDisplayText(dataSources) {
+  return `Classification: ${sourceClassificationForIds(dataSources)}`;
+}
+
+function sourceComputationModeDisplayText(dataSources) {
+  return `Computation Mode: ${sourceComputationModeForIds(dataSources)}`;
+}
+
+function sourceComputationModeTooltipText() {
+  return [
+    "MPP = Massive Parallel Processing. Distributed query execution across multiple workers and partitions for larger-scale data processing.",
+    "VMTP = Vectorized Multi-Threaded Processing. Single-node vectorized execution across multiple CPU threads for fast local analytical queries.",
+  ].join("\n");
 }
 
 function accessModeForDataSources(sourceIds) {
@@ -688,12 +859,422 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+function readSqlDollarQuotedLiteral(sqlText, startIndex) {
+  const delimiterMatch = sqlText.slice(startIndex).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
+  if (!delimiterMatch) {
+    return null;
+  }
+
+  const delimiter = delimiterMatch[0];
+  const endIndex = sqlText.indexOf(delimiter, startIndex + delimiter.length);
+  if (endIndex === -1) {
+    return {
+      value: sqlText.slice(startIndex),
+      nextIndex: sqlText.length,
+    };
+  }
+
+  return {
+    value: sqlText.slice(startIndex, endIndex + delimiter.length),
+    nextIndex: endIndex + delimiter.length,
+  };
+}
+
+function readSqlQuotedLiteral(sqlText, startIndex, delimiter) {
+  let index = startIndex + 1;
+  while (index < sqlText.length) {
+    const current = sqlText[index];
+    if (current === delimiter) {
+      if (delimiter !== "`" && sqlText[index + 1] === delimiter) {
+        index += 2;
+        continue;
+      }
+
+      index += 1;
+      break;
+    }
+
+    if (current === "\\" && index + 1 < sqlText.length) {
+      index += 2;
+      continue;
+    }
+
+    index += 1;
+  }
+
+  return {
+    value: sqlText.slice(startIndex, index),
+    nextIndex: index,
+  };
+}
+
+function tokenizeSql(sqlText) {
+  const tokens = [];
+  let index = 0;
+
+  while (index < sqlText.length) {
+    const current = sqlText[index];
+
+    if (/\s/.test(current)) {
+      index += 1;
+      continue;
+    }
+
+    if (current === "-" && sqlText[index + 1] === "-") {
+      const startIndex = index;
+      index += 2;
+      while (index < sqlText.length && sqlText[index] !== "\n") {
+        index += 1;
+      }
+      tokens.push({ type: "comment", value: sqlText.slice(startIndex, index) });
+      continue;
+    }
+
+    if (current === "/" && sqlText[index + 1] === "*") {
+      const startIndex = index;
+      index += 2;
+      while (index < sqlText.length && !(sqlText[index] === "*" && sqlText[index + 1] === "/")) {
+        index += 1;
+      }
+      index = Math.min(index + 2, sqlText.length);
+      tokens.push({ type: "comment", value: sqlText.slice(startIndex, index) });
+      continue;
+    }
+
+    if (current === "$") {
+      const dollarQuoted = readSqlDollarQuotedLiteral(sqlText, index);
+      if (dollarQuoted) {
+        tokens.push({ type: "string", value: dollarQuoted.value });
+        index = dollarQuoted.nextIndex;
+        continue;
+      }
+    }
+
+    if (current === "'" || current === '"' || current === "`") {
+      const quoted = readSqlQuotedLiteral(sqlText, index, current);
+      tokens.push({ type: current === "'" ? "string" : "identifier", value: quoted.value });
+      index = quoted.nextIndex;
+      continue;
+    }
+
+    if (current === "[") {
+      const endIndex = sqlText.indexOf("]", index + 1);
+      tokens.push({
+        type: "identifier",
+        value: endIndex === -1 ? sqlText.slice(index) : sqlText.slice(index, endIndex + 1),
+      });
+      index = endIndex === -1 ? sqlText.length : endIndex + 1;
+      continue;
+    }
+
+    if (/[A-Za-z_]/.test(current)) {
+      const startIndex = index;
+      index += 1;
+      while (index < sqlText.length && /[A-Za-z0-9_$]/.test(sqlText[index])) {
+        index += 1;
+      }
+      tokens.push({ type: "word", value: sqlText.slice(startIndex, index) });
+      continue;
+    }
+
+    if (/[0-9]/.test(current)) {
+      const startIndex = index;
+      index += 1;
+      while (index < sqlText.length && /[0-9.]/.test(sqlText[index])) {
+        index += 1;
+      }
+      tokens.push({ type: "number", value: sqlText.slice(startIndex, index) });
+      continue;
+    }
+
+    const doubleCharacterSymbol = sqlText.slice(index, index + 2);
+    if (["!=", "<=", "<>", "::", "=>", ">=", "||"].includes(doubleCharacterSymbol)) {
+      tokens.push({ type: "symbol", value: doubleCharacterSymbol });
+      index += 2;
+      continue;
+    }
+
+    tokens.push({ type: "symbol", value: current });
+    index += 1;
+  }
+
+  return tokens;
+}
+
+function sqlKeywordPhraseMatches(tokens, startIndex, phrase) {
+  if (startIndex + phrase.length > tokens.length) {
+    return false;
+  }
+
+  return phrase.every((part, offset) => {
+    const token = tokens[startIndex + offset];
+    return token?.type === "word" && token.value.toUpperCase() === part;
+  });
+}
+
+function combineSqlKeywordTokens(tokens) {
+  const combined = [];
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.type !== "word") {
+      combined.push(token);
+      continue;
+    }
+
+    const matchedPhrase = sqlFormatKeywordPhrases.find((phrase) =>
+      sqlKeywordPhraseMatches(tokens, index, phrase)
+    );
+    if (matchedPhrase) {
+      combined.push({ type: "keyword", value: matchedPhrase.join(" ") });
+      index += matchedPhrase.length - 1;
+      continue;
+    }
+
+    const uppercaseValue = token.value.toUpperCase();
+    if (sqlFormatKeywords.has(uppercaseValue)) {
+      combined.push({ type: "keyword", value: uppercaseValue });
+      continue;
+    }
+
+    combined.push(token);
+  }
+
+  return combined;
+}
+
+function formatSqlText(sqlText) {
+  const normalizedSql = String(sqlText ?? "").replace(/\r\n?/g, "\n").trim();
+  if (!normalizedSql) {
+    return "";
+  }
+
+  const tokens = combineSqlKeywordTokens(tokenizeSql(normalizedSql));
+  const parts = [];
+  let lineStart = true;
+  let pendingSpace = false;
+  let lineIndent = 0;
+  let parenDepth = 0;
+  let currentClause = null;
+  let currentClauseDepth = 0;
+  let currentClauseValueIndent = 0;
+  let previousToken = null;
+
+  const trimTrailingSpace = () => {
+    while (parts[parts.length - 1] === " ") {
+      parts.pop();
+    }
+  };
+
+  const newline = (indent = lineIndent) => {
+    trimTrailingSpace();
+    if (parts.length && parts[parts.length - 1] !== "\n") {
+      parts.push("\n");
+    }
+    lineStart = true;
+    pendingSpace = false;
+    lineIndent = Math.max(indent, 0);
+  };
+
+  const write = (value, { spaceBefore = true } = {}) => {
+    if (!value) {
+      return;
+    }
+
+    if (lineStart) {
+      parts.push("  ".repeat(Math.max(lineIndent, 0)));
+      lineStart = false;
+    } else if (pendingSpace && spaceBefore) {
+      parts.push(" ");
+    }
+
+    parts.push(value);
+    pendingSpace = false;
+  };
+
+  const setClauseState = (keyword, clauseDepth, valueIndent) => {
+    currentClause = keyword;
+    currentClauseDepth = clauseDepth;
+    currentClauseValueIndent = valueIndent;
+  };
+
+  tokens.forEach((token, index) => {
+    if (token.type === "comment") {
+      if (!lineStart) {
+        newline(lineIndent);
+      }
+      write(token.value, { spaceBefore: false });
+      if (index < tokens.length - 1) {
+        newline(lineIndent);
+      }
+      previousToken = token;
+      return;
+    }
+
+    if (token.type === "keyword") {
+      if (sqlFormatJoinKeywords.has(token.value)) {
+        newline(parenDepth);
+        write(token.value, { spaceBefore: false });
+        setClauseState(token.value, parenDepth, parenDepth + 1);
+        pendingSpace = true;
+        previousToken = token;
+        return;
+      }
+
+      if (token.value === "ON" || token.value === "USING") {
+        newline(parenDepth + 1);
+        write(token.value, { spaceBefore: false });
+        setClauseState(token.value, parenDepth, parenDepth + 1);
+        pendingSpace = true;
+        previousToken = token;
+        return;
+      }
+
+      if ((token.value === "AND" || token.value === "OR") && sqlFormatLogicalClauses.has(currentClause)) {
+        newline(currentClauseValueIndent);
+        write(token.value, { spaceBefore: false });
+        pendingSpace = true;
+        previousToken = token;
+        return;
+      }
+
+      if (sqlFormatClauseKeywords.has(token.value)) {
+        if (!lineStart) {
+          newline(parenDepth);
+        }
+        write(token.value, { spaceBefore: false });
+        const clauseIndent = parenDepth;
+        const valueIndent = sqlFormatBreakAfterKeywords.has(token.value) ? clauseIndent + 1 : clauseIndent;
+        setClauseState(token.value, clauseIndent, valueIndent);
+        if (sqlFormatBreakAfterKeywords.has(token.value)) {
+          newline(valueIndent);
+        } else {
+          pendingSpace = true;
+        }
+        previousToken = token;
+        return;
+      }
+
+      if (token.value === "WHEN" || token.value === "ELSE") {
+        newline(parenDepth + 1);
+        write(token.value, { spaceBefore: false });
+        pendingSpace = true;
+        previousToken = token;
+        return;
+      }
+
+      write(token.value);
+      pendingSpace = true;
+      previousToken = token;
+      return;
+    }
+
+    if (token.type === "symbol") {
+      if (token.value === ",") {
+        write(",", { spaceBefore: false });
+        if (sqlFormatListKeywords.has(currentClause) && parenDepth === currentClauseDepth) {
+          newline(currentClauseValueIndent);
+        } else {
+          pendingSpace = true;
+        }
+        previousToken = token;
+        return;
+      }
+
+      if (token.value === ".") {
+        write(".", { spaceBefore: false });
+        previousToken = token;
+        return;
+      }
+
+      if (token.value === "(") {
+        write("(", {
+          spaceBefore: previousToken?.type === "keyword",
+        });
+        parenDepth += 1;
+        previousToken = token;
+        return;
+      }
+
+      if (token.value === ")") {
+        parenDepth = Math.max(parenDepth - 1, 0);
+        if (lineStart) {
+          lineIndent = parenDepth;
+        }
+        write(")", { spaceBefore: false });
+        if (currentClause && parenDepth < currentClauseDepth) {
+          currentClause = null;
+          currentClauseDepth = 0;
+          currentClauseValueIndent = 0;
+        }
+        previousToken = token;
+        return;
+      }
+
+      if (token.value === ";") {
+        write(";", { spaceBefore: false });
+        if (index < tokens.length - 1) {
+          newline(0);
+          newline(0);
+        }
+        currentClause = null;
+        currentClauseDepth = 0;
+        currentClauseValueIndent = 0;
+        previousToken = token;
+        return;
+      }
+
+      if (token.value === "::") {
+        write("::", { spaceBefore: false });
+        previousToken = token;
+        return;
+      }
+
+      write(token.value);
+      pendingSpace = true;
+      previousToken = token;
+      return;
+    }
+
+    write(token.value);
+    pendingSpace = true;
+    previousToken = token;
+  });
+
+  return parts
+    .join("")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function defaultLocalNotebookTitle() {
   const localNotebookCount = Object.keys(readStoredNotebookMetadata()).filter((key) =>
     isLocalNotebookId(key)
   ).length;
 
   return `Untitled Notebook ${localNotebookCount + 1}`;
+}
+
+function sourceQuerySql(relation) {
+  return `SELECT * FROM ${relation};`;
+}
+
+function sourceQueryDescriptor(sourceObjectRoot) {
+  if (!(sourceObjectRoot instanceof Element)) {
+    return null;
+  }
+
+  const relation = sourceObjectRoot.dataset.sourceObjectRelation?.trim();
+  if (!relation) {
+    return null;
+  }
+
+  return {
+    name: sourceObjectRoot.dataset.sourceObjectName?.trim() || relation,
+    relation,
+    sourceId: sourceObjectRoot.dataset.sourceOptionId?.trim() || "",
+  };
 }
 
 function emptyQueryResultsMarkup(cellId) {
@@ -724,8 +1305,18 @@ function cellSourceSummaryText(dataSources) {
   return `${labels.length} sources`;
 }
 
-function buildCellMarkup(notebookId, cell, index, canEdit) {
+function cellSourceSummaryMarkup(dataSources) {
+  return `
+    <span class="cell-source-summary-label" data-cell-source-summary-label>${escapeHtml(cellSourceSummaryText(dataSources))}</span>
+    <span class="cell-source-classification" data-cell-source-classification>${escapeHtml(sourceClassificationDisplayText(dataSources))}</span>
+    <span class="cell-source-computation-mode" data-cell-source-computation-mode title="${escapeHtml(sourceComputationModeTooltipText())}">${escapeHtml(sourceComputationModeDisplayText(dataSources))}</span>
+  `;
+}
+
+function buildCellMarkup(notebookId, cell, index, canEdit, totalCells) {
   const selectedSources = normalizeDataSources(cell.dataSources);
+  const canMoveUp = canEdit && index > 0;
+  const canMoveDown = canEdit && index < totalCells - 1;
   const sovereigntyHint =
     "Your data is exclusivly stored and processed in Swiss Government facilities. Hybrid or 3rd-party storage will be available with the Swiss Government Cloud for insensitive data.";
   const sourceOptionsMarkup =
@@ -750,7 +1341,7 @@ function buildCellMarkup(notebookId, cell, index, canEdit) {
 
   return `
     <article
-      class="workspace-cell"
+      class="workspace-cell${cell.cellId === activeCellId ? " is-active" : ""}"
       data-query-cell
       data-cell-id="${escapeHtml(cell.cellId)}"
       data-default-cell-sources="${escapeHtml(selectedSources.join("||"))}"
@@ -758,14 +1349,13 @@ function buildCellMarkup(notebookId, cell, index, canEdit) {
       <form class="query-form query-form-cell" hx-post="/api/query" hx-target="#query-results-${escapeHtml(cell.cellId)}" hx-swap="outerHTML">
         <input type="hidden" name="notebook_id" value="${escapeHtml(notebookId)}">
         <input type="hidden" name="cell_id" value="${escapeHtml(cell.cellId)}">
-        <div class="query-divider" aria-hidden="true"></div>
         <div class="cell-toolbar">
           <div class="cell-heading">
             <span class="cell-label">Cell ${index + 1}</span>
             <span class="workspace-access-badge workspace-access-badge-small" data-cell-access-badge title="${escapeHtml(accessModeHintForDataSources(selectedSources))}">${escapeHtml(accessModeForDataSources(selectedSources))}</span>
             <span class="workspace-access-badge workspace-access-badge-small workspace-access-badge-static" title="${escapeHtml(sovereigntyHint)}">CHE Data Souvereignity</span>
             <details class="cell-source-picker" data-cell-source-picker>
-              <summary class="cell-source-picker-toggle" data-cell-source-summary>${escapeHtml(cellSourceSummaryText(selectedSources))}</summary>
+              <summary class="cell-source-picker-toggle" data-cell-source-summary>${cellSourceSummaryMarkup(selectedSources)}</summary>
               <div class="cell-source-selection" data-cell-source-selection>
                 ${sourceOptionsMarkup}
               </div>
@@ -779,6 +1369,23 @@ function buildCellMarkup(notebookId, cell, index, canEdit) {
                 <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
               </summary>
               <div class="workspace-action-menu-panel">
+                <button type="button" class="workspace-action-menu-item${canMoveUp ? "" : " is-action-disabled"}" data-move-cell-up ${canMoveUp ? "" : "disabled"} title="${
+                  canMoveUp
+                    ? "Move cell up"
+                    : canEdit
+                      ? "This cell is already first."
+                      : "This notebook cannot be edited."
+                }">Move up</button>
+                <button type="button" class="workspace-action-menu-item${canMoveDown ? "" : " is-action-disabled"}" data-move-cell-down ${canMoveDown ? "" : "disabled"} title="${
+                  canMoveDown
+                    ? "Move cell down"
+                    : canEdit
+                      ? "This cell is already last."
+                      : "This notebook cannot be edited."
+                }">Move down</button>
+                <div class="workspace-action-menu-separator" aria-hidden="true"></div>
+                <button type="button" class="workspace-action-menu-item${canEdit ? "" : " is-action-disabled"}" data-format-cell-sql ${canEdit ? "" : "disabled"} title="${canEdit ? "Format SQL" : "This notebook cannot be edited."}">Format SQL</button>
+                <button type="button" class="workspace-action-menu-item${canEdit ? "" : " is-action-disabled"}" data-add-cell-after ${canEdit ? "" : "disabled"} title="${canEdit ? "Add cell below" : "This notebook cannot be edited."}">Add cell</button>
                 <button type="button" class="workspace-action-menu-item${canEdit ? "" : " is-action-disabled"}" data-copy-cell ${canEdit ? "" : "disabled"} title="${canEdit ? "Copy cell" : "This notebook cannot be edited."}">Copy cell</button>
                 <button type="button" class="workspace-action-menu-item workspace-action-menu-item-danger${canEdit ? "" : " is-action-disabled"}" data-delete-cell ${canEdit ? "" : "disabled"} title="${canEdit ? "Delete cell" : "This notebook cannot be edited."}">Delete cell</button>
               </div>
@@ -818,7 +1425,7 @@ function buildWorkspaceMarkup(notebookId, metadata) {
       `
     : `<span class="workspace-version-current-empty">No saved versions yet.</span>`;
   const cellsMarkup = (metadata.cells ?? [])
-    .map((cell, index) => buildCellMarkup(notebookId, cell, index, metadata.canEdit))
+    .map((cell, index, cells) => buildCellMarkup(notebookId, cell, index, metadata.canEdit, cells.length))
     .join("");
 
   return `
@@ -1310,6 +1917,13 @@ function createEmptyCellState(initial = {}) {
   );
 }
 
+function createSourceQueryCellState(sourceDescriptor) {
+  return createEmptyCellState({
+    dataSources: sourceDescriptor?.sourceId ? [sourceDescriptor.sourceId] : [],
+    sql: sourceQuerySql(sourceDescriptor?.relation ?? ""),
+  });
+}
+
 function setNotebookCells(notebookId, cells, options = {}) {
   persistNotebookDraft(notebookId, { cells: normalizeNotebookCells(cells) });
   const metadata = notebookMetadata(notebookId);
@@ -1454,6 +2068,33 @@ function duplicateCell(notebookId, cellId) {
   });
   nextCells.splice(index + 1, 0, duplicate);
   setNotebookCells(notebookId, nextCells, { rerender: true });
+}
+
+function moveCell(notebookId, cellId, direction) {
+  const metadata = notebookMetadata(notebookId);
+  if (!metadata.canEdit) {
+    return;
+  }
+
+  const nextCells = [...metadata.cells];
+  const index = nextCells.findIndex((cell) => cell.cellId === cellId);
+  if (index === -1) {
+    return;
+  }
+
+  const targetIndex = direction === "up" ? index - 1 : direction === "down" ? index + 1 : index;
+  if (targetIndex < 0 || targetIndex >= nextCells.length || targetIndex === index) {
+    return;
+  }
+
+  const [movedCell] = nextCells.splice(index, 1);
+  nextCells.splice(targetIndex, 0, movedCell);
+  activeCellId = cellId;
+  setNotebookCells(notebookId, nextCells, { rerender: true });
+  setActiveCell(
+    Array.from(document.querySelectorAll("[data-query-cell]")).find((cellRoot) => cellRoot.dataset.cellId === cellId) ??
+      null
+  );
 }
 
 function deleteCell(notebookId, cellId) {
@@ -1695,11 +2336,16 @@ function renderLocalNotebookWorkspace(notebookId) {
 
   const metadata = notebookMetadata(notebookId);
   panel.innerHTML = buildWorkspaceMarkup(notebookId, metadata);
+  processHtmx(panel);
   initializeEditors(panel);
   applyNotebookMetadata();
   activateNotebookLink(notebookId);
   revealNotebookLink(notebookId);
   writeLastNotebookId(notebookId);
+}
+
+function defaultNotebookCreateTarget() {
+  return directChildrenContainer(ensureRootUnassignedFolder());
 }
 
 function resolveNotebookCreateTarget(button) {
@@ -1713,17 +2359,17 @@ function resolveNotebookCreateTarget(button) {
   return directChildrenContainer(unassignedFolder);
 }
 
-function createNotebook(targetContainer) {
+function createNotebook(targetContainer, initialMetadata = {}) {
   if (!targetContainer) {
     return null;
   }
 
   const notebookId = `${localNotebookPrefix}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
   const metadata = {
-    title: defaultLocalNotebookTitle(),
-    summary: "Describe this notebook.",
-    cells: [createEmptyCellState()],
-    tags: [],
+    title: initialMetadata.title ?? defaultLocalNotebookTitle(),
+    summary: initialMetadata.summary ?? "Describe this notebook.",
+    cells: normalizeNotebookCells(initialMetadata.cells ?? [createEmptyCellState()]),
+    tags: normalizeTags(initialMetadata.tags ?? []),
     canEdit: true,
     canDelete: true,
     deleted: false,
@@ -1740,6 +2386,48 @@ function createNotebook(targetContainer) {
   applyNotebookMetadata();
   renderLocalNotebookWorkspace(notebookId);
   return notebookId;
+}
+
+function activeEditableNotebookId() {
+  const notebookId = currentActiveNotebookId();
+  if (!notebookId) {
+    return null;
+  }
+
+  const metadata = notebookMetadata(notebookId);
+  return metadata.canEdit && !metadata.deleted ? notebookId : null;
+}
+
+function querySourceInCurrentNotebook(sourceObjectRoot) {
+  const sourceDescriptor = sourceQueryDescriptor(sourceObjectRoot);
+  const notebookId = activeEditableNotebookId();
+  if (!sourceDescriptor || !notebookId) {
+    return false;
+  }
+
+  const metadata = notebookMetadata(notebookId);
+  const nextCell = createSourceQueryCellState(sourceDescriptor);
+  activeCellId = nextCell.cellId;
+  setNotebookCells(notebookId, [...metadata.cells, nextCell], { rerender: true });
+  return true;
+}
+
+function querySourceInNewNotebook(sourceObjectRoot) {
+  const sourceDescriptor = sourceQueryDescriptor(sourceObjectRoot);
+  if (!sourceDescriptor) {
+    return null;
+  }
+
+  const targetContainer = defaultNotebookCreateTarget();
+  if (!targetContainer) {
+    return null;
+  }
+
+  const nextCell = createSourceQueryCellState(sourceDescriptor);
+  activeCellId = nextCell.cellId;
+  return createNotebook(targetContainer, {
+    cells: [nextCell],
+  });
 }
 
 function updateWorkspaceCellEditor(cellRoot, sqlText) {
@@ -1775,7 +2463,62 @@ function updateWorkspaceCellEditor(cellRoot, sqlText) {
   applyingNotebookState = false;
 }
 
-function syncCellActionButtons(cellRoot, editable) {
+function formatCellSql(notebookId, cellId) {
+  const cellRoot = document.querySelector(`[data-query-cell][data-cell-id="${cellId}"]`);
+  const editorRoot = cellRoot?.querySelector("[data-editor-root]");
+  const textarea = cellRoot?.querySelector("[data-editor-source]");
+  const editor = editorRoot ? editorRegistry.get(editorRoot) : null;
+  const currentSql = editor?.state.doc.toString() ?? textarea?.value ?? "";
+  const formattedSql = formatSqlText(currentSql);
+
+  if (!formattedSql || formattedSql === currentSql || !textarea) {
+    return;
+  }
+
+  textarea.value = formattedSql;
+  textarea.dataset.defaultSql = formattedSql;
+
+  if (editor) {
+    const nextCursor = Math.min(editor.state.selection.main.head, formattedSql.length);
+    applyingNotebookState = true;
+    editor.dispatch({
+      changes: {
+        from: 0,
+        to: currentSql.length,
+        insert: formattedSql,
+      },
+      selection: {
+        anchor: nextCursor,
+      },
+    });
+    applyingNotebookState = false;
+    editor.focus();
+  }
+
+  setCellSql(notebookId, cellId, formattedSql);
+}
+
+function syncCellActionButtons(cellRoot, editable, index, totalCells) {
+  syncWorkspaceActionButton(cellRoot?.querySelector("[data-format-cell-sql]"), {
+    allowed: editable,
+    enabledTitle: "Format SQL",
+    disabledTitle: "This notebook cannot be edited.",
+  });
+  syncWorkspaceActionButton(cellRoot?.querySelector("[data-add-cell-after]"), {
+    allowed: editable,
+    enabledTitle: "Add cell below",
+    disabledTitle: "This notebook cannot be edited.",
+  });
+  syncWorkspaceActionButton(cellRoot?.querySelector("[data-move-cell-up]"), {
+    allowed: editable && index > 0,
+    enabledTitle: "Move cell up",
+    disabledTitle: editable ? "This cell is already first." : "This notebook cannot be edited.",
+  });
+  syncWorkspaceActionButton(cellRoot?.querySelector("[data-move-cell-down]"), {
+    allowed: editable && index < totalCells - 1,
+    enabledTitle: "Move cell down",
+    disabledTitle: editable ? "This cell is already last." : "This notebook cannot be edited.",
+  });
   syncWorkspaceActionButton(cellRoot?.querySelector("[data-copy-cell]"), {
     allowed: editable,
     enabledTitle: "Copy cell",
@@ -1794,6 +2537,26 @@ function closeCellActionMenus() {
   });
 }
 
+function syncSourceActionMenu(menu) {
+  const currentNotebookId = currentActiveNotebookId();
+  const currentNotebook = currentNotebookId ? notebookMetadata(currentNotebookId) : null;
+  syncWorkspaceActionButton(menu?.querySelector("[data-query-source-current]"), {
+    allowed: Boolean(currentNotebook?.canEdit && !currentNotebook?.deleted),
+    enabledTitle: currentNotebook
+      ? `Insert a query into "${currentNotebook.title}"`
+      : "Insert a query into the current notebook",
+    disabledTitle: currentNotebookId
+      ? "The current notebook cannot be edited. Use 'Query in new notebook' instead."
+      : "No notebook is currently selected.",
+  });
+}
+
+function closeSourceActionMenus() {
+  document.querySelectorAll("[data-source-action-menu][open]").forEach((menu) => {
+    menu.removeAttribute("open");
+  });
+}
+
 function closeCellSourcePicker(cellRoot) {
   const picker = cellRoot?.querySelector("[data-cell-source-picker]");
   if (!picker) {
@@ -1804,7 +2567,18 @@ function closeCellSourcePicker(cellRoot) {
   picker.removeAttribute("open");
 }
 
-function applyWorkspaceCellState(workspaceRoot, cell, index, editable) {
+function setActiveCell(cellRoot = null) {
+  activeCellId = cellRoot?.dataset.cellId ?? null;
+  document.querySelectorAll("[data-query-cell].is-active").forEach((activeCell) => {
+    if (activeCell !== cellRoot) {
+      activeCell.classList.remove("is-active");
+    }
+  });
+
+  cellRoot?.classList.add("is-active");
+}
+
+function applyWorkspaceCellState(workspaceRoot, cell, index, editable, totalCells) {
   const cellRoot = workspaceRoot?.querySelector(`[data-query-cell][data-cell-id="${cell.cellId}"]`);
   if (!cellRoot) {
     return;
@@ -1825,7 +2599,7 @@ function applyWorkspaceCellState(workspaceRoot, cell, index, editable) {
 
   const sourceSummary = cellRoot.querySelector("[data-cell-source-summary]");
   if (sourceSummary) {
-    sourceSummary.textContent = cellSourceSummaryText(cell.dataSources);
+    sourceSummary.innerHTML = cellSourceSummaryMarkup(cell.dataSources);
   }
 
   const selectedSources = new Set(normalizeDataSources(cell.dataSources));
@@ -1841,7 +2615,7 @@ function applyWorkspaceCellState(workspaceRoot, cell, index, editable) {
     cellRoot.querySelector("[data-cell-source-picker]")?.removeAttribute("open");
   }
 
-  syncCellActionButtons(cellRoot, editable);
+  syncCellActionButtons(cellRoot, editable, index, totalCells);
   updateWorkspaceCellEditor(cellRoot, cell.sql);
 }
 
@@ -1948,8 +2722,9 @@ function applyWorkspaceMetadata(metaRoot, metadata) {
     return;
   }
 
+  const totalCells = metadata.cells?.length ?? 0;
   (metadata.cells ?? []).forEach((cell, index) => {
-    applyWorkspaceCellState(workspaceRoot, cell, index, metadata.canEdit);
+    applyWorkspaceCellState(workspaceRoot, cell, index, metadata.canEdit, totalCells);
   });
 
   const addCellButton = workspaceRoot?.querySelector("[data-add-cell]");
@@ -2750,6 +3525,14 @@ function initializeSidebarSearch() {
   applySidebarSearchFilter();
 }
 
+function processHtmx(root) {
+  if (!root || typeof window.htmx?.process !== "function") {
+    return;
+  }
+
+  window.htmx.process(root);
+}
+
 async function loadNotebookWorkspace(notebookId) {
   const panel = document.getElementById("workspace-panel");
   if (!panel || !notebookId) {
@@ -2795,6 +3578,7 @@ async function loadNotebookWorkspace(notebookId) {
   }
 
   panel.innerHTML = workspaceMarkup;
+  processHtmx(panel);
   initializeEditors(panel);
   applyNotebookMetadata();
   activateNotebookLink(notebookId);
@@ -2840,11 +3624,21 @@ async function restoreLastNotebook() {
 }
 
 document.body.addEventListener("click", async (event) => {
+  setActiveCell(event.target.closest("[data-query-cell]"));
+
   if (!event.target.closest("[data-workspace-action-menu]")) {
     closeWorkspaceActionMenus();
   }
   if (!event.target.closest("[data-cell-action-menu]")) {
     closeCellActionMenus();
+  }
+  if (!event.target.closest("[data-source-action-menu]")) {
+    closeSourceActionMenus();
+  }
+
+  const sourceActionMenu = event.target.closest("[data-source-action-menu]");
+  if (sourceActionMenu) {
+    syncSourceActionMenu(sourceActionMenu);
   }
 
   const sidebarToggleButton = event.target.closest("[data-sidebar-toggle]");
@@ -2895,6 +3689,26 @@ document.body.addEventListener("click", async (event) => {
     event.preventDefault();
     event.stopPropagation();
     setDataSourceTreeExpanded(true);
+    return;
+  }
+
+  const querySourceCurrentButton = event.target.closest("[data-query-source-current]");
+  if (querySourceCurrentButton) {
+    event.preventDefault();
+    closeSourceActionMenus();
+
+    const sourceObjectRoot = querySourceCurrentButton.closest("[data-source-object]");
+    if (!querySourceInCurrentNotebook(sourceObjectRoot)) {
+      window.alert("Open an editable notebook first, or use 'Query in new notebook'.");
+    }
+    return;
+  }
+
+  const querySourceNewButton = event.target.closest("[data-query-source-new]");
+  if (querySourceNewButton) {
+    event.preventDefault();
+    closeSourceActionMenus();
+    querySourceInNewNotebook(querySourceNewButton.closest("[data-source-object]"));
     return;
   }
 
@@ -3018,6 +3832,38 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const addCellAfterButton = event.target.closest("[data-add-cell-after]");
+  if (addCellAfterButton) {
+    event.preventDefault();
+    closeCellActionMenus();
+
+    const workspaceRoot = addCellAfterButton.closest("[data-workspace-notebook]");
+    const notebookId = workspaceNotebookId(workspaceRoot);
+    const cellId = addCellAfterButton.closest("[data-query-cell]")?.dataset.cellId;
+    if (!notebookId || !cellId) {
+      return;
+    }
+
+    addCell(notebookId, cellId);
+    return;
+  }
+
+  const formatCellSqlButton = event.target.closest("[data-format-cell-sql]");
+  if (formatCellSqlButton) {
+    event.preventDefault();
+    closeCellActionMenus();
+
+    const workspaceRoot = formatCellSqlButton.closest("[data-workspace-notebook]");
+    const notebookId = workspaceNotebookId(workspaceRoot);
+    const cellId = formatCellSqlButton.closest("[data-query-cell]")?.dataset.cellId;
+    if (!notebookId || !cellId) {
+      return;
+    }
+
+    formatCellSql(notebookId, cellId);
+    return;
+  }
+
   const copyCellButton = event.target.closest("[data-copy-cell]");
   if (copyCellButton) {
     event.preventDefault();
@@ -3031,6 +3877,38 @@ document.body.addEventListener("click", async (event) => {
     }
 
     duplicateCell(notebookId, cellId);
+    return;
+  }
+
+  const moveCellUpButton = event.target.closest("[data-move-cell-up]");
+  if (moveCellUpButton) {
+    event.preventDefault();
+    closeCellActionMenus();
+
+    const workspaceRoot = moveCellUpButton.closest("[data-workspace-notebook]");
+    const notebookId = workspaceNotebookId(workspaceRoot);
+    const cellId = moveCellUpButton.closest("[data-query-cell]")?.dataset.cellId;
+    if (!notebookId || !cellId) {
+      return;
+    }
+
+    moveCell(notebookId, cellId, "up");
+    return;
+  }
+
+  const moveCellDownButton = event.target.closest("[data-move-cell-down]");
+  if (moveCellDownButton) {
+    event.preventDefault();
+    closeCellActionMenus();
+
+    const workspaceRoot = moveCellDownButton.closest("[data-workspace-notebook]");
+    const notebookId = workspaceNotebookId(workspaceRoot);
+    const cellId = moveCellDownButton.closest("[data-query-cell]")?.dataset.cellId;
+    if (!notebookId || !cellId) {
+      return;
+    }
+
+    moveCell(notebookId, cellId, "down");
     return;
   }
 
@@ -3274,6 +4152,10 @@ document.body.addEventListener("click", async (event) => {
   activateNotebookLink(notebookId);
   revealNotebookLink(notebookId);
   writeLastNotebookId(notebookId);
+});
+
+document.body.addEventListener("focusin", (event) => {
+  setActiveCell(event.target.closest("[data-query-cell]"));
 });
 
 document.body.addEventListener("input", (event) => {
