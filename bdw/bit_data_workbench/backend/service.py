@@ -8,7 +8,14 @@ from urllib.parse import urlparse
 import duckdb
 
 from ..config import Settings
-from ..models import NotebookDefinition, QueryResult, SourceCatalog, SourceObject, SourceSchema
+from ..models import (
+    NotebookDefinition,
+    QueryResult,
+    SourceCatalog,
+    SourceField,
+    SourceObject,
+    SourceSchema,
+)
 from .notebooks import build_completion_schema, build_notebook_tree, build_notebooks, build_source_options
 
 
@@ -152,6 +159,51 @@ class WorkbenchService:
     def notebook_tree(self):
         with self._lock:
             return build_notebook_tree(self._notebooks)
+
+    def source_object_fields(self, relation: str) -> list[SourceField]:
+        normalized_relation = relation.strip()
+        if not normalized_relation:
+            raise KeyError("Missing source object relation.")
+
+        parts = [part.strip() for part in normalized_relation.split(".") if part.strip()]
+        if len(parts) == 3 and parts[0] in {"pg_oltp", "pg_olap"}:
+            catalog_name = parts[0]
+            schema_name = parts[1]
+            object_name = parts[2]
+            query = """
+                SELECT
+                    column_name,
+                    COALESCE(NULLIF(UPPER(data_type), ''), NULLIF(UPPER(udt_name), ''), 'UNKNOWN')
+                FROM information_schema.columns
+                WHERE table_catalog = ? AND table_schema = ? AND table_name = ?
+                ORDER BY ordinal_position
+            """
+            parameters = [catalog_name, schema_name, object_name]
+        elif len(parts) == 2:
+            schema_name = parts[0]
+            object_name = parts[1]
+            query = """
+                SELECT
+                    column_name,
+                    COALESCE(NULLIF(UPPER(data_type), ''), NULLIF(UPPER(udt_name), ''), 'UNKNOWN')
+                FROM information_schema.columns
+                WHERE table_catalog NOT IN ('pg_oltp', 'pg_olap')
+                  AND table_schema = ?
+                  AND table_name = ?
+                ORDER BY ordinal_position
+            """
+            parameters = [schema_name, object_name]
+        else:
+            raise KeyError(f"Unsupported source object relation: {relation}")
+
+        with self._lock:
+            conn = self._require_connection()
+            rows = conn.execute(query, parameters).fetchall()
+
+        if not rows:
+            raise KeyError(f"Unknown source object: {relation}")
+
+        return [SourceField(name=column_name, data_type=data_type) for column_name, data_type in rows]
 
     def execute_query(self, sql: str) -> QueryResult:
         query = sql.strip()
@@ -369,7 +421,7 @@ class WorkbenchService:
 
     def _refresh_state(self) -> None:
         conn = self._require_connection()
-        rows = conn.execute(
+        object_rows = conn.execute(
             """
             SELECT
                 table_catalog,
@@ -388,7 +440,7 @@ class WorkbenchService:
             "pg_olap": {},
         }
 
-        for catalog, schema, table_name, table_type in rows:
+        for catalog, schema, table_name, table_type in object_rows:
             catalog_name = catalog if catalog in {"pg_oltp", "pg_olap"} else "workspace"
             grouped.setdefault(catalog_name, {}).setdefault(schema, []).append(
                 SourceObject(

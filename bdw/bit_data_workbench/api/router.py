@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
@@ -41,3 +41,16 @@ def run_query(
             "active_notebook_id": notebook_id,
         },
     )
+
+
+@router.get("/api/source-object-fields")
+def source_object_fields(
+    relation: str = Query(""),
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        fields = service.source_object_fields(relation)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return JSONResponse({"fields": [field.payload for field in fields]})

@@ -7,6 +7,9 @@ let draggedNotebook = null;
 let restoreController = null;
 let applyingNotebookState = false;
 let activeCellId = null;
+let activeSourceObjectRelation = null;
+const sourceObjectFieldCache = new Map();
+const sourceObjectFieldRequests = new Map();
 
 const notebookTreeStorageKey = "bdw.notebookTree.v1";
 const notebookMetadataStorageKey = "bdw.notebookMeta.v1";
@@ -178,6 +181,18 @@ function notebookFolders() {
 
 function dataSourceNodes() {
   return Array.from(document.querySelectorAll("[data-source-catalog], [data-source-schema]"));
+}
+
+function sourceObjectNodes() {
+  return Array.from(document.querySelectorAll("[data-source-object]"));
+}
+
+function sourceInspector() {
+  return document.querySelector("[data-source-inspector]");
+}
+
+function sourceInspectorPanel() {
+  return document.querySelector("[data-source-inspector-panel]");
 }
 
 function sidebarToggle() {
@@ -860,6 +875,409 @@ function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+function normalizeSourceObjectFields(fields) {
+  if (!Array.isArray(fields)) {
+    return [];
+  }
+
+  return fields
+    .map((field) => ({
+      name: typeof field?.name === "string" ? field.name.trim() : "",
+      dataType: typeof field?.dataType === "string" ? field.dataType.trim() : "UNKNOWN",
+    }))
+    .filter((field) => field.name);
+}
+
+function sourceObjectRelation(sourceObjectRoot) {
+  if (!(sourceObjectRoot instanceof Element)) {
+    return "";
+  }
+
+  return sourceObjectRoot.dataset.sourceObjectRelation?.trim() || "";
+}
+
+function sourceObjectFieldCacheKey(sourceObjectRoot) {
+  return sourceObjectRelation(sourceObjectRoot);
+}
+
+function sourceObjectDisplayName(sourceObjectRoot) {
+  return (
+    sourceObjectRoot?.dataset.sourceObjectName?.trim() ||
+    sourceObjectRoot?.dataset.sourceObjectRelation?.trim() ||
+    "Selected source"
+  );
+}
+
+function sourceObjectDisplayKind(sourceObjectRoot) {
+  return sourceObjectRoot?.dataset.sourceObjectKind?.trim()?.toUpperCase() || "TABLE";
+}
+
+function normalizedSourceFieldDataType(dataType) {
+  return String(dataType ?? "")
+    .trim()
+    .toUpperCase();
+}
+
+function sourceFieldTypeFamily(dataType) {
+  const normalized = normalizedSourceFieldDataType(dataType);
+  if (!normalized) {
+    return "unknown";
+  }
+
+  if (
+    /(BIGINT|HUGEINT|INTEGER|INT|SMALLINT|TINYINT|DECIMAL|NUMERIC|REAL|DOUBLE|FLOAT|SERIAL|UBIGINT|UHUGEINT|UINTEGER|USMALLINT|UTINYINT)/.test(
+      normalized
+    )
+  ) {
+    return "number";
+  }
+
+  if (/(DATE|TIME|TIMESTAMP|INTERVAL)/.test(normalized)) {
+    return "temporal";
+  }
+
+  if (/(BOOL)/.test(normalized)) {
+    return "boolean";
+  }
+
+  if (/(JSON|JSONB|XML)/.test(normalized)) {
+    return "document";
+  }
+
+  if (/(BYTEA|BLOB|BINARY|VARBINARY)/.test(normalized)) {
+    return "binary";
+  }
+
+  if (/(ARRAY|LIST)/.test(normalized)) {
+    return "list";
+  }
+
+  if (/(MAP|STRUCT|UNION)/.test(normalized)) {
+    return "object";
+  }
+
+  if (/(CHAR|TEXT|STRING|VARCHAR|UUID|ENUM|INET|CIDR|NAME)/.test(normalized)) {
+    return "text";
+  }
+
+  return "unknown";
+}
+
+function sourceFieldIconMarkup(dataType) {
+  switch (sourceFieldTypeFamily(dataType)) {
+    case "number":
+      return `
+        <span class="sidebar-source-field-icon sidebar-source-field-icon-number" aria-hidden="true">
+          <span class="sidebar-source-field-icon-glyph">123</span>
+        </span>
+      `;
+    case "text":
+      return `
+        <span class="sidebar-source-field-icon sidebar-source-field-icon-text" aria-hidden="true">
+          <span class="sidebar-source-field-icon-glyph">T</span>
+        </span>
+      `;
+    case "temporal":
+      return `
+        <span class="sidebar-source-field-icon sidebar-source-field-icon-temporal" aria-hidden="true">
+          <svg viewBox="0 0 16 16" focusable="false">
+            <rect x="2.25" y="3.25" width="11.5" height="10.5" rx="1.5"></rect>
+            <path d="M5 2.4v2.4M11 2.4v2.4M2.5 6.15h11"></path>
+            <path d="M4.9 8.6h2.1M9 8.6h2.1M4.9 11h2.1"></path>
+          </svg>
+        </span>
+      `;
+    case "boolean":
+      return `
+        <span class="sidebar-source-field-icon sidebar-source-field-icon-boolean" aria-hidden="true">
+          <svg viewBox="0 0 16 16" focusable="false">
+            <rect x="2.5" y="2.5" width="11" height="11" rx="2"></rect>
+            <path d="M5.3 8.2 7.1 10l3.7-4"></path>
+          </svg>
+        </span>
+      `;
+    case "document":
+      return `
+        <span class="sidebar-source-field-icon sidebar-source-field-icon-document" aria-hidden="true">
+          <span class="sidebar-source-field-icon-glyph sidebar-source-field-icon-glyph-code">{ }</span>
+        </span>
+      `;
+    case "binary":
+      return `
+        <span class="sidebar-source-field-icon sidebar-source-field-icon-binary" aria-hidden="true">
+          <span class="sidebar-source-field-icon-glyph sidebar-source-field-icon-glyph-binary">01</span>
+        </span>
+      `;
+    case "list":
+      return `
+        <span class="sidebar-source-field-icon sidebar-source-field-icon-list" aria-hidden="true">
+          <svg viewBox="0 0 16 16" focusable="false">
+            <circle cx="4.2" cy="4.3" r="0.95"></circle>
+            <circle cx="4.2" cy="8" r="0.95"></circle>
+            <circle cx="4.2" cy="11.7" r="0.95"></circle>
+            <path d="M6.6 4.3h5.2M6.6 8h5.2M6.6 11.7h5.2"></path>
+          </svg>
+        </span>
+      `;
+    case "object":
+      return `
+        <span class="sidebar-source-field-icon sidebar-source-field-icon-object" aria-hidden="true">
+          <svg viewBox="0 0 16 16" focusable="false">
+            <rect x="2.1" y="2.2" width="3.6" height="3.6" rx="0.7"></rect>
+            <rect x="10.3" y="2.2" width="3.6" height="3.6" rx="0.7"></rect>
+            <rect x="10.3" y="10.2" width="3.6" height="3.6" rx="0.7"></rect>
+            <path d="M5.7 4h3a1.8 1.8 0 0 1 1.8 1.8v1.1"></path>
+            <path d="M10.5 8.4H7.7a1.8 1.8 0 0 0-1.8 1.8v0.2"></path>
+          </svg>
+        </span>
+      `;
+    default:
+      return `
+        <span class="sidebar-source-field-icon sidebar-source-field-icon-unknown" aria-hidden="true">
+          <svg viewBox="0 0 16 16" focusable="false">
+            <circle cx="8" cy="8" r="4.4"></circle>
+          </svg>
+        </span>
+      `;
+  }
+}
+
+function sourceInspectorMarkup(sourceObjectRoot, fields) {
+  const objectName = sourceObjectDisplayName(sourceObjectRoot);
+  const objectKind = sourceObjectDisplayKind(sourceObjectRoot);
+  const fieldCountLabel = `${fields.length} ${fields.length === 1 ? "field" : "fields"}`;
+
+  const fieldsMarkup = fields.length
+    ? `
+        <ul class="sidebar-source-field-list">
+          ${fields
+            .map(
+              (field) => `
+                <li class="sidebar-source-field">
+                  <span class="sidebar-source-field-name">
+                    ${sourceFieldIconMarkup(field.dataType)}
+                    <span class="sidebar-source-field-name-text">${escapeHtml(field.name)}</span>
+                  </span>
+                  <span class="sidebar-source-field-type">${escapeHtml(field.dataType)}</span>
+                </li>
+              `
+            )
+            .join("")}
+        </ul>
+      `
+    : '<p class="sidebar-source-inspector-empty">No fields are available for this source object.</p>';
+
+  return `
+    <header class="sidebar-source-inspector-header">
+      <div class="sidebar-source-inspector-copy">
+        <h3 class="sidebar-source-inspector-title">${escapeHtml(objectName)}</h3>
+        <p class="sidebar-source-inspector-meta">${escapeHtml(objectKind)} - ${escapeHtml(fieldCountLabel)}</p>
+      </div>
+    </header>
+    <div class="sidebar-source-inspector-body">
+      ${fieldsMarkup}
+    </div>
+  `;
+}
+
+function sourceInspectorLoadingMarkup(sourceObjectRoot) {
+  return `
+    <header class="sidebar-source-inspector-header">
+      <div class="sidebar-source-inspector-copy">
+        <h3 class="sidebar-source-inspector-title">${escapeHtml(sourceObjectDisplayName(sourceObjectRoot))}</h3>
+        <p class="sidebar-source-inspector-meta">${escapeHtml(sourceObjectDisplayKind(sourceObjectRoot))}</p>
+      </div>
+    </header>
+    <div class="sidebar-source-inspector-loading">
+      <span class="sidebar-loading-spinner" aria-hidden="true"></span>
+      <span>Loading fields...</span>
+    </div>
+  `;
+}
+
+function sourceInspectorErrorMarkup(sourceObjectRoot, message) {
+  return `
+    <header class="sidebar-source-inspector-header">
+      <div class="sidebar-source-inspector-copy">
+        <h3 class="sidebar-source-inspector-title">${escapeHtml(sourceObjectDisplayName(sourceObjectRoot))}</h3>
+        <p class="sidebar-source-inspector-meta">${escapeHtml(sourceObjectDisplayKind(sourceObjectRoot))}</p>
+      </div>
+    </header>
+    <p class="sidebar-source-inspector-empty">${escapeHtml(message)}</p>
+  `;
+}
+
+function renderSourceInspectorMarkup(markup, hidden = false) {
+  const inspectorRoot = sourceInspector();
+  const inspectorPanel = sourceInspectorPanel();
+  if (!inspectorRoot || !inspectorPanel) {
+    return;
+  }
+
+  if (hidden) {
+    inspectorRoot.hidden = true;
+    inspectorPanel.innerHTML = "";
+    return;
+  }
+
+  inspectorPanel.innerHTML = markup;
+  inspectorRoot.hidden = false;
+}
+
+function renderSourceInspector(sourceObjectRoot = null, fields = []) {
+  if (!(sourceObjectRoot instanceof Element)) {
+    renderSourceInspectorMarkup("", true);
+    return;
+  }
+
+  renderSourceInspectorMarkup(sourceInspectorMarkup(sourceObjectRoot, normalizeSourceObjectFields(fields)));
+}
+
+function renderSourceInspectorLoading(sourceObjectRoot) {
+  if (!(sourceObjectRoot instanceof Element)) {
+    renderSourceInspectorMarkup("", true);
+    return;
+  }
+
+  renderSourceInspectorMarkup(sourceInspectorLoadingMarkup(sourceObjectRoot));
+}
+
+function renderSourceInspectorError(sourceObjectRoot, message) {
+  if (!(sourceObjectRoot instanceof Element)) {
+    renderSourceInspectorMarkup("", true);
+    return;
+  }
+
+  renderSourceInspectorMarkup(
+    sourceInspectorErrorMarkup(
+      sourceObjectRoot,
+      message || "The fields could not be loaded for this source object."
+    )
+  );
+}
+
+function setSourceObjectLoadingState(sourceObjectRoot, loading) {
+  if (!(sourceObjectRoot instanceof Element)) {
+    return;
+  }
+
+  sourceObjectRoot.classList.toggle("is-loading", loading);
+  sourceObjectRoot.setAttribute("aria-busy", loading ? "true" : "false");
+}
+
+function setSelectedSourceObjectState(sourceObjectRoot = null) {
+  const selectedRelation = sourceObjectRoot?.dataset.sourceObjectRelation?.trim() || null;
+  activeSourceObjectRelation = selectedRelation;
+
+  sourceObjectNodes().forEach((item) => {
+    const isSelected = item === sourceObjectRoot;
+    item.classList.toggle("is-selected", isSelected);
+    item.setAttribute("aria-selected", isSelected ? "true" : "false");
+    if (!isSelected) {
+      setSourceObjectLoadingState(item, false);
+    }
+  });
+
+  if (!(sourceObjectRoot instanceof Element)) {
+    renderSourceInspectorMarkup("", true);
+  }
+}
+
+async function fetchSourceObjectFields(relation) {
+  const response = await window.fetch(
+    `/api/source-object-fields?relation=${encodeURIComponent(relation)}`,
+    {
+      headers: {
+        Accept: "application/json",
+      },
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error("The fields could not be loaded for this source object.");
+  }
+
+  const payload = await response.json();
+  return normalizeSourceObjectFields(payload?.fields ?? []);
+}
+
+async function loadSourceObjectFields(sourceObjectRoot, { renderLoading = true } = {}) {
+  const relation = sourceObjectFieldCacheKey(sourceObjectRoot);
+  if (!relation) {
+    return [];
+  }
+
+  if (sourceObjectFieldCache.has(relation)) {
+    const fields = sourceObjectFieldCache.get(relation) ?? [];
+    if (activeSourceObjectRelation === relation) {
+      renderSourceInspector(sourceObjectRoot, fields);
+    }
+    return fields;
+  }
+
+  if (renderLoading && activeSourceObjectRelation === relation) {
+    setSourceObjectLoadingState(sourceObjectRoot, true);
+    renderSourceInspectorLoading(sourceObjectRoot);
+  }
+
+  let pendingRequest = sourceObjectFieldRequests.get(relation);
+  if (!pendingRequest) {
+    pendingRequest = fetchSourceObjectFields(relation)
+      .then((fields) => {
+        sourceObjectFieldCache.set(relation, fields);
+        return fields;
+      })
+      .finally(() => {
+        sourceObjectFieldRequests.delete(relation);
+      });
+    sourceObjectFieldRequests.set(relation, pendingRequest);
+  }
+
+  try {
+    const fields = await pendingRequest;
+    if (activeSourceObjectRelation === relation) {
+      renderSourceInspector(sourceObjectRoot, fields);
+    }
+    return fields;
+  } catch (error) {
+    if (activeSourceObjectRelation === relation) {
+      renderSourceInspectorError(
+        sourceObjectRoot,
+        error instanceof Error ? error.message : "The fields could not be loaded for this source object."
+      );
+    }
+    throw error;
+  } finally {
+    setSourceObjectLoadingState(sourceObjectRoot, false);
+  }
+}
+
+async function selectSourceObject(sourceObjectRoot = null, { renderLoading = true } = {}) {
+  setSelectedSourceObjectState(sourceObjectRoot);
+  if (!(sourceObjectRoot instanceof Element)) {
+    return [];
+  }
+
+  return loadSourceObjectFields(sourceObjectRoot, { renderLoading });
+}
+
+function restoreSelectedSourceObject() {
+  const sourceObjectRoot =
+    sourceObjectNodes().find(
+      (item) => item.dataset.sourceObjectRelation?.trim() === activeSourceObjectRelation
+    ) ?? null;
+
+  if (!sourceObjectRoot) {
+    activeSourceObjectRelation = null;
+  }
+
+  selectSourceObject(sourceObjectRoot, {
+    renderLoading: !sourceObjectFieldCache.has(sourceObjectFieldCacheKey(sourceObjectRoot)),
+  }).catch(() => {
+    // Keep the last selected state, but do not interrupt the rest of the UI.
+  });
+}
+
 function readSqlDollarQuotedLiteral(sqlText, startIndex) {
   const delimiterMatch = sqlText.slice(startIndex).match(/^\$[A-Za-z_][A-Za-z0-9_]*\$|^\$\$/);
   if (!delimiterMatch) {
@@ -1257,8 +1675,30 @@ function defaultLocalNotebookTitle() {
   return `Untitled Notebook ${localNotebookCount + 1}`;
 }
 
-function sourceQuerySql(relation) {
-  return `SELECT * FROM ${relation};`;
+function sqlQueryIdentifier(name) {
+  if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+    return name;
+  }
+
+  return `"${String(name).replace(/"/g, '""')}"`;
+}
+
+function sourceQuerySql(relation, fields = []) {
+  const fieldNames = normalizeSourceObjectFields(fields).map((field) => field.name);
+  if (!fieldNames.length) {
+    return `SELECT * FROM ${relation};`;
+  }
+
+  return [
+    "SELECT",
+    fieldNames
+      .map(
+        (fieldName, index) =>
+          `  ${sqlQueryIdentifier(fieldName)}${index < fieldNames.length - 1 ? "," : ""}`
+      )
+      .join("\n"),
+    `FROM ${relation};`,
+  ].join("\n");
 }
 
 function sourceQueryDescriptor(sourceObjectRoot) {
@@ -1377,18 +1817,18 @@ function buildCellMarkup(notebookId, cell, index, canEdit, totalCells) {
               </summary>
               <div class="workspace-action-menu-panel">
                 <button type="button" class="workspace-action-menu-item${canEdit ? "" : " is-action-disabled"}" data-format-cell-sql ${canEdit ? "" : "disabled"} title="${canEdit ? "Format SQL" : "This notebook cannot be edited."}">Format SQL</button>
-                <button type="button" class="workspace-action-menu-item workspace-action-menu-item-placeholder is-action-disabled" disabled title="Coming soon.">Optimize SQL</button>
-                <button type="button" class="workspace-action-menu-item workspace-action-menu-item-placeholder is-action-disabled" disabled title="Coming soon.">Explain SQL Execution Plan</button>
-                <button type="button" class="workspace-action-menu-item workspace-action-menu-item-placeholder is-action-disabled" disabled title="Coming soon.">Explain Semantics of this Query</button>
+                <button type="button" class="workspace-action-menu-item workspace-action-menu-item-placeholder is-action-disabled" disabled title="disabled.">Optimize SQL</button>
+                <button type="button" class="workspace-action-menu-item workspace-action-menu-item-placeholder is-action-disabled" disabled title="disabled.">Explain SQL Execution Plan</button>
+                <button type="button" class="workspace-action-menu-item workspace-action-menu-item-placeholder is-action-disabled" disabled title="disabled.">Explain Semantics of this Query</button>
                 <div class="workspace-action-menu-separator" aria-hidden="true"></div>
-                <button type="button" class="workspace-action-menu-item${canMoveUp ? "" : " is-action-disabled"}" data-move-cell-up ${canMoveUp ? "" : "disabled"} title="${
+                <button type="button" class="workspace-action-menu-item workspace-action-menu-item-no-strike${canMoveUp ? "" : " is-action-disabled"}" data-move-cell-up ${canMoveUp ? "" : "disabled"} title="${
                   canMoveUp
                     ? "Move cell up"
                     : canEdit
                       ? "This cell is already first."
                       : "This notebook cannot be edited."
                 }">Move up</button>
-                <button type="button" class="workspace-action-menu-item${canMoveDown ? "" : " is-action-disabled"}" data-move-cell-down ${canMoveDown ? "" : "disabled"} title="${
+                <button type="button" class="workspace-action-menu-item workspace-action-menu-item-no-strike${canMoveDown ? "" : " is-action-disabled"}" data-move-cell-down ${canMoveDown ? "" : "disabled"} title="${
                   canMoveDown
                     ? "Move cell down"
                     : canEdit
@@ -1928,10 +2368,10 @@ function createEmptyCellState(initial = {}) {
   );
 }
 
-function createSourceQueryCellState(sourceDescriptor) {
+function createSourceQueryCellState(sourceDescriptor, fields = []) {
   return createEmptyCellState({
     dataSources: sourceDescriptor?.sourceId ? [sourceDescriptor.sourceId] : [],
-    sql: sourceQuerySql(sourceDescriptor?.relation ?? ""),
+    sql: sourceQuerySql(sourceDescriptor?.relation ?? "", fields),
   });
 }
 
@@ -2547,15 +2987,24 @@ function requestCellRun(cellId) {
   return true;
 }
 
-function insertSourceQueryIntoCurrentNotebook(sourceObjectRoot, { runImmediately = false } = {}) {
+async function insertSourceQueryIntoCurrentNotebook(sourceObjectRoot, { runImmediately = false } = {}) {
   const sourceDescriptor = sourceQueryDescriptor(sourceObjectRoot);
   const notebookId = activeEditableNotebookId();
   if (!sourceDescriptor || !notebookId) {
     return false;
   }
 
+  let fields;
+  try {
+    fields = await selectSourceObject(sourceObjectRoot);
+  } catch (error) {
+    console.error("Failed to load source object fields.", error);
+    window.alert("The fields for this source object could not be loaded.");
+    return null;
+  }
+
   const metadata = notebookMetadata(notebookId);
-  const nextCell = createSourceQueryCellState(sourceDescriptor);
+  const nextCell = createSourceQueryCellState(sourceDescriptor, fields);
   activeCellId = nextCell.cellId;
   setNotebookCells(notebookId, [...metadata.cells, nextCell], { rerender: true });
   if (runImmediately) {
@@ -2572,7 +3021,7 @@ function viewSourceData(sourceObjectRoot) {
   return insertSourceQueryIntoCurrentNotebook(sourceObjectRoot, { runImmediately: true });
 }
 
-function querySourceInNewNotebook(sourceObjectRoot) {
+async function querySourceInNewNotebook(sourceObjectRoot) {
   const sourceDescriptor = sourceQueryDescriptor(sourceObjectRoot);
   if (!sourceDescriptor) {
     return null;
@@ -2583,7 +3032,16 @@ function querySourceInNewNotebook(sourceObjectRoot) {
     return null;
   }
 
-  const nextCell = createSourceQueryCellState(sourceDescriptor);
+  let fields;
+  try {
+    fields = await selectSourceObject(sourceObjectRoot);
+  } catch (error) {
+    console.error("Failed to load source object fields.", error);
+    window.alert("The fields for this source object could not be loaded.");
+    return null;
+  }
+
+  const nextCell = createSourceQueryCellState(sourceDescriptor, fields);
   activeCellId = nextCell.cellId;
   return createNotebook(targetContainer, {
     cells: [nextCell],
@@ -2705,8 +3163,8 @@ function syncSourceActionMenu(menu) {
   syncWorkspaceActionButton(menu?.querySelector("[data-view-source-data]"), {
     allowed: currentNotebookEditable,
     enabledTitle: currentNotebook
-      ? `Insert and run a SELECT * query in "${currentNotebook.title}"`
-      : "Insert and run a SELECT * query in the current notebook",
+      ? `Insert and run a query with all fields in "${currentNotebook.title}"`
+      : "Insert and run a query with all fields in the current notebook",
     disabledTitle: currentNotebookId
       ? "The current notebook cannot be edited. Use 'Query in new notebook' instead."
       : "No notebook is currently selected.",
@@ -3863,13 +4321,24 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const sourceObjectRoot = event.target.closest("[data-source-object]");
+  if (sourceObjectRoot && !event.target.closest("[data-source-action-menu]")) {
+    try {
+      await selectSourceObject(sourceObjectRoot);
+    } catch (error) {
+      console.error("Failed to load source object fields.", error);
+    }
+    return;
+  }
+
   const querySourceCurrentButton = event.target.closest("[data-query-source-current]");
   if (querySourceCurrentButton) {
     event.preventDefault();
     closeSourceActionMenus();
 
     const sourceObjectRoot = querySourceCurrentButton.closest("[data-source-object]");
-    if (!querySourceInCurrentNotebook(sourceObjectRoot)) {
+    const inserted = await querySourceInCurrentNotebook(sourceObjectRoot);
+    if (inserted === false) {
       window.alert("Open an editable notebook first, or use 'Query in new notebook'.");
     }
     return;
@@ -3881,7 +4350,8 @@ document.body.addEventListener("click", async (event) => {
     closeSourceActionMenus();
 
     const sourceObjectRoot = viewSourceDataButton.closest("[data-source-object]");
-    if (!viewSourceData(sourceObjectRoot)) {
+    const viewed = await viewSourceData(sourceObjectRoot);
+    if (viewed === false) {
       window.alert("Open an editable notebook first, or use 'Query in new notebook'.");
     }
     return;
@@ -3891,7 +4361,7 @@ document.body.addEventListener("click", async (event) => {
   if (querySourceNewButton) {
     event.preventDefault();
     closeSourceActionMenus();
-    querySourceInNewNotebook(querySourceNewButton.closest("[data-source-object]"));
+    await querySourceInNewNotebook(querySourceNewButton.closest("[data-source-object]"));
     return;
   }
 
@@ -4544,6 +5014,7 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
   initializeNotebookTree();
   initializeSidebarToggle();
   applyNotebookMetadata();
+  restoreSelectedSourceObject();
 
   const notebookId =
     event.detail?.requestConfig?.parameters?.notebook_id ??
@@ -4562,4 +5033,5 @@ initializeSidebarSearch();
 initializeNotebookTree();
 initializeSidebarToggle();
 applyNotebookMetadata();
+restoreSelectedSourceObject();
 restoreLastNotebook();

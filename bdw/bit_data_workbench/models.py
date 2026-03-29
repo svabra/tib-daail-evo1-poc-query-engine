@@ -6,6 +6,19 @@ from typing import Any
 
 
 @dataclass(slots=True)
+class SourceField:
+    name: str
+    data_type: str
+
+    @property
+    def payload(self) -> dict[str, str]:
+        return {
+            "name": self.name,
+            "dataType": self.data_type,
+        }
+
+
+@dataclass(slots=True)
 class SourceObject:
     name: str
     kind: str

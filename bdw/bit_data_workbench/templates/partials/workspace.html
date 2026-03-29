@@ -311,7 +311,7 @@
                   <div class="workspace-action-menu-separator" aria-hidden="true"></div>
                   <button
                     type="button"
-                    class="workspace-action-menu-item{% if not active_notebook.can_edit or loop.first %} is-action-disabled{% endif %}"
+                    class="workspace-action-menu-item workspace-action-menu-item-no-strike{% if not active_notebook.can_edit or loop.first %} is-action-disabled{% endif %}"
                     data-move-cell-up
                     {% if not active_notebook.can_edit or loop.first %}disabled{% endif %}
                     title="{% if not active_notebook.can_edit %}This notebook cannot be edited.{% elif loop.first %}This cell is already first.{% else %}Move cell up{% endif %}"
@@ -320,7 +320,7 @@
                   </button>
                   <button
                     type="button"
-                    class="workspace-action-menu-item{% if not active_notebook.can_edit or loop.last %} is-action-disabled{% endif %}"
+                    class="workspace-action-menu-item workspace-action-menu-item-no-strike{% if not active_notebook.can_edit or loop.last %} is-action-disabled{% endif %}"
                     data-move-cell-down
                     {% if not active_notebook.can_edit or loop.last %}disabled{% endif %}
                     title="{% if not active_notebook.can_edit %}This notebook cannot be edited.{% elif loop.last %}This cell is already last.{% else %}Move cell down{% endif %}"
