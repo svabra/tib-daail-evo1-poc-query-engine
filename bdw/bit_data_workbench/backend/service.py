@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import duckdb
 
 from ..config import Settings
+from .query_jobs import QueryJobManager
 from ..models import (
     NotebookDefinition,
     QueryResult,
@@ -105,19 +106,17 @@ class WorkbenchService:
         self._notebooks: list[NotebookDefinition] = []
         self._completion_schema: dict[str, object] = {}
         self._source_options: list[dict[str, str]] = []
+        self._query_jobs = QueryJobManager(
+            max_result_rows=settings.max_result_rows,
+            connection_factory=self._create_connection,
+            notebook_title_resolver=self._resolve_notebook_title,
+            metadata_refresher=self.refresh_metadata_state,
+        )
 
     def start(self) -> None:
         self.settings.duckdb_database.parent.mkdir(parents=True, exist_ok=True)
         self.settings.duckdb_extension_directory.mkdir(parents=True, exist_ok=True)
-
-        conn = duckdb.connect(str(self.settings.duckdb_database))
-        conn.execute(
-            f"SET extension_directory = {sql_literal(self.settings.duckdb_extension_directory.as_posix())}"
-        )
-
-        self._ensure_extension(conn, "httpfs")
-        self._ensure_extension(conn, "postgres")
-        self._bootstrap_integrations(conn)
+        conn = self._create_connection()
 
         with self._lock:
             self._conn = conn
@@ -159,6 +158,38 @@ class WorkbenchService:
     def notebook_tree(self):
         with self._lock:
             return build_notebook_tree(self._notebooks)
+
+    def query_jobs_state(self) -> dict[str, object]:
+        return self._query_jobs.state_payload()
+
+    def wait_for_query_jobs_state(
+        self,
+        last_version: int | None,
+        timeout: float = 15.0,
+    ) -> dict[str, object]:
+        return self._query_jobs.wait_for_state(last_version, timeout=timeout)
+
+    def start_query_job(
+        self,
+        *,
+        sql: str,
+        notebook_id: str,
+        notebook_title: str,
+        cell_id: str,
+        data_sources: list[str] | None = None,
+    ) -> dict[str, object]:
+        snapshot = self._query_jobs.start_job(
+            sql=sql,
+            notebook_id=notebook_id,
+            notebook_title=notebook_title,
+            cell_id=cell_id,
+            data_sources=data_sources,
+        )
+        return snapshot.payload
+
+    def cancel_query_job(self, job_id: str) -> dict[str, object]:
+        snapshot = self._query_jobs.cancel_job(job_id)
+        return snapshot.payload
 
     def source_object_fields(self, relation: str) -> list[SourceField]:
         normalized_relation = relation.strip()
@@ -254,10 +285,37 @@ class WorkbenchService:
                 duration_ms=(time.perf_counter() - started) * 1000,
             )
 
+    def refresh_metadata_state(self) -> None:
+        with self._lock:
+            if self._conn is None:
+                return
+            self._refresh_state()
+
     def _require_connection(self) -> duckdb.DuckDBPyConnection:
         if self._conn is None:
             raise RuntimeError("The workbench service has not been initialized.")
         return self._conn
+
+    def _resolve_notebook_title(self, notebook_id: str) -> str | None:
+        with self._lock:
+            for notebook in self._notebooks:
+                if notebook.notebook_id == notebook_id:
+                    return notebook.title
+        return None
+
+    def _create_connection(self) -> duckdb.DuckDBPyConnection:
+        self.settings.duckdb_database.parent.mkdir(parents=True, exist_ok=True)
+        self.settings.duckdb_extension_directory.mkdir(parents=True, exist_ok=True)
+
+        conn = duckdb.connect(str(self.settings.duckdb_database))
+        conn.execute(
+            f"SET extension_directory = {sql_literal(self.settings.duckdb_extension_directory.as_posix())}"
+        )
+
+        self._ensure_extension(conn, "httpfs")
+        self._ensure_extension(conn, "postgres")
+        self._bootstrap_integrations(conn)
+        return conn
 
     def _ensure_extension(self, conn: duckdb.DuckDBPyConnection, extension: str) -> None:
         try:
@@ -405,11 +463,6 @@ class WorkbenchService:
         secret_name: str,
         read_only: bool,
     ) -> None:
-        try:
-            conn.execute(f"DETACH {sql_identifier(alias)}")
-        except duckdb.Error:
-            pass
-
         options = [
             "TYPE postgres",
             f"SECRET {sql_identifier(secret_name)}",
@@ -417,7 +470,7 @@ class WorkbenchService:
         if read_only:
             options.append("READ_ONLY")
 
-        conn.execute(f"ATTACH '' AS {sql_identifier(alias)} ({', '.join(options)})")
+        conn.execute(f"ATTACH OR REPLACE '' AS {sql_identifier(alias)} ({', '.join(options)})")
 
     def _refresh_state(self) -> None:
         conn = self._require_connection()

@@ -177,3 +177,81 @@ class QueryResult:
     @property
     def ok(self) -> bool:
         return self.error is None
+
+
+@dataclass(slots=True)
+class QueryJobMetricPoint:
+    job_id: str
+    notebook_id: str
+    notebook_title: str
+    completed_at: str
+    duration_ms: float
+    status: str
+    row_count: int = 0
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {
+            "jobId": self.job_id,
+            "notebookId": self.notebook_id,
+            "notebookTitle": self.notebook_title,
+            "completedAt": self.completed_at,
+            "durationMs": self.duration_ms,
+            "status": self.status,
+            "rowCount": self.row_count,
+        }
+
+
+@dataclass(slots=True)
+class QueryJobDefinition:
+    job_id: str
+    notebook_id: str
+    notebook_title: str
+    cell_id: str
+    sql: str
+    status: str
+    started_at: str
+    updated_at: str
+    completed_at: str | None = None
+    duration_ms: float = 0.0
+    progress: float | None = None
+    progress_label: str = "Queued"
+    message: str | None = None
+    error: str | None = None
+    columns: list[str] = field(default_factory=list)
+    rows: list[tuple[Any, ...]] = field(default_factory=list)
+    row_count: int = 0
+    rows_shown: int = 0
+    truncated: bool = False
+    data_sources: list[str] = field(default_factory=list)
+    source_types: list[str] = field(default_factory=list)
+    backend_name: str = "duckdb"
+    can_cancel: bool = False
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {
+            "jobId": self.job_id,
+            "notebookId": self.notebook_id,
+            "notebookTitle": self.notebook_title,
+            "cellId": self.cell_id,
+            "sql": self.sql,
+            "status": self.status,
+            "startedAt": self.started_at,
+            "updatedAt": self.updated_at,
+            "completedAt": self.completed_at,
+            "durationMs": self.duration_ms,
+            "progress": self.progress,
+            "progressLabel": self.progress_label,
+            "message": self.message,
+            "error": self.error,
+            "columns": list(self.columns),
+            "rows": [list(row) for row in self.rows],
+            "rowCount": self.row_count,
+            "rowsShown": self.rows_shown,
+            "truncated": self.truncated,
+            "dataSources": list(self.data_sources),
+            "sourceTypes": list(self.source_types),
+            "backendName": self.backend_name,
+            "canCancel": self.can_cancel,
+        }

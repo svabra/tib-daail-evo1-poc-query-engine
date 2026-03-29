@@ -202,9 +202,7 @@
       >
         <form
           class="query-form query-form-cell"
-          hx-post="/api/query"
-          hx-target="#query-results-{{ cell.cell_id }}"
-          hx-swap="outerHTML"
+          data-query-form
         >
           <input type="hidden" name="notebook_id" value="{{ active_notebook.notebook_id }}">
           <input type="hidden" name="cell_id" value="{{ cell.cell_id }}">
@@ -265,7 +263,10 @@
               </details>
             </div>
             <div class="cell-actions">
-              <button class="run-button" type="submit" title="Run with Ctrl/Cmd + Enter">Run Cell</button>
+              <div class="cell-run-actions">
+                <button class="run-button" type="submit" title="Run with Ctrl/Cmd + Enter" data-run-cell>Run Cell</button>
+                <button class="query-cancel-button" type="button" data-cancel-query hidden>Cancel</button>
+              </div>
               <details class="workspace-action-menu cell-action-menu" data-cell-action-menu>
                 <summary
                   class="workspace-action-menu-toggle"

@@ -256,6 +256,30 @@
     <div class="sidebar-source-inspector-panel" data-source-inspector-panel aria-live="polite"></div>
   </section>
 
+  <details class="sidebar-section sidebar-query-monitor" data-query-monitor-section open>
+    <summary class="section-heading section-summary">
+      <h2>Query Monitor</h2>
+      <div class="section-tools">
+        <span class="section-count query-monitor-count" data-query-monitor-count>0</span>
+      </div>
+    </summary>
+    <div class="query-monitor-body">
+      <section class="query-monitor-performance" data-query-performance hidden>
+        <div class="query-monitor-performance-header">
+          <div>
+            <h3>Recent Runtime</h3>
+            <p>Last completed queries, with p50 and p95 reference.</p>
+          </div>
+          <div class="query-monitor-performance-stats" data-query-performance-stats></div>
+        </div>
+        <div class="query-monitor-chart" data-query-performance-chart></div>
+      </section>
+      <div class="query-monitor-list" data-query-monitor-list>
+        <p class="query-monitor-empty">No query jobs yet.</p>
+      </div>
+    </div>
+  </details>
+
   <div class="sidebar-footer">
     <button
       type="button"
@@ -267,6 +291,7 @@
     >
       <span class="sidebar-toggle-icon" aria-hidden="true">‹</span>
       <span class="sidebar-toggle-label">Collapse navigation</span>
+      <span class="sidebar-toggle-badge" data-sidebar-query-count hidden>0</span>
     </button>
     <dl class="runtime-pill runtime-pill-sidebar" aria-label="Application version">
       <dt>DAAIFL Query Workbench</dt>

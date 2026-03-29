@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 
 from ..backend.service import WorkbenchService
@@ -54,3 +57,78 @@ def source_object_fields(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return JSONResponse({"fields": [field.payload for field in fields]})
+
+
+@router.get("/api/query-jobs")
+def query_jobs_state(service: WorkbenchService = Depends(get_workbench_service)) -> JSONResponse:
+    return JSONResponse(jsonable_encoder(service.query_jobs_state()))
+
+
+@router.post("/api/query-jobs")
+def start_query_job(
+    sql: str = Form(""),
+    notebook_id: str = Form(""),
+    notebook_title: str = Form(""),
+    cell_id: str = Form(""),
+    data_sources: str = Form(""),
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        snapshot = service.start_query_job(
+            sql=sql,
+            notebook_id=notebook_id,
+            notebook_title=notebook_title,
+            cell_id=cell_id,
+            data_sources=[source for source in data_sources.split("||") if source.strip()],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(snapshot))
+
+
+@router.post("/api/query-jobs/{job_id}/cancel")
+def cancel_query_job(
+    job_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        snapshot = service.cancel_query_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(snapshot))
+
+
+@router.get("/api/query-jobs/stream")
+async def stream_query_jobs(
+    request: Request,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> StreamingResponse:
+    async def event_stream():
+        last_version: int | None = None
+        while True:
+            if await request.is_disconnected():
+                break
+
+            snapshot = await asyncio.to_thread(
+                service.wait_for_query_jobs_state,
+                last_version,
+                15.0,
+            )
+            version = int(snapshot.get("version", 0))
+            if last_version is None or version != last_version:
+                last_version = version
+                yield f"event: jobs\ndata: {json.dumps(jsonable_encoder(snapshot))}\n\n"
+            else:
+                yield "event: ping\ndata: {}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

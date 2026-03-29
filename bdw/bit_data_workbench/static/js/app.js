@@ -10,6 +10,12 @@ let activeCellId = null;
 let activeSourceObjectRelation = null;
 const sourceObjectFieldCache = new Map();
 const sourceObjectFieldRequests = new Map();
+let queryJobsStateVersion = null;
+let queryJobsSnapshot = [];
+let queryJobsSummary = { runningCount: 0, totalCount: 0 };
+let queryPerformanceState = { recent: [], stats: {} };
+let queryJobsEventSource = null;
+let queryJobsClockHandle = null;
 
 const notebookTreeStorageKey = "bdw.notebookTree.v1";
 const notebookMetadataStorageKey = "bdw.notebookMeta.v1";
@@ -18,6 +24,8 @@ const sidebarCollapsedStorageKey = "bdw.sidebarCollapsed.v1";
 const unassignedFolderName = "Unassigned";
 const localNotebookPrefix = "local-notebook-";
 const localCellPrefix = "local-cell-";
+const queryJobTerminalStatuses = new Set(["completed", "failed", "cancelled"]);
+const queryJobRunningStatuses = new Set(["queued", "running"]);
 const sqlFormatKeywordPhrases = [
   ["LEFT", "OUTER", "JOIN"],
   ["RIGHT", "OUTER", "JOIN"],
@@ -195,6 +203,42 @@ function sourceInspectorPanel() {
   return document.querySelector("[data-source-inspector-panel]");
 }
 
+function queryMonitorList() {
+  return document.querySelector("[data-query-monitor-list]");
+}
+
+function queryMonitorCount() {
+  return document.querySelector("[data-query-monitor-count]");
+}
+
+function sidebarQueryCount() {
+  return document.querySelector("[data-sidebar-query-count]");
+}
+
+function queryPerformanceSection() {
+  return document.querySelector("[data-query-performance]");
+}
+
+function queryPerformanceStats() {
+  return document.querySelector("[data-query-performance-stats]");
+}
+
+function queryPerformanceChart() {
+  return document.querySelector("[data-query-performance-chart]");
+}
+
+function queryNotificationMenu() {
+  return document.querySelector("[data-query-notifications]");
+}
+
+function queryNotificationList() {
+  return document.querySelector("[data-query-notification-list]");
+}
+
+function queryNotificationCount() {
+  return document.querySelector("[data-query-notification-count]");
+}
+
 function sidebarToggle() {
   return document.querySelector("[data-sidebar-toggle]");
 }
@@ -215,6 +259,7 @@ function activateNotebookLink(notebookId) {
   document.querySelectorAll(".notebook-link").forEach((link) => {
     link.classList.toggle("is-active", link.dataset.notebookId === notebookId);
   });
+  renderQueryNotificationMenu();
 }
 
 function notebookLinks(notebookId) {
@@ -873,6 +918,569 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function normalizeQueryJob(job) {
+  if (!job || typeof job !== "object") {
+    return null;
+  }
+
+  return {
+    ...job,
+    columns: Array.isArray(job.columns) ? job.columns : [],
+    rows: Array.isArray(job.rows) ? job.rows : [],
+    dataSources: Array.isArray(job.dataSources) ? job.dataSources : [],
+    sourceTypes: Array.isArray(job.sourceTypes) ? job.sourceTypes : [],
+  };
+}
+
+function currentWorkspaceNotebookTitle(workspaceRoot = document.querySelector("[data-workspace-notebook]")) {
+  const titleDisplay = workspaceRoot?.querySelector("[data-notebook-title-display]");
+  return titleDisplay?.textContent?.trim() || "Notebook";
+}
+
+function currentWorkspaceNotebookId() {
+  return workspaceNotebookId(document.querySelector("[data-workspace-notebook]"));
+}
+
+function selectedDataSourcesForCell(cellRoot) {
+  if (!(cellRoot instanceof Element)) {
+    return [];
+  }
+
+  const checkedValues = Array.from(cellRoot.querySelectorAll("[data-cell-source-option]:checked")).map(
+    (option) => option.value
+  );
+  if (checkedValues.length) {
+    return normalizeDataSources(checkedValues);
+  }
+
+  return normalizeDataSources((cellRoot.dataset.defaultCellSources || "").split("||"));
+}
+
+function queryJobForCell(notebookId, cellId) {
+  if (!notebookId || !cellId) {
+    return null;
+  }
+
+  return (
+    queryJobsSnapshot.find((job) => job.notebookId === notebookId && job.cellId === cellId) ?? null
+  );
+}
+
+function queryJobIsRunning(job) {
+  return Boolean(job && queryJobRunningStatuses.has(job.status));
+}
+
+function queryJobStatusCopy(job) {
+  if (!job) {
+    return "Idle";
+  }
+
+  switch (job.status) {
+    case "queued":
+      return "Queued";
+    case "running":
+      return "Running";
+    case "completed":
+      return "Completed";
+    case "cancelled":
+      return "Cancelled";
+    case "failed":
+      return "Failed";
+    default:
+      return "Idle";
+  }
+}
+
+function queryJobElapsedMs(job) {
+  if (!job) {
+    return 0;
+  }
+
+  if (queryJobIsRunning(job)) {
+    const startedAtMs = Date.parse(job.startedAt || "");
+    if (!Number.isNaN(startedAtMs)) {
+      return Math.max(0, Date.now() - startedAtMs);
+    }
+  }
+
+  return Number.isFinite(Number(job.durationMs)) ? Math.max(0, Number(job.durationMs)) : 0;
+}
+
+function formatQueryDuration(durationMs) {
+  let remaining = Math.max(0, Math.round(Number.isFinite(Number(durationMs)) ? Number(durationMs) : 0));
+  const units = [
+    ["d", 24 * 60 * 60 * 1000],
+    ["h", 60 * 60 * 1000],
+    ["m", 60 * 1000],
+    ["s", 1000],
+  ];
+  const parts = [];
+  let started = false;
+
+  for (const [suffix, size] of units) {
+    const value = Math.floor(remaining / size);
+    remaining -= value * size;
+    if (value > 0 || started) {
+      parts.push(`${value}${suffix}`);
+      started = true;
+    }
+  }
+
+  if (!parts.length) {
+    return `${remaining} ms`;
+  }
+
+  parts.push(`${remaining} ms`);
+  return parts.join(" ");
+}
+
+function formatQueryTimestamp(value) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "";
+  }
+  return parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function queryRowsShownLabel(job) {
+  if (!job) {
+    return "Run this cell to inspect the selected data sources.";
+  }
+
+  if (job.rowsShown > 0) {
+    if (job.truncated) {
+      return `${job.rowsShown} row(s) shown. The result was truncated for the UI.`;
+    }
+    return `${job.rowsShown} row(s) shown.`;
+  }
+
+  if (queryJobIsRunning(job)) {
+    return "Waiting for the first rows...";
+  }
+
+  return job.message || "Statement executed successfully.";
+}
+
+function queryProgressMarkup(job) {
+  if (!queryJobIsRunning(job)) {
+    return "";
+  }
+
+  const progressValue =
+    typeof job.progress === "number" && Number.isFinite(job.progress)
+      ? Math.max(0, Math.min(100, job.progress * 100))
+      : null;
+
+  return `
+    <div class="query-progress-card">
+      <div class="query-progress-copy">
+        <strong>${escapeHtml(job.progressLabel || "Running...")}</strong>
+        <span>${escapeHtml(job.backendName || "VMTP DUCKDB")}</span>
+      </div>
+      <div class="query-progress-track${progressValue === null ? " is-indeterminate" : ""}">
+        <span style="${progressValue === null ? "" : `width:${progressValue}%;`}"></span>
+      </div>
+    </div>
+  `;
+}
+
+function queryResultTableMarkup(job) {
+  if (!job?.columns?.length) {
+    return "";
+  }
+
+  return `
+    <div class="result-table-wrap">
+      <table class="result-table">
+        <thead>
+          <tr>
+            ${job.columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("")}
+          </tr>
+        </thead>
+        <tbody>
+          ${job.rows
+            .map(
+              (row) => `
+                <tr>
+                  ${row
+                    .map((value) =>
+                      value === null
+                        ? '<td><span class="cell-null">NULL</span></td>'
+                        : `<td>${escapeHtml(value)}</td>`
+                    )
+                    .join("")}
+                </tr>
+              `
+            )
+            .join("")}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function queryResultPanelMarkup(cellId, job = null) {
+  if (!job) {
+    return emptyQueryResultsMarkup(cellId);
+  }
+
+  const showDownloads = job.status === "completed" && job.columns.length > 0;
+  const rowsBadge = queryRowsShownLabel(job);
+  const showRowsBadge = queryJobIsRunning(job) || Number(job.rowsShown || 0) > 0 || Boolean(job.truncated);
+  const resultBody = job.error
+    ? `
+        <div class="result-error">
+          <strong>${escapeHtml(job.status === "cancelled" ? "Query cancelled." : "Query failed.")}</strong>
+          <pre>${escapeHtml(job.error)}</pre>
+        </div>
+      `
+    : job.columns.length
+      ? `
+          ${queryProgressMarkup(job)}
+          ${queryResultTableMarkup(job)}
+        `
+      : queryJobIsRunning(job)
+        ? `
+            ${queryProgressMarkup(job)}
+            <div class="result-empty result-empty-running">
+              <p>${escapeHtml(job.message || "Running query...")}</p>
+            </div>
+          `
+        : `
+            <div class="result-empty">
+              <p>${escapeHtml(job.message || "Statement executed successfully.")}</p>
+            </div>
+          `;
+
+  return `
+    <section id="query-results-${escapeHtml(cellId)}" class="result-panel" data-cell-result>
+      <header class="result-header">
+        <div class="result-header-copy">
+          <h3>Result</h3>
+          <p class="result-meta" data-query-duration data-job-id="${escapeHtml(job.jobId || "")}">${escapeHtml(formatQueryDuration(queryJobElapsedMs(job)))}</p>
+        </div>
+        <div class="result-header-actions">
+          <span class="result-badge${queryJobIsRunning(job) ? " is-live" : ""}" ${showRowsBadge ? "" : "hidden"}>${escapeHtml(rowsBadge)}</span>
+          <div class="result-download-actions" aria-label="Result download actions" ${showDownloads ? "" : "hidden"}>
+            <button
+              type="button"
+              class="result-action-button"
+              data-result-download-json
+              title="Download result as JSON"
+            >JSON</button>
+            <button
+              type="button"
+              class="result-action-button"
+              data-result-download-csv
+              title="Download result as CSV"
+            >CSV</button>
+          </div>
+        </div>
+      </header>
+      ${resultBody}
+    </section>
+  `;
+}
+
+function renderPerformanceChartMarkup(performance) {
+  const points = Array.isArray(performance?.recent) ? performance.recent : [];
+  if (!points.length) {
+    return "";
+  }
+
+  const width = 280;
+  const height = 92;
+  const paddingX = 10;
+  const paddingY = 10;
+  const values = points.map((point) => Math.max(1, Number(point.durationMs || 0)));
+  const transformedValues = values.map((value) => Math.log10(value + 1));
+  const minValue = Math.min(...transformedValues);
+  const maxValue = Math.max(...transformedValues);
+  const spread = Math.max(maxValue - minValue, 0.0001);
+  const stepX = points.length > 1 ? (width - paddingX * 2) / (points.length - 1) : 0;
+
+  const yForValue = (durationMs) => {
+    const transformed = Math.log10(Math.max(1, Number(durationMs || 0)) + 1);
+    const ratio = (transformed - minValue) / spread;
+    return height - paddingY - ratio * (height - paddingY * 2);
+  };
+
+  const polyline = points
+    .map((point, index) => `${paddingX + index * stepX},${yForValue(point.durationMs).toFixed(2)}`)
+    .join(" ");
+  const p50Y =
+    typeof performance?.stats?.p50Ms === "number" ? yForValue(performance.stats.p50Ms).toFixed(2) : null;
+  const p95Y =
+    typeof performance?.stats?.p95Ms === "number" ? yForValue(performance.stats.p95Ms).toFixed(2) : null;
+
+  return `
+    <svg viewBox="0 0 ${width} ${height}" class="query-monitor-chart-svg" preserveAspectRatio="none" aria-hidden="true">
+      ${p95Y ? `<line x1="${paddingX}" y1="${p95Y}" x2="${width - paddingX}" y2="${p95Y}" class="query-monitor-chart-line query-monitor-chart-line-p95"></line>` : ""}
+      ${p50Y ? `<line x1="${paddingX}" y1="${p50Y}" x2="${width - paddingX}" y2="${p50Y}" class="query-monitor-chart-line query-monitor-chart-line-p50"></line>` : ""}
+      <polyline points="${polyline}" class="query-monitor-chart-path"></polyline>
+      ${points
+        .map((point, index) => {
+          const x = paddingX + index * stepX;
+          const y = yForValue(point.durationMs);
+          return `
+            <circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="2.4" class="query-monitor-chart-point query-monitor-chart-point-${escapeHtml(point.status)}">
+              <title>${escapeHtml(point.notebookTitle)} | ${escapeHtml(formatQueryDuration(point.durationMs))}</title>
+            </circle>
+          `;
+        })
+        .join("")}
+    </svg>
+  `;
+}
+
+function queryPerformanceStatsMarkup(performance) {
+  const stats = performance?.stats ?? {};
+  const statEntries = [
+    [
+      "Latest",
+      stats.latestMs,
+      "Runtime of the most recently completed query.",
+    ],
+    [
+      "p50",
+      stats.p50Ms,
+      "Median runtime. 50% of recent completed queries finished at or below this duration.",
+    ],
+    [
+      "p95",
+      stats.p95Ms,
+      "Tail runtime. 95% of recent completed queries finished at or below this duration. The slowest 5% took longer.",
+    ],
+  ].filter((entry) => typeof entry[1] === "number");
+
+  return statEntries
+    .map(
+      ([label, value, tooltip]) => `
+        <span class="query-monitor-stat-pill" title="${escapeHtml(tooltip)}" aria-label="${escapeHtml(
+          `${label}: ${tooltip}`
+        )}">
+          <strong>${escapeHtml(label)}</strong>
+          <span>${escapeHtml(formatQueryDuration(value))}</span>
+        </span>
+      `
+    )
+    .join("");
+}
+
+function queryMonitorItemMarkup(job) {
+  const running = queryJobIsRunning(job);
+  const rowsCopy = job.rowsShown > 0 ? `${job.rowsShown} row(s)` : "No rows yet";
+  return `
+    <article class="query-monitor-item query-monitor-item-${escapeHtml(job.status)}" data-query-job-id="${escapeHtml(job.jobId)}">
+      <div class="query-monitor-item-copy">
+        <button
+          type="button"
+          class="query-monitor-open"
+          data-open-query-notebook="${escapeHtml(job.notebookId)}"
+          data-open-query-cell="${escapeHtml(job.cellId)}"
+          title="Open ${escapeHtml(job.notebookTitle)}"
+        >
+          ${escapeHtml(job.notebookTitle)}
+        </button>
+        <div class="query-monitor-item-meta">
+          <span class="query-monitor-status-badge${running ? " is-live" : ""}">${escapeHtml(queryJobStatusCopy(job))}</span>
+          <span data-query-monitor-duration data-job-id="${escapeHtml(job.jobId)}">${escapeHtml(formatQueryDuration(queryJobElapsedMs(job)))}</span>
+          <span>${escapeHtml(rowsCopy)}</span>
+        </div>
+        <p class="query-monitor-sql">${escapeHtml(job.sql)}</p>
+      </div>
+      <div class="query-monitor-item-actions">
+        ${running ? `<button type="button" class="query-monitor-cancel" data-cancel-query-job="${escapeHtml(job.jobId)}">Cancel</button>` : ""}
+        <span class="query-monitor-updated">${escapeHtml(formatQueryTimestamp(job.updatedAt))}</span>
+      </div>
+    </article>
+  `;
+}
+
+function queryNotificationItemMarkup(job) {
+  const rowsLabel = queryRowsShownLabel(job);
+  return `
+    <button
+      type="button"
+      class="topbar-notification-item"
+      data-open-query-notebook="${escapeHtml(job.notebookId)}"
+      data-open-query-cell="${escapeHtml(job.cellId)}"
+      title="Open ${escapeHtml(job.notebookTitle)}"
+    >
+      <span class="topbar-notification-item-status${queryJobIsRunning(job) ? " is-live" : ""}">${escapeHtml(queryJobStatusCopy(job))}</span>
+      <span class="topbar-notification-item-title">${escapeHtml(job.notebookTitle)}</span>
+      <span class="topbar-notification-item-copy" data-query-notification-copy data-job-id="${escapeHtml(job.jobId)}" data-query-copy-suffix="${escapeHtml(rowsLabel)}">${escapeHtml(formatQueryDuration(queryJobElapsedMs(job)))} | ${escapeHtml(rowsLabel)}</span>
+    </button>
+  `;
+}
+
+function refreshLiveQueryClock() {
+  const jobsById = new Map(queryJobsSnapshot.map((job) => [job.jobId, job]));
+
+  document.querySelectorAll("[data-query-duration]").forEach((node) => {
+    const job = jobsById.get(node.dataset.jobId || "");
+    if (!job) {
+      return;
+    }
+    node.textContent = formatQueryDuration(queryJobElapsedMs(job));
+  });
+
+  document.querySelectorAll("[data-query-monitor-duration]").forEach((node) => {
+    const job = jobsById.get(node.dataset.jobId || "");
+    if (!job) {
+      return;
+    }
+    node.textContent = formatQueryDuration(queryJobElapsedMs(job));
+  });
+
+  document.querySelectorAll("[data-query-notification-copy]").forEach((node) => {
+    const job = jobsById.get(node.dataset.jobId || "");
+    if (!job) {
+      return;
+    }
+    const suffix = node.dataset.queryCopySuffix || queryRowsShownLabel(job);
+    node.textContent = `${formatQueryDuration(queryJobElapsedMs(job))} | ${suffix}`;
+  });
+}
+
+function syncQueryClockLoop() {
+  const hasRunningJobs = queryJobsSnapshot.some((job) => queryJobIsRunning(job));
+  if (hasRunningJobs && queryJobsClockHandle === null) {
+    refreshLiveQueryClock();
+    queryJobsClockHandle = window.setInterval(refreshLiveQueryClock, 100);
+    return;
+  }
+
+  if (!hasRunningJobs && queryJobsClockHandle !== null) {
+    window.clearInterval(queryJobsClockHandle);
+    queryJobsClockHandle = null;
+  }
+
+  refreshLiveQueryClock();
+}
+
+function renderQueryMonitor() {
+  const listRoot = queryMonitorList();
+  const countRoot = queryMonitorCount();
+  const toggleCountRoot = sidebarQueryCount();
+  const performanceRoot = queryPerformanceSection();
+  const performanceStatsRoot = queryPerformanceStats();
+  const performanceChartRoot = queryPerformanceChart();
+  if (!listRoot || !countRoot) {
+    return;
+  }
+
+  const runningCount = Number(queryJobsSummary.runningCount || 0);
+  countRoot.textContent = String(runningCount);
+  countRoot.classList.toggle("is-live", runningCount > 0);
+  if (toggleCountRoot) {
+    toggleCountRoot.textContent = String(runningCount);
+    toggleCountRoot.hidden = runningCount === 0;
+    toggleCountRoot.classList.toggle("is-live", runningCount > 0);
+  }
+
+  if (!queryJobsSnapshot.length) {
+    listRoot.innerHTML = '<p class="query-monitor-empty">No query jobs yet.</p>';
+  } else {
+    listRoot.innerHTML = queryJobsSnapshot.slice(0, 8).map((job) => queryMonitorItemMarkup(job)).join("");
+  }
+
+  if (performanceRoot && performanceStatsRoot && performanceChartRoot) {
+    const hasPerformance = Array.isArray(queryPerformanceState?.recent) && queryPerformanceState.recent.length > 0;
+    performanceRoot.hidden = !hasPerformance;
+    if (hasPerformance) {
+      performanceStatsRoot.innerHTML = queryPerformanceStatsMarkup(queryPerformanceState);
+      performanceChartRoot.innerHTML = renderPerformanceChartMarkup(queryPerformanceState);
+    } else {
+      performanceStatsRoot.innerHTML = "";
+      performanceChartRoot.innerHTML = "";
+    }
+  }
+}
+
+function renderQueryNotificationMenu() {
+  const menu = queryNotificationMenu();
+  const listRoot = queryNotificationList();
+  const countRoot = queryNotificationCount();
+  if (!menu || !listRoot || !countRoot) {
+    return;
+  }
+
+  const activeNotebookId = currentActiveNotebookId();
+  const visibleNotifications = queryJobsSnapshot.filter((job) => job.notebookId !== activeNotebookId);
+  const runningCount = Number(queryJobsSummary.runningCount || 0);
+  const badgeCount = runningCount > 0 ? runningCount : visibleNotifications.length;
+  countRoot.textContent = String(badgeCount);
+  countRoot.hidden = badgeCount === 0;
+  countRoot.classList.toggle("is-live", runningCount > 0);
+
+  if (!visibleNotifications.length) {
+    listRoot.innerHTML = '<p class="topbar-notification-empty">No background query activity yet.</p>';
+    return;
+  }
+
+  listRoot.innerHTML = visibleNotifications.slice(0, 10).map((job) => queryNotificationItemMarkup(job)).join("");
+}
+
+function syncQueryCellJobState(cellRoot) {
+  if (!(cellRoot instanceof Element)) {
+    return;
+  }
+
+  const workspaceRoot = cellRoot.closest("[data-workspace-notebook]");
+  const notebookId = workspaceNotebookId(workspaceRoot);
+  const cellId = cellRoot.dataset.cellId;
+  const job = queryJobForCell(notebookId, cellId);
+  const runButton = cellRoot.querySelector("[data-run-cell]");
+  const cancelButton = cellRoot.querySelector("[data-cancel-query]");
+  const resultRoot = cellRoot.querySelector("[data-cell-result]");
+
+  cellRoot.classList.toggle("is-query-running", queryJobIsRunning(job));
+
+  if (runButton) {
+    if (queryJobIsRunning(job)) {
+      runButton.disabled = true;
+      runButton.classList.add("is-running");
+      runButton.innerHTML =
+        '<span class="query-button-spinner" aria-hidden="true"></span><span class="query-button-running-copy">Running ...</span>';
+    } else {
+      runButton.disabled = false;
+      runButton.classList.remove("is-running");
+      runButton.textContent = "Run Cell";
+    }
+  }
+
+  if (cancelButton) {
+    cancelButton.hidden = !queryJobIsRunning(job);
+    cancelButton.dataset.jobId = job?.jobId || "";
+    cancelButton.disabled = !queryJobIsRunning(job);
+  }
+
+  if (resultRoot) {
+    resultRoot.outerHTML = queryResultPanelMarkup(cellId, job);
+  }
+}
+
+function syncVisibleQueryCells() {
+  document.querySelectorAll("[data-query-cell]").forEach((cellRoot) => {
+    syncQueryCellJobState(cellRoot);
+  });
+}
+
+function applyQueryJobsState(snapshot) {
+  queryJobsStateVersion = snapshot?.version ?? null;
+  queryJobsSummary = snapshot?.summary ?? { runningCount: 0, totalCount: 0 };
+  queryPerformanceState = snapshot?.performance ?? { recent: [], stats: {} };
+  queryJobsSnapshot = Array.isArray(snapshot?.jobs)
+    ? snapshot.jobs.map((job) => normalizeQueryJob(job)).filter(Boolean)
+    : [];
+
+  renderQueryMonitor();
+  renderQueryNotificationMenu();
+  syncVisibleQueryCells();
+  syncQueryClockLoop();
 }
 
 function normalizeSourceObjectFields(fields) {
@@ -1724,7 +2332,7 @@ function emptyQueryResultsMarkup(cellId) {
       <header class="result-header">
         <div>
           <h3>Result</h3>
-          <p class="result-meta">0.0 ms</p>
+          <p class="result-meta">0 ms</p>
         </div>
         <span class="result-badge">Run this cell to inspect the selected data sources.</span>
       </header>
@@ -1794,7 +2402,7 @@ function buildCellMarkup(notebookId, cell, index, canEdit, totalCells) {
       data-cell-id="${escapeHtml(cell.cellId)}"
       data-default-cell-sources="${escapeHtml(selectedSources.join("||"))}"
     >
-      <form class="query-form query-form-cell" hx-post="/api/query" hx-target="#query-results-${escapeHtml(cell.cellId)}" hx-swap="outerHTML">
+      <form class="query-form query-form-cell" data-query-form>
         <input type="hidden" name="notebook_id" value="${escapeHtml(notebookId)}">
         <input type="hidden" name="cell_id" value="${escapeHtml(cell.cellId)}">
         <div class="cell-toolbar">
@@ -1810,7 +2418,10 @@ function buildCellMarkup(notebookId, cell, index, canEdit, totalCells) {
             </details>
           </div>
           <div class="cell-actions">
-            <button class="run-button" type="submit" title="Run with Ctrl/Cmd + Enter">Run Cell</button>
+            <div class="cell-run-actions">
+              <button class="run-button" type="submit" title="Run with Ctrl/Cmd + Enter" data-run-cell>Run Cell</button>
+              <button class="query-cancel-button" type="button" data-cancel-query hidden>Cancel</button>
+            </div>
             <details class="workspace-action-menu cell-action-menu" data-cell-action-menu>
               <summary class="workspace-action-menu-toggle" aria-label="Cell actions" title="Cell actions">
                 <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
@@ -2896,6 +3507,7 @@ function renderEmptyWorkspace() {
       </header>
     </article>
   `;
+  renderQueryNotificationMenu();
 }
 
 function renderLocalNotebookWorkspace(notebookId) {
@@ -2912,6 +3524,7 @@ function renderLocalNotebookWorkspace(notebookId) {
   activateNotebookLink(notebookId);
   revealNotebookLink(notebookId);
   writeLastNotebookId(notebookId);
+  syncVisibleQueryCells();
 }
 
 function defaultNotebookCreateTarget() {
@@ -4162,6 +4775,216 @@ function processHtmx(root) {
   window.htmx.process(root);
 }
 
+async function loadQueryJobsState() {
+  const response = await window.fetch("/api/query-jobs", {
+    headers: {
+      Accept: "application/json",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load query jobs: ${response.status}`);
+  }
+
+  applyQueryJobsState(await response.json());
+}
+
+function ensureQueryJobsEventSource() {
+  if (queryJobsEventSource || typeof window.EventSource !== "function") {
+    return;
+  }
+
+  const eventSource = new window.EventSource("/api/query-jobs/stream");
+  eventSource.addEventListener("jobs", (event) => {
+    try {
+      applyQueryJobsState(JSON.parse(event.data));
+    } catch (error) {
+      console.error("Failed to parse query job event.", error);
+    }
+  });
+  eventSource.onerror = () => {
+    // Keep the browser-managed reconnect loop, but refresh once to reduce stale UI if needed.
+    if (queryJobsStateVersion !== null) {
+      loadQueryJobsState().catch(() => {
+        // Ignore transient reconnect issues.
+      });
+    }
+  };
+  queryJobsEventSource = eventSource;
+}
+
+async function openNotebookForQueryJob(notebookId, cellId = "") {
+  if (!notebookId) {
+    return;
+  }
+
+  await loadNotebookWorkspace(notebookId);
+  renderQueryNotificationMenu();
+
+  if (!cellId) {
+    return;
+  }
+
+  const cellRoot = document.querySelector(`[data-query-cell][data-cell-id="${cellId}"]`);
+  if (cellRoot) {
+    setActiveCell(cellRoot);
+    cellRoot.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+}
+
+async function startQueryJobForForm(form) {
+  const workspaceRoot = form.closest("[data-workspace-notebook]");
+  const cellRoot = form.closest("[data-query-cell]");
+  const notebookId = workspaceNotebookId(workspaceRoot);
+  const cellId = cellRoot?.dataset.cellId;
+  if (!workspaceRoot || !cellRoot || !notebookId || !cellId) {
+    return;
+  }
+
+  const existingJob = queryJobForCell(notebookId, cellId);
+  if (queryJobIsRunning(existingJob)) {
+    return;
+  }
+
+  const formData = new FormData(form);
+  const editorSource = cellRoot.querySelector("[data-editor-source]");
+  formData.set("sql", editorSource?.value ?? "");
+  formData.set("notebook_id", notebookId);
+  formData.set("cell_id", cellId);
+  formData.set("notebook_title", currentWorkspaceNotebookTitle(workspaceRoot));
+  formData.set("data_sources", selectedDataSourcesForCell(cellRoot).join("||"));
+
+  const response = await window.fetch("/api/query-jobs", {
+    method: "POST",
+    body: formData,
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    let message = "The query could not be started.";
+    try {
+      const payload = await response.json();
+      message = payload?.detail || message;
+    } catch (_error) {
+      // Ignore invalid JSON bodies.
+    }
+
+    const resultRoot = cellRoot.querySelector("[data-cell-result]");
+    if (resultRoot) {
+      resultRoot.outerHTML = queryResultPanelMarkup(cellId, {
+        jobId: `local-error-${cellId}`,
+        notebookId,
+        notebookTitle: currentWorkspaceNotebookTitle(workspaceRoot),
+        cellId,
+        sql: editorSource?.value ?? "",
+        status: "failed",
+        durationMs: 0,
+        updatedAt: new Date().toISOString(),
+        rowsShown: 0,
+        truncated: false,
+        message: "Query failed.",
+        error: message,
+        columns: [],
+        rows: [],
+      });
+    }
+    return;
+  }
+
+  const snapshot = normalizeQueryJob(await response.json());
+  if (!snapshot) {
+    return;
+  }
+
+  const nextJobs = [snapshot, ...queryJobsSnapshot.filter((job) => job.jobId !== snapshot.jobId)];
+  applyQueryJobsState({
+    version: queryJobsStateVersion,
+    summary: {
+      ...queryJobsSummary,
+      runningCount: queryJobsSummary.runningCount + 1,
+    },
+    jobs: nextJobs,
+    performance: queryPerformanceState,
+  });
+}
+
+async function cancelQueryJob(jobId) {
+  if (!jobId) {
+    return;
+  }
+
+  const response = await window.fetch(`/api/query-jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+  if (!response.ok) {
+    return;
+  }
+
+  const snapshot = normalizeQueryJob(await response.json());
+  if (!snapshot) {
+    return;
+  }
+
+  applyQueryJobsState({
+    version: queryJobsStateVersion,
+    summary: queryJobsSummary,
+    jobs: [snapshot, ...queryJobsSnapshot.filter((job) => job.jobId !== snapshot.jobId)],
+    performance: queryPerformanceState,
+  });
+}
+
+function downloadTextFile(filename, content, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = window.URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.URL.revokeObjectURL(url);
+}
+
+function downloadQueryResult(job, format) {
+  if (!job?.columns?.length) {
+    return;
+  }
+
+  const baseName = `${job.notebookTitle || "query"}-${job.cellId || "cell"}`
+    .replace(/[^\w.-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .toLowerCase();
+
+  if (format === "json") {
+    const payload = job.rows.map((row) =>
+      Object.fromEntries(job.columns.map((column, index) => [column, row[index] ?? null]))
+    );
+    downloadTextFile(`${baseName || "query-result"}.json`, JSON.stringify(payload, null, 2), "application/json");
+    return;
+  }
+
+  const lines = [
+    job.columns.join(","),
+    ...job.rows.map((row) =>
+      row
+        .map((value) => {
+          if (value === null || value === undefined) {
+            return "";
+          }
+          const serialized = String(value);
+          return /[",\n]/.test(serialized) ? `"${serialized.replace(/"/g, '""')}"` : serialized;
+        })
+        .join(",")
+    ),
+  ];
+  downloadTextFile(`${baseName || "query-result"}.csv`, lines.join("\n"), "text/csv;charset=utf-8");
+}
+
 async function loadNotebookWorkspace(notebookId) {
   const panel = document.getElementById("workspace-panel");
   if (!panel || !notebookId) {
@@ -4213,6 +5036,8 @@ async function loadNotebookWorkspace(notebookId) {
   activateNotebookLink(notebookId);
   revealNotebookLink(notebookId);
   writeLastNotebookId(notebookId);
+  syncVisibleQueryCells();
+  renderQueryNotificationMenu();
 }
 
 async function restoreLastNotebook() {
@@ -4252,6 +5077,20 @@ async function restoreLastNotebook() {
   }
 }
 
+document.body.addEventListener(
+  "submit",
+  async (event) => {
+    const form = event.target.closest("[data-query-form]");
+    if (!form) {
+      return;
+    }
+
+    event.preventDefault();
+    await startQueryJobForForm(form);
+  },
+  true
+);
+
 document.body.addEventListener("click", async (event) => {
   setActiveCell(event.target.closest("[data-query-cell]"));
 
@@ -4263,6 +5102,9 @@ document.body.addEventListener("click", async (event) => {
   }
   if (!event.target.closest("[data-source-action-menu]")) {
     closeSourceActionMenus();
+  }
+  if (!event.target.closest("[data-query-notifications]")) {
+    queryNotificationMenu()?.removeAttribute("open");
   }
 
   const sourceActionMenu = event.target.closest("[data-source-action-menu]");
@@ -4286,6 +5128,51 @@ document.body.addEventListener("click", async (event) => {
 
     const target = resolveNotebookCreateTarget(createNotebookButton);
     createNotebook(target);
+    return;
+  }
+
+  const cancelQueryButton = event.target.closest("[data-cancel-query]");
+  if (cancelQueryButton) {
+    event.preventDefault();
+    await cancelQueryJob(cancelQueryButton.dataset.jobId || "");
+    return;
+  }
+
+  const cancelQueryJobButton = event.target.closest("[data-cancel-query-job]");
+  if (cancelQueryJobButton) {
+    event.preventDefault();
+    await cancelQueryJob(cancelQueryJobButton.dataset.cancelQueryJob || "");
+    return;
+  }
+
+  const openQueryNotebookButton = event.target.closest("[data-open-query-notebook]");
+  if (openQueryNotebookButton) {
+    event.preventDefault();
+    queryNotificationMenu()?.removeAttribute("open");
+    await openNotebookForQueryJob(
+      openQueryNotebookButton.dataset.openQueryNotebook || "",
+      openQueryNotebookButton.dataset.openQueryCell || ""
+    );
+    return;
+  }
+
+  const downloadJsonButton = event.target.closest("[data-result-download-json]");
+  if (downloadJsonButton) {
+    event.preventDefault();
+    const cellRoot = downloadJsonButton.closest("[data-query-cell]");
+    const notebookId = workspaceNotebookId(downloadJsonButton.closest("[data-workspace-notebook]"));
+    const cellId = cellRoot?.dataset.cellId;
+    downloadQueryResult(queryJobForCell(notebookId, cellId), "json");
+    return;
+  }
+
+  const downloadCsvButton = event.target.closest("[data-result-download-csv]");
+  if (downloadCsvButton) {
+    event.preventDefault();
+    const cellRoot = downloadCsvButton.closest("[data-query-cell]");
+    const notebookId = workspaceNotebookId(downloadCsvButton.closest("[data-workspace-notebook]"));
+    const cellId = cellRoot?.dataset.cellId;
+    downloadQueryResult(queryJobForCell(notebookId, cellId), "csv");
     return;
   }
 
@@ -5015,6 +5902,9 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
   initializeSidebarToggle();
   applyNotebookMetadata();
   restoreSelectedSourceObject();
+  renderQueryMonitor();
+  syncVisibleQueryCells();
+  renderQueryNotificationMenu();
 
   const notebookId =
     event.detail?.requestConfig?.parameters?.notebook_id ??
@@ -5034,4 +5924,11 @@ initializeNotebookTree();
 initializeSidebarToggle();
 applyNotebookMetadata();
 restoreSelectedSourceObject();
-restoreLastNotebook();
+ensureQueryJobsEventSource();
+loadQueryJobsState()
+  .catch((error) => {
+    console.error("Failed to load query jobs.", error);
+  })
+  .finally(() => {
+    restoreLastNotebook();
+  });

@@ -44,6 +44,24 @@
               <path d="M5.8 7.3h4.4"></path>
             </svg>
           </button>
+          <details class="topbar-notification-menu" data-query-notifications>
+            <summary
+              class="topbar-action-button topbar-action-button-icon-only"
+              aria-label="Query notifications"
+              title="Query notifications"
+            >
+              <span class="topbar-notification-badge" data-query-notification-count hidden>0</span>
+              <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M3.2 11.6h9.6l-1.1-1.6V6.8a3.7 3.7 0 0 0-7.4 0V10z"></path>
+                <path d="M6.2 12.1a1.9 1.9 0 0 0 3.6 0"></path>
+              </svg>
+            </summary>
+            <div class="topbar-notification-panel">
+              <div class="topbar-notification-list" data-query-notification-list>
+                <p class="topbar-notification-empty">No background query activity yet.</p>
+              </div>
+            </div>
+          </details>
           <button type="button" class="topbar-action-button" data-create-notebook>
             Create Notebook
           </button>

@@ -193,6 +193,10 @@ docker run --rm -d ^
 
 ### TODO
 
+- Create notebook auto-save/versioning on query run:
+  every time the user presses `Run Cell`, compare the current notebook state against the latest saved version and create a new version only if something changed.
+  The comparison must include notebook title, description, tags, cells, cell order, selected data sources, SQL text, and any other persisted notebook attributes.
+
 - Decide how frontend dependencies should be packaged into the image build:
   - keep the vendored CodeMirror / `lang-sql` tree in `bdw/bit_data_workbench/static/vendor/**` for a simple self-contained image build without npm/CDN dependencies
   - or switch to an npm/pnpm-based frontend build step for a cleaner repository and generate the browser assets during CI / image build
