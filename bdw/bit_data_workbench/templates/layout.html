@@ -4,9 +4,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{{ title }}</title>
-    <link rel="icon" type="image/png" href="{{ url_for('static', path='img/favicon.png') }}">
-    <link rel="shortcut icon" href="{{ url_for('static', path='img/favicon.ico') }}">
-    <link rel="stylesheet" href="{{ url_for('static', path='css/app.css') }}">
+    <link rel="icon" type="image/png" href="/static/img/favicon.png">
+    <link rel="shortcut icon" href="/static/img/favicon.ico">
+    <link rel="stylesheet" href="/static/css/app.css">
   </head>
   <body>
     {% block body %}{% endblock %}
@@ -65,7 +65,7 @@
     </dialog>
 
     <script id="sql-schema" type="application/json">{{ completion_schema_json | safe }}</script>
-    <script src="{{ url_for('static', path='vendor/htmx.min.js') }}"></script>
-    <script type="module" src="{{ url_for('static', path='js/app.js') }}"></script>
+    <script src="/static/vendor/htmx.min.js"></script>
+    <script type="module" src="/static/js/app.js"></script>
   </body>
 </html>
