@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: bdw
-          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.1
+          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.2
           imagePullPolicy: Always
           ports:
             - name: http
@@ -33,6 +33,8 @@ spec:
             - secretRef:
                 name: tib-daail-evo1-poc-query-engine-secret
           env:
+            - name: DUCKDB_DATABASE
+              value: /tmp/workspace/workspace.duckdb
             - name: POD_NAME
               valueFrom:
                 fieldRef:
