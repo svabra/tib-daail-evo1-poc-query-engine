@@ -163,7 +163,7 @@ via `envFrom`.
 Build locally:
 
 ```bash
-docker build -f bdw/Dockerfile -t bit-data-workbench:0.3.4 .
+docker build -f bdw/Dockerfile -t bit-data-workbench:0.3.5 .
 ```
 
 Run directly without Compose-managed service wiring:
@@ -173,7 +173,7 @@ docker run --rm -d ^
   --name bit-data-workbench ^
   -p 8000:8000 ^
   -v "%cd%\\workspace:/workspace" ^
-  -e IMAGE_VERSION=0.3.4 ^
+  -e IMAGE_VERSION=0.3.5 ^
   -e DUCKDB_DATABASE=/workspace/bit-data-workbench.duckdb ^
   -e DUCKDB_EXTENSION_DIRECTORY=/opt/duckdb/extensions ^
   -e S3_ENDPOINT=minio:9000 ^
@@ -191,7 +191,7 @@ docker run --rm -d ^
   -e PG_PASSWORD=evo1 ^
   -e PG_OLTP_DATABASE=evo1_oltp ^
   -e PG_OLAP_DATABASE=evo1_olap ^
-  bit-data-workbench:0.3.4
+  bit-data-workbench:0.3.5
 ```
 
 ### TODO
@@ -217,7 +217,7 @@ The route is an OpenShift `edge` route and exposes the HTTP service externally t
 Current image:
 
 ```text
-docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.4
+docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.5
 ```
 
 ## Verification

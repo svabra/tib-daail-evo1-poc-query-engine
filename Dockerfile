@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 
 ARG DUCKDB_VERSION=1.5.0
-ARG IMAGE_VERSION=0.3.4
+ARG IMAGE_VERSION=0.3.5
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -24,7 +24,8 @@ RUN apt-get update \
 
 RUN pip install \
         "duckdb==${DUCKDB_VERSION}" \
-        "duckdb-cli==${DUCKDB_VERSION}"
+        "duckdb-cli==${DUCKDB_VERSION}" \
+        "pytz==2025.2"
 
 RUN rm -rf /tmp/.duckdb \
     && mkdir -p /opt/duckdb/extensions
@@ -32,6 +33,7 @@ RUN rm -rf /tmp/.duckdb \
 RUN python - <<'PY'
 from pathlib import Path
 import duckdb
+import pytz
 
 extension_dir = Path("/opt/duckdb/extensions")
 extension_dir.mkdir(parents=True, exist_ok=True)
