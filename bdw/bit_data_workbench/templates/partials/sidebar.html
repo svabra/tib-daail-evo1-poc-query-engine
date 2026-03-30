@@ -208,7 +208,7 @@
                       {% set source_option_id = catalog.name %}
                     {% endif %}
                     <li
-                      class="source-object source-object-{{ source_object.kind }}"
+                      class="source-object source-object-{{ source_object.kind | replace(' ', '-') }}"
                       data-searchable-item="{{ source_object.name }} {{ source_object.relation }}"
                       data-source-object
                       data-source-object-kind="{{ source_object.kind }}"
@@ -217,7 +217,7 @@
                       data-source-option-id="{{ source_option_id }}"
                     >
                       <span class="source-node-label">
-                        {% if source_object.kind == "view" %}
+                        {% if source_object.kind in ("view", "materialized view") %}
                           <svg
                             class="source-icon source-icon-object source-icon-object-view"
                             viewBox="0 0 16 16"

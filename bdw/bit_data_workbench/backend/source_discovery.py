@@ -202,7 +202,18 @@ class DataSourceDiscoverer(ABC):
         raise NotImplementedError
 
 
-class SqlConnectionStatusDiscoverer(DataSourceDiscoverer):
+@dataclass(frozen=True, slots=True)
+class SqlDiscoveredRelation:
+    schema_name: str
+    relation_name: str
+    relation_kind: str
+
+    @property
+    def relation_id(self) -> str:
+        return f"{self.schema_name}.{self.relation_name}"
+
+
+class SqlSourceDiscoverer(DataSourceDiscoverer):
     source_type = "sql"
     poll_interval_seconds = 5.0
 
@@ -211,24 +222,90 @@ class SqlConnectionStatusDiscoverer(DataSourceDiscoverer):
         *,
         source_id: str,
         source_label: str,
-        status_provider: Callable[[], SourceConnectionStatus],
+        snapshot_provider: Callable[[], tuple[SourceConnectionStatus, list[SqlDiscoveredRelation]]],
     ) -> None:
         self.source_id = source_id
         self.source_label = source_label
-        self._status_provider = status_provider
+        self._snapshot_provider = snapshot_provider
+        self._current_relations: dict[str, SqlDiscoveredRelation] = {}
 
     def sync(self, connection: duckdb.DuckDBPyConnection) -> DataSourceDiscoveryResult | None:
         del connection
+        connection_status, relations = self._snapshot_provider()
+
+        if connection_status.state != "connected":
+            return DataSourceDiscoveryResult(
+                source_type=self.source_type,
+                source_id=self.source_id,
+                source_label=self.source_label,
+                added_relations=[],
+                removed_relations=[],
+                updated_relations=[],
+                message=f"{self.source_label} connection checked.",
+                connection_status=connection_status,
+            )
+
+        next_relations = {relation.relation_id: relation for relation in relations}
+        removed_relation_ids = [
+            relation_id
+            for relation_id in self._current_relations
+            if relation_id not in next_relations
+        ]
+        added_relation_ids = [
+            relation_id
+            for relation_id in next_relations
+            if relation_id not in self._current_relations
+        ]
+        updated_relation_ids = [
+            relation_id
+            for relation_id, relation in next_relations.items()
+            if relation_id in self._current_relations and self._current_relations[relation_id] != relation
+        ]
+
+        if not added_relation_ids and not removed_relation_ids and not updated_relation_ids:
+            return DataSourceDiscoveryResult(
+                source_type=self.source_type,
+                source_id=self.source_id,
+                source_label=self.source_label,
+                added_relations=[],
+                removed_relations=[],
+                updated_relations=[],
+                message=f"{self.source_label} connection checked.",
+                connection_status=connection_status,
+            )
+
+        self._current_relations = next_relations
         return DataSourceDiscoveryResult(
             source_type=self.source_type,
             source_id=self.source_id,
             source_label=self.source_label,
-            added_relations=[],
-            removed_relations=[],
-            updated_relations=[],
-            message=f"{self.source_label} connection checked.",
-            connection_status=self._status_provider(),
+            added_relations=[f"{self.source_id}.{relation_id}" for relation_id in added_relation_ids],
+            removed_relations=[f"{self.source_id}.{relation_id}" for relation_id in removed_relation_ids],
+            updated_relations=[f"{self.source_id}.{relation_id}" for relation_id in updated_relation_ids],
+            message=self._build_message(
+                added_count=len(added_relation_ids),
+                removed_count=len(removed_relation_ids),
+                updated_count=len(updated_relation_ids),
+            ),
+            connection_status=connection_status,
         )
+
+    def _build_message(
+        self,
+        *,
+        added_count: int,
+        removed_count: int,
+        updated_count: int,
+    ) -> str:
+        fragments: list[str] = []
+        if added_count:
+            fragments.append(f"added {added_count}")
+        if updated_count:
+            fragments.append(f"updated {updated_count}")
+        if removed_count:
+            fragments.append(f"removed {removed_count}")
+        summary = ", ".join(fragments) if fragments else "no visible changes"
+        return f"{self.source_label} discovery {summary} relation(s)."
 
 
 class S3DataSourceDiscoverer(DataSourceDiscoverer):
@@ -597,7 +674,7 @@ class DataSourceDiscoveryManager:
             status_changed = self._update_source_status(result.connection_status)
 
         try:
-            if result.has_relation_changes or status_changed:
+            if result.has_relation_changes:
                 self._metadata_refresher()
         except Exception as exc:
             logger.warning(

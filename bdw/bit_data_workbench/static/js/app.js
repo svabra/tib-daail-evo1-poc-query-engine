@@ -2636,7 +2636,82 @@ function currentWorkspaceCanEdit() {
   return document.querySelector("[data-notebook-meta]")?.dataset.canEdit !== "false";
 }
 
-function queueDataSourceSidebarRefresh() {
+function upsertSourceConnectionStatus(catalogNode, status) {
+  if (!(catalogNode instanceof Element)) {
+    return;
+  }
+
+  const summary = catalogNode.querySelector(":scope > summary");
+  if (!(summary instanceof Element)) {
+    return;
+  }
+
+  let badge = summary.querySelector(":scope > .source-connection-status");
+  if (!status?.label) {
+    badge?.remove();
+    return;
+  }
+
+  if (!(badge instanceof Element)) {
+    badge = document.createElement("span");
+    badge.className = "source-connection-status";
+    badge.innerHTML = '<span class="source-connection-dot" aria-hidden="true"></span><span></span>';
+    summary.appendChild(badge);
+  }
+
+  badge.className = `source-connection-status source-connection-status-${status.state || "unknown"}`;
+  badge.setAttribute("title", status.detail || status.label);
+  const copy = badge.querySelector(":scope > span:last-child");
+  if (copy) {
+    copy.textContent = status.label;
+  }
+}
+
+function applyDataSourceStatusIndicators(snapshot) {
+  const statuses = Array.isArray(snapshot?.statuses) ? snapshot.statuses : [];
+  const statusMap = new Map(
+    statuses
+      .filter((status) => typeof status?.sourceId === "string" && status.sourceId.trim())
+      .map((status) => [status.sourceId.trim(), status])
+  );
+
+  document.querySelectorAll("[data-source-catalog]").forEach((catalogNode) => {
+    const sourceId = catalogNode.dataset.sourceCatalogName?.trim() || "";
+    upsertSourceConnectionStatus(catalogNode, statusMap.get(sourceId) || null);
+  });
+}
+
+async function refreshDataSourcesSection(mode = currentWorkspaceMode()) {
+  const currentSection = dataSourcesSection();
+  if (!currentSection) {
+    return;
+  }
+
+  const sidebarState = captureSidebarState();
+  const activeNotebookId = currentActiveNotebookId() || workspaceNotebookId() || "";
+  const response = await window.fetch(
+    `/sidebar?active_notebook_id=${encodeURIComponent(activeNotebookId)}&mode=${encodeURIComponent(mode)}`,
+    {
+      headers: { Accept: "text/html" },
+    }
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to refresh the data sources section: ${response.status}`);
+  }
+
+  const container = document.createElement("div");
+  container.innerHTML = await response.text();
+  const nextSection = container.querySelector("[data-data-sources-section]");
+  if (!(nextSection instanceof Element)) {
+    throw new Error("Failed to locate the refreshed data sources section.");
+  }
+
+  currentSection.outerHTML = nextSection.outerHTML;
+  restoreSidebarState(sidebarState);
+  restoreSelectedSourceObject();
+}
+
+function queueDataSourcesSectionRefresh() {
   if (pendingDataSourceSidebarRefreshHandle !== null) {
     return;
   }
@@ -2650,7 +2725,7 @@ function queueDataSourceSidebarRefresh() {
     }
 
     const runRefresh = async () => {
-      await refreshSidebar(currentWorkspaceMode());
+      await refreshDataSourcesSection(currentWorkspaceMode());
 
       if (currentWorkspaceMode() !== "notebook") {
         return;
@@ -2672,7 +2747,7 @@ function queueDataSourceSidebarRefresh() {
         dataSourceSidebarRefreshPromise = null;
         if (dataSourceSidebarRefreshQueued) {
           dataSourceSidebarRefreshQueued = false;
-          queueDataSourceSidebarRefresh();
+          queueDataSourcesSectionRefresh();
         }
       });
   }, 120);
@@ -2686,14 +2761,19 @@ function applyDataSourceEventsState(snapshot) {
     return;
   }
 
+  applyDataSourceStatusIndicators(snapshot);
+
   const latestEvent = Array.isArray(snapshot?.events) ? snapshot.events[0] : null;
   const touchedRelations = [
     ...(latestEvent?.addedRelations ?? []),
     ...(latestEvent?.removedRelations ?? []),
     ...(latestEvent?.updatedRelations ?? []),
   ];
+  if (!touchedRelations.length) {
+    return;
+  }
   clearSourceObjectFieldCacheForRelations(touchedRelations);
-  queueDataSourceSidebarRefresh();
+  queueDataSourcesSectionRefresh();
 }
 
 function normalizeSourceObjectFields(fields) {
