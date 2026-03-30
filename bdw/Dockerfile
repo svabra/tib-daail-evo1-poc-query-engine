@@ -1,14 +1,14 @@
 FROM python:3.12-slim
 
 ARG DUCKDB_VERSION=1.5.0
-ARG IMAGE_VERSION=0.3.2
+ARG IMAGE_VERSION=0.3.3
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     HOME=/tmp \
     IMAGE_VERSION=${IMAGE_VERSION} \
     PORT=8000 \
-    DUCKDB_DATABASE=/workspace/workspace.duckdb \
+    DUCKDB_DATABASE=/tmp/workspace/workspace.duckdb \
     DUCKDB_EXTENSION_DIRECTORY=/opt/duckdb/extensions
 
 WORKDIR /app

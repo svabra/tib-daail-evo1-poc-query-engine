@@ -5,7 +5,7 @@ run_ui() {
     local public_port="${DUCKDB_UI_PORT:-4213}"
     local bind_address="${DUCKDB_UI_BIND_ADDRESS:-0.0.0.0}"
     local proxy_target=""
-    local database_path="${DUCKDB_DATABASE:-/workspace/workspace.duckdb}"
+    local database_path="${DUCKDB_DATABASE:-/tmp/workspace/workspace.duckdb}"
 
     export HOME="${HOME:-/tmp}"
 
@@ -71,7 +71,7 @@ case "${command}" in
     cli)
         shift || true
         if [[ "$#" -eq 0 ]]; then
-            exec duckdb "${DUCKDB_DATABASE:-/workspace/workspace.duckdb}"
+            exec duckdb "${DUCKDB_DATABASE:-/tmp/workspace/workspace.duckdb}"
         fi
         exec duckdb "$@"
         ;;

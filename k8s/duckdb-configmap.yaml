@@ -8,7 +8,7 @@ metadata:
 data:
   HOME: /tmp
   DUCKDB_UI_PORT: "4213"
-  DUCKDB_DATABASE: /workspace/workspace.duckdb
+  DUCKDB_DATABASE: /tmp/workspace/workspace.duckdb
   DUCKDB_EXTRA_EXTENSIONS: httpfs,postgres
   DUCKDB_EXTENSION_DIRECTORY: /opt/duckdb/extensions
   S3_ENDPOINT: replace-me.example

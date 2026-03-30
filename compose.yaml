@@ -15,7 +15,7 @@ services:
       minio-seed:
         condition: service_completed_successfully
     environment:
-      IMAGE_VERSION: "0.3.2"
+      IMAGE_VERSION: "0.3.3"
       PORT: "8000"
       MAX_RESULT_ROWS: "200"
       DUCKDB_DATABASE: /workspace/bit-data-workbench.duckdb

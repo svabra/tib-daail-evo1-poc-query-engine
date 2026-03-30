@@ -8,10 +8,7 @@ metadata:
 spec:
   replicas: 1
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 0
-      maxUnavailable: 1
+    type: Recreate
   selector:
     matchLabels:
       app.kubernetes.io/name: evo1-bdw
@@ -22,7 +19,7 @@ spec:
     spec:
       containers:
         - name: bdw
-          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.2
+          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.3
           imagePullPolicy: Always
           ports:
             - name: http

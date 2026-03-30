@@ -417,7 +417,7 @@ def bootstrap_integrations(conn: duckdb.DuckDBPyConnection) -> None:
 
 
 def main() -> int:
-    database_path = Path(env("DUCKDB_DATABASE", "/workspace/workspace.duckdb"))
+    database_path = Path(env("DUCKDB_DATABASE", "/tmp/workspace/workspace.duckdb"))
     extension_dir = Path(env("DUCKDB_EXTENSION_DIRECTORY", "/workspace/.duckdb/extensions"))
     ui_port = env("DUCKDB_UI_PORT", "4213")
     extra_extensions = parse_extensions(os.getenv("DUCKDB_EXTRA_EXTENSIONS", ""))

@@ -135,7 +135,7 @@ class Settings:
             ui_title="DAAIFL Workbench",
             image_version=default_image_version(),
             port=int(env("PORT", "8000")),
-            duckdb_database=Path(env("DUCKDB_DATABASE", "/workspace/workspace.duckdb")),
+            duckdb_database=Path(env("DUCKDB_DATABASE", "/tmp/workspace/workspace.duckdb")),
             duckdb_extension_directory=Path(
                 env("DUCKDB_EXTENSION_DIRECTORY", "/opt/duckdb/extensions")
             ),
