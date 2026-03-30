@@ -15,6 +15,7 @@ from ..models import (
     NotebookDefinition,
     QueryResult,
     SourceCatalog,
+    SourceConnectionStatus,
     SourceField,
     SourceObject,
     SourceSchema,
@@ -23,7 +24,11 @@ from .s3_storage import delete_s3_bucket, list_s3_buckets, s3_bucket_schema_name
 from .data_generation_jobs import DataGenerationJobManager
 from .query_jobs import QueryJobManager
 from .notebooks import build_completion_schema, build_notebook_tree, build_notebooks, build_source_options
-from .source_discovery import DataSourceDiscoveryManager, S3DataSourceDiscoverer
+from .source_discovery import (
+    DataSourceDiscoveryManager,
+    S3DataSourceDiscoverer,
+    SqlConnectionStatusDiscoverer,
+)
 
 
 SUPPORTED_S3_VIEW_FORMATS = {"parquet", "csv", "json"}
@@ -113,6 +118,7 @@ class WorkbenchService:
         self._notebooks: list[NotebookDefinition] = []
         self._completion_schema: dict[str, object] = {}
         self._source_options: list[dict[str, str]] = []
+        self._postgres_health_connections: dict[str, object] = {}
         self._query_jobs = QueryJobManager(
             max_result_rows=settings.max_result_rows,
             connection_factory=self._create_worker_connection,
@@ -130,7 +136,27 @@ class WorkbenchService:
         self._data_source_discovery = DataSourceDiscoveryManager(
             connection_factory=self._create_worker_connection,
             metadata_refresher=self.refresh_metadata_state,
-            discoverers=[S3DataSourceDiscoverer(settings)],
+            discoverers=[
+                SqlConnectionStatusDiscoverer(
+                    source_id="pg_oltp",
+                    source_label="PostgreSQL OLTP",
+                    status_provider=lambda: self._postgres_connection_status(
+                        target="oltp",
+                        source_id="pg_oltp",
+                        source_label="PostgreSQL OLTP",
+                    ),
+                ),
+                SqlConnectionStatusDiscoverer(
+                    source_id="pg_olap",
+                    source_label="PostgreSQL OLAP",
+                    status_provider=lambda: self._postgres_connection_status(
+                        target="olap",
+                        source_id="pg_olap",
+                        source_label="PostgreSQL OLAP",
+                    ),
+                ),
+                S3DataSourceDiscoverer(settings),
+            ],
         )
 
     def start(self) -> None:
@@ -145,6 +171,7 @@ class WorkbenchService:
 
     def stop(self) -> None:
         self._data_source_discovery.stop()
+        self._close_persistent_postgres_connections()
         with self._lock:
             if self._conn is None:
                 return
@@ -422,13 +449,6 @@ class WorkbenchService:
         return self._create_connection()
 
     def _create_postgres_native_connection(self, target: str):
-        try:
-            import psycopg
-        except ImportError as exc:
-            raise RuntimeError(
-                "psycopg is required for native PostgreSQL query execution."
-            ) from exc
-
         normalized_target = str(target).strip().lower()
         if normalized_target == "oltp":
             database = self.settings.pg_oltp_database
@@ -436,6 +456,15 @@ class WorkbenchService:
             database = self.settings.pg_olap_database
         else:
             raise ValueError(f"Unsupported PostgreSQL native target: {target}")
+        return self._open_postgres_connection(database)
+
+    def _open_postgres_connection(self, database: str | None):
+        try:
+            import psycopg
+        except ImportError as exc:
+            raise RuntimeError(
+                "psycopg is required for native PostgreSQL query execution."
+            ) from exc
 
         if not all(
             (
@@ -460,6 +489,97 @@ class WorkbenchService:
             autocommit=True,
             connect_timeout=10,
         )
+
+    def _postgres_target_database(self, target: str) -> str | None:
+        normalized_target = str(target).strip().lower()
+        if normalized_target == "oltp":
+            return self.settings.pg_oltp_database
+        if normalized_target == "olap":
+            return self.settings.pg_olap_database
+        raise ValueError(f"Unsupported PostgreSQL target: {target}")
+
+    def _close_persistent_postgres_connections(self) -> None:
+        with self._lock:
+            connections = list(self._postgres_health_connections.values())
+            self._postgres_health_connections.clear()
+
+        for connection in connections:
+            try:
+                connection.close()
+            except Exception:
+                pass
+
+    def _close_persistent_postgres_connection(self, source_id: str) -> None:
+        connection = None
+        with self._lock:
+            connection = self._postgres_health_connections.pop(source_id, None)
+
+        if connection is None:
+            return
+
+        try:
+            connection.close()
+        except Exception:
+            pass
+
+    def _postgres_connection_status(
+        self,
+        *,
+        target: str,
+        source_id: str,
+        source_label: str,
+    ) -> SourceConnectionStatus:
+        database = self._postgres_target_database(target)
+        if not database:
+            return SourceConnectionStatus(
+                source_id=source_id,
+                state="disconnected",
+                label="Disconnected",
+                detail=f"{source_label} is not configured.",
+            )
+
+        connection = None
+        with self._lock:
+            connection = self._postgres_health_connections.get(source_id)
+
+        if connection is not None:
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT 1")
+                return SourceConnectionStatus(
+                    source_id=source_id,
+                    state="connected",
+                    label="Connected",
+                    detail=f"{source_label} is reachable.",
+                )
+            except Exception:
+                self._close_persistent_postgres_connection(source_id)
+
+        try:
+            connection = self._open_postgres_connection(database)
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT 1")
+            with self._lock:
+                self._postgres_health_connections[source_id] = connection
+            return SourceConnectionStatus(
+                source_id=source_id,
+                state="connected",
+                label="Connected",
+                detail=f"{source_label} is reachable.",
+            )
+        except Exception as exc:
+            try:
+                if connection is not None:
+                    connection.close()
+            except Exception:
+                pass
+            self._close_persistent_postgres_connection(source_id)
+            return SourceConnectionStatus(
+                source_id=source_id,
+                state="disconnected",
+                label="Disconnected",
+                detail=f"{source_label} connection failed: {exc}",
+            )
 
     def _resolve_notebook_title(self, notebook_id: str) -> str | None:
         with self._lock:
@@ -661,6 +781,7 @@ class WorkbenchService:
 
     def _refresh_state(self) -> None:
         conn = self._require_connection()
+        source_statuses = self._data_source_discovery.source_statuses()
         object_rows = conn.execute(
             """
             SELECT
@@ -713,6 +834,7 @@ class WorkbenchService:
 
         catalogs: list[SourceCatalog] = []
         for catalog_name in ("workspace", "pg_oltp", "pg_olap"):
+            status = source_statuses.get(catalog_name)
             schemas = [
                 SourceSchema(
                     name=schema_name,
@@ -731,7 +853,15 @@ class WorkbenchService:
                 )
             ]
             if schemas:
-                catalogs.append(SourceCatalog(name=catalog_name, schemas=schemas))
+                catalogs.append(
+                    SourceCatalog(
+                        name=catalog_name,
+                        schemas=schemas,
+                        connection_status=status.state if status is not None else None,
+                        connection_label=status.label if status is not None else None,
+                        connection_detail=status.detail if status is not None else None,
+                    )
+                )
 
         self._catalogs = catalogs
         self._notebooks = build_notebooks(catalogs)

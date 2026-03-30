@@ -1075,6 +1075,10 @@ details:not([open]) > .source-schema > summary::before {
 .source-catalog > summary,
 .source-schema > summary {
   position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
   list-style: none;
   cursor: pointer;
   padding: 4px 5px 4px calc(5px + var(--disclosure-size) + var(--disclosure-gap));
@@ -1166,6 +1170,32 @@ details:not([open]) > .source-schema > summary::before {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+.source-connection-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.source-connection-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  opacity: 0.9;
+}
+
+.source-connection-status-connected {
+  color: #2f7d4a;
+}
+
+.source-connection-status-disconnected {
+  color: #9b4b4b;
 }
 
 .source-action-menu {

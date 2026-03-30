@@ -163,7 +163,7 @@
       <div class="source-tree">
         {% for catalog in catalogs %}
           <details class="source-catalog" data-source-catalog data-source-catalog-name="{{ catalog.name }}">
-            <summary data-searchable-item="{{ catalog.name }}">
+            <summary data-searchable-item="{{ catalog.name }} {{ catalog.connection_label or '' }} {{ catalog.connection_detail or '' }}">
               <span class="source-node-label">
                 <svg class="source-icon source-icon-catalog" viewBox="0 0 16 16" aria-hidden="true">
                   <ellipse cx="8" cy="3.3" rx="4.8" ry="1.9"></ellipse>
@@ -172,6 +172,15 @@
                 </svg>
                 <span>{{ catalog.name }}</span>
               </span>
+              {% if catalog.connection_label %}
+                <span
+                  class="source-connection-status source-connection-status-{{ catalog.connection_status or 'unknown' }}"
+                  title="{{ catalog.connection_detail or catalog.connection_label }}"
+                >
+                  <span class="source-connection-dot" aria-hidden="true"></span>
+                  <span>{{ catalog.connection_label }}</span>
+                </span>
+              {% endif %}
             </summary>
             {% for schema in catalog.schemas %}
               <details

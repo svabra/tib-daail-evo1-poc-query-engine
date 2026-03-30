@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 import duckdb
 
 from ..config import Settings
-from ..models import DataSourceDiscoveryEventDefinition
+from ..models import DataSourceDiscoveryEventDefinition, SourceConnectionStatus
 from .s3_storage import iter_s3_keys, list_s3_buckets, s3_bucket_schema_name, s3_client
 
 
@@ -175,15 +175,20 @@ class DataSourceDiscoveryResult:
     updated_relations: list[str]
     message: str
     metadata_changed: bool = False
+    connection_status: SourceConnectionStatus | None = None
 
     @property
-    def has_changes(self) -> bool:
+    def has_relation_changes(self) -> bool:
         return bool(
             self.metadata_changed
             or self.added_relations
             or self.removed_relations
             or self.updated_relations
         )
+
+    @property
+    def has_changes(self) -> bool:
+        return self.has_relation_changes or self.connection_status is not None
 
 
 class DataSourceDiscoverer(ABC):
@@ -195,6 +200,35 @@ class DataSourceDiscoverer(ABC):
     @abstractmethod
     def sync(self, connection: duckdb.DuckDBPyConnection) -> DataSourceDiscoveryResult | None:
         raise NotImplementedError
+
+
+class SqlConnectionStatusDiscoverer(DataSourceDiscoverer):
+    source_type = "sql"
+    poll_interval_seconds = 5.0
+
+    def __init__(
+        self,
+        *,
+        source_id: str,
+        source_label: str,
+        status_provider: Callable[[], SourceConnectionStatus],
+    ) -> None:
+        self.source_id = source_id
+        self.source_label = source_label
+        self._status_provider = status_provider
+
+    def sync(self, connection: duckdb.DuckDBPyConnection) -> DataSourceDiscoveryResult | None:
+        del connection
+        return DataSourceDiscoveryResult(
+            source_type=self.source_type,
+            source_id=self.source_id,
+            source_label=self.source_label,
+            added_relations=[],
+            removed_relations=[],
+            updated_relations=[],
+            message=f"{self.source_label} connection checked.",
+            connection_status=self._status_provider(),
+        )
 
 
 class S3DataSourceDiscoverer(DataSourceDiscoverer):
@@ -472,6 +506,7 @@ class DataSourceDiscoveryManager:
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
         self._events: list[DataSourceDiscoveryEventDefinition] = []
+        self._source_statuses: dict[str, SourceConnectionStatus] = {}
         self._state_version = 0
         self._stop_event = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -513,6 +548,10 @@ class DataSourceDiscoveryManager:
         with self._condition:
             return self._state_payload_locked()
 
+    def source_statuses(self) -> dict[str, SourceConnectionStatus]:
+        with self._condition:
+            return dict(self._source_statuses)
+
     def wait_for_state(self, last_version: int | None, timeout: float = 15.0) -> dict[str, Any]:
         with self._condition:
             if last_version is None or last_version != self._state_version:
@@ -553,8 +592,13 @@ class DataSourceDiscoveryManager:
         if result is None or not result.has_changes:
             return
 
+        status_changed = False
+        if result.connection_status is not None:
+            status_changed = self._update_source_status(result.connection_status)
+
         try:
-            self._metadata_refresher()
+            if result.has_relation_changes or status_changed:
+                self._metadata_refresher()
         except Exception as exc:
             logger.warning(
                 "Failed to refresh workbench metadata after '%s' discovery: %s",
@@ -562,8 +606,22 @@ class DataSourceDiscoveryManager:
                 exc,
             )
 
-        if emit_event:
+        if emit_event and result.has_relation_changes:
             self._record_event(result)
+            return
+
+        if status_changed:
+            with self._condition:
+                self._state_version += 1
+                self._condition.notify_all()
+
+    def _update_source_status(self, status: SourceConnectionStatus) -> bool:
+        with self._condition:
+            previous = self._source_statuses.get(status.source_id)
+            if previous == status:
+                return False
+            self._source_statuses[status.source_id] = status
+            return True
 
     def _record_event(self, result: DataSourceDiscoveryResult) -> None:
         event = DataSourceDiscoveryEventDefinition(
@@ -592,4 +650,5 @@ class DataSourceDiscoveryManager:
                 "lastDetectedAt": last_detected_at,
             },
             "events": [event.payload for event in self._events],
+            "statuses": [status.payload for status in self._source_statuses.values()],
         }

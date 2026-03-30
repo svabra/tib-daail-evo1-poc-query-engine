@@ -33,9 +33,31 @@ class SourceSchema:
 
 
 @dataclass(slots=True)
+class SourceConnectionStatus:
+    source_id: str
+    state: str
+    label: str
+    detail: str | None = None
+    checked_at: str | None = None
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {
+            "sourceId": self.source_id,
+            "state": self.state,
+            "label": self.label,
+            "detail": self.detail,
+            "checkedAt": self.checked_at,
+        }
+
+
+@dataclass(slots=True)
 class SourceCatalog:
     name: str
     schemas: list[SourceSchema] = field(default_factory=list)
+    connection_status: str | None = None
+    connection_label: str | None = None
+    connection_detail: str | None = None
 
 
 @dataclass(slots=True)
