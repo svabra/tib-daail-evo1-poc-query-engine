@@ -20,6 +20,8 @@ WORKBENCH_ENVIRONMENT_VARIABLES = (
     "S3_SECRET_ACCESS_KEY",
     "S3_URL_STYLE",
     "S3_USE_SSL",
+    "S3_VERIFY_SSL",
+    "S3_CA_CERT_FILE",
     "S3_SESSION_TOKEN",
     "S3_STARTUP_VIEW_SCHEMA",
     "S3_STARTUP_VIEWS",
@@ -114,6 +116,8 @@ class Settings:
     s3_secret_access_key: str | None
     s3_url_style: str | None
     s3_use_ssl: bool
+    s3_verify_ssl: bool
+    s3_ca_cert_file: Path | None
     s3_session_token: str | None
     s3_startup_view_schema: str
     s3_startup_views: str | None
@@ -147,6 +151,10 @@ class Settings:
             s3_secret_access_key=env_optional("S3_SECRET_ACCESS_KEY"),
             s3_url_style=env_optional("S3_URL_STYLE"),
             s3_use_ssl=env_bool("S3_USE_SSL", True),
+            s3_verify_ssl=env_bool("S3_VERIFY_SSL", True),
+            s3_ca_cert_file=(
+                Path(value) if (value := env_optional("S3_CA_CERT_FILE")) is not None else None
+            ),
             s3_session_token=env_optional("S3_SESSION_TOKEN"),
             s3_startup_view_schema=env("S3_STARTUP_VIEW_SCHEMA", "s3"),
             s3_startup_views=env_optional("S3_STARTUP_VIEWS"),
@@ -174,6 +182,14 @@ class Settings:
             "duckdb_database": self.duckdb_database.as_posix(),
             "timestamp_utc": datetime.now(UTC).isoformat(),
         }
+
+    def apply_runtime_environment(self) -> None:
+        if not self.s3_ca_cert_file:
+            return
+
+        ca_bundle_path = self.s3_ca_cert_file.as_posix()
+        for env_name in ("AWS_CA_BUNDLE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "SSL_CERT_FILE"):
+            os.environ[env_name] = ca_bundle_path
 
     @staticmethod
     def startup_environment_lines() -> list[str]:

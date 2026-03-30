@@ -21,6 +21,9 @@ def s3_client(settings: Settings):
             "addressing_style": "path" if (settings.s3_url_style or "").lower() == "path" else "auto",
         }
     )
+    verify: bool | str = settings.s3_verify_ssl
+    if settings.s3_verify_ssl and settings.s3_ca_cert_file is not None:
+        verify = settings.s3_ca_cert_file.as_posix()
     return boto3.client(
         "s3",
         endpoint_url=endpoint_url,
@@ -29,6 +32,7 @@ def s3_client(settings: Settings):
         aws_secret_access_key=settings.s3_secret_access_key,
         aws_session_token=settings.s3_session_token,
         config=config,
+        verify=verify,
     )
 
 

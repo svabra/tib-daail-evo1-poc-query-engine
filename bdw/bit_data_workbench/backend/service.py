@@ -476,11 +476,19 @@ class WorkbenchService:
         conn.execute(
             f"SET extension_directory = {sql_literal(self.settings.duckdb_extension_directory.as_posix())}"
         )
+        self._configure_s3_tls(conn)
 
         self._ensure_extension(conn, "httpfs")
         self._ensure_extension(conn, "postgres")
         self._bootstrap_integrations(conn)
         return conn
+
+    def _configure_s3_tls(self, conn: duckdb.DuckDBPyConnection) -> None:
+        conn.execute(
+            f"SET enable_server_cert_verification = {'true' if self.settings.s3_verify_ssl else 'false'}"
+        )
+        if self.settings.s3_ca_cert_file is not None:
+            conn.execute(f"SET ca_cert_file = {sql_literal(self.settings.s3_ca_cert_file.as_posix())}")
 
     def _ensure_extension(self, conn: duckdb.DuckDBPyConnection, extension: str) -> None:
         try:

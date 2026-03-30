@@ -18,6 +18,7 @@ BASE_DIR = Path(__file__).resolve().parent
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = Settings.from_env()
+    settings.apply_runtime_environment()
     for line in Settings.startup_environment_lines():
         print(line, flush=True)
     workbench = WorkbenchService(settings)

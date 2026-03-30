@@ -188,6 +188,15 @@ def env_bool(name: str, default: bool) -> bool:
     raise ValueError(f"Unsupported boolean value for {name}: {raw}")
 
 
+def configure_s3_tls(conn: duckdb.DuckDBPyConnection) -> None:
+    verify_ssl = env_bool("S3_VERIFY_SSL", True)
+    ca_cert_file = env_optional("S3_CA_CERT_FILE")
+
+    conn.execute(f"SET enable_server_cert_verification = {'true' if verify_ssl else 'false'}")
+    if ca_cert_file is not None:
+        conn.execute(f"SET ca_cert_file = {sql_string(ca_cert_file)}")
+
+
 def normalize_port(name: str, value: str) -> str:
     if not value.isdigit():
         raise ValueError(f"{name} must be numeric, got: {value}")
@@ -438,6 +447,7 @@ def main() -> int:
 
     try:
         conn.execute(f"SET extension_directory = {sql_string(extension_dir.as_posix())}")
+        configure_s3_tls(conn)
 
         ensure_extension(conn, "ui")
         for extension in extra_extensions:
