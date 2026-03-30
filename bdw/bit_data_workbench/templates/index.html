@@ -1,0 +1,103 @@
+{% extends "layout.html" %}
+
+{% block body %}
+  <div class="shell">
+    {% include "partials/sidebar.html" %}
+
+    <main class="workspace-shell">
+      <header class="topbar">
+        <div class="brand">
+          <a
+            href="/"
+            class="brand-home-link"
+            aria-label="Go to the welcome page"
+            title="Welcome page"
+          >
+            <img
+              class="brand-mark"
+              src="{{ request.url_for('static', path='img/swiss-confederation-logo.png') }}"
+              alt="Schweizerische Eidgenossenschaft"
+            >
+          </a>
+          <div class="brand-copy">
+            <h1>{{ title }}</h1>
+          </div>
+        </div>
+        <div class="topbar-actions">
+          <button
+            type="button"
+            class="topbar-action-button topbar-action-button-icon-only"
+            data-open-query-workbench
+            aria-label="Query Workbench"
+            title="Query Workbench"
+          >
+            <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="2.1" y="2.4" width="11.8" height="11.2" rx="1.2"></rect>
+              <path d="M2.8 6.2h10.4"></path>
+              <path d="M5.4 9.1 7 10.7 10.6 7.1"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="topbar-action-button topbar-action-button-icon-only"
+            data-open-ingestion-workbench
+            aria-label="Ingestion Workbench"
+            title="Ingestion Workbench"
+          >
+            <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M3 3.2h10v3.3H3z"></path>
+              <path d="M5.1 8.1v2.6a2 2 0 0 0 2 2h1.8a2 2 0 0 0 2-2V8.1"></path>
+              <path d="M8 2.1v6.2"></path>
+              <path d="M5.9 6.2 8 8.3l2.1-2.1"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="topbar-action-button topbar-action-button-muted topbar-action-button-icon-only"
+            aria-disabled="true"
+            aria-label="Governance Workbench"
+            title="Governance Workbench"
+          >
+            <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M8 1.7 12.8 3v3.6c0 3.2-1.7 5.2-4.8 7.7C4.9 11.8 3.2 9.8 3.2 6.6V3z"></path>
+              <path d="M8 5.1v5.4"></path>
+              <path d="M5.8 7.3h4.4"></path>
+            </svg>
+          </button>
+          <details class="topbar-notification-menu" data-query-notifications>
+            <summary
+              class="topbar-action-button topbar-action-button-icon-only"
+              aria-label="Notifications"
+              title="Notifications"
+            >
+              <span class="topbar-notification-badge" data-query-notification-count hidden>0</span>
+              <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M3.2 11.6h9.6l-1.1-1.6V6.8a3.7 3.7 0 0 0-7.4 0V10z"></path>
+                <path d="M6.2 12.1a1.9 1.9 0 0 0 3.6 0"></path>
+              </svg>
+            </summary>
+            <div class="topbar-notification-panel">
+              <div class="topbar-notification-header">
+                <strong>Messages</strong>
+                <button type="button" class="topbar-notification-clear" data-clear-notifications hidden>
+                  Clear
+                </button>
+              </div>
+              <div class="topbar-notification-list" data-query-notification-list>
+                <p class="topbar-notification-empty">No notifications yet.</p>
+              </div>
+            </div>
+          </details>
+          <button type="button" class="topbar-action-button" data-create-notebook>
+            Create Notebook
+          </button>
+        </div>
+      </header>
+
+      <section id="workspace-panel">
+        {% include workspace_partial_template %}
+      </section>
+    </main>
+  </div>
+  <script id="source-options" type="application/json">{{ source_options_json | safe }}</script>
+{% endblock %}

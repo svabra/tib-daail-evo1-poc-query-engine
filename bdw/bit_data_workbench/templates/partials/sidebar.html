@@ -1,0 +1,372 @@
+{% set sidebar_oob = sidebar_oob | default(false) %}
+{% set workspace_mode = workspace_mode | default('notebook') %}
+<aside
+  id="sidebar"
+  class="sidebar"
+  data-sidebar
+  data-sidebar-mode="{{ workspace_mode }}"
+  {% if sidebar_oob %}hx-swap-oob="outerHTML"{% endif %}
+>
+  <div class="sidebar-body" data-sidebar-body>
+    <div class="sidebar-search">
+      <label class="sidebar-label" for="sidebar-search-input">Search</label>
+      <input
+        id="sidebar-search-input"
+        class="search-input"
+        type="search"
+        placeholder="{{ 'Search runbooks and data sources' if workspace_mode == 'ingestion' else 'Search notebooks and data sources' }}"
+        data-sidebar-search
+      >
+    </div>
+
+    {% if workspace_mode == 'ingestion' %}
+      <details class="sidebar-section notebook-section" data-ingestion-runbook-section>
+        <summary class="section-heading section-summary">
+          <h2>Ingestion Runbooks</h2>
+          <div class="section-tools">
+            <span class="section-count">{{ data_generators | length }}</span>
+          </div>
+        </summary>
+        <div class="runbook-list" data-runbook-list>
+          {% for generator in data_generators %}
+            <button
+              type="button"
+              class="runbook-link"
+              data-open-ingestion-runbook="{{ generator.generatorId }}"
+              data-searchable-item="{{ generator.title }} {{ generator.description }} {{ generator.targetKind }} {{ generator.tags | join(' ') }}"
+            >
+              <div class="runbook-title-row">
+                <span class="runbook-title">{{ generator.title }}</span>
+                <span class="runbook-kind">{{ generator.targetKind | upper }}</span>
+              </div>
+              <span class="runbook-summary">{{ generator.description }}</span>
+            </button>
+          {% endfor %}
+        </div>
+      </details>
+    {% else %}
+      <details class="sidebar-section notebook-section" data-notebook-section>
+        <summary class="section-heading section-summary">
+          <h2>Notebooks</h2>
+          <div class="section-tools">
+            <button
+              type="button"
+              class="tree-add-button"
+              data-collapse-tree
+              title="Collapse notebook structure"
+              aria-label="Collapse notebook structure"
+            >
+              <svg class="tree-action-glyph tree-action-glyph-structure" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M2.5 3.5h3.4"></path>
+                <path d="M2.5 8h6.5"></path>
+                <path d="M2.5 12.5h3.4"></path>
+                <path d="M11.4 3.5v9"></path>
+                <path d="M9.3 8h4.2"></path>
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="tree-add-button"
+              data-expand-tree
+              title="Expand notebook structure"
+              aria-label="Expand notebook structure"
+            >
+              <svg class="tree-action-glyph tree-action-glyph-structure" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M2.5 3.5h3.4"></path>
+                <path d="M2.5 8h6.5"></path>
+                <path d="M2.5 12.5h3.4"></path>
+                <path d="M11.4 3.5v9"></path>
+                <path d="M9.3 8h4.2"></path>
+                <path d="M11.4 5.9v4.2"></path>
+              </svg>
+            </button>
+            <span
+              class="info-badge"
+              title="Notebook folders and drag-and-drop order are currently stored locally in this browser. Subject to change: will be stored by-user and remotely."
+              aria-label="Notebook tree storage information"
+            >
+              i
+            </span>
+            <span class="section-count">{{ notebooks | length }}</span>
+            <button
+              type="button"
+              class="tree-add-button"
+              data-create-notebook
+              title="Create notebook"
+              aria-label="Create notebook"
+            >
+              <svg class="tree-action-glyph" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M4 2.2h5.2l2.8 2.8v8.8H4z"></path>
+                <path d="M9.2 2.2v2.7h2.8"></path>
+                <path d="M8 6.9v4.2M5.9 9h4.2"></path>
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="tree-add-button"
+              data-add-tree-item
+              title="Add folder"
+              aria-label="Add folder"
+            >
+              +
+            </button>
+          </div>
+        </summary>
+        <div class="notebook-tree tree-children" data-notebook-tree data-tree-children>
+          {% for node in notebook_tree %}
+            {% include "partials/notebook_tree_node.html" %}
+          {% endfor %}
+        </div>
+      </details>
+    {% endif %}
+
+    <div class="sidebar-divider" aria-hidden="true"></div>
+
+    <details class="sidebar-section" data-data-sources-section>
+      <summary class="section-heading section-summary">
+        <h2>Data Sources</h2>
+        <div class="section-tools">
+          <button
+            type="button"
+            class="tree-add-button"
+            data-collapse-sources
+            title="Collapse data source structure"
+            aria-label="Collapse data source structure"
+          >
+            <svg class="tree-action-glyph tree-action-glyph-structure" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M2.5 3.5h3.4"></path>
+              <path d="M2.5 8h6.5"></path>
+              <path d="M2.5 12.5h3.4"></path>
+              <path d="M11.4 3.5v9"></path>
+              <path d="M9.3 8h4.2"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="tree-add-button"
+            data-expand-sources
+            title="Expand data source structure"
+            aria-label="Expand data source structure"
+          >
+            <svg class="tree-action-glyph tree-action-glyph-structure" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M2.5 3.5h3.4"></path>
+              <path d="M2.5 8h6.5"></path>
+              <path d="M2.5 12.5h3.4"></path>
+              <path d="M11.4 3.5v9"></path>
+              <path d="M9.3 8h4.2"></path>
+              <path d="M11.4 5.9v4.2"></path>
+            </svg>
+          </button>
+          <span class="section-count">{{ catalogs | length }}</span>
+        </div>
+      </summary>
+      <div class="source-tree">
+        {% for catalog in catalogs %}
+          <details class="source-catalog" data-source-catalog data-source-catalog-name="{{ catalog.name }}">
+            <summary data-searchable-item="{{ catalog.name }}">
+              <span class="source-node-label">
+                <svg class="source-icon source-icon-catalog" viewBox="0 0 16 16" aria-hidden="true">
+                  <ellipse cx="8" cy="3.3" rx="4.8" ry="1.9"></ellipse>
+                  <path d="M3.2 3.3v8c0 1 2.15 1.9 4.8 1.9s4.8-.9 4.8-1.9v-8"></path>
+                  <path d="M3.2 7c0 1 2.15 1.9 4.8 1.9s4.8-.9 4.8-1.9"></path>
+                </svg>
+                <span>{{ catalog.name }}</span>
+              </span>
+            </summary>
+            {% for schema in catalog.schemas %}
+              <details
+                class="source-schema"
+                data-source-schema
+                data-source-schema-key="{{ catalog.name }}::{{ schema.name }}"
+              >
+                <summary data-searchable-item="{{ schema.label or schema.name }}">
+                  <span class="source-node-label">
+                    <svg class="source-icon source-icon-schema" viewBox="0 0 16 16" aria-hidden="true">
+                      <rect x="1.6" y="1.8" width="3.7" height="3.7" rx="0.7"></rect>
+                      <rect x="10.7" y="1.8" width="3.7" height="3.7" rx="0.7"></rect>
+                      <rect x="10.7" y="10.5" width="3.7" height="3.7" rx="0.7"></rect>
+                      <path d="M5.3 3.7h2.8a2 2 0 0 1 2 2v1.5"></path>
+                      <path d="M10.1 8H7.4a2 2 0 0 0-2 2v.5"></path>
+                    </svg>
+                    <span>{{ schema.label or schema.name }}</span>
+                  </span>
+                </summary>
+                <ul class="source-object-list">
+                  {% for source_object in schema.objects %}
+                    {% if catalog.name == "workspace" %}
+                      {% set source_option_id = "workspace.s3" %}
+                    {% else %}
+                      {% set source_option_id = catalog.name %}
+                    {% endif %}
+                    <li
+                      class="source-object source-object-{{ source_object.kind }}"
+                      data-searchable-item="{{ source_object.name }} {{ source_object.relation }}"
+                      data-source-object
+                      data-source-object-kind="{{ source_object.kind }}"
+                      data-source-object-name="{{ source_object.name }}"
+                      data-source-object-relation="{{ source_object.relation }}"
+                      data-source-option-id="{{ source_option_id }}"
+                    >
+                      <span class="source-node-label">
+                        {% if source_object.kind == "view" %}
+                          <svg
+                            class="source-icon source-icon-object source-icon-object-view"
+                            viewBox="0 0 16 16"
+                            aria-hidden="true"
+                          >
+                            <rect x="2.4" y="3" width="11.2" height="9.6" rx="1.1"></rect>
+                            <path d="M4.2 5.2h7.6M4.2 7.7h7.6"></path>
+                            <path d="M3.2 10.7c1.5-1.7 3.1-2.6 4.8-2.6s3.3.9 4.8 2.6"></path>
+                            <circle cx="8" cy="10.2" r="1"></circle>
+                          </svg>
+                        {% else %}
+                          <svg
+                            class="source-icon source-icon-object source-icon-object-table"
+                            viewBox="0 0 16 16"
+                            aria-hidden="true"
+                          >
+                            <rect x="2.1" y="2.3" width="11.8" height="11.1" rx="1.1"></rect>
+                            <path d="M2.8 6.1h10.4M2.8 9.4h10.4M6 2.9v9.8M10 2.9v9.8"></path>
+                          </svg>
+                        {% endif %}
+                        <span>{{ source_object.name }}</span>
+                      </span>
+                      <span class="source-object-meta">
+                        <small>{{ source_object.kind }}</small>
+                        <details class="workspace-action-menu source-action-menu" data-source-action-menu>
+                          <summary
+                            class="workspace-action-menu-toggle"
+                            aria-label="Source actions"
+                            title="Source actions"
+                          >
+                            <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
+                          </summary>
+                          <div class="workspace-action-menu-panel">
+                            <button
+                              type="button"
+                              class="workspace-action-menu-item"
+                              data-view-source-data
+                              title="Insert and run a query with all fields in the current notebook"
+                            >
+                              View Data
+                            </button>
+                            <button
+                              type="button"
+                              class="workspace-action-menu-item"
+                              data-query-source-current
+                              title="Insert a query into the current notebook"
+                            >
+                              Query in current notebook
+                            </button>
+                            <button
+                              type="button"
+                              class="workspace-action-menu-item"
+                              data-query-source-new
+                              title="Create a new notebook with this query"
+                            >
+                              Query in new notebook
+                            </button>
+                          </div>
+                        </details>
+                      </span>
+                    </li>
+                  {% endfor %}
+                </ul>
+              </details>
+            {% endfor %}
+          </details>
+        {% endfor %}
+      </div>
+    </details>
+  </div>
+
+  <section class="sidebar-source-inspector" data-source-inspector hidden>
+    <div class="sidebar-divider sidebar-source-inspector-divider" aria-hidden="true"></div>
+    <div class="sidebar-source-inspector-panel" data-source-inspector-panel aria-live="polite"></div>
+  </section>
+
+  {% if workspace_mode == 'ingestion' %}
+    <div class="sidebar-divider" aria-hidden="true"></div>
+
+    <details class="sidebar-section" data-ingestion-cleanup-section>
+      <summary class="section-heading section-summary">
+        <h2>Environment Cleanup</h2>
+        <div class="section-tools">
+          <span class="section-count">{{ ingestion_cleanup_targets | length }}</span>
+        </div>
+      </summary>
+      <div class="ingestion-cleanup-list">
+        {% for target in ingestion_cleanup_targets %}
+          <button
+            type="button"
+            class="ingestion-cleanup-button"
+            data-run-ingestion-cleanup="{{ target.targetId }}"
+            data-cleanup-target-title="{{ target.title }}"
+            data-cleanup-target-copy="{{ target.confirmCopy }}"
+          >
+            <span class="ingestion-cleanup-title">{{ target.title }}</span>
+            <span class="ingestion-cleanup-copy">{{ target.description }}</span>
+          </button>
+        {% endfor %}
+      </div>
+    </details>
+
+    <details class="sidebar-section sidebar-query-monitor" data-generation-monitor-section>
+      <summary class="section-heading section-summary">
+        <h2>Ingestion Monitoring</h2>
+        <div class="section-tools">
+          <span class="section-count query-monitor-count" data-generation-monitor-count>0</span>
+        </div>
+      </summary>
+      <div class="query-monitor-body">
+        <div class="query-monitor-list" data-generation-monitor-list>
+          <p class="query-monitor-empty">No ingestion jobs yet.</p>
+        </div>
+      </div>
+    </details>
+  {% else %}
+    <details class="sidebar-section sidebar-query-monitor" data-query-monitor-section>
+      <summary class="section-heading section-summary">
+        <h2>Query Monitor</h2>
+        <div class="section-tools">
+          <span class="section-count query-monitor-count" data-query-monitor-count>0</span>
+        </div>
+      </summary>
+      <div class="query-monitor-body">
+        <section class="query-monitor-performance" data-query-performance hidden>
+          <div class="query-monitor-performance-header">
+            <div>
+              <h3>Recent Runtime</h3>
+              <p>Last successful queries, with p50 and p95 reference.</p>
+            </div>
+            <div class="query-monitor-performance-stats" data-query-performance-stats></div>
+          </div>
+          <div class="query-monitor-chart" data-query-performance-chart></div>
+          <div class="query-monitor-distribution" data-query-performance-distribution></div>
+        </section>
+        <div class="query-monitor-list" data-query-monitor-list>
+          <p class="query-monitor-empty">No query jobs yet.</p>
+        </div>
+      </div>
+    </details>
+  {% endif %}
+
+  <div class="sidebar-footer">
+    <button
+      type="button"
+      class="sidebar-toggle"
+      data-sidebar-toggle
+      aria-expanded="true"
+      aria-controls="sidebar"
+      title="Collapse navigation"
+    >
+      <span class="sidebar-toggle-icon" aria-hidden="true">‹</span>
+      <span class="sidebar-toggle-label">Collapse navigation</span>
+      <span class="sidebar-toggle-badge" data-sidebar-query-count hidden>0</span>
+    </button>
+    <dl class="runtime-pill runtime-pill-sidebar" aria-label="Application version">
+      <dt>DAAIFL Workbench</dt>
+      <dd>V{{ runtime.image_version }}</dd>
+    </dl>
+  </div>
+</aside>

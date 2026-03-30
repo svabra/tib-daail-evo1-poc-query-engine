@@ -1,0 +1,59 @@
+<section id="query-results-{{ cell_id }}" class="result-panel" data-cell-result>
+  <header class="result-header">
+    <div class="result-header-copy">
+      <h3>Result</h3>
+      <p class="result-meta">{{ "%.1f"|format(query_result.duration_ms) }} ms</p>
+    </div>
+    <div class="result-header-actions">
+      {% if query_result.message %}
+        <span class="result-badge">{{ query_result.message }}</span>
+      {% endif %}
+      <div class="result-download-actions" aria-label="Result download actions">
+        <button
+          type="button"
+          class="result-action-button"
+          data-result-download-json
+          title="Download result as JSON"
+        >JSON</button>
+        <button
+          type="button"
+          class="result-action-button"
+          data-result-download-csv
+          title="Download result as CSV"
+        >CSV</button>
+      </div>
+    </div>
+  </header>
+
+  {% if query_result.error %}
+    <div class="result-error">
+      <strong>Query failed.</strong>
+      <pre>{{ query_result.error }}</pre>
+    </div>
+  {% elif query_result.columns %}
+    <div class="result-table-wrap">
+      <table class="result-table">
+        <thead>
+          <tr>
+            {% for column in query_result.columns %}
+              <th>{{ column }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in query_result.rows %}
+            <tr>
+              {% for value in row %}
+                <td>{% if value is none %}<span class="cell-null">NULL</span>{% else %}{{ value }}{% endif %}</td>
+              {% endfor %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="result-empty">
+      <p>{{ query_result.message or "Run this cell to inspect the selected data sources." }}</p>
+    </div>
+  {% endif %}
+</section>

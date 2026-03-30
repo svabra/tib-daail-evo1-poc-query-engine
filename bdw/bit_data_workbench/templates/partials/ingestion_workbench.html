@@ -1,0 +1,30 @@
+<article class="workspace-card ingestion-workbench-page" data-ingestion-workbench-page>
+  <header class="workspace-header ingestion-workbench-page-header">
+    <div class="workspace-title-block ingestion-workbench-page-copy">
+      <h2>Ingestion Workbench</h2>
+      <p class="workspace-summary">
+        Launch server-side Python generator modules and follow their progress while data is written into PostgreSQL OLTP, PostgreSQL OLAP, or S3.
+      </p>
+    </div>
+  </header>
+
+  <section class="ingestion-workbench-section">
+    <div class="ingestion-workbench-section-header">
+      <h3>Available Generators</h3>
+      <p>Modules are discovered from the <code>data_generator</code> package on the server.</p>
+    </div>
+    <div class="ingestion-generator-list" data-ingestion-generator-list>
+      <p class="ingestion-empty">Loading data generators...</p>
+    </div>
+  </section>
+
+  <section class="ingestion-workbench-section">
+    <div class="ingestion-workbench-section-header">
+      <h3>Generation Jobs</h3>
+      <p>Progress comes from server-side jobs, so it survives page refreshes while the server is running.</p>
+    </div>
+    <div class="ingestion-job-list" data-ingestion-job-list>
+      <p class="ingestion-empty">No data generation jobs yet.</p>
+    </div>
+  </section>
+</article>

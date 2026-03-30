@@ -17,11 +17,16 @@ spec:
     spec:
       containers:
         - name: bdw
-          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.1.5
+          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.0
           imagePullPolicy: Always
           ports:
             - name: http
               containerPort: 8000
+          envFrom:
+            - configMapRef:
+                name: tib-daail-evo1-poc-query-engine-config
+            - secretRef:
+                name: tib-daail-evo1-poc-query-engine-secret
           env:
             - name: POD_NAME
               valueFrom:
@@ -39,6 +44,9 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
           resources:
             requests:
               cpu: 100m
@@ -67,3 +75,6 @@ spec:
             periodSeconds: 20
             timeoutSeconds: 3
             failureThreshold: 3
+      volumes:
+        - name: workspace
+          emptyDir: {}
