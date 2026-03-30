@@ -7,6 +7,11 @@ metadata:
     app.kubernetes.io/name: evo1-bdw
 spec:
   replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: evo1-bdw
@@ -17,7 +22,7 @@ spec:
     spec:
       containers:
         - name: bdw
-          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.0
+          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.1
           imagePullPolicy: Always
           ports:
             - name: http
@@ -49,11 +54,11 @@ spec:
               mountPath: /workspace
           resources:
             requests:
-              cpu: 100m
-              memory: 128Mi
+              cpu: "4"
+              memory: 4Gi
             limits:
-              cpu: "1"
-              memory: 512Mi
+              cpu: "8"
+              memory: 12Gi
           startupProbe:
             httpGet:
               path: /info
