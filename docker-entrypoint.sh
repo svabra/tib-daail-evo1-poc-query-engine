@@ -5,10 +5,11 @@ run_ui() {
     local public_port="${DUCKDB_UI_PORT:-4213}"
     local bind_address="${DUCKDB_UI_BIND_ADDRESS:-0.0.0.0}"
     local proxy_target=""
+    local database_path="${DUCKDB_DATABASE:-/workspace/workspace.duckdb}"
 
     export HOME="${HOME:-/tmp}"
 
-    mkdir -p /workspace
+    mkdir -p "$(dirname "${database_path}")"
     mkdir -p "${HOME}/.duckdb/extension_data"
 
     python /usr/local/bin/start_duckdb_ui.py &
