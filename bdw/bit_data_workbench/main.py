@@ -18,6 +18,8 @@ BASE_DIR = Path(__file__).resolve().parent
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = Settings.from_env()
+    for line in Settings.startup_environment_lines():
+        print(line, flush=True)
     workbench = WorkbenchService(settings)
     workbench.start()
     app.state.workbench = workbench
@@ -27,7 +29,7 @@ async def lifespan(app: FastAPI):
         workbench.stop()
 
 
-app = FastAPI(title="DAAIFL Query Workbench", lifespan=lifespan)
+app = FastAPI(title="DAAIFL Workbench", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.mount("/node", StaticFiles(directory=BASE_DIR / "static" / "vendor" / "node"), name="node")
 app.include_router(api_router)

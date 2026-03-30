@@ -59,6 +59,151 @@ def source_object_fields(
     return JSONResponse({"fields": [field.payload for field in fields]})
 
 
+@router.get("/api/data-source-events")
+def data_source_events_state(service: WorkbenchService = Depends(get_workbench_service)) -> JSONResponse:
+    return JSONResponse(jsonable_encoder(service.data_source_events_state()))
+
+
+@router.get("/api/data-generators")
+def data_generators(service: WorkbenchService = Depends(get_workbench_service)) -> JSONResponse:
+    return JSONResponse({"generators": jsonable_encoder(service.data_generators())})
+
+
+@router.get("/api/data-generation-jobs")
+def data_generation_jobs_state(service: WorkbenchService = Depends(get_workbench_service)) -> JSONResponse:
+    return JSONResponse(jsonable_encoder(service.data_generation_jobs_state()))
+
+
+@router.post("/api/data-generation-jobs")
+def start_data_generation_job(
+    generator_id: str = Form(""),
+    size_gb: float = Form(1.0),
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        snapshot = service.start_data_generation_job(
+            generator_id=generator_id,
+            size_gb=size_gb,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(snapshot))
+
+
+@router.post("/api/data-generation-jobs/{job_id}/cancel")
+def cancel_data_generation_job(
+    job_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        snapshot = service.cancel_data_generation_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(snapshot))
+
+
+@router.post("/api/data-generation-jobs/{job_id}/cleanup")
+def cleanup_data_generation_job(
+    job_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        snapshot = service.cleanup_data_generation_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(snapshot))
+
+
+@router.post("/api/ingestion-cleanup/{target_id}")
+def cleanup_ingestion_target(
+    target_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        payload = service.cleanup_ingestion_target(target_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(payload))
+
+
+@router.get("/api/data-generation-jobs/stream")
+async def stream_data_generation_jobs(
+    request: Request,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> StreamingResponse:
+    async def event_stream():
+        last_version: int | None = None
+        while True:
+            if await request.is_disconnected():
+                break
+
+            snapshot = await asyncio.to_thread(
+                service.wait_for_data_generation_jobs_state,
+                last_version,
+                15.0,
+            )
+            version = int(snapshot.get("version", 0))
+            if last_version is None or version != last_version:
+                last_version = version
+                yield f"event: jobs\ndata: {json.dumps(jsonable_encoder(snapshot))}\n\n"
+            else:
+                yield "event: ping\ndata: {}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.get("/api/data-source-events/stream")
+async def stream_data_source_events(
+    request: Request,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> StreamingResponse:
+    async def event_stream():
+        last_version: int | None = None
+        while True:
+            if await request.is_disconnected():
+                break
+
+            snapshot = await asyncio.to_thread(
+                service.wait_for_data_source_events_state,
+                last_version,
+                15.0,
+            )
+            version = int(snapshot.get("version", 0))
+            if last_version is None or version != last_version:
+                last_version = version
+                yield f"event: sources\ndata: {json.dumps(jsonable_encoder(snapshot))}\n\n"
+            else:
+                yield "event: ping\ndata: {}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.get("/api/query-jobs")
 def query_jobs_state(service: WorkbenchService = Depends(get_workbench_service)) -> JSONResponse:
     return JSONResponse(jsonable_encoder(service.query_jobs_state()))

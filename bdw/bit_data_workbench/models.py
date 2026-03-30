@@ -28,6 +28,7 @@ class SourceObject:
 @dataclass(slots=True)
 class SourceSchema:
     name: str
+    label: str | None = None
     objects: list[SourceObject] = field(default_factory=list)
 
 
@@ -35,6 +36,38 @@ class SourceSchema:
 class SourceCatalog:
     name: str
     schemas: list[SourceSchema] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class DataSourceDiscoveryEventDefinition:
+    event_id: str
+    source_type: str
+    source_id: str
+    source_label: str
+    detected_at: str
+    message: str
+    added_relations: list[str] = field(default_factory=list)
+    removed_relations: list[str] = field(default_factory=list)
+    updated_relations: list[str] = field(default_factory=list)
+
+    @property
+    def total_changes(self) -> int:
+        return len(self.added_relations) + len(self.removed_relations) + len(self.updated_relations)
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {
+            "eventId": self.event_id,
+            "sourceType": self.source_type,
+            "sourceId": self.source_id,
+            "sourceLabel": self.source_label,
+            "detectedAt": self.detected_at,
+            "message": self.message,
+            "addedRelations": list(self.added_relations),
+            "removedRelations": list(self.removed_relations),
+            "updatedRelations": list(self.updated_relations),
+            "totalChanges": self.total_changes,
+        }
 
 
 @dataclass(slots=True)
@@ -254,4 +287,111 @@ class QueryJobDefinition:
             "sourceTypes": list(self.source_types),
             "backendName": self.backend_name,
             "canCancel": self.can_cancel,
+        }
+
+
+@dataclass(slots=True)
+class DataGeneratorDefinition:
+    generator_id: str
+    title: str
+    description: str
+    target_kind: str
+    module_name: str
+    default_size_gb: float = 1.0
+    min_size_gb: float = 0.1
+    max_size_gb: float = 1024.0
+    approximate_row_bytes: int = 256
+    default_target_name: str = ""
+    supports_cancel: bool = True
+    supports_cleanup: bool = True
+    tags: list[str] = field(default_factory=list)
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {
+            "generatorId": self.generator_id,
+            "title": self.title,
+            "description": self.description,
+            "targetKind": self.target_kind,
+            "moduleName": self.module_name,
+            "defaultSizeGb": self.default_size_gb,
+            "minSizeGb": self.min_size_gb,
+            "maxSizeGb": self.max_size_gb,
+            "approximateRowBytes": self.approximate_row_bytes,
+            "defaultTargetName": self.default_target_name,
+            "supportsCancel": self.supports_cancel,
+            "supportsCleanup": self.supports_cleanup,
+            "tags": list(self.tags),
+        }
+
+
+@dataclass(slots=True)
+class DataGenerationJobDefinition:
+    job_id: str
+    generator_id: str
+    title: str
+    description: str
+    target_kind: str
+    requested_size_gb: float
+    status: str
+    started_at: str
+    updated_at: str
+    completed_at: str | None = None
+    duration_ms: float = 0.0
+    progress: float | None = None
+    progress_label: str = "Queued"
+    message: str | None = None
+    error: str | None = None
+    target_name: str = ""
+    target_relation: str = ""
+    target_path: str = ""
+    generated_rows: int = 0
+    generated_size_gb: float = 0.0
+    backend_name: str = "Python module"
+    can_cancel: bool = False
+    can_cleanup: bool = False
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {
+            "jobId": self.job_id,
+            "generatorId": self.generator_id,
+            "title": self.title,
+            "description": self.description,
+            "targetKind": self.target_kind,
+            "requestedSizeGb": self.requested_size_gb,
+            "status": self.status,
+            "startedAt": self.started_at,
+            "updatedAt": self.updated_at,
+            "completedAt": self.completed_at,
+            "durationMs": self.duration_ms,
+            "progress": self.progress,
+            "progressLabel": self.progress_label,
+            "message": self.message,
+            "error": self.error,
+            "targetName": self.target_name,
+            "targetRelation": self.target_relation,
+            "targetPath": self.target_path,
+            "generatedRows": self.generated_rows,
+            "generatedSizeGb": self.generated_size_gb,
+            "backendName": self.backend_name,
+            "canCancel": self.can_cancel,
+            "canCleanup": self.can_cleanup,
+        }
+
+
+@dataclass(slots=True)
+class IngestionCleanupTargetDefinition:
+    target_id: str
+    title: str
+    description: str
+    confirm_copy: str
+
+    @property
+    def payload(self) -> dict[str, str]:
+        return {
+            "targetId": self.target_id,
+            "title": self.title,
+            "description": self.description,
+            "confirmCopy": self.confirm_copy,
         }

@@ -52,6 +52,18 @@
       </form>
     </dialog>
 
+    <dialog class="modal-dialog" data-message-dialog>
+      <form method="dialog" class="modal-card" data-message-form>
+        <h2 class="modal-title" data-message-title>Notice</h2>
+        <p class="modal-copy" data-message-copy>Done.</p>
+        <menu class="modal-actions">
+          <button class="modal-button" type="submit" value="confirm" data-message-submit>
+            OK
+          </button>
+        </menu>
+      </form>
+    </dialog>
+
     <script id="sql-schema" type="application/json">{{ completion_schema_json | safe }}</script>
     <script src="{{ url_for('static', path='vendor/htmx.min.js') }}"></script>
     <script type="module" src="{{ url_for('static', path='js/app.js') }}"></script>

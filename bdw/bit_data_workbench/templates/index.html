@@ -7,11 +7,18 @@
     <main class="workspace-shell">
       <header class="topbar">
         <div class="brand">
-          <img
-            class="brand-mark"
-            src="{{ request.url_for('static', path='img/swiss-confederation-logo.png') }}"
-            alt="Schweizerische Eidgenossenschaft"
+          <a
+            href="/"
+            class="brand-home-link"
+            aria-label="Go to the welcome page"
+            title="Welcome page"
           >
+            <img
+              class="brand-mark"
+              src="{{ request.url_for('static', path='img/swiss-confederation-logo.png') }}"
+              alt="Schweizerische Eidgenossenschaft"
+            >
+          </a>
           <div class="brand-copy">
             <h1>{{ title }}</h1>
           </div>
@@ -19,8 +26,21 @@
         <div class="topbar-actions">
           <button
             type="button"
-            class="topbar-action-button topbar-action-button-muted topbar-action-button-icon-only"
-            aria-disabled="true"
+            class="topbar-action-button topbar-action-button-icon-only"
+            data-open-query-workbench
+            aria-label="Query Workbench"
+            title="Query Workbench"
+          >
+            <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="2.1" y="2.4" width="11.8" height="11.2" rx="1.2"></rect>
+              <path d="M2.8 6.2h10.4"></path>
+              <path d="M5.4 9.1 7 10.7 10.6 7.1"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="topbar-action-button topbar-action-button-icon-only"
+            data-open-ingestion-workbench
             aria-label="Ingestion Workbench"
             title="Ingestion Workbench"
           >
@@ -47,8 +67,8 @@
           <details class="topbar-notification-menu" data-query-notifications>
             <summary
               class="topbar-action-button topbar-action-button-icon-only"
-              aria-label="Query notifications"
-              title="Query notifications"
+              aria-label="Notifications"
+              title="Notifications"
             >
               <span class="topbar-notification-badge" data-query-notification-count hidden>0</span>
               <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
@@ -57,8 +77,14 @@
               </svg>
             </summary>
             <div class="topbar-notification-panel">
+              <div class="topbar-notification-header">
+                <strong>Messages</strong>
+                <button type="button" class="topbar-notification-clear" data-clear-notifications hidden>
+                  Clear
+                </button>
+              </div>
               <div class="topbar-notification-list" data-query-notification-list>
-                <p class="topbar-notification-empty">No background query activity yet.</p>
+                <p class="topbar-notification-empty">No notifications yet.</p>
               </div>
             </div>
           </details>
@@ -69,7 +95,7 @@
       </header>
 
       <section id="workspace-panel">
-        {% include "partials/workspace.html" %}
+        {% include workspace_partial_template %}
       </section>
     </main>
   </div>

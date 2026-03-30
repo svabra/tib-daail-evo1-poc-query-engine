@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 import time
 from threading import RLock
@@ -8,8 +9,9 @@ from urllib.parse import urlparse
 import duckdb
 
 from ..config import Settings
-from .query_jobs import QueryJobManager
+from ..data_generator.registry import DataGeneratorRegistry
 from ..models import (
+    IngestionCleanupTargetDefinition,
     NotebookDefinition,
     QueryResult,
     SourceCatalog,
@@ -17,10 +19,15 @@ from ..models import (
     SourceObject,
     SourceSchema,
 )
+from .s3_storage import delete_s3_bucket, list_s3_buckets, s3_bucket_schema_name
+from .data_generation_jobs import DataGenerationJobManager
+from .query_jobs import QueryJobManager
 from .notebooks import build_completion_schema, build_notebook_tree, build_notebooks, build_source_options
+from .source_discovery import DataSourceDiscoveryManager, S3DataSourceDiscoverer
 
 
 SUPPORTED_S3_VIEW_FORMATS = {"parquet", "csv", "json"}
+logger = logging.getLogger(__name__)
 
 
 def sql_identifier(value: str) -> str:
@@ -108,9 +115,22 @@ class WorkbenchService:
         self._source_options: list[dict[str, str]] = []
         self._query_jobs = QueryJobManager(
             max_result_rows=settings.max_result_rows,
-            connection_factory=self._create_connection,
+            connection_factory=self._create_worker_connection,
+            postgres_connection_factory=self._create_postgres_native_connection,
             notebook_title_resolver=self._resolve_notebook_title,
             metadata_refresher=self.refresh_metadata_state,
+        )
+        self._data_generators = DataGeneratorRegistry()
+        self._data_generation_jobs = DataGenerationJobManager(
+            settings=settings,
+            registry=self._data_generators,
+            connection_factory=self._create_worker_connection,
+            metadata_refresher=self.refresh_metadata_state,
+        )
+        self._data_source_discovery = DataSourceDiscoveryManager(
+            connection_factory=self._create_worker_connection,
+            metadata_refresher=self.refresh_metadata_state,
+            discoverers=[S3DataSourceDiscoverer(settings)],
         )
 
     def start(self) -> None:
@@ -121,8 +141,10 @@ class WorkbenchService:
         with self._lock:
             self._conn = conn
             self._refresh_state()
+        self._data_source_discovery.start()
 
     def stop(self) -> None:
+        self._data_source_discovery.stop()
         with self._lock:
             if self._conn is None:
                 return
@@ -162,12 +184,57 @@ class WorkbenchService:
     def query_jobs_state(self) -> dict[str, object]:
         return self._query_jobs.state_payload()
 
+    def data_generators(self) -> list[dict[str, object]]:
+        return self._data_generation_jobs.generators_payload()
+
+    def ingestion_cleanup_targets(self) -> list[dict[str, str]]:
+        return [
+            IngestionCleanupTargetDefinition(
+                target_id="pg_oltp_public",
+                title="Clean PostgreSQL OLTP",
+                description="Drop all tables and views in pg_oltp.public.",
+                confirm_copy="Drop every table and view in pg_oltp.public? This cannot be undone.",
+            ).payload,
+            IngestionCleanupTargetDefinition(
+                target_id="pg_olap_public",
+                title="Clean PostgreSQL OLAP",
+                description="Drop all tables and views in pg_olap.public.",
+                confirm_copy="Drop every table and view in pg_olap.public? This cannot be undone.",
+            ).payload,
+            IngestionCleanupTargetDefinition(
+                target_id="s3_workspace",
+                title="Clean S3 Workspace",
+                description="Delete all objects in the configured S3 bucket and remove workspace s3 views.",
+                confirm_copy="Delete all objects from the configured S3 bucket and drop every view in workspace.s3? This cannot be undone.",
+            ).payload,
+        ]
+
+    def data_generation_jobs_state(self) -> dict[str, object]:
+        return self._data_generation_jobs.state_payload()
+
+    def data_source_events_state(self) -> dict[str, object]:
+        return self._data_source_discovery.state_payload()
+
     def wait_for_query_jobs_state(
         self,
         last_version: int | None,
         timeout: float = 15.0,
     ) -> dict[str, object]:
         return self._query_jobs.wait_for_state(last_version, timeout=timeout)
+
+    def wait_for_data_generation_jobs_state(
+        self,
+        last_version: int | None,
+        timeout: float = 15.0,
+    ) -> dict[str, object]:
+        return self._data_generation_jobs.wait_for_state(last_version, timeout=timeout)
+
+    def wait_for_data_source_events_state(
+        self,
+        last_version: int | None,
+        timeout: float = 15.0,
+    ) -> dict[str, object]:
+        return self._data_source_discovery.wait_for_state(last_version, timeout=timeout)
 
     def start_query_job(
         self,
@@ -190,6 +257,58 @@ class WorkbenchService:
     def cancel_query_job(self, job_id: str) -> dict[str, object]:
         snapshot = self._query_jobs.cancel_job(job_id)
         return snapshot.payload
+
+    def start_data_generation_job(
+        self,
+        *,
+        generator_id: str,
+        size_gb: float,
+    ) -> dict[str, object]:
+        snapshot = self._data_generation_jobs.start_job(
+            generator_id=generator_id,
+            size_gb=size_gb,
+        )
+        return snapshot.payload
+
+    def cancel_data_generation_job(self, job_id: str) -> dict[str, object]:
+        snapshot = self._data_generation_jobs.cancel_job(job_id)
+        return snapshot.payload
+
+    def cleanup_data_generation_job(self, job_id: str) -> dict[str, object]:
+        snapshot = self._data_generation_jobs.cleanup_job(job_id)
+        self.refresh_metadata_state()
+        return snapshot.payload
+
+    def cleanup_ingestion_target(self, target_id: str) -> dict[str, str]:
+        normalized_target_id = target_id.strip()
+        if normalized_target_id == "pg_oltp_public":
+            removed_count = self._drop_catalog_schema_objects("pg_oltp", "public")
+            self.refresh_metadata_state()
+            return {
+                "targetId": normalized_target_id,
+                "message": f"Dropped {removed_count} table(s)/view(s) from pg_oltp.public.",
+            }
+        if normalized_target_id == "pg_olap_public":
+            removed_count = self._drop_catalog_schema_objects("pg_olap", "public")
+            self.refresh_metadata_state()
+            return {
+                "targetId": normalized_target_id,
+                "message": f"Dropped {removed_count} table(s)/view(s) from pg_olap.public.",
+            }
+        if normalized_target_id == "s3_workspace":
+            if not self.settings.s3_bucket:
+                raise ValueError("S3 cleanup requires a configured S3 bucket.")
+            deleted_object_count = delete_s3_bucket(self.settings, self.settings.s3_bucket)
+            dropped_view_count = self._drop_workspace_schema_objects(self.settings.s3_startup_view_schema)
+            self.refresh_metadata_state()
+            return {
+                "targetId": normalized_target_id,
+                "message": (
+                    f"Deleted {deleted_object_count} object(s) from s3://{self.settings.s3_bucket} "
+                    f"and dropped {dropped_view_count} workspace view(s) in schema {self.settings.s3_startup_view_schema}."
+                ),
+            }
+        raise KeyError(f"Unknown ingestion cleanup target: {target_id}")
 
     def source_object_fields(self, relation: str) -> list[SourceField]:
         normalized_relation = relation.strip()
@@ -296,6 +415,52 @@ class WorkbenchService:
             raise RuntimeError("The workbench service has not been initialized.")
         return self._conn
 
+    def _create_worker_connection(self) -> duckdb.DuckDBPyConnection:
+        with self._lock:
+            if self._conn is not None:
+                return self._conn.cursor()
+        return self._create_connection()
+
+    def _create_postgres_native_connection(self, target: str):
+        try:
+            import psycopg
+        except ImportError as exc:
+            raise RuntimeError(
+                "psycopg is required for native PostgreSQL query execution."
+            ) from exc
+
+        normalized_target = str(target).strip().lower()
+        if normalized_target == "oltp":
+            database = self.settings.pg_oltp_database
+        elif normalized_target == "olap":
+            database = self.settings.pg_olap_database
+        else:
+            raise ValueError(f"Unsupported PostgreSQL native target: {target}")
+
+        if not all(
+            (
+                self.settings.pg_host,
+                self.settings.pg_port,
+                self.settings.pg_user,
+                self.settings.pg_password,
+                database,
+            )
+        ):
+            raise RuntimeError(
+                "PostgreSQL native execution requires PG_HOST, PG_PORT, PG_USER, PG_PASSWORD, "
+                "and the target database to be configured."
+            )
+
+        return psycopg.connect(
+            host=self.settings.pg_host,
+            port=int(self.settings.pg_port),
+            user=self.settings.pg_user,
+            password=self.settings.pg_password,
+            dbname=database,
+            autocommit=True,
+            connect_timeout=10,
+        )
+
     def _resolve_notebook_title(self, notebook_id: str) -> str | None:
         with self._lock:
             for notebook in self._notebooks:
@@ -367,7 +532,6 @@ class WorkbenchService:
             f"REGION {sql_literal(self.settings.s3_region)}",
             f"ENDPOINT {sql_literal(endpoint)}",
             f"USE_SSL {'true' if use_ssl else 'false'}",
-            f"SCOPE {sql_literal(f's3://{self.settings.s3_bucket}')}",
         ]
         if self.settings.s3_url_style:
             options.append(f"URL_STYLE {sql_literal(self.settings.s3_url_style)}")
@@ -375,9 +539,16 @@ class WorkbenchService:
             options.append(f"SESSION_TOKEN {sql_literal(self.settings.s3_session_token)}")
 
         conn.execute(f"CREATE OR REPLACE SECRET bdw_s3 ({', '.join(options)})")
-        conn.execute(f"CREATE SCHEMA IF NOT EXISTS {sql_identifier(self.settings.s3_startup_view_schema)}")
-
         for view_name, data_format, path in parse_s3_startup_views(self.settings.s3_startup_views):
+            view_bucket = self.settings.s3_bucket
+            try:
+                parsed = urlparse(path)
+                if parsed.scheme == "s3" and parsed.netloc:
+                    view_bucket = parsed.netloc
+            except Exception:
+                view_bucket = self.settings.s3_bucket
+            schema_name = s3_bucket_schema_name(view_bucket or self.settings.s3_bucket or "s3")
+            conn.execute(f"CREATE SCHEMA IF NOT EXISTS {sql_identifier(schema_name)}")
             if data_format == "parquet":
                 query = f"SELECT * FROM read_parquet({sql_literal(path)})"
             elif data_format == "csv":
@@ -387,11 +558,19 @@ class WorkbenchService:
             else:
                 raise ValueError(f"Unsupported S3 startup view format: {data_format}")
 
-            conn.execute(
-                "CREATE OR REPLACE VIEW "
-                f"{qualified_name(self.settings.s3_startup_view_schema, view_name)} "
-                f"AS {query}"
-            )
+            try:
+                conn.execute(
+                    "CREATE OR REPLACE VIEW "
+                    f"{qualified_name(schema_name, view_name)} "
+                    f"AS {query}"
+                )
+            except duckdb.Error as exc:
+                logger.warning(
+                    "Skipping S3 startup view '%s' for path '%s': %s",
+                    view_name,
+                    path,
+                    exc,
+                )
 
     def _bootstrap_postgres(self, conn: duckdb.DuckDBPyConnection) -> None:
         if not all(
@@ -417,7 +596,7 @@ class WorkbenchService:
                 conn,
                 alias="pg_oltp",
                 secret_name="bdw_pg_oltp",
-                read_only=True,
+                read_only=False,
             )
 
         if self.settings.pg_olap_database:
@@ -492,6 +671,23 @@ class WorkbenchService:
             "pg_oltp": {},
             "pg_olap": {},
         }
+        workspace_schema_labels: dict[str, str] = {}
+
+        if self.settings.s3_endpoint and self.settings.s3_access_key_id and self.settings.s3_secret_access_key:
+            try:
+                bucket_names = list_s3_buckets(self.settings)
+            except Exception as exc:
+                logger.warning("Failed to list S3 buckets during metadata refresh: %s", exc)
+                bucket_names = [self.settings.s3_bucket] if self.settings.s3_bucket else []
+
+            for bucket_name in bucket_names:
+                schema_name = s3_bucket_schema_name(bucket_name)
+                grouped["workspace"].setdefault(schema_name, [])
+                workspace_schema_labels[schema_name] = bucket_name
+        if self.settings.pg_oltp_database:
+            grouped["pg_oltp"].setdefault("public", [])
+        if self.settings.pg_olap_database:
+            grouped["pg_olap"].setdefault("public", [])
 
         for catalog, schema, table_name, table_type in object_rows:
             catalog_name = catalog if catalog in {"pg_oltp", "pg_olap"} else "workspace"
@@ -510,8 +706,21 @@ class WorkbenchService:
         catalogs: list[SourceCatalog] = []
         for catalog_name in ("workspace", "pg_oltp", "pg_olap"):
             schemas = [
-                SourceSchema(name=schema_name, objects=objects)
-                for schema_name, objects in grouped.get(catalog_name, {}).items()
+                SourceSchema(
+                    name=schema_name,
+                    label=workspace_schema_labels.get(schema_name, schema_name)
+                    if catalog_name == "workspace"
+                    else None,
+                    objects=objects,
+                )
+                for schema_name, objects in sorted(
+                    grouped.get(catalog_name, {}).items(),
+                    key=lambda item: (
+                        workspace_schema_labels.get(item[0], item[0]).lower()
+                        if catalog_name == "workspace"
+                        else item[0].lower()
+                    ),
+                )
             ]
             if schemas:
                 catalogs.append(SourceCatalog(name=catalog_name, schemas=schemas))
@@ -520,3 +729,43 @@ class WorkbenchService:
         self._notebooks = build_notebooks(catalogs)
         self._completion_schema = build_completion_schema(catalogs)
         self._source_options = build_source_options(catalogs)
+
+    def _drop_catalog_schema_objects(self, catalog_name: str, schema_name: str) -> int:
+        with self._lock:
+            conn = self._require_connection()
+            rows = conn.execute(
+                """
+                SELECT table_name, table_type
+                FROM information_schema.tables
+                WHERE table_catalog = ? AND table_schema = ?
+                ORDER BY CASE WHEN table_type = 'VIEW' THEN 0 ELSE 1 END, table_name
+                """,
+                [catalog_name, schema_name],
+            ).fetchall()
+            for table_name, table_type in rows:
+                relation = qualified_name(catalog_name, schema_name, table_name)
+                if str(table_type).upper() == "VIEW":
+                    conn.execute(f"DROP VIEW IF EXISTS {relation} CASCADE")
+                else:
+                    conn.execute(f"DROP TABLE IF EXISTS {relation} CASCADE")
+            return len(rows)
+
+    def _drop_workspace_schema_objects(self, schema_name: str) -> int:
+        with self._lock:
+            conn = self._require_connection()
+            rows = conn.execute(
+                """
+                SELECT table_name, table_type
+                FROM information_schema.tables
+                WHERE table_catalog NOT IN ('pg_oltp', 'pg_olap') AND table_schema = ?
+                ORDER BY CASE WHEN table_type = 'VIEW' THEN 0 ELSE 1 END, table_name
+                """,
+                [schema_name],
+            ).fetchall()
+            for table_name, table_type in rows:
+                relation = qualified_name(schema_name, table_name)
+                if str(table_type).upper() == "VIEW":
+                    conn.execute(f"DROP VIEW IF EXISTS {relation} CASCADE")
+                else:
+                    conn.execute(f"DROP TABLE IF EXISTS {relation} CASCADE")
+            return len(rows)

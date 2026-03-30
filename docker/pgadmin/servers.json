@@ -1,0 +1,24 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "PostgreSQL OLTP",
+      "Group": "DAAIFL",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "evo1_oltp",
+      "Username": "evo1",
+      "PassFile": "/pgpass",
+      "SSLMode": "prefer"
+    },
+    "2": {
+      "Name": "PostgreSQL OLAP",
+      "Group": "DAAIFL",
+      "Host": "postgres",
+      "Port": 5432,
+      "MaintenanceDB": "evo1_olap",
+      "Username": "evo1",
+      "PassFile": "/pgpass",
+      "SSLMode": "prefer"
+    }
+  }
+}

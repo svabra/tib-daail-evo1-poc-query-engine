@@ -50,7 +50,7 @@ python -m venv .venv
 Start only the local integration dependencies:
 
 ```bash
-docker compose up -d minio minio-init minio-seed postgres
+docker compose up -d minio minio-init minio-seed postgres pgadmin
 ```
 
 Start the FastAPI application locally with auto-reload:
@@ -84,6 +84,7 @@ Local services:
 - `http://localhost:8000` -> DAAIFL Data Workbench local dev server
 - `http://localhost:9000` -> MinIO S3 endpoint
 - `http://localhost:9001` -> MinIO console
+- `http://localhost:5050` -> pgAdmin
 - `localhost:5432` -> PostgreSQL
 
 Default local credentials:
@@ -95,6 +96,8 @@ PostgreSQL user: evo1
 PostgreSQL password: evo1
 PostgreSQL OLTP database: evo1_oltp
 PostgreSQL OLAP database: evo1_olap
+pgAdmin email: admin@daail.io
+pgAdmin password: admin
 S3 bucket: vat-smoke-test
 ```
 

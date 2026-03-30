@@ -7,6 +7,45 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 
+WORKBENCH_ENVIRONMENT_VARIABLES = (
+    "IMAGE_VERSION",
+    "PORT",
+    "DUCKDB_DATABASE",
+    "DUCKDB_EXTENSION_DIRECTORY",
+    "MAX_RESULT_ROWS",
+    "S3_ENDPOINT",
+    "S3_REGION",
+    "S3_BUCKET",
+    "S3_ACCESS_KEY_ID",
+    "S3_SECRET_ACCESS_KEY",
+    "S3_URL_STYLE",
+    "S3_USE_SSL",
+    "S3_SESSION_TOKEN",
+    "S3_STARTUP_VIEW_SCHEMA",
+    "S3_STARTUP_VIEWS",
+    "PG_HOST",
+    "PG_PORT",
+    "PG_USER",
+    "PGUSER",
+    "PG_PASSWORD",
+    "PGPASSWORD",
+    "PG_OLTP_DATABASE",
+    "PGDATABASE",
+    "PG_OLAP_DATABASE",
+    "POD_NAME",
+    "POD_NAMESPACE",
+    "POD_IP",
+    "NODE_NAME",
+)
+
+REDACTED_ENVIRONMENT_VARIABLES = {
+    "PG_PASSWORD",
+    "PGPASSWORD",
+    "S3_SECRET_ACCESS_KEY",
+    "S3_SESSION_TOKEN",
+}
+
+
 def env(name: str, default: str = "") -> str:
     value = os.getenv(name, default)
     return value.strip() or default
@@ -32,6 +71,31 @@ def env_bool(name: str, default: bool) -> bool:
         return False
 
     raise ValueError(f"Unsupported boolean value for {name}: {raw}")
+
+
+def format_environment_value(name: str) -> str:
+    value = os.getenv(name)
+    if value is None:
+        return "null"
+    if name in REDACTED_ENVIRONMENT_VARIABLES:
+        return "[REDACTED]"
+    if value == "":
+        return '""'
+    return value
+
+
+def default_image_version() -> str:
+    value = env_optional("IMAGE_VERSION")
+    if value is not None:
+        return value
+
+    version_file = Path(__file__).resolve().parents[2] / "VERSION"
+    try:
+        raw_value = version_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        raw_value = ""
+
+    return raw_value or "dev"
 
 
 @dataclass(slots=True)
@@ -68,8 +132,8 @@ class Settings:
     def from_env(cls) -> "Settings":
         return cls(
             service_name="bit-data-workbench",
-            ui_title="DAAIFL Query Workbench",
-            image_version=env("IMAGE_VERSION", "unknown"),
+            ui_title="DAAIFL Workbench",
+            image_version=default_image_version(),
             port=int(env("PORT", "8000")),
             duckdb_database=Path(env("DUCKDB_DATABASE", "/workspace/workspace.duckdb")),
             duckdb_extension_directory=Path(
@@ -110,3 +174,10 @@ class Settings:
             "duckdb_database": self.duckdb_database.as_posix(),
             "timestamp_utc": datetime.now(UTC).isoformat(),
         }
+
+    @staticmethod
+    def startup_environment_lines() -> list[str]:
+        return [
+            f"{name}={format_environment_value(name)}"
+            for name in WORKBENCH_ENVIRONMENT_VARIABLES
+        ]

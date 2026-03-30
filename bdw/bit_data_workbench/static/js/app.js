@@ -16,16 +16,35 @@ let queryJobsSummary = { runningCount: 0, totalCount: 0 };
 let queryPerformanceState = { recent: [], stats: {} };
 let queryJobsEventSource = null;
 let queryJobsClockHandle = null;
+let queryJobsLoaded = false;
+let dataGeneratorsCatalog = [];
+let dataGenerationJobsStateVersion = null;
+let dataGenerationJobsSnapshot = [];
+let dataGenerationJobsSummary = { runningCount: 0, totalCount: 0 };
+let dataGenerationEventSource = null;
+let dataGenerationClockHandle = null;
+let dataGenerationJobsLoaded = false;
+let dataSourceEventsStateVersion = null;
+let dataSourceEventsEventSource = null;
+let pendingDataSourceSidebarRefreshHandle = null;
+let dataSourceSidebarRefreshPromise = null;
+let dataSourceSidebarRefreshQueued = false;
+const refreshedDataGenerationJobIds = new Set();
 
-const notebookTreeStorageKey = "bdw.notebookTree.v1";
+const notebookTreeStorageKey = "bdw.notebookTree.v2";
 const notebookMetadataStorageKey = "bdw.notebookMeta.v1";
+const notebookActivityStorageKey = "bdw.notebookActivity.v1";
 const lastNotebookStorageKey = "bdw.lastNotebook.v1";
 const sidebarCollapsedStorageKey = "bdw.sidebarCollapsed.v1";
+const dismissedNotificationsStorageKey = "bdw.dismissedNotifications.v2";
 const unassignedFolderName = "Unassigned";
 const localNotebookPrefix = "local-notebook-";
 const localCellPrefix = "local-cell-";
 const queryJobTerminalStatuses = new Set(["completed", "failed", "cancelled"]);
 const queryJobRunningStatuses = new Set(["queued", "running"]);
+const dataGenerationTerminalStatuses = new Set(["completed", "failed", "cancelled"]);
+const dataGenerationRunningStatuses = new Set(["queued", "running"]);
+let dismissedNotificationKeys = readDismissedNotificationKeys();
 const sqlFormatKeywordPhrases = [
   ["LEFT", "OUTER", "JOIN"],
   ["RIGHT", "OUTER", "JOIN"],
@@ -158,6 +177,69 @@ function confirmDialog() {
   return document.querySelector("[data-confirm-dialog]");
 }
 
+function messageDialog() {
+  return document.querySelector("[data-message-dialog]");
+}
+
+function appendModalDialog(markup) {
+  document.body.insertAdjacentHTML("beforeend", markup.trim());
+}
+
+function ensureConfirmDialog() {
+  let dialog = confirmDialog();
+  if (dialog) {
+    return dialog;
+  }
+
+  appendModalDialog(`
+    <dialog class="modal-dialog" data-confirm-dialog>
+      <form method="dialog" class="modal-card" data-confirm-form>
+        <h2 class="modal-title" data-confirm-title>Confirm</h2>
+        <p class="modal-copy" data-confirm-copy>Continue?</p>
+        <label class="modal-toggle-option" data-confirm-option-container hidden>
+          <input class="modal-toggle-checkbox" type="checkbox" data-confirm-option-input>
+          <span class="modal-toggle-copy" data-confirm-option-label></span>
+        </label>
+        <menu class="modal-actions">
+          <button class="modal-button modal-button-secondary" type="button" data-modal-cancel>
+            Cancel
+          </button>
+          <button class="modal-button modal-button-danger" type="submit" value="confirm" data-confirm-submit>
+            Delete
+          </button>
+        </menu>
+      </form>
+    </dialog>
+  `);
+
+  dialog = confirmDialog();
+  return dialog;
+}
+
+function ensureMessageDialog() {
+  let dialog = messageDialog();
+  if (dialog) {
+    return dialog;
+  }
+
+  appendModalDialog(`
+    <dialog class="modal-dialog" data-message-dialog>
+      <form method="dialog" class="modal-card" data-message-form>
+        <h2 class="modal-title" data-message-title>Notice</h2>
+        <p class="modal-copy" data-message-copy>Done.</p>
+        <menu class="modal-actions">
+          <button class="modal-button" type="submit" value="confirm" data-message-submit>
+            OK
+          </button>
+        </menu>
+      </form>
+    </dialog>
+  `);
+
+  dialog = messageDialog();
+  return dialog;
+}
+
 function readSchema() {
   const element = document.getElementById("sql-schema");
   if (!element) {
@@ -227,6 +309,10 @@ function queryPerformanceChart() {
   return document.querySelector("[data-query-performance-chart]");
 }
 
+function queryPerformanceDistribution() {
+  return document.querySelector("[data-query-performance-distribution]");
+}
+
 function queryNotificationMenu() {
   return document.querySelector("[data-query-notifications]");
 }
@@ -239,6 +325,38 @@ function queryNotificationCount() {
   return document.querySelector("[data-query-notification-count]");
 }
 
+function homePageRoot() {
+  return document.querySelector("[data-home-page]");
+}
+
+function homeRecentNotebooksRoot() {
+  return document.querySelector("[data-home-recent-notebooks]");
+}
+
+function homeRecentIngestionsRoot() {
+  return document.querySelector("[data-home-recent-ingestions]");
+}
+
+function notificationClearButton() {
+  return document.querySelector("[data-clear-notifications]");
+}
+
+function ingestionGeneratorList() {
+  return document.querySelector("[data-ingestion-generator-list]");
+}
+
+function ingestionJobList() {
+  return document.querySelector("[data-ingestion-job-list]");
+}
+
+function dataGenerationMonitorList() {
+  return document.querySelector("[data-generation-monitor-list]");
+}
+
+function dataGenerationMonitorCount() {
+  return document.querySelector("[data-generation-monitor-count]");
+}
+
 function sidebarToggle() {
   return document.querySelector("[data-sidebar-toggle]");
 }
@@ -248,11 +366,67 @@ function currentActiveNotebookId() {
 }
 
 function workspaceNotebookId(root = document) {
+  if (!root || typeof root.querySelector !== "function") {
+    return null;
+  }
+
   return (
     root.querySelector("input[name='notebook_id']")?.value ??
     root.querySelector("[data-notebook-meta]")?.dataset.notebookId ??
     null
   );
+}
+
+function currentSidebarMode() {
+  return document.querySelector("[data-sidebar]")?.dataset.sidebarMode || "notebook";
+}
+
+function currentWorkspaceMode() {
+  return document.querySelector("[data-ingestion-workbench-page]") ? "ingestion" : "notebook";
+}
+
+function workbenchTitle(mode = currentWorkspaceMode()) {
+  return mode === "ingestion" ? "DAAIFL Ingestion Workbench" : "DAAIFL Query Workbench";
+}
+
+function applyWorkbenchTitle(mode = currentWorkspaceMode()) {
+  const title = workbenchTitle(mode);
+  const brandTitle = document.querySelector(".brand-copy h1");
+  if (brandTitle) {
+    brandTitle.textContent = title;
+  }
+  if (typeof document !== "undefined") {
+    document.title = title;
+  }
+}
+
+function formatRelativeTimestamp(value) {
+  const timestamp = Date.parse(value || "");
+  if (!timestamp) {
+    return "Just now";
+  }
+
+  const deltaMs = Date.now() - timestamp;
+  if (deltaMs < 60_000) {
+    return "Just now";
+  }
+
+  const deltaMinutes = Math.floor(deltaMs / 60_000);
+  if (deltaMinutes < 60) {
+    return `${deltaMinutes} min ago`;
+  }
+
+  const deltaHours = Math.floor(deltaMinutes / 60);
+  if (deltaHours < 24) {
+    return `${deltaHours} h ago`;
+  }
+
+  const deltaDays = Math.floor(deltaHours / 24);
+  if (deltaDays < 7) {
+    return `${deltaDays} d ago`;
+  }
+
+  return formatVersionTimestamp(value);
 }
 
 function activateNotebookLink(notebookId) {
@@ -305,6 +479,53 @@ function writeSidebarCollapsed(collapsed) {
     window.localStorage.setItem(sidebarCollapsedStorageKey, collapsed ? "true" : "false");
   } catch (_error) {
     // Ignore persistence failures and keep the UI usable.
+  }
+}
+
+function readNotebookActivity() {
+  try {
+    const rawValue = window.localStorage.getItem(notebookActivityStorageKey);
+    if (!rawValue) {
+      return {};
+    }
+
+    const parsed = JSON.parse(rawValue);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (_error) {
+    return {};
+  }
+}
+
+function writeNotebookActivity(activity) {
+  try {
+    window.localStorage.setItem(notebookActivityStorageKey, JSON.stringify(activity));
+  } catch (_error) {
+    // Ignore persistence failures and keep the UI usable.
+  }
+}
+
+function readDismissedNotificationKeys() {
+  try {
+    const rawValue = window.localStorage.getItem(dismissedNotificationsStorageKey);
+    if (!rawValue) {
+      return new Set();
+    }
+
+    const parsed = JSON.parse(rawValue);
+    return Array.isArray(parsed) ? new Set(parsed.map((entry) => String(entry))) : new Set();
+  } catch (_error) {
+    return new Set();
+  }
+}
+
+function writeDismissedNotificationKeys() {
+  try {
+    window.localStorage.setItem(
+      dismissedNotificationsStorageKey,
+      JSON.stringify(Array.from(dismissedNotificationKeys))
+    );
+  } catch (_error) {
+    // Ignore persistence failures and keep the UI functional.
   }
 }
 
@@ -414,13 +635,7 @@ function showFolderNameDialog({ title, copy, submitLabel, initialValue = "" }) {
 }
 
 function showConfirmDialog({ title, copy, confirmLabel, option = null }) {
-  const dialog = confirmDialog();
-  if (!dialog) {
-    return Promise.resolve({
-      confirmed: window.confirm(copy),
-      optionChecked: false,
-    });
-  }
+  const dialog = ensureConfirmDialog();
 
   const titleNode = dialog.querySelector("[data-confirm-title]");
   const copyNode = dialog.querySelector("[data-confirm-copy]");
@@ -474,6 +689,34 @@ function showConfirmDialog({ title, copy, confirmLabel, option = null }) {
     applyOptionState();
     cancel?.addEventListener("click", onCancel);
     optionInput?.addEventListener("change", applyOptionState);
+    dialog.addEventListener("close", onClose, { once: true });
+    dialog.showModal();
+  });
+}
+
+function showMessageDialog({ title, copy, actionLabel = "OK" }) {
+  const dialog = ensureMessageDialog();
+  const titleNode = dialog.querySelector("[data-message-title]");
+  const copyNode = dialog.querySelector("[data-message-copy]");
+  const form = dialog.querySelector("[data-message-form]");
+  const submit = dialog.querySelector("[data-message-submit]");
+
+  titleNode.textContent = title;
+  copyNode.textContent = copy;
+  submit.textContent = actionLabel;
+
+  return new Promise((resolve) => {
+    const onSubmit = (event) => {
+      event.preventDefault();
+      closeDialog(dialog, "confirm");
+    };
+
+    const onClose = () => {
+      form.removeEventListener("submit", onSubmit);
+      resolve();
+    };
+
+    form.addEventListener("submit", onSubmit);
     dialog.addEventListener("close", onClose, { once: true });
     dialog.showModal();
   });
@@ -640,6 +883,7 @@ function sourceComputationModeTooltipText() {
   return [
     "MPP = Massive Parallel Processing. Distributed query execution across multiple workers and partitions for larger-scale data processing.",
     "VMTP = Vectorized Multi-Threaded Processing. Single-node vectorized execution across multiple CPU threads for fast local analytical queries.",
+    "PostgreSQL Native = Direct execution by the PostgreSQL planner and executor, without DuckDB in the query path.",
   ].join("\n");
 }
 
@@ -677,6 +921,26 @@ function parseVersionsPayload(value) {
   } catch (_error) {
     return [];
   }
+}
+
+function normalizeNotebookTitleValue(value, fallback = "Untitled Notebook") {
+  const title = typeof value === "string" ? value.trim() : "";
+  if (title) {
+    return title;
+  }
+
+  const fallbackTitle = typeof fallback === "string" ? fallback.trim() : "";
+  return fallbackTitle || "Untitled Notebook";
+}
+
+function normalizeNotebookSummaryValue(value, fallback = "Describe this notebook.") {
+  const summary = typeof value === "string" ? value.trim() : "";
+  if (summary) {
+    return summary;
+  }
+
+  const fallbackSummary = typeof fallback === "string" ? fallback.trim() : "";
+  return fallbackSummary || "Describe this notebook.";
 }
 
 function normalizeCellEntry(cell, fallback = {}) {
@@ -863,8 +1127,8 @@ function createInitialNotebookVersion(notebookId, metadata, createdAt = null) {
   return {
     versionId: `initial-${notebookId}`,
     createdAt: createdAt || new Date().toISOString(),
-    title: metadata.title,
-    summary: metadata.summary,
+    title: normalizeNotebookTitleValue(metadata.title),
+    summary: normalizeNotebookSummaryValue(metadata.summary),
     tags: normalizeTags(metadata.tags),
     cells: (metadata.cells ?? []).map((cell) => ({
       cellId: cell.cellId,
@@ -931,6 +1195,51 @@ function normalizeQueryJob(job) {
     rows: Array.isArray(job.rows) ? job.rows : [],
     dataSources: Array.isArray(job.dataSources) ? job.dataSources : [],
     sourceTypes: Array.isArray(job.sourceTypes) ? job.sourceTypes : [],
+  };
+}
+
+function normalizeDataGenerator(generator) {
+  if (!generator || typeof generator !== "object") {
+    return null;
+  }
+
+  const title = String(generator.title ?? "").trim();
+  const generatorId = String(generator.generatorId ?? "").trim();
+  if (!title || !generatorId) {
+    return null;
+  }
+
+  return {
+    ...generator,
+    generatorId,
+    title,
+    description: String(generator.description ?? "").trim(),
+    targetKind: String(generator.targetKind ?? "").trim() || "unknown",
+    moduleName: String(generator.moduleName ?? "").trim(),
+    defaultTargetName: String(generator.defaultTargetName ?? "").trim(),
+    defaultSizeGb: Number.isFinite(Number(generator.defaultSizeGb)) ? Number(generator.defaultSizeGb) : 1,
+    minSizeGb: Number.isFinite(Number(generator.minSizeGb)) ? Number(generator.minSizeGb) : 0.01,
+    maxSizeGb: Number.isFinite(Number(generator.maxSizeGb)) ? Number(generator.maxSizeGb) : 512,
+    supportsCleanup: Boolean(generator.supportsCleanup),
+    tags: Array.isArray(generator.tags) ? generator.tags : [],
+  };
+}
+
+function normalizeDataGenerationJob(job) {
+  if (!job || typeof job !== "object") {
+    return null;
+  }
+
+  return {
+    ...job,
+    generatorId: String(job.generatorId ?? "").trim(),
+    title: String(job.title ?? "").trim() || "Data generation",
+    description: String(job.description ?? "").trim(),
+    targetKind: String(job.targetKind ?? "").trim() || "unknown",
+    targetName: String(job.targetName ?? "").trim(),
+    targetRelation: String(job.targetRelation ?? "").trim(),
+    targetPath: String(job.targetPath ?? "").trim(),
+    canCleanup: Boolean(job.canCleanup),
   };
 }
 
@@ -1042,6 +1351,104 @@ function formatQueryTimestamp(value) {
     return "";
   }
   return parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function dataGenerationJobIsRunning(job) {
+  return Boolean(job && dataGenerationRunningStatuses.has(job.status));
+}
+
+function dataGenerationJobStatusCopy(job) {
+  if (!job) {
+    return "Idle";
+  }
+
+  switch (job.status) {
+    case "queued":
+      return "Queued";
+    case "running":
+      return "Running";
+    case "completed":
+      return "Completed";
+    case "cancelled":
+      return "Cancelled";
+    case "failed":
+      return "Failed";
+    default:
+      return "Idle";
+  }
+}
+
+function dataGenerationJobElapsedMs(job) {
+  if (!job) {
+    return 0;
+  }
+
+  if (dataGenerationJobIsRunning(job)) {
+    const startedAtMs = Date.parse(job.startedAt || "");
+    if (!Number.isNaN(startedAtMs)) {
+      return Math.max(0, Date.now() - startedAtMs);
+    }
+  }
+
+  return Number.isFinite(Number(job.durationMs)) ? Math.max(0, Number(job.durationMs)) : 0;
+}
+
+function formatDataGenerationSize(valueGb) {
+  const sizeGb = Number(valueGb);
+  if (!Number.isFinite(sizeGb) || sizeGb <= 0) {
+    return "0 GB";
+  }
+
+  if (sizeGb >= 1) {
+    return `${sizeGb.toFixed(sizeGb >= 10 ? 0 : 1)} GB`;
+  }
+  return `${(sizeGb * 1024).toFixed(sizeGb * 1024 >= 10 ? 0 : 1)} MB`;
+}
+
+function dataGenerationJobCopy(job) {
+  if (!job) {
+    return "";
+  }
+
+  const sizeCopy = formatDataGenerationSize(job.generatedSizeGb || job.requestedSizeGb);
+  const rowCount = Number(job.generatedRows || 0);
+  const rowsCopy =
+    rowCount > 0
+      ? `${rowCount.toLocaleString()} rows`
+      : dataGenerationJobIsRunning(job)
+        ? "Starting"
+        : "0 rows";
+  return `${formatQueryDuration(dataGenerationJobElapsedMs(job))} | ${sizeCopy} | ${rowsCopy}`;
+}
+
+function compareDataGenerationJobsByStartedAt(left, right) {
+  const leftStartedAt = Date.parse(left?.startedAt || "");
+  const rightStartedAt = Date.parse(right?.startedAt || "");
+
+  if (!Number.isNaN(leftStartedAt) || !Number.isNaN(rightStartedAt)) {
+    const normalizedLeft = Number.isNaN(leftStartedAt) ? 0 : leftStartedAt;
+    const normalizedRight = Number.isNaN(rightStartedAt) ? 0 : rightStartedAt;
+    if (normalizedLeft !== normalizedRight) {
+      return normalizedRight - normalizedLeft;
+    }
+  }
+
+  return String(right?.jobId || "").localeCompare(String(left?.jobId || ""));
+}
+
+function compareQueryJobsByStartedAt(left, right) {
+  const leftStartedAt = Date.parse(left?.startedAt || left?.updatedAt || "");
+  const rightStartedAt = Date.parse(right?.startedAt || right?.updatedAt || "");
+
+  if (!Number.isNaN(leftStartedAt) || !Number.isNaN(rightStartedAt)) {
+    const normalizedLeft = Number.isNaN(leftStartedAt) ? 0 : leftStartedAt;
+    const normalizedRight = Number.isNaN(rightStartedAt) ? 0 : rightStartedAt;
+    if (normalizedLeft !== normalizedRight) {
+      return normalizedRight - normalizedLeft;
+    }
+  }
+
+  return String(right?.jobId || "").localeCompare(String(left?.jobId || ""));
 }
 
 function queryRowsShownLabel(job) {
@@ -1235,6 +1642,110 @@ function renderPerformanceChartMarkup(performance) {
   `;
 }
 
+function renderPerformanceDistributionMarkup(performance) {
+  const points = Array.isArray(performance?.recent) ? performance.recent : [];
+  if (!points.length) {
+    return "";
+  }
+
+  const values = points
+    .map((point) => Math.max(1, Number(point.durationMs || 0)))
+    .filter((value) => Number.isFinite(value));
+  if (!values.length) {
+    return "";
+  }
+
+  const width = 280;
+  const height = 86;
+  const paddingX = 8;
+  const paddingTop = 6;
+  const paddingBottom = 18;
+  const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+  const variance =
+    values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / Math.max(1, values.length - 1);
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const fallbackSpread = Math.max((maxValue - minValue) / 6, mean * 0.18, 1);
+  const standardDeviation = Math.max(Math.sqrt(variance), fallbackSpread);
+  const domainStart = Math.max(0, Math.min(minValue, mean - standardDeviation * 3));
+  const domainEnd = Math.max(domainStart + 1, Math.max(maxValue, mean + standardDeviation * 3));
+  const plotWidth = width - paddingX * 2;
+  const plotHeight = height - paddingTop - paddingBottom;
+  const sampleCount = 48;
+  const gaussianPoints = [];
+
+  let peakDensity = 0;
+  for (let index = 0; index < sampleCount; index += 1) {
+    const ratio = sampleCount === 1 ? 0 : index / (sampleCount - 1);
+    const xValue = domainStart + ratio * (domainEnd - domainStart);
+    const density = Math.exp(-0.5 * ((xValue - mean) / standardDeviation) ** 2);
+    peakDensity = Math.max(peakDensity, density);
+    gaussianPoints.push({ ratio, xValue, density });
+  }
+
+  const pathPoints = gaussianPoints.map(({ ratio, density }) => {
+    const x = paddingX + ratio * plotWidth;
+    const y = paddingTop + (1 - density / Math.max(peakDensity, 0.0001)) * plotHeight;
+    return `${x.toFixed(2)},${y.toFixed(2)}`;
+  });
+  const areaPath = [
+    `M ${paddingX} ${height - paddingBottom}`,
+    ...gaussianPoints.map(({ ratio, density }) => {
+      const x = paddingX + ratio * plotWidth;
+      const y = paddingTop + (1 - density / Math.max(peakDensity, 0.0001)) * plotHeight;
+      return `L ${x.toFixed(2)} ${y.toFixed(2)}`;
+    }),
+    `L ${width - paddingX} ${height - paddingBottom}`,
+    "Z",
+  ].join(" ");
+
+  const markerForValue = (value, className, label) => {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return "";
+    }
+    const ratio = Math.max(0, Math.min(1, (value - domainStart) / (domainEnd - domainStart)));
+    const x = paddingX + ratio * plotWidth;
+    return `
+      <line x1="${x.toFixed(2)}" y1="${paddingTop}" x2="${x.toFixed(2)}" y2="${(height - paddingBottom).toFixed(
+        2
+      )}" class="query-monitor-distribution-marker ${className}"></line>
+      <title>${escapeHtml(`${label}: ${formatQueryDuration(value)}`)}</title>
+    `;
+  };
+
+  const tickEntries = [
+    ["Min", minValue],
+    ["Mean", mean],
+    ["Max", maxValue],
+  ];
+
+  return `
+    <div class="query-monitor-distribution-header">
+      <h4>Runtime Distribution</h4>
+      <p>Bell curve of recent successful query runtimes.</p>
+    </div>
+    <svg viewBox="0 0 ${width} ${height}" class="query-monitor-distribution-svg" preserveAspectRatio="none" aria-hidden="true">
+      <path d="${areaPath}" class="query-monitor-distribution-area"></path>
+      <polyline points="${pathPoints.join(" ")}" class="query-monitor-distribution-curve"></polyline>
+      ${markerForValue(mean, "is-mean", "Mean")}
+      ${markerForValue(performance?.stats?.p50Ms, "is-p50", "p50")}
+      ${markerForValue(performance?.stats?.p95Ms, "is-p95", "p95")}
+    </svg>
+    <div class="query-monitor-distribution-ticks">
+      ${tickEntries
+        .map(
+          ([label, value]) => `
+            <span class="query-monitor-distribution-tick">
+              <strong>${escapeHtml(label)}</strong>
+              <span>${escapeHtml(formatQueryDuration(value))}</span>
+            </span>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
 function queryPerformanceStatsMarkup(performance) {
   const stats = performance?.stats ?? {};
   const statEntries = [
@@ -1272,6 +1783,7 @@ function queryPerformanceStatsMarkup(performance) {
 function queryMonitorItemMarkup(job) {
   const running = queryJobIsRunning(job);
   const rowsCopy = job.rowsShown > 0 ? `${job.rowsShown} row(s)` : "No rows yet";
+  const timestamp = job.startedAt || job.updatedAt;
   return `
     <article class="query-monitor-item query-monitor-item-${escapeHtml(job.status)}" data-query-job-id="${escapeHtml(job.jobId)}">
       <div class="query-monitor-item-copy">
@@ -1293,7 +1805,7 @@ function queryMonitorItemMarkup(job) {
       </div>
       <div class="query-monitor-item-actions">
         ${running ? `<button type="button" class="query-monitor-cancel" data-cancel-query-job="${escapeHtml(job.jobId)}">Cancel</button>` : ""}
-        <span class="query-monitor-updated">${escapeHtml(formatQueryTimestamp(job.updatedAt))}</span>
+        <span class="query-monitor-updated">${escapeHtml(formatQueryTimestamp(timestamp))}</span>
       </div>
     </article>
   `;
@@ -1314,6 +1826,561 @@ function queryNotificationItemMarkup(job) {
       <span class="topbar-notification-item-copy" data-query-notification-copy data-job-id="${escapeHtml(job.jobId)}" data-query-copy-suffix="${escapeHtml(rowsLabel)}">${escapeHtml(formatQueryDuration(queryJobElapsedMs(job)))} | ${escapeHtml(rowsLabel)}</span>
     </button>
   `;
+}
+
+function dataGeneratorCardMarkup(generator) {
+  const tagsMarkup = (generator.tags || [])
+    .map((tag) => `<span class="ingestion-generator-tag">${escapeHtml(tag)}</span>`)
+    .join("");
+
+  return `
+    <article class="ingestion-generator-card" data-generator-card data-generator-id="${escapeHtml(generator.generatorId)}">
+      <div class="ingestion-generator-card-header">
+        <div class="ingestion-generator-copy">
+          <h4>${escapeHtml(generator.title)}</h4>
+          <p class="ingestion-generator-description">${escapeHtml(generator.description)}</p>
+        </div>
+        <div class="ingestion-generator-tags">
+          <span class="ingestion-generator-tag">${escapeHtml(generator.targetKind.toUpperCase())}</span>
+          ${tagsMarkup}
+        </div>
+      </div>
+      <div class="ingestion-generator-controls">
+        <div class="ingestion-generator-size">
+          <label for="generator-size-${escapeHtml(generator.generatorId)}">Generate size</label>
+          <div class="ingestion-generator-size-input">
+            <input
+              id="generator-size-${escapeHtml(generator.generatorId)}"
+              class="modal-input"
+              type="number"
+              min="${escapeHtml(generator.minSizeGb)}"
+              max="${escapeHtml(generator.maxSizeGb)}"
+              step="0.01"
+              value="${escapeHtml(generator.defaultSizeGb)}"
+              data-ingestion-size-input
+            >
+            <span class="ingestion-generator-size-unit" aria-hidden="true">GB</span>
+          </div>
+        </div>
+        <button
+          type="button"
+          class="modal-button ingestion-generator-run"
+          data-start-data-generation="${escapeHtml(generator.generatorId)}"
+        >
+          Run Module
+        </button>
+        <p class="ingestion-job-meta-copy">
+          Default target: <strong>${escapeHtml(generator.defaultTargetName || generator.generatorId)}</strong><br>
+          Module: <code>${escapeHtml(generator.moduleName || generator.generatorId)}</code>
+        </p>
+      </div>
+    </article>
+  `;
+}
+
+function dataGenerationJobFactsMarkup(job) {
+  const facts = [
+    ["Target", job.targetKind.toUpperCase()],
+    ["Requested size", formatDataGenerationSize(job.requestedSizeGb)],
+    ["Elapsed", formatQueryDuration(dataGenerationJobElapsedMs(job))],
+    ["Generated size", formatDataGenerationSize(job.generatedSizeGb || 0)],
+    ["Rows", Number(job.generatedRows || 0) > 0 ? Number(job.generatedRows).toLocaleString() : "0"],
+  ];
+
+  return `
+    <div class="ingestion-job-facts">
+      ${facts
+        .map(
+          ([label, value]) => `
+            <div class="ingestion-job-fact">
+              <span class="ingestion-job-fact-label">${escapeHtml(label)}</span>
+              <span class="ingestion-job-fact-value${label === "Elapsed" ? " ingestion-job-fact-value-live" : ""}"${
+                label === "Elapsed" ? ` data-ingestion-job-duration data-job-id="${escapeHtml(job.jobId)}"` : ""
+              }>${escapeHtml(String(value))}</span>
+            </div>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function dataGenerationJobProgressMarkup(job) {
+  const progressValue =
+    typeof job.progress === "number" && Number.isFinite(job.progress)
+      ? Math.max(0, Math.min(100, job.progress * 100))
+      : null;
+  const showTrack = dataGenerationJobIsRunning(job) || progressValue !== null;
+
+  return `
+    <div class="ingestion-job-progress">
+      <div class="ingestion-job-progress-header">
+        <strong>${escapeHtml(job.progressLabel || dataGenerationJobStatusCopy(job))}</strong>
+      </div>
+      ${
+        showTrack
+          ? `
+            <div class="ingestion-job-progress-track${progressValue === null ? " is-indeterminate" : ""}">
+              <span style="${progressValue === null ? "" : `width:${progressValue}%;`}"></span>
+            </div>
+          `
+          : ""
+      }
+    </div>
+  `;
+}
+
+function dataGenerationJobCardMarkup(job) {
+  return `
+    <article class="ingestion-job-card" data-data-generation-job-card data-job-id="${escapeHtml(job.jobId)}">
+      <div class="ingestion-job-card-header">
+        <div class="ingestion-job-copy">
+          <h4>${escapeHtml(job.title)}</h4>
+          <p class="ingestion-job-description">${escapeHtml(job.description)}</p>
+        </div>
+        <div class="ingestion-job-actions">
+          <span class="ingestion-job-status${dataGenerationJobIsRunning(job) ? " is-live" : ""}">${escapeHtml(
+            dataGenerationJobStatusCopy(job)
+          )}</span>
+          ${
+            dataGenerationJobIsRunning(job)
+              ? `<button type="button" class="ingestion-job-cancel" data-cancel-data-generation-job="${escapeHtml(job.jobId)}">Cancel</button>`
+              : ""
+          }
+          ${
+            job.canCleanup
+              ? `<button type="button" class="ingestion-job-clean" data-cleanup-data-generation-job="${escapeHtml(job.jobId)}">Clean data</button>`
+              : ""
+          }
+        </div>
+      </div>
+      ${dataGenerationJobProgressMarkup(job)}
+      ${dataGenerationJobFactsMarkup(job)}
+      <div class="ingestion-job-targets">
+        ${
+          job.targetRelation
+            ? `<span class="ingestion-job-target"><strong>Relation:</strong> ${escapeHtml(job.targetRelation)}</span>`
+            : ""
+        }
+        ${
+          job.targetPath
+            ? `<span class="ingestion-job-target"><strong>Path:</strong> ${escapeHtml(job.targetPath)}</span>`
+            : ""
+        }
+      </div>
+      <p class="ingestion-job-message">${escapeHtml(job.message || "")}</p>
+      ${job.error ? `<pre class="ingestion-job-error">${escapeHtml(job.error)}</pre>` : ""}
+    </article>
+  `;
+}
+
+function dataGenerationNotificationItemMarkup(job) {
+  return `
+    <button
+      type="button"
+      class="topbar-notification-item"
+      data-open-ingestion-workbench
+      data-focus-generation-job="${escapeHtml(job.jobId)}"
+      title="Open the ingestion workbench"
+    >
+      <span class="topbar-notification-item-status topbar-notification-item-status-notice${dataGenerationJobIsRunning(job) ? " is-live" : ""}">${escapeHtml(
+        `${dataGenerationJobStatusCopy(job)} ingestion`
+      )}</span>
+      <span class="topbar-notification-item-title">${escapeHtml(job.title)}</span>
+      <span class="topbar-notification-item-copy" data-data-generation-notification-copy data-job-id="${escapeHtml(
+        job.jobId
+      )}">${escapeHtml(dataGenerationJobCopy(job))}</span>
+    </button>
+  `;
+}
+
+function dataGenerationMonitorItemMarkup(job) {
+  const running = dataGenerationJobIsRunning(job);
+  const sizeCopy = formatDataGenerationSize(job.generatedSizeGb || job.requestedSizeGb);
+  const rowsCopy =
+    Number(job.generatedRows || 0) > 0 ? `${Number(job.generatedRows).toLocaleString()} rows` : "No rows yet";
+  const summaryCopy = job.targetRelation || job.targetPath || job.message || job.description || "";
+
+  return `
+    <article class="query-monitor-item query-monitor-item-${escapeHtml(job.status)}" data-data-generation-job-id="${escapeHtml(job.jobId)}">
+      <div class="query-monitor-item-copy">
+        <button
+          type="button"
+          class="query-monitor-open"
+          data-open-ingestion-workbench
+          data-focus-generation-job="${escapeHtml(job.jobId)}"
+          title="Open ${escapeHtml(job.title)}"
+        >
+          ${escapeHtml(job.title)}
+        </button>
+        <div class="query-monitor-item-meta">
+          <span class="query-monitor-status-badge${running ? " is-live" : ""}">${escapeHtml(
+            dataGenerationJobStatusCopy(job)
+          )}</span>
+          <span data-generation-monitor-duration data-job-id="${escapeHtml(job.jobId)}">${escapeHtml(
+            formatQueryDuration(dataGenerationJobElapsedMs(job))
+          )}</span>
+          <span>${escapeHtml(sizeCopy)}</span>
+          <span>${escapeHtml(rowsCopy)}</span>
+        </div>
+        <p class="query-monitor-sql">${escapeHtml(summaryCopy)}</p>
+      </div>
+      <div class="query-monitor-item-actions">
+        ${
+          running
+            ? `<button type="button" class="query-monitor-cancel" data-cancel-data-generation-job="${escapeHtml(job.jobId)}">Cancel</button>`
+            : ""
+        }
+        <span class="query-monitor-updated">${escapeHtml(formatQueryTimestamp(job.updatedAt))}</span>
+      </div>
+    </article>
+  `;
+}
+
+function notificationItemKey(type, job) {
+  const status = String(job?.status || "").trim().toLowerCase();
+  const lifecycleKey =
+    status === "completed" || status === "failed" || status === "cancelled" ? status : "active";
+  return `${type}:${job?.jobId || ""}:${lifecycleKey}`;
+}
+
+function collectVisibleNotifications() {
+  const activeNotebookId = currentWorkspaceNotebookId();
+  const queryNotifications = queryJobsSnapshot
+    .filter((job) => job.notebookId !== activeNotebookId)
+    .map((job) => ({
+      type: "query",
+      job,
+      updatedAt: job.updatedAt,
+      dismissalKey: notificationItemKey("query", job),
+      dismissible: queryJobTerminalStatuses.has(job.status),
+      markup: queryNotificationItemMarkup(job),
+    }));
+  const dataGenerationNotifications = dataGenerationJobsSnapshot.map((job) => ({
+    type: "ingestion",
+    job,
+    updatedAt: job.updatedAt,
+    dismissalKey: notificationItemKey("ingestion", job),
+    dismissible: dataGenerationTerminalStatuses.has(job.status),
+    markup: dataGenerationNotificationItemMarkup(job),
+  }));
+
+  return [...dataGenerationNotifications, ...queryNotifications]
+    .filter((item) => !dismissedNotificationKeys.has(item.dismissalKey))
+    .sort((left, right) => Date.parse(right.updatedAt || "") - Date.parse(left.updatedAt || ""));
+}
+
+function pruneDismissedNotificationKeys() {
+  const validKeys = new Set([
+    ...queryJobsSnapshot.map((job) => notificationItemKey("query", job)),
+    ...dataGenerationJobsSnapshot.map((job) => notificationItemKey("ingestion", job)),
+  ]);
+  let changed = false;
+
+  for (const key of dismissedNotificationKeys) {
+    if (key.startsWith("query:") && !queryJobsLoaded) {
+      continue;
+    }
+    if (key.startsWith("ingestion:") && !dataGenerationJobsLoaded) {
+      continue;
+    }
+    if (validKeys.has(key)) {
+      continue;
+    }
+    dismissedNotificationKeys.delete(key);
+    changed = true;
+  }
+
+  if (changed) {
+    writeDismissedNotificationKeys();
+  }
+}
+
+function clearVisibleNotifications() {
+  const visibleItems = collectVisibleNotifications();
+  if (!visibleItems.length) {
+    return;
+  }
+
+  visibleItems.forEach((item) => dismissedNotificationKeys.add(item.dismissalKey));
+  writeDismissedNotificationKeys();
+  renderQueryNotificationMenu();
+}
+
+function renderIngestionWorkbench() {
+  const generatorList = ingestionGeneratorList();
+  const jobList = ingestionJobList();
+
+  if (generatorList) {
+    if (!dataGeneratorsCatalog.length) {
+      generatorList.innerHTML = '<p class="ingestion-empty">No data generators discovered.</p>';
+    } else {
+      generatorList.innerHTML = dataGeneratorsCatalog.map((generator) => dataGeneratorCardMarkup(generator)).join("");
+    }
+  }
+
+  if (jobList) {
+    if (!dataGenerationJobsSnapshot.length) {
+      jobList.innerHTML = '<p class="ingestion-empty">No data generation jobs yet.</p>';
+    } else {
+      jobList.innerHTML = dataGenerationJobsSnapshot.map((job) => dataGenerationJobCardMarkup(job)).join("");
+    }
+  }
+}
+
+function recordNotebookActivity(notebookId, reason = "edited") {
+  const normalizedNotebookId = String(notebookId ?? "").trim();
+  if (!normalizedNotebookId) {
+    return;
+  }
+
+  const metadata = notebookMetadata(normalizedNotebookId);
+  const activity = readNotebookActivity();
+  activity[normalizedNotebookId] = {
+    notebookId: normalizedNotebookId,
+    title: metadata.title,
+    summary: metadata.summary,
+    touchedAt: new Date().toISOString(),
+    reason,
+  };
+  writeNotebookActivity(activity);
+  renderHomePage();
+}
+
+function notebookActivityMarkup(entry) {
+  const reasonCopy = entry.reason === "run" ? "Last action: Run" : "Last action: Edit";
+  return `
+    <button
+      type="button"
+      class="home-activity-card"
+      data-open-recent-notebook="${escapeHtml(entry.notebookId)}"
+    >
+      <span class="home-activity-title-row">
+        <span class="home-activity-title">${escapeHtml(entry.title || "Notebook")}</span>
+        <span class="home-activity-meta">${escapeHtml(formatRelativeTimestamp(entry.touchedAt))}</span>
+      </span>
+      <span class="home-activity-copy">${escapeHtml(entry.summary || "No description saved.")}</span>
+      <span class="home-activity-meta">${escapeHtml(reasonCopy)}</span>
+    </button>
+  `;
+}
+
+function ingestionActivityMarkup(job) {
+  return `
+    <button
+      type="button"
+      class="home-activity-card"
+      data-open-ingestion-workbench
+      data-focus-generation-job="${escapeHtml(job.jobId || "")}"
+    >
+      <span class="home-activity-title-row">
+        <span class="home-activity-title">${escapeHtml(job.title || "Ingestion run")}</span>
+        <span class="home-activity-meta">${escapeHtml(formatRelativeTimestamp(job.startedAt || job.updatedAt))}</span>
+      </span>
+      <span class="home-activity-copy">${escapeHtml(job.message || job.description || "No ingestion message yet.")}</span>
+      <span class="home-activity-meta">${escapeHtml((job.status || "unknown").replace(/^./, (m) => m.toUpperCase()))} • ${escapeHtml(formatQueryDuration(dataGenerationJobElapsedMs(job)))}</span>
+    </button>
+  `;
+}
+
+function renderHomePage() {
+  if (!homePageRoot()) {
+    return;
+  }
+
+  const recentNotebooksRoot = homeRecentNotebooksRoot();
+  if (recentNotebooksRoot) {
+    const activityEntries = Object.values(readNotebookActivity())
+      .filter((entry) => entry && typeof entry === "object")
+      .map((entry) => ({
+        notebookId: String(entry.notebookId || "").trim(),
+        title: String(entry.title || "").trim(),
+        summary: String(entry.summary || "").trim(),
+        touchedAt: String(entry.touchedAt || "").trim(),
+        reason: entry.reason === "run" ? "run" : "edited",
+      }))
+      .filter((entry) => entry.notebookId && notebookLinks(entry.notebookId).length)
+      .sort((left, right) => Date.parse(right.touchedAt || "") - Date.parse(left.touchedAt || ""))
+      .slice(0, 3);
+
+    if (!activityEntries.length) {
+      recentNotebooksRoot.innerHTML = '<p class="home-empty">No recent notebook activity yet.</p>';
+    } else {
+      recentNotebooksRoot.innerHTML = activityEntries.map((entry) => notebookActivityMarkup(entry)).join("");
+    }
+  }
+
+  const recentIngestionsRoot = homeRecentIngestionsRoot();
+  if (recentIngestionsRoot) {
+    const recentJobs = [...dataGenerationJobsSnapshot]
+      .sort((left, right) => Date.parse(right.startedAt || "") - Date.parse(left.startedAt || ""))
+      .slice(0, 3);
+    if (!recentJobs.length) {
+      recentIngestionsRoot.innerHTML = '<p class="home-empty">No ingestion runs yet.</p>';
+    } else {
+      recentIngestionsRoot.innerHTML = recentJobs.map((job) => ingestionActivityMarkup(job)).join("");
+    }
+  }
+}
+
+function refreshLiveDataGenerationClock() {
+  const jobsById = new Map(dataGenerationJobsSnapshot.map((job) => [job.jobId, job]));
+
+  document.querySelectorAll("[data-ingestion-job-duration]").forEach((node) => {
+    const job = jobsById.get(node.dataset.jobId || "");
+    if (!job) {
+      return;
+    }
+    node.textContent = formatQueryDuration(dataGenerationJobElapsedMs(job));
+  });
+
+  document.querySelectorAll("[data-generation-monitor-duration]").forEach((node) => {
+    const job = jobsById.get(node.dataset.jobId || "");
+    if (!job) {
+      return;
+    }
+    node.textContent = formatQueryDuration(dataGenerationJobElapsedMs(job));
+  });
+
+  document.querySelectorAll("[data-data-generation-notification-copy]").forEach((node) => {
+    const job = jobsById.get(node.dataset.jobId || "");
+    if (!job) {
+      return;
+    }
+    node.textContent = dataGenerationJobCopy(job);
+  });
+}
+
+function syncDataGenerationClockLoop() {
+  const hasRunningJobs = dataGenerationJobsSnapshot.some((job) => dataGenerationJobIsRunning(job));
+  if (hasRunningJobs && dataGenerationClockHandle === null) {
+    refreshLiveDataGenerationClock();
+    dataGenerationClockHandle = window.setInterval(refreshLiveDataGenerationClock, 100);
+    return;
+  }
+
+  if (!hasRunningJobs && dataGenerationClockHandle !== null) {
+    window.clearInterval(dataGenerationClockHandle);
+    dataGenerationClockHandle = null;
+  }
+
+  refreshLiveDataGenerationClock();
+}
+
+function captureSidebarState() {
+  return {
+    searchTerm: document.querySelector("[data-sidebar-search]")?.value ?? "",
+    notebookSectionOpen: Boolean(notebookSection()?.open),
+    ingestionRunbookSectionOpen: Boolean(document.querySelector("[data-ingestion-runbook-section]")?.open),
+    dataSourcesSectionOpen: Boolean(dataSourcesSection()?.open),
+    ingestionCleanupSectionOpen: Boolean(document.querySelector("[data-ingestion-cleanup-section]")?.open),
+    generationMonitorSectionOpen: Boolean(document.querySelector("[data-generation-monitor-section]")?.open),
+    queryMonitorSectionOpen: Boolean(document.querySelector("[data-query-monitor-section]")?.open),
+    sourceCatalogsOpen: Array.from(document.querySelectorAll("[data-source-catalog][open]")).map(
+      (node) => node.dataset.sourceCatalogName || ""
+    ),
+    sourceSchemasOpen: Array.from(document.querySelectorAll("[data-source-schema][open]")).map(
+      (node) => node.dataset.sourceSchemaKey || ""
+    ),
+  };
+}
+
+function restoreSidebarState(state) {
+  if (!state) {
+    return;
+  }
+
+  const search = document.querySelector("[data-sidebar-search]");
+  if (search) {
+    search.value = state.searchTerm || "";
+  }
+
+  const notebookSectionRoot = notebookSection();
+  if (notebookSectionRoot) {
+    notebookSectionRoot.open = Boolean(state.notebookSectionOpen);
+  }
+
+  const ingestionRunbookSectionRoot = document.querySelector("[data-ingestion-runbook-section]");
+  if (ingestionRunbookSectionRoot) {
+    ingestionRunbookSectionRoot.open = Boolean(state.ingestionRunbookSectionOpen);
+  }
+
+  const dataSourcesRoot = dataSourcesSection();
+  if (dataSourcesRoot) {
+    dataSourcesRoot.open = Boolean(state.dataSourcesSectionOpen);
+  }
+
+  const ingestionCleanupSectionRoot = document.querySelector("[data-ingestion-cleanup-section]");
+  if (ingestionCleanupSectionRoot) {
+    ingestionCleanupSectionRoot.open = Boolean(state.ingestionCleanupSectionOpen);
+  }
+
+  const generationMonitorSectionRoot = document.querySelector("[data-generation-monitor-section]");
+  if (generationMonitorSectionRoot) {
+    generationMonitorSectionRoot.open = Boolean(state.generationMonitorSectionOpen);
+  }
+
+  const queryMonitorSectionRoot = document.querySelector("[data-query-monitor-section]");
+  if (queryMonitorSectionRoot) {
+    queryMonitorSectionRoot.open = Boolean(state.queryMonitorSectionOpen);
+  }
+
+  const openCatalogs = new Set(Array.isArray(state.sourceCatalogsOpen) ? state.sourceCatalogsOpen : []);
+  document.querySelectorAll("[data-source-catalog]").forEach((node) => {
+    node.open = openCatalogs.has(node.dataset.sourceCatalogName || "");
+  });
+
+  const openSchemas = new Set(Array.isArray(state.sourceSchemasOpen) ? state.sourceSchemasOpen : []);
+  document.querySelectorAll("[data-source-schema]").forEach((node) => {
+    node.open = openSchemas.has(node.dataset.sourceSchemaKey || "");
+  });
+
+  applySidebarSearchFilter();
+}
+
+async function refreshSidebar(mode = currentWorkspaceMode()) {
+  const sidebar = document.querySelector("[data-sidebar]");
+  if (!sidebar) {
+    return;
+  }
+
+  const sidebarState = captureSidebarState();
+  const activeNotebookId = currentActiveNotebookId() || workspaceNotebookId() || "";
+  const response = await window.fetch(
+    `/sidebar?active_notebook_id=${encodeURIComponent(activeNotebookId)}&mode=${encodeURIComponent(mode)}`,
+    {
+      headers: { Accept: "text/html" },
+    }
+  );
+  if (!response.ok) {
+    throw new Error(`Failed to refresh the sidebar: ${response.status}`);
+  }
+
+  sidebar.outerHTML = await response.text();
+  initializeSidebarSearch();
+  initializeNotebookTree();
+  initializeSidebarToggle();
+  applyNotebookMetadata();
+  restoreSidebarState(sidebarState);
+  restoreSelectedSourceObject();
+  renderDataGenerationMonitor();
+  renderQueryMonitor();
+  renderQueryNotificationMenu();
+  renderHomePage();
+}
+
+function maybeRefreshSidebarForCompletedGenerationJobs() {
+  const newCompletedJobs = dataGenerationJobsSnapshot.filter(
+    (job) => job.status === "completed" && !refreshedDataGenerationJobIds.has(job.jobId)
+  );
+  if (!newCompletedJobs.length) {
+    return;
+  }
+
+  newCompletedJobs.forEach((job) => refreshedDataGenerationJobIds.add(job.jobId));
+  refreshSidebar().catch((error) => {
+    console.error("Failed to refresh the sidebar after data generation.", error);
+  });
 }
 
 function refreshLiveQueryClock() {
@@ -1368,6 +2435,7 @@ function renderQueryMonitor() {
   const performanceRoot = queryPerformanceSection();
   const performanceStatsRoot = queryPerformanceStats();
   const performanceChartRoot = queryPerformanceChart();
+  const performanceDistributionRoot = queryPerformanceDistribution();
   if (!listRoot || !countRoot) {
     return;
   }
@@ -1387,41 +2455,79 @@ function renderQueryMonitor() {
     listRoot.innerHTML = queryJobsSnapshot.slice(0, 8).map((job) => queryMonitorItemMarkup(job)).join("");
   }
 
-  if (performanceRoot && performanceStatsRoot && performanceChartRoot) {
+  if (performanceRoot && performanceStatsRoot && performanceChartRoot && performanceDistributionRoot) {
     const hasPerformance = Array.isArray(queryPerformanceState?.recent) && queryPerformanceState.recent.length > 0;
     performanceRoot.hidden = !hasPerformance;
     if (hasPerformance) {
       performanceStatsRoot.innerHTML = queryPerformanceStatsMarkup(queryPerformanceState);
       performanceChartRoot.innerHTML = renderPerformanceChartMarkup(queryPerformanceState);
+      performanceDistributionRoot.innerHTML = renderPerformanceDistributionMarkup(queryPerformanceState);
     } else {
       performanceStatsRoot.innerHTML = "";
       performanceChartRoot.innerHTML = "";
+      performanceDistributionRoot.innerHTML = "";
     }
   }
+}
+
+function renderDataGenerationMonitor() {
+  const listRoot = dataGenerationMonitorList();
+  const countRoot = dataGenerationMonitorCount();
+  const toggleCountRoot = sidebarQueryCount();
+  if (!listRoot || !countRoot) {
+    return;
+  }
+
+  const runningCount = Number(dataGenerationJobsSummary.runningCount || 0);
+  countRoot.textContent = String(runningCount);
+  countRoot.classList.toggle("is-live", runningCount > 0);
+
+  if (toggleCountRoot && currentWorkspaceMode() === "ingestion") {
+    toggleCountRoot.textContent = String(runningCount);
+    toggleCountRoot.hidden = runningCount === 0;
+    toggleCountRoot.classList.toggle("is-live", runningCount > 0);
+  }
+
+  if (!dataGenerationJobsSnapshot.length) {
+    listRoot.innerHTML = '<p class="query-monitor-empty">No ingestion jobs yet.</p>';
+    return;
+  }
+
+  listRoot.innerHTML = dataGenerationJobsSnapshot
+    .slice(0, 8)
+    .map((job) => dataGenerationMonitorItemMarkup(job))
+    .join("");
 }
 
 function renderQueryNotificationMenu() {
   const menu = queryNotificationMenu();
   const listRoot = queryNotificationList();
   const countRoot = queryNotificationCount();
+  const clearButton = notificationClearButton();
   if (!menu || !listRoot || !countRoot) {
     return;
   }
 
-  const activeNotebookId = currentActiveNotebookId();
-  const visibleNotifications = queryJobsSnapshot.filter((job) => job.notebookId !== activeNotebookId);
-  const runningCount = Number(queryJobsSummary.runningCount || 0);
-  const badgeCount = runningCount > 0 ? runningCount : visibleNotifications.length;
+  const visibleNotifications = collectVisibleNotifications();
+  const hasRunningActivity =
+    Number(queryJobsSummary.runningCount || 0) > 0 || Number(dataGenerationJobsSummary.runningCount || 0) > 0;
+  const badgeCount = visibleNotifications.length;
   countRoot.textContent = String(badgeCount);
   countRoot.hidden = badgeCount === 0;
-  countRoot.classList.toggle("is-live", runningCount > 0);
+  countRoot.classList.toggle("is-live", hasRunningActivity);
+  if (clearButton) {
+    clearButton.hidden = !visibleNotifications.length;
+  }
 
   if (!visibleNotifications.length) {
-    listRoot.innerHTML = '<p class="topbar-notification-empty">No background query activity yet.</p>';
+    listRoot.innerHTML = '<p class="topbar-notification-empty">No notifications yet.</p>';
     return;
   }
 
-  listRoot.innerHTML = visibleNotifications.slice(0, 10).map((job) => queryNotificationItemMarkup(job)).join("");
+  listRoot.innerHTML = visibleNotifications
+    .slice(0, 12)
+    .map((item) => item.markup)
+    .join("");
 }
 
 function syncQueryCellJobState(cellRoot) {
@@ -1470,17 +2576,124 @@ function syncVisibleQueryCells() {
 }
 
 function applyQueryJobsState(snapshot) {
+  queryJobsLoaded = true;
   queryJobsStateVersion = snapshot?.version ?? null;
   queryJobsSummary = snapshot?.summary ?? { runningCount: 0, totalCount: 0 };
   queryPerformanceState = snapshot?.performance ?? { recent: [], stats: {} };
   queryJobsSnapshot = Array.isArray(snapshot?.jobs)
-    ? snapshot.jobs.map((job) => normalizeQueryJob(job)).filter(Boolean)
+    ? snapshot.jobs
+        .map((job) => normalizeQueryJob(job))
+        .filter(Boolean)
+        .sort(compareQueryJobsByStartedAt)
     : [];
 
+  pruneDismissedNotificationKeys();
   renderQueryMonitor();
   renderQueryNotificationMenu();
   syncVisibleQueryCells();
   syncQueryClockLoop();
+  renderHomePage();
+}
+
+function applyDataGenerationJobsState(snapshot) {
+  dataGenerationJobsLoaded = true;
+  dataGenerationJobsStateVersion = snapshot?.version ?? null;
+  dataGenerationJobsSummary = snapshot?.summary ?? { runningCount: 0, totalCount: 0 };
+  dataGenerationJobsSnapshot = Array.isArray(snapshot?.jobs)
+    ? snapshot.jobs
+        .map((job) => normalizeDataGenerationJob(job))
+        .filter(Boolean)
+        .sort(compareDataGenerationJobsByStartedAt)
+    : [];
+
+  pruneDismissedNotificationKeys();
+  renderIngestionWorkbench();
+  renderDataGenerationMonitor();
+  renderQueryNotificationMenu();
+  syncDataGenerationClockLoop();
+  maybeRefreshSidebarForCompletedGenerationJobs();
+  renderHomePage();
+}
+
+function clearSourceObjectFieldCacheForRelations(relations = []) {
+  if (!Array.isArray(relations) || !relations.length) {
+    sourceObjectFieldCache.clear();
+    sourceObjectFieldRequests.clear();
+    return;
+  }
+
+  relations.forEach((relation) => {
+    const normalizedRelation = typeof relation === "string" ? relation.trim() : "";
+    if (!normalizedRelation) {
+      return;
+    }
+    sourceObjectFieldCache.delete(normalizedRelation);
+    sourceObjectFieldRequests.delete(normalizedRelation);
+  });
+}
+
+function currentWorkspaceCanEdit() {
+  return document.querySelector("[data-notebook-meta]")?.dataset.canEdit !== "false";
+}
+
+function queueDataSourceSidebarRefresh() {
+  if (pendingDataSourceSidebarRefreshHandle !== null) {
+    return;
+  }
+
+  pendingDataSourceSidebarRefreshHandle = window.setTimeout(() => {
+    pendingDataSourceSidebarRefreshHandle = null;
+
+    if (dataSourceSidebarRefreshPromise) {
+      dataSourceSidebarRefreshQueued = true;
+      return;
+    }
+
+    const runRefresh = async () => {
+      await refreshSidebar(currentWorkspaceMode());
+
+      if (currentWorkspaceMode() !== "notebook") {
+        return;
+      }
+
+      const notebookId = currentActiveNotebookId() || workspaceNotebookId();
+      if (!notebookId || currentWorkspaceCanEdit()) {
+        return;
+      }
+
+      await loadNotebookWorkspace(notebookId);
+    };
+
+    dataSourceSidebarRefreshPromise = runRefresh()
+      .catch((error) => {
+        console.error("Failed to refresh the sidebar after a data source change.", error);
+      })
+      .finally(() => {
+        dataSourceSidebarRefreshPromise = null;
+        if (dataSourceSidebarRefreshQueued) {
+          dataSourceSidebarRefreshQueued = false;
+          queueDataSourceSidebarRefresh();
+        }
+      });
+  }, 120);
+}
+
+function applyDataSourceEventsState(snapshot) {
+  const previousVersion = dataSourceEventsStateVersion;
+  dataSourceEventsStateVersion = snapshot?.version ?? null;
+
+  if (previousVersion === null || dataSourceEventsStateVersion === previousVersion) {
+    return;
+  }
+
+  const latestEvent = Array.isArray(snapshot?.events) ? snapshot.events[0] : null;
+  const touchedRelations = [
+    ...(latestEvent?.addedRelations ?? []),
+    ...(latestEvent?.removedRelations ?? []),
+    ...(latestEvent?.updatedRelations ?? []),
+  ];
+  clearSourceObjectFieldCacheForRelations(touchedRelations);
+  queueDataSourceSidebarRefresh();
 }
 
 function normalizeSourceObjectFields(fields) {
@@ -2666,29 +3879,75 @@ function createNotebookLinkElement(notebookId, metadata) {
 
 function notebookMetadata(notebookId) {
   const defaults = readNotebookDefaults(notebookId);
+  if (!defaults.canEdit) {
+    const readOnlyMetadata = {
+      ...defaults,
+      notebookId,
+      title: normalizeNotebookTitleValue(defaults.title),
+      summary: normalizeNotebookSummaryValue(defaults.summary),
+      cells: normalizeNotebookCells(defaults.cells),
+      dataSources: notebookSourceIds({ cells: defaults.cells }),
+      tags: normalizeTags(defaults.tags),
+      sql: defaults.cells[0]?.sql ?? "",
+      deleted: false,
+      versions: defaults.versions?.length
+        ? defaults.versions
+        : [createInitialNotebookVersion(notebookId, defaults)],
+    };
+
+    updateStoredNotebookState(notebookId, () => ({
+      title: readOnlyMetadata.title,
+      summary: readOnlyMetadata.summary,
+      tags: readOnlyMetadata.tags,
+      cells: readOnlyMetadata.cells,
+      deleted: false,
+      versions: readOnlyMetadata.versions,
+    }));
+
+    return readOnlyMetadata;
+  }
+
   const storedState = normalizeStoredNotebookState(readStoredNotebookMetadata()[notebookId]);
   const cells = normalizeNotebookCells(storedState.cells ?? defaults.cells);
+  const resolvedTitle = normalizeNotebookTitleValue(storedState.title, defaults.title);
+  const resolvedSummary = normalizeNotebookSummaryValue(storedState.summary, defaults.summary);
   const baseMetadata = {
     ...defaults,
     notebookId,
-    title: storedState.title ?? defaults.title,
-    summary: storedState.summary ?? defaults.summary,
+    title: resolvedTitle,
+    summary: resolvedSummary,
     cells,
     dataSources: notebookSourceIds({ cells }),
     tags: normalizeTags(storedState.tags ?? defaults.tags),
     sql: cells[0]?.sql ?? "",
     deleted: storedState.deleted ?? defaults.deleted,
   };
+  let versionsRepaired = false;
   const versions =
     storedState.versions && storedState.versions.length
-      ? storedState.versions
+      ? storedState.versions.map((version) => {
+          const repairedTitle = normalizeNotebookTitleValue(version.title, baseMetadata.title);
+          const repairedSummary = normalizeNotebookSummaryValue(version.summary, baseMetadata.summary);
+          if (repairedTitle !== version.title || repairedSummary !== version.summary) {
+            versionsRepaired = true;
+          }
+          return {
+            ...version,
+            title: repairedTitle,
+            summary: repairedSummary,
+          };
+        })
       : [createInitialNotebookVersion(notebookId, baseMetadata)];
 
-  if (!storedState.versions || !storedState.versions.length) {
+  const metadataRepaired =
+    resolvedTitle !== (typeof storedState.title === "string" ? storedState.title : resolvedTitle) ||
+    resolvedSummary !== (typeof storedState.summary === "string" ? storedState.summary : resolvedSummary);
+
+  if (!storedState.versions || !storedState.versions.length || metadataRepaired || versionsRepaired) {
     updateStoredNotebookState(notebookId, (currentState) => ({
       ...currentState,
-      title: currentState.title ?? baseMetadata.title,
-      summary: currentState.summary ?? baseMetadata.summary,
+      title: normalizeNotebookTitleValue(currentState.title, baseMetadata.title),
+      summary: normalizeNotebookSummaryValue(currentState.summary, baseMetadata.summary),
       tags: currentState.tags ?? baseMetadata.tags,
       cells: currentState.cells ?? baseMetadata.cells,
       deleted: currentState.deleted ?? baseMetadata.deleted,
@@ -2949,6 +4208,7 @@ function updateSidebarNotebookLink(link, metadata) {
 function setNotebookTitle(notebookId, title) {
   persistNotebookDraft(notebookId, { title });
   applyNotebookMetadata();
+  recordNotebookActivity(notebookId, "edited");
 }
 
 function setNotebookSummary(notebookId, summary) {
@@ -2962,6 +4222,7 @@ function setNotebookSummary(notebookId, summary) {
     summaryDisplay.textContent = metadata.summary;
   }
   applySidebarSearchFilter();
+  recordNotebookActivity(notebookId, "edited");
 }
 
 function createEmptyCellState(initial = {}) {
@@ -2990,6 +4251,7 @@ function setNotebookCells(notebookId, cells, options = {}) {
   persistNotebookDraft(notebookId, { cells: normalizeNotebookCells(cells) });
   const metadata = notebookMetadata(notebookId);
   notebookLinks(notebookId).forEach((link) => updateSidebarNotebookLink(link, metadata));
+  recordNotebookActivity(notebookId, "edited");
 
   if (options.rerender && isLocalNotebookId(notebookId)) {
     renderLocalNotebookWorkspace(notebookId);
@@ -3004,6 +4266,7 @@ function setNotebookCells(notebookId, cells, options = {}) {
 function setNotebookTags(notebookId, tags) {
   persistNotebookDraft(notebookId, { tags: normalizeTags(tags) });
   applyNotebookMetadata();
+  recordNotebookActivity(notebookId, "edited");
 }
 
 function setCellDataSources(notebookId, cellId, dataSources) {
@@ -3026,6 +4289,7 @@ function setCellDataSources(notebookId, cellId, dataSources) {
   notebookLinks(notebookId).forEach((link) => updateSidebarNotebookLink(link, metadata));
   applyNotebookMetadata();
   applySidebarSearchFilter();
+  recordNotebookActivity(notebookId, "edited");
 }
 
 function setCellSql(notebookId, cellId, sqlText) {
@@ -3043,6 +4307,7 @@ function setCellSql(notebookId, cellId, sqlText) {
       ),
     };
   });
+  recordNotebookActivity(notebookId, "edited");
 }
 
 function saveNotebookVersion(notebookId) {
@@ -3507,6 +4772,11 @@ function renderEmptyWorkspace() {
       </header>
     </article>
   `;
+  if (currentSidebarMode() !== "notebook") {
+    refreshSidebar("notebook").catch((error) => {
+      console.error("Failed to restore the notebook sidebar.", error);
+    });
+  }
   renderQueryNotificationMenu();
 }
 
@@ -3521,10 +4791,21 @@ function renderLocalNotebookWorkspace(notebookId) {
   processHtmx(panel);
   initializeEditors(panel);
   applyNotebookMetadata();
+  if (currentSidebarMode() !== "notebook") {
+    refreshSidebar("notebook")
+      .then(() => {
+        activateNotebookLink(notebookId);
+        revealNotebookLink(notebookId);
+      })
+      .catch((error) => {
+        console.error("Failed to restore the notebook sidebar.", error);
+      });
+  }
   activateNotebookLink(notebookId);
   revealNotebookLink(notebookId);
   writeLastNotebookId(notebookId);
   syncVisibleQueryCells();
+  renderQueryNotificationMenu();
 }
 
 function defaultNotebookCreateTarget() {
@@ -3572,7 +4853,7 @@ function createNotebook(targetContainer, initialMetadata = {}) {
 }
 
 function activeEditableNotebookId() {
-  const notebookId = currentActiveNotebookId();
+  const notebookId = currentWorkspaceNotebookId();
   if (!notebookId) {
     return null;
   }
@@ -3770,7 +5051,7 @@ function closeCellActionMenus() {
 }
 
 function syncSourceActionMenu(menu) {
-  const currentNotebookId = currentActiveNotebookId();
+  const currentNotebookId = currentWorkspaceNotebookId();
   const currentNotebook = currentNotebookId ? notebookMetadata(currentNotebookId) : null;
   const currentNotebookEditable = Boolean(currentNotebook?.canEdit && !currentNotebook?.deleted);
   syncWorkspaceActionButton(menu?.querySelector("[data-view-source-data]"), {
@@ -4153,7 +5434,16 @@ function readStoredNotebookTree() {
     }
 
     const parsed = JSON.parse(rawValue);
-    return Array.isArray(parsed) ? parsed : null;
+    if (!Array.isArray(parsed)) {
+      return null;
+    }
+
+    const migration = migrateStoredNotebookTree(parsed);
+    if (migration.changed) {
+      writeStoredNotebookTree(migration.state);
+    }
+
+    return migration.state;
   } catch (_error) {
     return null;
   }
@@ -4165,6 +5455,160 @@ function writeStoredNotebookTree(state) {
   } catch (_error) {
     // Ignore persistence failures and keep the in-memory tree functional.
   }
+}
+
+function createStoredFolderState(name, parentFolderId = "") {
+  const folderId = deriveFolderId(name, parentFolderId);
+  const permissions = defaultFolderPermissions(folderId);
+  return {
+    type: "folder",
+    name,
+    folderId,
+    open: true,
+    canEdit: permissions.canEdit,
+    canDelete: permissions.canDelete,
+    children: [],
+  };
+}
+
+function removeNotebookFromStoredTree(nodes, notebookId) {
+  let removed = null;
+  let changed = false;
+  const nextNodes = [];
+
+  for (const node of Array.isArray(nodes) ? nodes : []) {
+    if (!node || typeof node !== "object") {
+      continue;
+    }
+
+    if (node.type === "notebook" && node.notebookId === notebookId) {
+      removed = node;
+      changed = true;
+      continue;
+    }
+
+    if (node.type === "folder" && Array.isArray(node.children)) {
+      const childResult = removeNotebookFromStoredTree(node.children, notebookId);
+      if (childResult.changed) {
+        changed = true;
+      }
+      if (!removed && childResult.removed) {
+        removed = childResult.removed;
+      }
+      nextNodes.push({
+        ...node,
+        children: childResult.nodes,
+      });
+      continue;
+    }
+
+    nextNodes.push(node);
+  }
+
+  return {
+    nodes: nextNodes,
+    removed,
+    changed,
+  };
+}
+
+function folderContainsNotebookState(node, notebookId) {
+  if (!node || typeof node !== "object") {
+    return false;
+  }
+
+  if (node.type === "notebook") {
+    return node.notebookId === notebookId;
+  }
+
+  if (node.type !== "folder" || !Array.isArray(node.children)) {
+    return false;
+  }
+
+  return node.children.some((child) => folderContainsNotebookState(child, notebookId));
+}
+
+function ensureNotebookInRootFolderState(nodes, notebookId, folderName) {
+  const folderId = deriveFolderId(folderName);
+  const rootNodes = Array.isArray(nodes)
+    ? nodes
+        .map((node) => (node && typeof node === "object" ? node : null))
+        .filter(Boolean)
+    : [];
+
+  const existingFolderIndex = rootNodes.findIndex(
+    (node) => node.type === "folder" && (node.folderId === folderId || node.name === folderName)
+  );
+
+  if (
+    existingFolderIndex >= 0 &&
+    folderContainsNotebookState(rootNodes[existingFolderIndex], notebookId)
+  ) {
+    return {
+      state: rootNodes,
+      changed: false,
+    };
+  }
+
+  const removal = removeNotebookFromStoredTree(rootNodes, notebookId);
+  const notebookNode = removal.removed;
+  if (!notebookNode) {
+    return {
+      state: rootNodes,
+      changed: false,
+    };
+  }
+
+  const nextNodes = removal.nodes;
+  const targetFolderIndex = nextNodes.findIndex(
+    (node) => node.type === "folder" && (node.folderId === folderId || node.name === folderName)
+  );
+
+  if (targetFolderIndex >= 0) {
+    const targetFolder = nextNodes[targetFolderIndex];
+    nextNodes[targetFolderIndex] = {
+      ...targetFolder,
+      open: true,
+      children: [...(Array.isArray(targetFolder.children) ? targetFolder.children : []), notebookNode],
+    };
+  } else {
+    nextNodes.push({
+      ...createStoredFolderState(folderName),
+      children: [notebookNode],
+    });
+  }
+
+  return {
+    state: nextNodes,
+    changed: true,
+  };
+}
+
+function migrateStoredNotebookTree(state) {
+  let nextState = Array.isArray(state) ? state : [];
+  let changed = false;
+
+  const migrations = [
+    {
+      notebookId: "pg-vs-s3-contest-pg-native",
+      folderName: "Performance Evaluation",
+    },
+  ];
+
+  for (const migration of migrations) {
+    const result = ensureNotebookInRootFolderState(
+      nextState,
+      migration.notebookId,
+      migration.folderName
+    );
+    nextState = result.state;
+    changed = changed || result.changed;
+  }
+
+  return {
+    state: nextState,
+    changed,
+  };
 }
 
 function updateFolderCounts(root = document) {
@@ -4699,6 +6143,10 @@ function applySidebarSearchFilter() {
     return !term || haystack.includes(term);
   };
 
+  sidebar.querySelectorAll("[data-open-ingestion-runbook]").forEach((button) => {
+    button.dataset.searchHidden = matches(button) ? "false" : "true";
+  });
+
   sidebar.querySelectorAll("[data-draggable-notebook]").forEach((link) => {
     link.dataset.searchHidden = matches(link) ? "false" : "true";
   });
@@ -4750,6 +6198,11 @@ function applySidebarSearchFilter() {
     notebookSection()?.setAttribute("open", "");
   }
 
+  const ingestionRunbookSection = sidebar.querySelector("[data-ingestion-runbook-section]");
+  if (term && sidebar.querySelector("[data-open-ingestion-runbook][data-search-hidden='false']")) {
+    ingestionRunbookSection?.setAttribute("open", "");
+  }
+
   if (term && sidebar.querySelector("[data-source-catalog][data-search-hidden='false']")) {
     dataSourcesSection()?.setAttribute("open", "");
   }
@@ -4775,6 +6228,36 @@ function processHtmx(root) {
   window.htmx.process(root);
 }
 
+async function loadDataGeneratorCatalog() {
+  const response = await window.fetch("/api/data-generators", {
+    headers: {
+      Accept: "application/json",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load data generators: ${response.status}`);
+  }
+
+  const payload = await response.json();
+  dataGeneratorsCatalog = Array.isArray(payload?.generators)
+    ? payload.generators.map((generator) => normalizeDataGenerator(generator)).filter(Boolean)
+    : [];
+  renderIngestionWorkbench();
+}
+
+async function loadDataGenerationJobsState() {
+  const response = await window.fetch("/api/data-generation-jobs", {
+    headers: {
+      Accept: "application/json",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load data generation jobs: ${response.status}`);
+  }
+
+  applyDataGenerationJobsState(await response.json());
+}
+
 async function loadQueryJobsState() {
   const response = await window.fetch("/api/query-jobs", {
     headers: {
@@ -4786,6 +6269,80 @@ async function loadQueryJobsState() {
   }
 
   applyQueryJobsState(await response.json());
+}
+
+async function loadDataSourceEventsState() {
+  const response = await window.fetch("/api/data-source-events", {
+    headers: {
+      Accept: "application/json",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load data source events: ${response.status}`);
+  }
+
+  applyDataSourceEventsState(await response.json());
+}
+
+async function openQueryWorkbench(notebookId = "") {
+  applyWorkbenchTitle("notebook");
+
+  if (currentSidebarMode() !== "notebook") {
+    await refreshSidebar("notebook");
+  }
+
+  if (notebookId) {
+    await loadNotebookWorkspace(notebookId);
+    return;
+  }
+
+  await restoreLastNotebook();
+}
+
+function ensureDataGenerationEventSource() {
+  if (dataGenerationEventSource || typeof window.EventSource !== "function") {
+    return;
+  }
+
+  const eventSource = new window.EventSource("/api/data-generation-jobs/stream");
+  eventSource.addEventListener("jobs", (event) => {
+    try {
+      applyDataGenerationJobsState(JSON.parse(event.data));
+    } catch (error) {
+      console.error("Failed to parse data generation event.", error);
+    }
+  });
+  eventSource.onerror = () => {
+    if (dataGenerationJobsStateVersion !== null) {
+      loadDataGenerationJobsState().catch(() => {
+        // Ignore transient reconnect issues.
+      });
+    }
+  };
+  dataGenerationEventSource = eventSource;
+}
+
+function ensureDataSourceEventsEventSource() {
+  if (dataSourceEventsEventSource || typeof window.EventSource !== "function") {
+    return;
+  }
+
+  const eventSource = new window.EventSource("/api/data-source-events/stream");
+  eventSource.addEventListener("sources", (event) => {
+    try {
+      applyDataSourceEventsState(JSON.parse(event.data));
+    } catch (error) {
+      console.error("Failed to parse data source event.", error);
+    }
+  });
+  eventSource.onerror = () => {
+    if (dataSourceEventsStateVersion !== null) {
+      loadDataSourceEventsState().catch(() => {
+        // Ignore transient reconnect issues.
+      });
+    }
+  };
+  dataSourceEventsEventSource = eventSource;
 }
 
 function ensureQueryJobsEventSource() {
@@ -4810,6 +6367,203 @@ function ensureQueryJobsEventSource() {
     }
   };
   queryJobsEventSource = eventSource;
+}
+
+async function openIngestionWorkbench({ focusJobId = "", focusGeneratorId = "" } = {}) {
+  const panel = document.getElementById("workspace-panel");
+  if (!panel) {
+    return;
+  }
+
+  const response = await window.fetch("/ingestion-workbench", {
+    headers: { "HX-Request": "true" },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load the ingestion workbench: ${response.status}`);
+  }
+
+  panel.innerHTML = await response.text();
+  processHtmx(panel);
+  applyWorkbenchTitle("ingestion");
+  await Promise.allSettled([loadDataGeneratorCatalog(), loadDataGenerationJobsState()]);
+  renderIngestionWorkbench();
+  if (currentSidebarMode() !== "ingestion") {
+    await refreshSidebar("ingestion");
+  } else {
+    renderDataGenerationMonitor();
+  }
+  renderQueryNotificationMenu();
+
+  if (focusJobId) {
+    const target = panel.querySelector(`[data-data-generation-job-card][data-job-id="${focusJobId}"]`);
+    target?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  if (focusGeneratorId) {
+    const target = panel.querySelector(`[data-generator-card][data-generator-id="${focusGeneratorId}"]`);
+    target?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+}
+
+async function startDataGenerationJob(generatorId, sizeGb) {
+  if (!generatorId || !Number.isFinite(Number(sizeGb)) || Number(sizeGb) <= 0) {
+    window.alert("Provide a valid generation size in GB.");
+    return;
+  }
+
+  const formData = new FormData();
+  formData.set("generator_id", generatorId);
+  formData.set("size_gb", String(sizeGb));
+
+  const response = await window.fetch("/api/data-generation-jobs", {
+    method: "POST",
+    body: formData,
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    let message = "The data generator could not be started.";
+    try {
+      const payload = await response.json();
+      message = payload?.detail || message;
+    } catch (_error) {
+      // Ignore invalid JSON bodies.
+    }
+    window.alert(message);
+    return;
+  }
+
+  const snapshot = normalizeDataGenerationJob(await response.json());
+  if (!snapshot) {
+    return;
+  }
+
+  applyDataGenerationJobsState({
+    version: dataGenerationJobsStateVersion,
+    summary: {
+      ...dataGenerationJobsSummary,
+      runningCount: Number(dataGenerationJobsSummary.runningCount || 0) + 1,
+    },
+    jobs: [snapshot, ...dataGenerationJobsSnapshot.filter((job) => job.jobId !== snapshot.jobId)],
+  });
+}
+
+async function cancelDataGenerationJob(jobId) {
+  if (!jobId) {
+    return;
+  }
+
+  const response = await window.fetch(`/api/data-generation-jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+  if (!response.ok) {
+    return;
+  }
+
+  try {
+    await loadDataGenerationJobsState();
+  } catch (_error) {
+    const snapshot = normalizeDataGenerationJob(await response.json());
+    if (!snapshot) {
+      return;
+    }
+
+    applyDataGenerationJobsState({
+      version: dataGenerationJobsStateVersion,
+      summary: dataGenerationJobsSummary,
+      jobs: [snapshot, ...dataGenerationJobsSnapshot.filter((job) => job.jobId !== snapshot.jobId)],
+    });
+  }
+}
+
+async function cleanupDataGenerationJob(jobId) {
+  if (!jobId) {
+    return;
+  }
+
+  const response = await window.fetch(`/api/data-generation-jobs/${encodeURIComponent(jobId)}/cleanup`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    let message = "The generated data could not be cleaned.";
+    try {
+      const payload = await response.json();
+      message = payload?.detail || message;
+    } catch (_error) {
+      // Ignore invalid JSON bodies.
+    }
+    await showMessageDialog({
+      title: "Data cleanup failed",
+      copy: message,
+    });
+    return;
+  }
+
+  try {
+    await loadDataGenerationJobsState();
+  } catch (_error) {
+    const snapshot = normalizeDataGenerationJob(await response.json());
+    if (!snapshot) {
+      return;
+    }
+
+    applyDataGenerationJobsState({
+      version: dataGenerationJobsStateVersion,
+      summary: dataGenerationJobsSummary,
+      jobs: [snapshot, ...dataGenerationJobsSnapshot.filter((job) => job.jobId !== snapshot.jobId)],
+    });
+  }
+
+  refreshSidebar().catch((error) => {
+    console.error("Failed to refresh the sidebar after cleanup.", error);
+  });
+}
+
+async function runIngestionCleanup(targetId) {
+  if (!targetId) {
+    return;
+  }
+
+  const response = await window.fetch(`/api/ingestion-cleanup/${encodeURIComponent(targetId)}`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    let message = "The ingestion target could not be cleaned.";
+    try {
+      const payload = await response.json();
+      message = payload?.detail || message;
+    } catch (_error) {
+      // Ignore invalid JSON bodies.
+    }
+    await showMessageDialog({
+      title: "Environment cleanup failed",
+      copy: message,
+    });
+    return;
+  }
+
+  const payload = await response.json();
+  await Promise.allSettled([refreshSidebar(), loadDataGenerationJobsState()]);
+  renderQueryNotificationMenu();
+  if (payload?.message) {
+    await showMessageDialog({
+      title: "Environment cleanup complete",
+      copy: payload.message,
+    });
+  }
 }
 
 async function openNotebookForQueryJob(notebookId, cellId = "") {
@@ -4897,6 +6651,7 @@ async function startQueryJobForForm(form) {
     return;
   }
 
+  recordNotebookActivity(notebookId, "run");
   const nextJobs = [snapshot, ...queryJobsSnapshot.filter((job) => job.jobId !== snapshot.jobId)];
   applyQueryJobsState({
     version: queryJobsStateVersion,
@@ -4924,17 +6679,21 @@ async function cancelQueryJob(jobId) {
     return;
   }
 
-  const snapshot = normalizeQueryJob(await response.json());
-  if (!snapshot) {
-    return;
-  }
+  try {
+    await loadQueryJobsState();
+  } catch (_error) {
+    const snapshot = normalizeQueryJob(await response.json());
+    if (!snapshot) {
+      return;
+    }
 
-  applyQueryJobsState({
-    version: queryJobsStateVersion,
-    summary: queryJobsSummary,
-    jobs: [snapshot, ...queryJobsSnapshot.filter((job) => job.jobId !== snapshot.jobId)],
-    performance: queryPerformanceState,
-  });
+    applyQueryJobsState({
+      version: queryJobsStateVersion,
+      summary: queryJobsSummary,
+      jobs: [snapshot, ...queryJobsSnapshot.filter((job) => job.jobId !== snapshot.jobId)],
+      performance: queryPerformanceState,
+    });
+  }
 }
 
 function downloadTextFile(filename, content, mimeType) {
@@ -5033,6 +6792,9 @@ async function loadNotebookWorkspace(notebookId) {
   processHtmx(panel);
   initializeEditors(panel);
   applyNotebookMetadata();
+  if (currentSidebarMode() !== "notebook") {
+    await refreshSidebar("notebook");
+  }
   activateNotebookLink(notebookId);
   revealNotebookLink(notebookId);
   writeLastNotebookId(notebookId);
@@ -5112,6 +6874,17 @@ document.body.addEventListener("click", async (event) => {
     syncSourceActionMenu(sourceActionMenu);
   }
 
+  const runCellButton = event.target.closest("[data-run-cell]");
+  if (runCellButton) {
+    event.preventDefault();
+    const form = runCellButton.closest("[data-query-form]");
+    if (!form) {
+      return;
+    }
+    await startQueryJobForForm(form);
+    return;
+  }
+
   const sidebarToggleButton = event.target.closest("[data-sidebar-toggle]");
   if (sidebarToggleButton) {
     event.preventDefault();
@@ -5121,10 +6894,77 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const openIngestionWorkbenchButton = event.target.closest("[data-open-ingestion-workbench]");
+  if (openIngestionWorkbenchButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    queryNotificationMenu()?.removeAttribute("open");
+    await openIngestionWorkbench({
+      focusJobId: openIngestionWorkbenchButton.dataset.focusGenerationJob || "",
+    });
+    return;
+  }
+
+  const openQueryWorkbenchButton = event.target.closest("[data-open-query-workbench]");
+  if (openQueryWorkbenchButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    queryNotificationMenu()?.removeAttribute("open");
+    await openQueryWorkbench(openQueryWorkbenchButton.dataset.openRecentNotebook || "");
+    return;
+  }
+
+  const openRecentNotebookButton = event.target.closest("[data-open-recent-notebook]");
+  if (openRecentNotebookButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    queryNotificationMenu()?.removeAttribute("open");
+    await openQueryWorkbench(openRecentNotebookButton.dataset.openRecentNotebook || "");
+    return;
+  }
+
+  const openIngestionRunbookButton = event.target.closest("[data-open-ingestion-runbook]");
+  if (openIngestionRunbookButton) {
+    event.preventDefault();
+    await openIngestionWorkbench({
+      focusGeneratorId: openIngestionRunbookButton.dataset.openIngestionRunbook || "",
+    });
+    return;
+  }
+
+  const clearNotificationsButton = event.target.closest("[data-clear-notifications]");
+  if (clearNotificationsButton) {
+    event.preventDefault();
+    clearVisibleNotifications();
+    return;
+  }
+
+  const runIngestionCleanupButton = event.target.closest("[data-run-ingestion-cleanup]");
+  if (runIngestionCleanupButton) {
+    event.preventDefault();
+    const targetTitle = runIngestionCleanupButton.dataset.cleanupTargetTitle || "Environment cleanup";
+    const confirmCopy =
+      runIngestionCleanupButton.dataset.cleanupTargetCopy ||
+      "Clean the selected ingestion target? This cannot be undone.";
+    const { confirmed } = await showConfirmDialog({
+      title: targetTitle,
+      copy: confirmCopy,
+      confirmLabel: "Clean target",
+    });
+    if (!confirmed) {
+      return;
+    }
+    await runIngestionCleanup(runIngestionCleanupButton.dataset.runIngestionCleanup || "");
+    return;
+  }
+
   const createNotebookButton = event.target.closest("[data-create-notebook]");
   if (createNotebookButton) {
     event.preventDefault();
     event.stopPropagation();
+    if (!notebookTreeRoot()) {
+      await refreshSidebar("notebook");
+    }
 
     const target = resolveNotebookCreateTarget(createNotebookButton);
     createNotebook(target);
@@ -5142,6 +6982,44 @@ document.body.addEventListener("click", async (event) => {
   if (cancelQueryJobButton) {
     event.preventDefault();
     await cancelQueryJob(cancelQueryJobButton.dataset.cancelQueryJob || "");
+    return;
+  }
+
+  const cancelDataGenerationButton = event.target.closest("[data-cancel-data-generation-job]");
+  if (cancelDataGenerationButton) {
+    event.preventDefault();
+    await cancelDataGenerationJob(cancelDataGenerationButton.dataset.cancelDataGenerationJob || "");
+    return;
+  }
+
+  const cleanupDataGenerationButton = event.target.closest("[data-cleanup-data-generation-job]");
+  if (cleanupDataGenerationButton) {
+    event.preventDefault();
+    const jobCard = cleanupDataGenerationButton.closest("[data-data-generation-job-card]");
+    const jobTitle =
+      jobCard?.querySelector(".ingestion-job-copy h4")?.textContent?.trim() || "Generated data";
+    const { confirmed } = await showConfirmDialog({
+      title: "Clean generated data",
+      copy: `Clean the generated data for ${jobTitle}? This keeps the target structure but removes the loaded data.`,
+      confirmLabel: "Clean data",
+    });
+    if (!confirmed) {
+      return;
+    }
+    await cleanupDataGenerationJob(cleanupDataGenerationButton.dataset.cleanupDataGenerationJob || "");
+    return;
+  }
+
+  const startDataGenerationButton = event.target.closest("[data-start-data-generation]");
+  if (startDataGenerationButton) {
+    event.preventDefault();
+    const generatorCard = startDataGenerationButton.closest("[data-generator-card]");
+    const sizeInput = generatorCard?.querySelector("[data-ingestion-size-input]");
+    const requestedSize = Number(sizeInput?.value ?? 0);
+    await startDataGenerationJob(
+      startDataGenerationButton.dataset.startDataGeneration || "",
+      requestedSize
+    );
     return;
   }
 
@@ -5900,6 +7778,7 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
   initializeSidebarSearch();
   initializeNotebookTree();
   initializeSidebarToggle();
+  applyWorkbenchTitle(currentWorkspaceMode());
   applyNotebookMetadata();
   restoreSelectedSourceObject();
   renderQueryMonitor();
@@ -5922,13 +7801,68 @@ initializeEditors();
 initializeSidebarSearch();
 initializeNotebookTree();
 initializeSidebarToggle();
+applyWorkbenchTitle(currentWorkspaceMode());
 applyNotebookMetadata();
 restoreSelectedSourceObject();
+ensureDataGenerationEventSource();
+ensureDataSourceEventsEventSource();
 ensureQueryJobsEventSource();
-loadQueryJobsState()
-  .catch((error) => {
+const initialWorkspaceMode = currentWorkspaceMode();
+const initialLoadTasks = [
+  loadQueryJobsState().catch((error) => {
     console.error("Failed to load query jobs.", error);
-  })
+  }),
+  loadDataGenerationJobsState().catch((error) => {
+    console.error("Failed to load data generation jobs.", error);
+  }),
+];
+
+if (initialWorkspaceMode === "ingestion") {
+  initialLoadTasks.push(
+    loadDataGeneratorCatalog().catch((error) => {
+      console.error("Failed to load data generators.", error);
+    })
+  );
+}
+
+Promise.allSettled(initialLoadTasks)
   .finally(() => {
+    if (initialWorkspaceMode === "ingestion") {
+      renderIngestionWorkbench();
+      renderDataGenerationMonitor();
+      renderQueryNotificationMenu();
+      return;
+    }
+
+    if (homePageRoot()) {
+      const notebookSectionRoot = notebookSection();
+      if (notebookSectionRoot) {
+        notebookSectionRoot.open = false;
+      }
+
+      const dataSourcesRoot = dataSourcesSection();
+      if (dataSourcesRoot) {
+        dataSourcesRoot.open = false;
+      }
+
+      const queryMonitorSectionRoot = document.querySelector("[data-query-monitor-section]");
+      if (queryMonitorSectionRoot) {
+        queryMonitorSectionRoot.open = false;
+      }
+
+      renderHomePage();
+      renderQueryNotificationMenu();
+      return;
+    }
+
+    const currentNotebookId = currentWorkspaceNotebookId();
+    if (window.location.pathname.startsWith("/notebooks/") && currentNotebookId) {
+      activateNotebookLink(currentNotebookId);
+      revealNotebookLink(currentNotebookId);
+      writeLastNotebookId(currentNotebookId);
+      renderQueryNotificationMenu();
+      return;
+    }
+
     restoreLastNotebook();
   });

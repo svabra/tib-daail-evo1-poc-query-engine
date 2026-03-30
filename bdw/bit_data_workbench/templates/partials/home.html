@@ -1,0 +1,58 @@
+<section class="home-page" data-home-page>
+  <div class="home-hero">
+    <div class="home-hero-copy">
+      <span class="home-eyebrow">Welcome</span>
+      <h2>Welcome to the DAAIFL Workbench</h2>
+      <p>
+        Choose the workbench you want to enter, then continue from your recent notebooks or ingestion runs.
+      </p>
+    </div>
+    <div class="home-workbench-grid">
+      <button type="button" class="home-workbench-card" data-open-query-workbench>
+        <span class="home-workbench-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <rect x="3.2" y="4.2" width="17.6" height="15.6" rx="2"></rect>
+            <path d="M4.7 9h14.6"></path>
+            <path d="M8.4 13.3 10.8 15.7 16 10.5"></path>
+          </svg>
+        </span>
+        <span class="home-workbench-title">Query Workbench</span>
+        <span class="home-workbench-copy">Open notebooks, run SQL, and compare execution behavior.</span>
+      </button>
+      <button type="button" class="home-workbench-card" data-open-ingestion-workbench>
+        <span class="home-workbench-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M4.2 5.1h15.6v5.1H4.2z"></path>
+            <path d="M7.2 12.8v4.1a3 3 0 0 0 3 3h3.6a3 3 0 0 0 3-3v-4.1"></path>
+            <path d="M12 3.4v9.9"></path>
+            <path d="M8.7 10.4 12 13.7l3.3-3.3"></path>
+          </svg>
+        </span>
+        <span class="home-workbench-title">Ingestion Workbench</span>
+        <span class="home-workbench-copy">Launch generator runbooks and monitor ingestion progress.</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="home-grid">
+    <section class="home-section">
+      <div class="home-section-header">
+        <h3>Latest Notebooks Touched</h3>
+        <p>Most recently run or edited notebooks in this browser.</p>
+      </div>
+      <div class="home-activity-list" data-home-recent-notebooks>
+        <p class="home-empty">No recent notebook activity yet.</p>
+      </div>
+    </section>
+
+    <section class="home-section">
+      <div class="home-section-header">
+        <h3>Latest Ingestions Run</h3>
+        <p>Most recent ingestion jobs observed by the workbench.</p>
+      </div>
+      <div class="home-activity-list" data-home-recent-ingestions>
+        <p class="home-empty">No ingestion runs yet.</p>
+      </div>
+    </section>
+  </div>
+</section>

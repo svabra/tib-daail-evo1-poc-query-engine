@@ -28,7 +28,9 @@ def infer_source_types(data_sources: list[str]) -> list[str]:
         normalized = source_id.strip().lower()
         if not normalized:
             continue
-        if normalized.startswith("pg_"):
+        if normalized.endswith("_native"):
+            source_type = "postgres-native"
+        elif normalized.startswith("pg_"):
             source_type = "postgres"
         elif normalized.endswith(".s3") or normalized == "workspace.s3":
             source_type = "s3"
@@ -74,11 +76,20 @@ class DuckDBQueryProgressReporter:
         return max(0.0, min(progress, 1.0))
 
 
+class PostgresNativeQueryProgressReporter:
+    backend_name = "PostgreSQL Native"
+
+    def progress(self, connection: Any) -> float | None:
+        return None
+
+
 class QueryProgressReporterRegistry:
     def __init__(self) -> None:
         self._default = DuckDBQueryProgressReporter()
+        self._postgres_native = PostgresNativeQueryProgressReporter()
         self._by_source_type: dict[str, QueryProgressReporter] = {
             "postgres": self._default,
+            "postgres-native": self._postgres_native,
             "s3": self._default,
             "workspace": self._default,
             "unknown": self._default,
@@ -108,11 +119,13 @@ class QueryJobManager:
         *,
         max_result_rows: int,
         connection_factory: Callable[[], duckdb.DuckDBPyConnection],
+        postgres_connection_factory: Callable[[str], Any],
         notebook_title_resolver: Callable[[str], str | None],
         metadata_refresher: Callable[[], None],
     ) -> None:
         self._max_result_rows = max(1, max_result_rows)
         self._connection_factory = connection_factory
+        self._postgres_connection_factory = postgres_connection_factory
         self._notebook_title_resolver = notebook_title_resolver
         self._metadata_refresher = metadata_refresher
         self._reporters = QueryProgressReporterRegistry()
@@ -205,7 +218,10 @@ class QueryJobManager:
 
         if connection is not None:
             try:
-                connection.interrupt()
+                if hasattr(connection, "interrupt"):
+                    connection.interrupt()
+                elif hasattr(connection, "cancel"):
+                    connection.cancel()
             except Exception:
                 pass
 
@@ -243,7 +259,15 @@ class QueryJobManager:
         execution_error: Exception | None = None
 
         try:
-            connection = self._connection_factory()
+            use_postgres_native = any(
+                source_id.strip().lower() == "pg_oltp_native"
+                for source_id in record.snapshot.data_sources
+            )
+            connection = (
+                self._postgres_connection_factory("oltp")
+                if use_postgres_native
+                else self._connection_factory()
+            )
             with self._condition:
                 record = self._jobs.get(job_id)
                 if record is None:
@@ -253,55 +277,107 @@ class QueryJobManager:
             def execute_query() -> None:
                 nonlocal execution_result, execution_error
                 try:
-                    cursor = connection.execute(record.snapshot.sql)
-                    columns = [column[0] for column in cursor.description] if cursor.description else []
-                    self._patch_job(
-                        job_id,
-                        columns=columns,
-                        progress_label="Fetching rows..." if columns else "Finalizing...",
-                        message="Query is streaming rows..." if columns else "Statement executed successfully.",
-                    )
-
-                    rows_buffer: list[tuple[Any, ...]] = []
-                    truncated = False
-                    row_count = 0
-                    message = "Statement executed successfully."
-
-                    if columns:
-                        batch_size = max(1, min(25, self._max_result_rows))
-                        while len(rows_buffer) <= self._max_result_rows:
-                            batch = connection.fetchmany(batch_size)
-                            if not batch:
-                                break
-                            rows_buffer.extend(tuple(item) for item in batch)
-                            truncated = len(rows_buffer) > self._max_result_rows
-                            visible_rows = rows_buffer[: self._max_result_rows]
-                            row_count = len(visible_rows)
-                            message = f"{row_count} row(s) shown."
-                            if truncated:
-                                message = (
-                                    f"{self._max_result_rows} row(s) shown. "
-                                    "The result was truncated for the UI."
-                                )
+                    if use_postgres_native:
+                        with connection.cursor() as cursor:
+                            cursor.execute(record.snapshot.sql)
+                            columns = [column.name for column in (cursor.description or [])]
                             self._patch_job(
                                 job_id,
-                                rows=visible_rows,
+                                columns=columns,
+                                progress_label="Fetching rows..." if columns else "Finalizing...",
+                                message="Query is fetching rows..." if columns else "Statement executed successfully.",
+                            )
+
+                            rows_buffer: list[tuple[Any, ...]] = []
+                            truncated = False
+                            row_count = 0
+                            message = "Statement executed successfully."
+
+                            if columns:
+                                batch_size = max(1, min(25, self._max_result_rows))
+                                while len(rows_buffer) <= self._max_result_rows:
+                                    batch = cursor.fetchmany(batch_size)
+                                    if not batch:
+                                        break
+                                    rows_buffer.extend(tuple(item) for item in batch)
+                                    truncated = len(rows_buffer) > self._max_result_rows
+                                    visible_rows = rows_buffer[: self._max_result_rows]
+                                    row_count = len(visible_rows)
+                                    message = f"{row_count} row(s) shown."
+                                    if truncated:
+                                        message = (
+                                            f"{self._max_result_rows} row(s) shown. "
+                                            "The result was truncated for the UI."
+                                        )
+                                    self._patch_job(
+                                        job_id,
+                                        rows=visible_rows,
+                                        row_count=row_count,
+                                        rows_shown=row_count,
+                                        truncated=truncated,
+                                        message=message,
+                                    )
+                                    if truncated:
+                                        break
+
+                            execution_result = QueryResult(
+                                sql=record.snapshot.sql,
+                                columns=columns,
+                                rows=rows_buffer[: self._max_result_rows],
                                 row_count=row_count,
-                                rows_shown=row_count,
                                 truncated=truncated,
                                 message=message,
                             )
-                            if truncated:
-                                break
+                    else:
+                        cursor = connection.execute(record.snapshot.sql)
+                        columns = [column[0] for column in cursor.description] if cursor.description else []
+                        self._patch_job(
+                            job_id,
+                            columns=columns,
+                            progress_label="Fetching rows..." if columns else "Finalizing...",
+                            message="Query is streaming rows..." if columns else "Statement executed successfully.",
+                        )
 
-                    execution_result = QueryResult(
-                        sql=record.snapshot.sql,
-                        columns=columns,
-                        rows=rows_buffer[: self._max_result_rows],
-                        row_count=row_count,
-                        truncated=truncated,
-                        message=message,
-                    )
+                        rows_buffer: list[tuple[Any, ...]] = []
+                        truncated = False
+                        row_count = 0
+                        message = "Statement executed successfully."
+
+                        if columns:
+                            batch_size = max(1, min(25, self._max_result_rows))
+                            while len(rows_buffer) <= self._max_result_rows:
+                                batch = connection.fetchmany(batch_size)
+                                if not batch:
+                                    break
+                                rows_buffer.extend(tuple(item) for item in batch)
+                                truncated = len(rows_buffer) > self._max_result_rows
+                                visible_rows = rows_buffer[: self._max_result_rows]
+                                row_count = len(visible_rows)
+                                message = f"{row_count} row(s) shown."
+                                if truncated:
+                                    message = (
+                                        f"{self._max_result_rows} row(s) shown. "
+                                        "The result was truncated for the UI."
+                                    )
+                                self._patch_job(
+                                    job_id,
+                                    rows=visible_rows,
+                                    row_count=row_count,
+                                    rows_shown=row_count,
+                                    truncated=truncated,
+                                    message=message,
+                                )
+                                if truncated:
+                                    break
+
+                        execution_result = QueryResult(
+                            sql=record.snapshot.sql,
+                            columns=columns,
+                            rows=rows_buffer[: self._max_result_rows],
+                            row_count=row_count,
+                            truncated=truncated,
+                            message=message,
+                        )
                 except Exception as exc:
                     execution_error = exc
 
@@ -439,7 +515,7 @@ class QueryJobManager:
     def _state_payload_locked(self) -> dict[str, Any]:
         jobs = sorted(
             self._jobs.values(),
-            key=lambda record: (record.snapshot.updated_at, record.sort_index),
+            key=lambda record: record.sort_index,
             reverse=True,
         )
         latest_cell_keys: set[tuple[str, str]] = set()
@@ -454,11 +530,14 @@ class QueryJobManager:
                 latest_cell_keys.add(cell_key)
             job_payloads.append(payload)
         running_jobs = [record.snapshot for record in jobs if record.snapshot.status in RUNNING_QUERY_STATUSES]
-        completed_jobs = [
-            record.snapshot
-            for record in reversed(jobs)
-            if record.snapshot.status in TERMINAL_QUERY_STATUSES and record.snapshot.completed_at
-        ]
+        completed_jobs = sorted(
+            (
+                record.snapshot
+                for record in self._jobs.values()
+                if record.snapshot.status == "completed" and record.snapshot.completed_at
+            ),
+            key=lambda job: (job.completed_at or job.updated_at or "", job.job_id),
+        )
         recent_metrics = [
             QueryJobMetricPoint(
                 job_id=job.job_id,
