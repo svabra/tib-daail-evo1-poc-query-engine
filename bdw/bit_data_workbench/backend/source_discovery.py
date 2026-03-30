@@ -196,10 +196,17 @@ class DataSourceDiscoverer(ABC):
     source_id = "unknown"
     source_label = "Unknown"
     poll_interval_seconds = 5.0
+    manual_connection_control = False
 
     @abstractmethod
     def sync(self, connection: duckdb.DuckDBPyConnection) -> DataSourceDiscoveryResult | None:
         raise NotImplementedError
+
+    def connect(self) -> DataSourceDiscoveryResult | None:
+        raise RuntimeError(f"{self.source_label} does not support manual connection control.")
+
+    def disconnect(self) -> DataSourceDiscoveryResult | None:
+        raise RuntimeError(f"{self.source_label} does not support manual connection control.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,6 +223,7 @@ class SqlDiscoveredRelation:
 class SqlSourceDiscoverer(DataSourceDiscoverer):
     source_type = "sql"
     poll_interval_seconds = 5.0
+    manual_connection_control = True
 
     def __init__(
         self,
@@ -223,14 +231,65 @@ class SqlSourceDiscoverer(DataSourceDiscoverer):
         source_id: str,
         source_label: str,
         snapshot_provider: Callable[[], tuple[SourceConnectionStatus, list[SqlDiscoveredRelation]]],
+        disconnect_handler: Callable[[], None] | None = None,
     ) -> None:
         self.source_id = source_id
         self.source_label = source_label
         self._snapshot_provider = snapshot_provider
+        self._disconnect_handler = disconnect_handler
         self._current_relations: dict[str, SqlDiscoveredRelation] = {}
+        self._lock = threading.RLock()
+        self._enabled = True
+
+    def connect(self) -> DataSourceDiscoveryResult | None:
+        with self._lock:
+            self._enabled = True
+        return self.sync(None)
+
+    def disconnect(self) -> DataSourceDiscoveryResult | None:
+        with self._lock:
+            self._enabled = False
+        if self._disconnect_handler is not None:
+            self._disconnect_handler()
+        return DataSourceDiscoveryResult(
+            source_type=self.source_type,
+            source_id=self.source_id,
+            source_label=self.source_label,
+            added_relations=[],
+            removed_relations=[],
+            updated_relations=[],
+            message=f"{self.source_label} disconnected.",
+            connection_status=SourceConnectionStatus(
+                source_id=self.source_id,
+                state="disconnected",
+                label="Disconnected",
+                detail=f"{self.source_label} live discovery is disconnected.",
+                checked_at=utc_now_iso(),
+            ),
+        )
 
     def sync(self, connection: duckdb.DuckDBPyConnection) -> DataSourceDiscoveryResult | None:
         del connection
+        with self._lock:
+            enabled = self._enabled
+        if not enabled:
+            return DataSourceDiscoveryResult(
+                source_type=self.source_type,
+                source_id=self.source_id,
+                source_label=self.source_label,
+                added_relations=[],
+                removed_relations=[],
+                updated_relations=[],
+                message=f"{self.source_label} discovery is disconnected.",
+                connection_status=SourceConnectionStatus(
+                    source_id=self.source_id,
+                    state="disconnected",
+                    label="Disconnected",
+                    detail=f"{self.source_label} live discovery is disconnected.",
+                    checked_at=utc_now_iso(),
+                ),
+            )
+
         connection_status, relations = self._snapshot_provider()
 
         if connection_status.state != "connected":
@@ -246,35 +305,36 @@ class SqlSourceDiscoverer(DataSourceDiscoverer):
             )
 
         next_relations = {relation.relation_id: relation for relation in relations}
-        removed_relation_ids = [
-            relation_id
-            for relation_id in self._current_relations
-            if relation_id not in next_relations
-        ]
-        added_relation_ids = [
-            relation_id
-            for relation_id in next_relations
-            if relation_id not in self._current_relations
-        ]
-        updated_relation_ids = [
-            relation_id
-            for relation_id, relation in next_relations.items()
-            if relation_id in self._current_relations and self._current_relations[relation_id] != relation
-        ]
+        with self._lock:
+            removed_relation_ids = [
+                relation_id
+                for relation_id in self._current_relations
+                if relation_id not in next_relations
+            ]
+            added_relation_ids = [
+                relation_id
+                for relation_id in next_relations
+                if relation_id not in self._current_relations
+            ]
+            updated_relation_ids = [
+                relation_id
+                for relation_id, relation in next_relations.items()
+                if relation_id in self._current_relations and self._current_relations[relation_id] != relation
+            ]
 
-        if not added_relation_ids and not removed_relation_ids and not updated_relation_ids:
-            return DataSourceDiscoveryResult(
-                source_type=self.source_type,
-                source_id=self.source_id,
-                source_label=self.source_label,
-                added_relations=[],
-                removed_relations=[],
-                updated_relations=[],
-                message=f"{self.source_label} connection checked.",
-                connection_status=connection_status,
-            )
+            if not added_relation_ids and not removed_relation_ids and not updated_relation_ids:
+                return DataSourceDiscoveryResult(
+                    source_type=self.source_type,
+                    source_id=self.source_id,
+                    source_label=self.source_label,
+                    added_relations=[],
+                    removed_relations=[],
+                    updated_relations=[],
+                    message=f"{self.source_label} connection checked.",
+                    connection_status=connection_status,
+                )
 
-        self._current_relations = next_relations
+            self._current_relations = next_relations
         return DataSourceDiscoveryResult(
             source_type=self.source_type,
             source_id=self.source_id,
@@ -313,26 +373,86 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
     source_id = "workspace.s3"
     source_label = "MinIO / S3"
     poll_interval_seconds = 2.0
+    manual_connection_control = True
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
         self._startup_views = parse_s3_startup_views(settings.s3_startup_views)
         self._current_specs: dict[str, DiscoveredRelationSpec] = {}
         self._current_buckets: set[str] = set()
+        self._lock = threading.RLock()
+        self._enabled = True
+
+    def connect(self) -> DataSourceDiscoveryResult | None:
+        with self._lock:
+            self._enabled = True
+        return DataSourceDiscoveryResult(
+            source_type=self.source_type,
+            source_id=self.source_id,
+            source_label=self.source_label,
+            added_relations=[],
+            removed_relations=[],
+            updated_relations=[],
+            message=f"{self.source_label} connected.",
+            connection_status=self._connected_status("MinIO / S3 live discovery is connected."),
+        )
+
+    def disconnect(self) -> DataSourceDiscoveryResult | None:
+        with self._lock:
+            self._enabled = False
+        return DataSourceDiscoveryResult(
+            source_type=self.source_type,
+            source_id=self.source_id,
+            source_label=self.source_label,
+            added_relations=[],
+            removed_relations=[],
+            updated_relations=[],
+            message=f"{self.source_label} disconnected.",
+            connection_status=self._disconnected_status("MinIO / S3 live discovery is disconnected."),
+        )
 
     def sync(self, connection: duckdb.DuckDBPyConnection) -> DataSourceDiscoveryResult | None:
-        if not all(
-            (
-                self._settings.s3_endpoint,
-                self._settings.s3_bucket,
-                self._settings.s3_access_key_id,
-                self._settings.s3_secret_access_key,
+        with self._lock:
+            enabled = self._enabled
+        if not enabled:
+            return DataSourceDiscoveryResult(
+                source_type=self.source_type,
+                source_id=self.source_id,
+                source_label=self.source_label,
+                added_relations=[],
+                removed_relations=[],
+                updated_relations=[],
+                message=f"{self.source_label} discovery is disconnected.",
+                connection_status=self._disconnected_status("MinIO / S3 live discovery is disconnected."),
             )
-        ):
-            return None
 
-        client = s3_client(self._settings)
-        current_buckets = set(list_s3_buckets(self._settings))
+        if not self._is_configured():
+            return DataSourceDiscoveryResult(
+                source_type=self.source_type,
+                source_id=self.source_id,
+                source_label=self.source_label,
+                added_relations=[],
+                removed_relations=[],
+                updated_relations=[],
+                message=f"{self.source_label} is not configured.",
+                connection_status=self._disconnected_status("MinIO / S3 is not configured."),
+            )
+
+        try:
+            client = s3_client(self._settings)
+            current_buckets = set(list_s3_buckets(self._settings))
+        except Exception as exc:
+            return DataSourceDiscoveryResult(
+                source_type=self.source_type,
+                source_id=self.source_id,
+                source_label=self.source_label,
+                added_relations=[],
+                removed_relations=[],
+                updated_relations=[],
+                message=f"{self.source_label} connection failed.",
+                connection_status=self._disconnected_status(f"{self.source_label} connection failed: {exc}"),
+            )
+
         if not self._current_specs:
             self._current_specs = self._load_existing_specs(connection)
         if not self._current_buckets:
@@ -349,7 +469,16 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
         added_buckets = sorted(current_buckets - self._current_buckets)
         removed_buckets = sorted(self._current_buckets - current_buckets)
         if not removed_names and not added_names and not updated_names and not added_buckets and not removed_buckets:
-            return None
+            return DataSourceDiscoveryResult(
+                source_type=self.source_type,
+                source_id=self.source_id,
+                source_label=self.source_label,
+                added_relations=[],
+                removed_relations=[],
+                updated_relations=[],
+                message=f"{self.source_label} connection checked.",
+                connection_status=self._connected_status(f"{self.source_label} is reachable."),
+            )
 
         for schema_name in sorted({spec.schema_name for spec in desired_specs.values()}):
             connection.execute(f"CREATE SCHEMA IF NOT EXISTS {qualified_name(schema_name)}")
@@ -410,7 +539,16 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
             and not added_buckets
             and not removed_buckets
         ):
-            return None
+            return DataSourceDiscoveryResult(
+                source_type=self.source_type,
+                source_id=self.source_id,
+                source_label=self.source_label,
+                added_relations=[],
+                removed_relations=[],
+                updated_relations=[],
+                message=f"{self.source_label} connection checked.",
+                connection_status=self._connected_status(f"{self.source_label} is reachable."),
+            )
 
         self._current_specs = next_specs
         self._current_buckets = set(current_buckets)
@@ -429,6 +567,35 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                 updated_relations=successful_updated,
             ),
             metadata_changed=bool(added_buckets or removed_buckets),
+            connection_status=self._connected_status(f"{self.source_label} is reachable."),
+        )
+
+    def _is_configured(self) -> bool:
+        return all(
+            (
+                self._settings.s3_endpoint,
+                self._settings.s3_bucket,
+                self._settings.s3_access_key_id,
+                self._settings.s3_secret_access_key,
+            )
+        )
+
+    def _connected_status(self, detail: str) -> SourceConnectionStatus:
+        return SourceConnectionStatus(
+            source_id=self.source_id,
+            state="connected",
+            label="Connected",
+            detail=detail,
+            checked_at=utc_now_iso(),
+        )
+
+    def _disconnected_status(self, detail: str) -> SourceConnectionStatus:
+        return SourceConnectionStatus(
+            source_id=self.source_id,
+            state="disconnected",
+            label="Disconnected",
+            detail=detail,
+            checked_at=utc_now_iso(),
         )
 
     def _load_existing_specs(
@@ -584,6 +751,11 @@ class DataSourceDiscoveryManager:
         self._condition = threading.Condition(self._lock)
         self._events: list[DataSourceDiscoveryEventDefinition] = []
         self._source_statuses: dict[str, SourceConnectionStatus] = {}
+        self._discoverers_by_source_id = {
+            discoverer.source_id: discoverer
+            for discoverer in self._discoverers
+            if getattr(discoverer, "source_id", "")
+        }
         self._state_version = 0
         self._stop_event = threading.Event()
         self._threads: list[threading.Thread] = []
@@ -629,6 +801,26 @@ class DataSourceDiscoveryManager:
         with self._condition:
             return dict(self._source_statuses)
 
+    def supports_manual_connection_control(self, source_id: str) -> bool:
+        discoverer = self._discoverers_by_source_id.get(source_id)
+        return bool(discoverer and getattr(discoverer, "manual_connection_control", False))
+
+    def connect_source(self, source_id: str) -> dict[str, Any]:
+        discoverer = self._discoverers_by_source_id.get(source_id)
+        if discoverer is None or not getattr(discoverer, "manual_connection_control", False):
+            raise KeyError(f"Unknown data source: {source_id}")
+        result = discoverer.connect()
+        self._apply_result(result, emit_event=False)
+        return self.state_payload()
+
+    def disconnect_source(self, source_id: str) -> dict[str, Any]:
+        discoverer = self._discoverers_by_source_id.get(source_id)
+        if discoverer is None or not getattr(discoverer, "manual_connection_control", False):
+            raise KeyError(f"Unknown data source: {source_id}")
+        result = discoverer.disconnect()
+        self._apply_result(result, emit_event=False)
+        return self.state_payload()
+
     def wait_for_state(self, last_version: int | None, timeout: float = 15.0) -> dict[str, Any]:
         with self._condition:
             if last_version is None or last_version != self._state_version:
@@ -669,6 +861,17 @@ class DataSourceDiscoveryManager:
         if result is None or not result.has_changes:
             return
 
+        self._apply_result(result, emit_event=emit_event)
+
+    def _apply_result(
+        self,
+        result: DataSourceDiscoveryResult | None,
+        *,
+        emit_event: bool,
+    ) -> None:
+        if result is None or not result.has_changes:
+            return
+
         status_changed = False
         if result.connection_status is not None:
             status_changed = self._update_source_status(result.connection_status)
@@ -679,7 +882,7 @@ class DataSourceDiscoveryManager:
         except Exception as exc:
             logger.warning(
                 "Failed to refresh workbench metadata after '%s' discovery: %s",
-                discoverer.source_type,
+                result.source_type,
                 exc,
             )
 
@@ -695,7 +898,13 @@ class DataSourceDiscoveryManager:
     def _update_source_status(self, status: SourceConnectionStatus) -> bool:
         with self._condition:
             previous = self._source_statuses.get(status.source_id)
-            if previous == status:
+            if (
+                previous is not None
+                and previous.source_id == status.source_id
+                and previous.state == status.state
+                and previous.label == status.label
+                and previous.detail == status.detail
+            ):
                 return False
             self._source_statuses[status.source_id] = status
             return True

@@ -54,10 +54,12 @@ class SourceConnectionStatus:
 @dataclass(slots=True)
 class SourceCatalog:
     name: str
+    connection_source_id: str | None = None
     schemas: list[SourceSchema] = field(default_factory=list)
     connection_status: str | None = None
     connection_label: str | None = None
     connection_detail: str | None = None
+    connection_controls_enabled: bool = False
 
 
 @dataclass(slots=True)

@@ -10,10 +10,10 @@ from .base import (
     generated_name,
 )
 from .helpers import (
-    SMOKE_DATASET_COLUMNS,
+    TAX_ASSESSMENT_DATASET_COLUMNS,
     approximate_size_gb,
     qualified_name,
-    smoke_dataset_select,
+    tax_assessment_dataset_select,
     sql_literal,
 )
 
@@ -22,7 +22,7 @@ class PgVsS3ContestDataGenerator(DataGenerator):
     generator_id = "pg_vs_s3_contest_loader"
     title = "PG vs S3 Contest Loader"
     description = (
-        "Generates one deterministic sales-order style dataset and writes the exact same "
+        "Generates one deterministic federal-tax assessment dataset and writes the exact same "
         "records into PostgreSQL OLTP and into S3-backed Parquet, so both targets can be "
         "benchmarked against each other."
     )
@@ -30,9 +30,9 @@ class PgVsS3ContestDataGenerator(DataGenerator):
     default_size_gb = 1.0
     min_size_gb = 0.01
     max_size_gb = 128.0
-    approximate_row_bytes = 248
-    default_target_name = "generated_orders_pg_vs_s3"
-    tags = ("postgres", "s3", "oltp", "contest", "orders", "smoke")
+    approximate_row_bytes = 320
+    default_target_name = "tax_assessment_pg_vs_s3"
+    tags = ("postgres", "s3", "oltp", "contest", "tax", "assessment")
 
     def run(self, context: DataGeneratorContext) -> DataGeneratorResult:
         settings = context.settings
@@ -66,14 +66,14 @@ class PgVsS3ContestDataGenerator(DataGenerator):
             )
             connection.execute(f"CREATE SCHEMA IF NOT EXISTS {qualified_name(s3_schema)}")
             connection.execute(f"DROP TABLE IF EXISTS {postgres_relation}")
-            connection.execute(f"CREATE TABLE {postgres_relation} ({', '.join(SMOKE_DATASET_COLUMNS)})")
+            connection.execute(f"CREATE TABLE {postgres_relation} ({', '.join(TAX_ASSESSMENT_DATASET_COLUMNS)})")
             delete_s3_prefix(settings, settings.s3_bucket, f"generated/{target_name}")
 
             written_rows = 0
             for batch_index, start_row in enumerate(range(0, total_rows, batch_rows), start=1):
                 context.raise_if_cancelled()
                 end_row = min(total_rows, start_row + batch_rows)
-                select_sql = smoke_dataset_select(start_row, end_row)
+                select_sql = tax_assessment_dataset_select(start_row, end_row)
                 parquet_path = f"{object_prefix}/part-{batch_index:05d}.parquet"
 
                 connection.execute(f"INSERT INTO {postgres_relation} {select_sql}")

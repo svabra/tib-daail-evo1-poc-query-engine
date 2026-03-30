@@ -1,23 +1,23 @@
 from __future__ import annotations
 
 from .base import DataGenerationCancelled, DataGenerator, DataGeneratorContext, DataGeneratorResult, estimated_rows_for_size, generated_name
-from .helpers import SMOKE_DATASET_COLUMNS, approximate_size_gb, qualified_name, smoke_dataset_select
+from .helpers import VAT_SMOKE_DATASET_COLUMNS, approximate_size_gb, qualified_name, vat_smoke_dataset_select
 
 
 class PostgresOltpSmokeDataGenerator(DataGenerator):
     generator_id = "postgres_oltp_smoke_orders"
-    title = "PostgreSQL OLTP Smoke Loader"
+    title = "PostgreSQL OLTP VAT Smoke Loader"
     description = (
-        "Generates a semantic sales-order style dataset and writes it into PostgreSQL OLTP "
-        "through the attached DuckDB integration."
+        "Generates a VAT filing reference dataset for the Swiss Federal Tax Administration and "
+        "writes it into PostgreSQL OLTP through the attached DuckDB integration."
     )
     target_kind = "postgres"
     default_size_gb = 1.0
     min_size_gb = 0.01
     max_size_gb = 128.0
-    approximate_row_bytes = 256
-    default_target_name = "generated_orders_oltp"
-    tags = ("postgres", "oltp", "orders", "smoke")
+    approximate_row_bytes = 232
+    default_target_name = "vat_smoke_test_reference"
+    tags = ("postgres", "oltp", "vat", "tax", "smoke")
 
     def run(self, context: DataGeneratorContext) -> DataGeneratorResult:
         requested_size_gb = self.normalize_size_gb(context.requested_size_gb)
@@ -37,13 +37,13 @@ class PostgresOltpSmokeDataGenerator(DataGenerator):
                 target_relation=f"pg_oltp.public.{table_name}",
             )
             connection.execute(f"DROP TABLE IF EXISTS {relation}")
-            connection.execute(f"CREATE TABLE {relation} ({', '.join(SMOKE_DATASET_COLUMNS)})")
+            connection.execute(f"CREATE TABLE {relation} ({', '.join(VAT_SMOKE_DATASET_COLUMNS)})")
 
             inserted_rows = 0
             for batch_index, start_row in enumerate(range(0, total_rows, batch_rows), start=1):
                 context.raise_if_cancelled()
                 end_row = min(total_rows, start_row + batch_rows)
-                connection.execute(f"INSERT INTO {relation} {smoke_dataset_select(start_row, end_row)}")
+                connection.execute(f"INSERT INTO {relation} {vat_smoke_dataset_select(start_row, end_row)}")
                 inserted_rows = end_row
                 context.report(
                     progress=inserted_rows / total_rows,

@@ -1172,22 +1172,35 @@ details:not([open]) > .source-schema > summary::before {
   letter-spacing: 0.08em;
 }
 
-.source-connection-status {
+.source-catalog-meta {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   flex: 0 0 auto;
-  font-size: 0.7rem;
-  font-weight: 600;
+}
+
+.source-connection-status {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 24px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  background: #fff;
   color: var(--text-muted);
 }
 
-.source-connection-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 999px;
-  background: currentColor;
-  opacity: 0.9;
+.source-connection-icon,
+.source-control-icon {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .source-connection-status-connected {
@@ -1196,6 +1209,77 @@ details:not([open]) > .source-schema > summary::before {
 
 .source-connection-status-disconnected {
   color: #9b4b4b;
+}
+
+.source-connection-status-unknown {
+  color: var(--text-muted);
+}
+
+.source-connection-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-1px);
+  transition:
+    opacity 0.16s ease,
+    visibility 0.16s ease,
+    transform 0.16s ease;
+}
+
+.source-catalog > summary:hover .source-connection-actions,
+.source-catalog > summary:focus-within .source-connection-actions {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
+.source-control-button {
+  width: 24px;
+  height: 24px;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.source-control-button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.source-control-button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.source-catalog-meta[data-source-state="connected"] .source-control-button-disconnect,
+.source-catalog-meta[data-source-state="disconnected"] .source-control-button-connect {
+  display: inline-flex;
+}
+
+.source-catalog > summary.is-source-updated .source-node-label,
+.source-catalog > summary.is-source-updated .source-catalog-meta {
+  animation: source-pulse 0.75s ease-in-out 3;
+}
+
+@keyframes source-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.18;
+  }
 }
 
 .source-action-menu {

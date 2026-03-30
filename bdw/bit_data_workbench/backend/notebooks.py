@@ -69,53 +69,110 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         catalogs,
         catalog_name="pg_oltp",
         schema_name="public",
-        object_names=("generated_orders_pg_vs_s3",),
+        object_names=("tax_assessment_pg_vs_s3",),
     )
     contest_s3_relation = _find_relation_by_object_name(
         catalogs,
         catalog_name="workspace",
         schema_name=None,
-        object_names=("generated_orders_pg_vs_s3",),
+        object_names=("tax_assessment_pg_vs_s3",),
     )
     contest_postgres_native_relation = _strip_catalog_prefix(contest_postgres_relation, "pg_oltp")
 
     s3_sql = (
         "SELECT\n"
-        "  vat_id,\n"
+        "  filing_id,\n"
+        "  company_uid,\n"
         "  canton_code,\n"
-        "  category\n"
+        "  tax_period_end,\n"
+        "  declared_turnover_chf,\n"
+        "  net_vat_due_chf,\n"
+        "  refund_claim_chf,\n"
+        "  filing_status\n"
         f"FROM {preferred_s3_relation}\n"
-        "ORDER BY vat_id\n"
+        "WHERE tax_period_end >= DATE '2025-01-01'\n"
+        "  AND (net_vat_due_chf > 20000 OR refund_claim_chf > 5000)\n"
+        "ORDER BY tax_period_end DESC, net_vat_due_chf DESC, refund_claim_chf DESC\n"
         "LIMIT 100;"
         if preferred_s3_relation
-        else "SELECT 'Load the S3 VAT smoke data from the Ingestion Workbench first.' AS status;"
+        else "SELECT 'Run the S3 VAT Smoke Loader from the Ingestion Workbench first.' AS status;"
     )
 
     postgres_sql = (
         "SELECT\n"
-        "  vat_id,\n"
+        "  filing_id,\n"
+        "  company_uid,\n"
         "  canton_code,\n"
-        "  category,\n"
-        "  effective_from\n"
+        "  tax_period_end,\n"
+        "  output_vat_chf,\n"
+        "  input_vat_chf,\n"
+        "  net_vat_due_chf,\n"
+        "  filing_status,\n"
+        "  audit_flag\n"
         f"FROM {preferred_postgres_relation}\n"
-        "ORDER BY vat_id\n"
+        "WHERE tax_period_end >= DATE '2025-01-01'\n"
+        "  AND (net_vat_due_chf > 15000 OR audit_flag = true)\n"
+        "ORDER BY tax_period_end DESC, net_vat_due_chf DESC, filing_id DESC\n"
         "LIMIT 100;"
         if preferred_postgres_relation
-        else "SELECT 'Load the PostgreSQL OLTP VAT smoke data from the Ingestion Workbench first.' AS status;"
+        else "SELECT 'Run the PostgreSQL OLTP VAT Smoke Loader from the Ingestion Workbench first.' AS status;"
     )
     performance_sql_template = (
+        "WITH scoped_assessments AS (\n"
+        "  SELECT\n"
+        "    canton_code,\n"
+        "    tax_type,\n"
+        "    industry_sector,\n"
+        "    assessment_status,\n"
+        "    payment_status,\n"
+        "    CAST(date_trunc('quarter', tax_period_end) AS DATE) AS tax_quarter_start,\n"
+        "    assessed_tax_chf,\n"
+        "    collected_tax_chf,\n"
+        "    open_balance_chf,\n"
+        "    taxable_base_chf,\n"
+        "    declared_deduction_chf,\n"
+        "    audit_risk_score,\n"
+        "    CASE\n"
+        "      WHEN payment_status IN ('overdue', 'enforcement') THEN 1\n"
+        "      ELSE 0\n"
+        "    END AS enforcement_risk_flag\n"
+        "  FROM {relation}\n"
+        "  WHERE tax_period_end >= DATE '2024-01-01'\n"
+        "    AND tax_type IN ('VAT', 'COMPANY_TAX', 'ALCOHOL_TAX', 'INCOME_TAX')\n"
+        "    AND assessment_status IN ('under_review', 'assessed', 'appealed', 'enforced')\n"
+        "),\n"
+        "quarterly_pressure AS (\n"
+        "  SELECT\n"
+        "    canton_code,\n"
+        "    tax_type,\n"
+        "    industry_sector,\n"
+        "    tax_quarter_start,\n"
+        "    COUNT(*) AS assessment_count,\n"
+        "    CAST(ROUND(SUM(assessed_tax_chf), 2) AS DECIMAL(18,2)) AS assessed_tax_total_chf,\n"
+        "    CAST(ROUND(SUM(collected_tax_chf), 2) AS DECIMAL(18,2)) AS collected_tax_total_chf,\n"
+        "    CAST(ROUND(SUM(open_balance_chf), 2) AS DECIMAL(18,2)) AS open_balance_total_chf,\n"
+        "    CAST(CAST(AVG(taxable_base_chf - declared_deduction_chf) AS DECIMAL(18,2)) AS DOUBLE PRECISION) AS avg_net_tax_base_chf,\n"
+        "    CAST(CAST(AVG(audit_risk_score) AS DECIMAL(18,2)) AS DOUBLE PRECISION) AS avg_audit_risk_score,\n"
+        "    SUM(enforcement_risk_flag) AS enforcement_risk_count\n"
+        "  FROM scoped_assessments\n"
+        "  GROUP BY canton_code, tax_type, industry_sector, tax_quarter_start\n"
+        ")\n"
         "SELECT\n"
         "  canton_code,\n"
-        "  product_category,\n"
-        "  COUNT(*) AS order_count,\n"
-        "  CAST(ROUND(SUM(amount_chf), 2) AS DECIMAL(18,2)) AS total_amount_chf,\n"
-        "  CAST(ROUND(AVG(quantity), 2) AS DOUBLE PRECISION) AS avg_quantity\n"
-        "FROM {relation}\n"
-        "WHERE order_date >= DATE '2025-01-01'\n"
-        "  AND priority_flag = true\n"
-        "GROUP BY canton_code, product_category\n"
-        "ORDER BY total_amount_chf DESC, order_count DESC\n"
-        "LIMIT 25;"
+        "  tax_type,\n"
+        "  industry_sector,\n"
+        "  tax_quarter_start,\n"
+        "  assessment_count,\n"
+        "  assessed_tax_total_chf,\n"
+        "  collected_tax_total_chf,\n"
+        "  open_balance_total_chf,\n"
+        "  avg_net_tax_base_chf,\n"
+        "  avg_audit_risk_score,\n"
+        "  enforcement_risk_count\n"
+        "FROM quarterly_pressure\n"
+        "WHERE assessed_tax_total_chf >= 750000\n"
+        "ORDER BY open_balance_total_chf DESC, avg_audit_risk_score DESC, assessment_count DESC\n"
+        "LIMIT 30;"
     )
     contest_postgres_sql = (
         performance_sql_template.format(relation=contest_postgres_relation)
@@ -137,7 +194,7 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         NotebookDefinition(
             notebook_id="s3-smoke-test",
             title="S3 Smoke Test",
-            summary="Reads the preconfigured smoke-test object through DuckDB.",
+            summary="Reviews VAT filing smoke data from S3 through DuckDB for Federal Tax Administration analysis.",
             cells=[
                 NotebookCellDefinition(
                     cell_id="s3-smoke-test-cell-1",
@@ -153,7 +210,7 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         NotebookDefinition(
             notebook_id="postgres-smoke-test",
             title="PostgreSQL Smoke Test",
-            summary="Queries the OLTP reference table through the attached PostgreSQL database.",
+            summary="Queries VAT filing reference data in PostgreSQL OLTP for Federal Tax Administration smoke testing.",
             cells=[
                 NotebookCellDefinition(
                     cell_id="postgres-smoke-test-cell-1",
@@ -169,7 +226,7 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         NotebookDefinition(
             notebook_id="pg-vs-s3-contest-oltp",
             title="PG vs S3 Contest OLTP",
-            summary="Runs the contest benchmark query against PostgreSQL OLTP using the mirrored contest dataset.",
+            summary="Runs a complex tax-assessment benchmark query against PostgreSQL OLTP using the mirrored contest dataset.",
             cells=[
                 NotebookCellDefinition(
                     cell_id="pg-vs-s3-contest-oltp-cell-1",
@@ -185,7 +242,7 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         NotebookDefinition(
             notebook_id="pg-vs-s3-contest-s3",
             title="PG vs S3 Contest S3",
-            summary="Runs the same contest benchmark query against the mirrored S3-backed dataset.",
+            summary="Runs the same complex tax-assessment benchmark query against the mirrored S3-backed dataset.",
             cells=[
                 NotebookCellDefinition(
                     cell_id="pg-vs-s3-contest-s3-cell-1",
@@ -201,7 +258,7 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         NotebookDefinition(
             notebook_id="pg-vs-s3-contest-pg-native",
             title="PG vs S3 Contest PostgreSQL Native",
-            summary="Runs the same contest benchmark query directly on PostgreSQL OLTP, without DuckDB in the execution path.",
+            summary="Runs the same complex tax-assessment benchmark query directly on PostgreSQL OLTP, without DuckDB in the execution path.",
             cells=[
                 NotebookCellDefinition(
                     cell_id="pg-vs-s3-contest-pg-native-cell-1",

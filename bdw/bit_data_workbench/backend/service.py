@@ -146,6 +146,7 @@ class WorkbenchService:
                         source_id="pg_oltp",
                         source_label="PostgreSQL OLTP",
                     ),
+                    disconnect_handler=lambda: self._close_persistent_postgres_connection("pg_oltp"),
                 ),
                 SqlSourceDiscoverer(
                     source_id="pg_olap",
@@ -155,6 +156,7 @@ class WorkbenchService:
                         source_id="pg_olap",
                         source_label="PostgreSQL OLAP",
                     ),
+                    disconnect_handler=lambda: self._close_persistent_postgres_connection("pg_olap"),
                 ),
                 S3DataSourceDiscoverer(settings),
             ],
@@ -242,6 +244,12 @@ class WorkbenchService:
 
     def data_source_events_state(self) -> dict[str, object]:
         return self._data_source_discovery.state_payload()
+
+    def connect_data_source(self, source_id: str) -> dict[str, object]:
+        return self._data_source_discovery.connect_source(source_id)
+
+    def disconnect_data_source(self, source_id: str) -> dict[str, object]:
+        return self._data_source_discovery.disconnect_source(source_id)
 
     def wait_for_query_jobs_state(
         self,
@@ -890,7 +898,16 @@ class WorkbenchService:
         }
         workspace_schema_labels: dict[str, str] = {}
 
-        if self.settings.s3_endpoint and self.settings.s3_access_key_id and self.settings.s3_secret_access_key:
+        workspace_source_id = "workspace.s3"
+        workspace_status = source_statuses.get(workspace_source_id)
+        workspace_discovery_enabled = workspace_status is None or workspace_status.state == "connected"
+
+        if (
+            workspace_discovery_enabled
+            and self.settings.s3_endpoint
+            and self.settings.s3_access_key_id
+            and self.settings.s3_secret_access_key
+        ):
             try:
                 bucket_names = list_s3_buckets(self.settings)
             except Exception as exc:
@@ -901,6 +918,10 @@ class WorkbenchService:
                 schema_name = s3_bucket_schema_name(bucket_name)
                 grouped["workspace"].setdefault(schema_name, [])
                 workspace_schema_labels[schema_name] = bucket_name
+        elif self.settings.s3_bucket:
+            schema_name = s3_bucket_schema_name(self.settings.s3_bucket)
+            grouped["workspace"].setdefault(schema_name, [])
+            workspace_schema_labels[schema_name] = self.settings.s3_bucket
         if self.settings.pg_oltp_database:
             grouped["pg_oltp"].setdefault("public", [])
         if self.settings.pg_olap_database:
@@ -917,16 +938,25 @@ class WorkbenchService:
                 )
             )
 
+        pg_oltp_status = source_statuses.get("pg_oltp")
         if self.settings.pg_oltp_database:
-            grouped["pg_oltp"] = self._postgres_catalog_objects("oltp")
+            if pg_oltp_status is None or pg_oltp_status.state == "connected":
+                grouped["pg_oltp"] = self._postgres_catalog_objects("oltp")
+            else:
+                grouped["pg_oltp"] = {}
             grouped["pg_oltp"].setdefault("public", [])
+        pg_olap_status = source_statuses.get("pg_olap")
         if self.settings.pg_olap_database:
-            grouped["pg_olap"] = self._postgres_catalog_objects("olap")
+            if pg_olap_status is None or pg_olap_status.state == "connected":
+                grouped["pg_olap"] = self._postgres_catalog_objects("olap")
+            else:
+                grouped["pg_olap"] = {}
             grouped["pg_olap"].setdefault("public", [])
 
         catalogs: list[SourceCatalog] = []
         for catalog_name in ("workspace", "pg_oltp", "pg_olap"):
-            status = source_statuses.get(catalog_name)
+            catalog_source_id = workspace_source_id if catalog_name == "workspace" else catalog_name
+            status = source_statuses.get(catalog_source_id)
             schemas = [
                 SourceSchema(
                     name=schema_name,
@@ -944,14 +974,18 @@ class WorkbenchService:
                     ),
                 )
             ]
-            if schemas:
+            if schemas or status is not None or self._data_source_discovery.supports_manual_connection_control(catalog_source_id):
                 catalogs.append(
                     SourceCatalog(
                         name=catalog_name,
+                        connection_source_id=catalog_source_id,
                         schemas=schemas,
                         connection_status=status.state if status is not None else None,
                         connection_label=status.label if status is not None else None,
                         connection_detail=status.detail if status is not None else None,
+                        connection_controls_enabled=self._data_source_discovery.supports_manual_connection_control(
+                            catalog_source_id
+                        ),
                     )
                 )
 

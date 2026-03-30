@@ -64,6 +64,32 @@ def data_source_events_state(service: WorkbenchService = Depends(get_workbench_s
     return JSONResponse(jsonable_encoder(service.data_source_events_state()))
 
 
+@router.post("/api/data-sources/{source_id}/connect")
+def connect_data_source(
+    source_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        payload = service.connect_data_source(source_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(payload))
+
+
+@router.post("/api/data-sources/{source_id}/disconnect")
+def disconnect_data_source(
+    source_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        payload = service.disconnect_data_source(source_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(payload))
+
+
 @router.get("/api/data-generators")
 def data_generators(service: WorkbenchService = Depends(get_workbench_service)) -> JSONResponse:
     return JSONResponse({"generators": jsonable_encoder(service.data_generators())})

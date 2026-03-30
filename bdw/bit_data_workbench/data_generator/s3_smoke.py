@@ -3,22 +3,22 @@ from __future__ import annotations
 from ..backend.s3_storage import s3_bucket_schema_name
 from .base import DataGenerationCancelled, DataGenerator, DataGeneratorContext, DataGeneratorResult, estimated_rows_for_size, generated_name
 from ..backend.s3_storage import delete_s3_prefix
-from .helpers import approximate_size_gb, qualified_name, smoke_dataset_select, sql_literal
+from .helpers import approximate_size_gb, qualified_name, sql_literal, vat_smoke_dataset_select
 
 class S3SmokeDataGenerator(DataGenerator):
     generator_id = "s3_smoke_orders"
-    title = "S3 Parquet Smoke Loader"
+    title = "S3 VAT Smoke Loader"
     description = (
-        "Generates a semantic sales-order style dataset, writes partitioned Parquet files to S3, "
-        "and registers a queryable DuckDB view over the result."
+        "Generates a VAT filing smoke dataset for the Swiss Federal Tax Administration, writes "
+        "partitioned Parquet files to S3, and registers a queryable DuckDB view over the result."
     )
     target_kind = "s3"
     default_size_gb = 1.0
     min_size_gb = 0.01
     max_size_gb = 512.0
-    approximate_row_bytes = 240
-    default_target_name = "generated_orders_s3"
-    tags = ("s3", "parquet", "orders", "smoke")
+    approximate_row_bytes = 220
+    default_target_name = "vat_smoke"
+    tags = ("s3", "parquet", "vat", "tax", "smoke")
 
     def run(self, context: DataGeneratorContext) -> DataGeneratorResult:
         settings = context.settings
@@ -54,7 +54,7 @@ class S3SmokeDataGenerator(DataGenerator):
                 part_path = f"{object_prefix}/part-{batch_index:05d}.parquet"
                 connection.execute(
                     "COPY ("
-                    f"{smoke_dataset_select(start_row, end_row)}"
+                    f"{vat_smoke_dataset_select(start_row, end_row)}"
                     f") TO {sql_literal(part_path)} (FORMAT PARQUET, COMPRESSION ZSTD)"
                 )
                 written_rows = end_row

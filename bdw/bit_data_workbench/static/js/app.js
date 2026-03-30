@@ -25,10 +25,13 @@ let dataGenerationEventSource = null;
 let dataGenerationClockHandle = null;
 let dataGenerationJobsLoaded = false;
 let dataSourceEventsStateVersion = null;
+let dataSourceEventsLatestEventId = null;
 let dataSourceEventsEventSource = null;
 let pendingDataSourceSidebarRefreshHandle = null;
 let dataSourceSidebarRefreshPromise = null;
 let dataSourceSidebarRefreshQueued = false;
+const pendingSourceCatalogBlinks = new Set();
+const sourceConnectionRequests = new Set();
 const refreshedDataGenerationJobIds = new Set();
 
 const notebookTreeStorageKey = "bdw.notebookTree.v2";
@@ -464,6 +467,23 @@ function writeLastNotebookId(notebookId) {
   } catch (_error) {
     // Ignore persistence failures and keep the session functional.
   }
+}
+
+function notebookUrl(notebookId) {
+  if (!notebookId || isLocalNotebookId(notebookId)) {
+    return null;
+  }
+
+  return `/notebooks/${encodeURIComponent(notebookId)}`;
+}
+
+function pushNotebookHistory(notebookId) {
+  const nextUrl = notebookUrl(notebookId);
+  if (!nextUrl || window.location.pathname === nextUrl) {
+    return;
+  }
+
+  window.history.pushState({ mode: "notebook", notebookId }, "", nextUrl);
 }
 
 function readSidebarCollapsed() {
@@ -2636,6 +2656,43 @@ function currentWorkspaceCanEdit() {
   return document.querySelector("[data-notebook-meta]")?.dataset.canEdit !== "false";
 }
 
+function sourceCatalogSelector(sourceId) {
+  const escaped =
+    typeof window.CSS?.escape === "function" ? window.CSS.escape(String(sourceId ?? "")) : String(sourceId ?? "");
+  return `[data-source-catalog-source-id="${escaped}"]`;
+}
+
+function sourceCatalogNode(sourceId) {
+  return document.querySelector(sourceCatalogSelector(sourceId));
+}
+
+function syncSourceConnectionControls(catalogNode, status) {
+  if (!(catalogNode instanceof Element)) {
+    return;
+  }
+
+  const meta = catalogNode.querySelector(":scope > summary [data-source-catalog-meta]");
+  if (!(meta instanceof Element)) {
+    return;
+  }
+
+  const state = status?.state || "unknown";
+  meta.dataset.sourceState = state;
+
+  meta.querySelectorAll("[data-source-connect], [data-source-disconnect]").forEach((button) => {
+    const sourceId = catalogNode.dataset.sourceCatalogSourceId?.trim() || catalogNode.dataset.sourceCatalogName?.trim() || "";
+    const sourceLabel = catalogNode.dataset.sourceCatalogName?.trim() || sourceId;
+    const isPending = sourceConnectionRequests.has(sourceId);
+    button.disabled = isPending;
+    button.hidden = false;
+    if (button instanceof HTMLButtonElement) {
+      const isConnect = button.hasAttribute("data-source-connect");
+      button.title = isConnect ? `Connect ${sourceLabel}` : `Disconnect ${sourceLabel}`;
+      button.setAttribute("aria-label", button.title);
+    }
+  });
+}
+
 function upsertSourceConnectionStatus(catalogNode, status) {
   if (!(catalogNode instanceof Element)) {
     return;
@@ -2646,7 +2703,10 @@ function upsertSourceConnectionStatus(catalogNode, status) {
     return;
   }
 
-  let badge = summary.querySelector(":scope > .source-connection-status");
+  const meta =
+    summary.querySelector(":scope > [data-source-catalog-meta]") ||
+    summary.querySelector(":scope > .source-catalog-meta");
+  let badge = meta?.querySelector(":scope > .source-connection-status") || null;
   if (!status?.label) {
     badge?.remove();
     return;
@@ -2655,15 +2715,92 @@ function upsertSourceConnectionStatus(catalogNode, status) {
   if (!(badge instanceof Element)) {
     badge = document.createElement("span");
     badge.className = "source-connection-status";
-    badge.innerHTML = '<span class="source-connection-dot" aria-hidden="true"></span><span></span>';
-    summary.appendChild(badge);
+    badge.innerHTML = `
+      <svg class="source-connection-icon" viewBox="0 0 16 16" aria-hidden="true">
+        <path d="M5.5 4.2H4.2a1.8 1.8 0 0 0 0 3.6h1.3"></path>
+        <path d="M10.5 4.2h1.3a1.8 1.8 0 0 1 0 3.6h-1.3"></path>
+        <path d="M5.9 8.4l4.2-4.2"></path>
+        <path d="M5.9 7.6l4.2 4.2"></path>
+      </svg>
+    `;
+    (meta || summary).appendChild(badge);
   }
 
   badge.className = `source-connection-status source-connection-status-${status.state || "unknown"}`;
   badge.setAttribute("title", status.detail || status.label);
-  const copy = badge.querySelector(":scope > span:last-child");
-  if (copy) {
-    copy.textContent = status.label;
+  badge.setAttribute("aria-label", status.label);
+  syncSourceConnectionControls(catalogNode, status);
+}
+
+function blinkSourceCatalog(sourceId) {
+  const summary = sourceCatalogNode(sourceId)?.querySelector(":scope > summary");
+  if (!(summary instanceof Element)) {
+    pendingSourceCatalogBlinks.add(sourceId);
+    return;
+  }
+
+  pendingSourceCatalogBlinks.delete(sourceId);
+  summary.classList.remove("is-source-updated");
+  void summary.offsetWidth;
+  summary.classList.add("is-source-updated");
+
+  window.setTimeout(() => {
+    summary.classList.remove("is-source-updated");
+  }, 2400);
+}
+
+function replayPendingSourceCatalogBlinks() {
+  if (!pendingSourceCatalogBlinks.size) {
+    return;
+  }
+
+  Array.from(pendingSourceCatalogBlinks).forEach((sourceId) => {
+    const summary = sourceCatalogNode(sourceId)?.querySelector(":scope > summary");
+    if (!(summary instanceof Element)) {
+      return;
+    }
+    blinkSourceCatalog(sourceId);
+  });
+}
+
+async function setDataSourceConnectionState(sourceId, action) {
+  const normalizedSourceId = String(sourceId ?? "").trim();
+  const normalizedAction = String(action ?? "").trim();
+  if (!normalizedSourceId || !["connect", "disconnect"].includes(normalizedAction)) {
+    return;
+  }
+
+  sourceConnectionRequests.add(normalizedSourceId);
+  const catalogNode = sourceCatalogNode(normalizedSourceId);
+  syncSourceConnectionControls(catalogNode, {
+    state: catalogNode?.querySelector("[data-source-catalog-meta]")?.dataset.sourceState || "unknown",
+    label: catalogNode?.querySelector(".source-connection-status")?.getAttribute("aria-label") || "",
+  });
+
+  try {
+    const response = await window.fetch(
+      `/api/data-sources/${encodeURIComponent(normalizedSourceId)}/${normalizedAction}`,
+      { method: "POST" }
+    );
+    if (!response.ok) {
+      throw new Error(`Failed to ${normalizedAction} ${normalizedSourceId}: ${response.status}`);
+    }
+    applyDataSourceEventsState(await response.json());
+  } catch (error) {
+    console.error(`Failed to ${normalizedAction} data source.`, error);
+    await showMessageDialog({
+      title: "Data source error",
+      copy: `Could not ${normalizedAction} ${normalizedSourceId}.`,
+    });
+  } finally {
+    sourceConnectionRequests.delete(normalizedSourceId);
+    syncSourceConnectionControls(sourceCatalogNode(normalizedSourceId), {
+      state:
+        sourceCatalogNode(normalizedSourceId)
+          ?.querySelector("[data-source-catalog-meta]")
+          ?.dataset.sourceState || "unknown",
+      label: sourceCatalogNode(normalizedSourceId)?.querySelector(".source-connection-status")?.getAttribute("aria-label") || "",
+    });
   }
 }
 
@@ -2676,7 +2813,8 @@ function applyDataSourceStatusIndicators(snapshot) {
   );
 
   document.querySelectorAll("[data-source-catalog]").forEach((catalogNode) => {
-    const sourceId = catalogNode.dataset.sourceCatalogName?.trim() || "";
+    const sourceId =
+      catalogNode.dataset.sourceCatalogSourceId?.trim() || catalogNode.dataset.sourceCatalogName?.trim() || "";
     upsertSourceConnectionStatus(catalogNode, statusMap.get(sourceId) || null);
   });
 }
@@ -2709,6 +2847,7 @@ async function refreshDataSourcesSection(mode = currentWorkspaceMode()) {
   currentSection.outerHTML = nextSection.outerHTML;
   restoreSidebarState(sidebarState);
   restoreSelectedSourceObject();
+  replayPendingSourceCatalogBlinks();
 }
 
 function queueDataSourcesSectionRefresh() {
@@ -2756,23 +2895,32 @@ function queueDataSourcesSectionRefresh() {
 function applyDataSourceEventsState(snapshot) {
   const previousVersion = dataSourceEventsStateVersion;
   dataSourceEventsStateVersion = snapshot?.version ?? null;
+  const latestEvent = Array.isArray(snapshot?.events) ? snapshot.events[0] : null;
+  const previousLatestEventId = dataSourceEventsLatestEventId;
+  dataSourceEventsLatestEventId = typeof latestEvent?.eventId === "string" ? latestEvent.eventId : null;
 
   if (previousVersion === null || dataSourceEventsStateVersion === previousVersion) {
+    applyDataSourceStatusIndicators(snapshot);
     return;
   }
 
   applyDataSourceStatusIndicators(snapshot);
 
-  const latestEvent = Array.isArray(snapshot?.events) ? snapshot.events[0] : null;
+  if (!latestEvent || dataSourceEventsLatestEventId === previousLatestEventId) {
+    return;
+  }
+
+  if (typeof latestEvent?.sourceId === "string" && latestEvent.sourceId.trim()) {
+    pendingSourceCatalogBlinks.add(latestEvent.sourceId.trim());
+  }
   const touchedRelations = [
     ...(latestEvent?.addedRelations ?? []),
     ...(latestEvent?.removedRelations ?? []),
     ...(latestEvent?.updatedRelations ?? []),
   ];
-  if (!touchedRelations.length) {
-    return;
+  if (touchedRelations.length) {
+    clearSourceObjectFieldCacheForRelations(touchedRelations);
   }
-  clearSourceObjectFieldCacheForRelations(touchedRelations);
   queueDataSourcesSectionRefresh();
 }
 
@@ -7166,6 +7314,22 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const sourceConnectButton = event.target.closest("[data-source-connect]");
+  if (sourceConnectButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    await setDataSourceConnectionState(sourceConnectButton.dataset.sourceConnect, "connect");
+    return;
+  }
+
+  const sourceDisconnectButton = event.target.closest("[data-source-disconnect]");
+  if (sourceDisconnectButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    await setDataSourceConnectionState(sourceDisconnectButton.dataset.sourceDisconnect, "disconnect");
+    return;
+  }
+
   const sourceObjectRoot = event.target.closest("[data-source-object]");
   if (sourceObjectRoot && !event.target.closest("[data-source-action-menu]")) {
     try {
@@ -7623,17 +7787,15 @@ document.body.addEventListener("click", async (event) => {
 
   const link = event.target.closest(".notebook-link");
   if (link) {
-    if (!link.hasAttribute("hx-get")) {
-      event.preventDefault();
-      await loadNotebookWorkspace(link.dataset.notebookId);
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
       return;
     }
 
+    event.preventDefault();
     restoreController?.abort();
     restoreController = null;
-    activateNotebookLink(link.dataset.notebookId);
-    revealNotebookLink(link.dataset.notebookId);
-    writeLastNotebookId(link.dataset.notebookId);
+    await loadNotebookWorkspace(link.dataset.notebookId);
+    pushNotebookHistory(link.dataset.notebookId);
     return;
   }
 
@@ -7874,6 +8036,23 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
     activateNotebookLink(notebookId);
     revealNotebookLink(notebookId);
     writeLastNotebookId(notebookId);
+  }
+});
+
+window.addEventListener("popstate", async () => {
+  if (window.location.pathname.startsWith("/notebooks/")) {
+    const notebookId = decodeURIComponent(window.location.pathname.slice("/notebooks/".length));
+    if (!notebookId) {
+      return;
+    }
+
+    try {
+      await loadNotebookWorkspace(notebookId);
+    } catch (error) {
+      if (error?.name !== "AbortError") {
+        console.error("Failed to restore notebook from browser history.", error);
+      }
+    }
   }
 });
 
