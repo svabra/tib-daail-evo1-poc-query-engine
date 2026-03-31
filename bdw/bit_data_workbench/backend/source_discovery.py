@@ -824,9 +824,10 @@ class DataSourceDiscoveryManager:
             if self._threads:
                 return
             self._stop_event.clear()
-
-        for discoverer in self._discoverers:
-            self._sync_discoverer(discoverer, emit_event=False)
+        logger.info(
+            "Starting data source discovery manager with %d discoverer(s); initial sync will run in background threads.",
+            len(self._discoverers),
+        )
 
         threads: list[threading.Thread] = []
         for discoverer in self._discoverers:
@@ -838,6 +839,11 @@ class DataSourceDiscoveryManager:
             )
             worker.start()
             threads.append(worker)
+            logger.info(
+                "Started data source discovery thread %s for source_id=%s",
+                worker.name,
+                getattr(discoverer, "source_id", discoverer.source_type),
+            )
 
         with self._condition:
             self._threads = threads

@@ -77,6 +77,18 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         schema_name=None,
         object_names=("tax_assessment_pg_vs_s3",),
     )
+    union_oltp_relation = _find_relation_by_object_name(
+        catalogs,
+        catalog_name="pg_oltp",
+        schema_name="public",
+        object_names=("pg_union_tax_reference",),
+    )
+    union_olap_relation = _find_relation_by_object_name(
+        catalogs,
+        catalog_name="pg_olap",
+        schema_name="public",
+        object_names=("pg_union_tax_reference",),
+    )
     contest_postgres_native_relation = _strip_catalog_prefix(contest_postgres_relation, "pg_oltp")
 
     s3_sql = (
@@ -188,6 +200,48 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         performance_sql_template.format(relation=contest_postgres_native_relation)
         if contest_postgres_native_relation
         else "SELECT 'Run the PG vs S3 Contest Loader from the Ingestion Workbench first.' AS status;"
+    )
+    cross_database_union_sql = (
+        "WITH combined_tax_positions AS (\n"
+        "  SELECT\n"
+        "    'OLTP' AS database_name,\n"
+        "    record_id,\n"
+        "    taxpayer_uid,\n"
+        "    canton_code,\n"
+        "    tax_period_end,\n"
+        "    net_tax_amount_chf,\n"
+        "    processing_status,\n"
+        "    risk_band,\n"
+        "    updated_at\n"
+        f"  FROM {union_oltp_relation}\n"
+        "  UNION\n"
+        "  SELECT\n"
+        "    'OLAP' AS database_name,\n"
+        "    record_id,\n"
+        "    taxpayer_uid,\n"
+        "    canton_code,\n"
+        "    tax_period_end,\n"
+        "    net_tax_amount_chf,\n"
+        "    processing_status,\n"
+        "    risk_band,\n"
+        "    updated_at\n"
+        f"  FROM {union_olap_relation}\n"
+        ")\n"
+        "SELECT\n"
+        "  database_name,\n"
+        "  canton_code,\n"
+        "  processing_status,\n"
+        "  risk_band,\n"
+        "  COUNT(*) AS record_count,\n"
+        "  CAST(ROUND(SUM(net_tax_amount_chf), 2) AS DECIMAL(18,2)) AS net_tax_amount_total_chf,\n"
+        "  MIN(tax_period_end) AS earliest_tax_period_end,\n"
+        "  MAX(tax_period_end) AS latest_tax_period_end\n"
+        "FROM combined_tax_positions\n"
+        "GROUP BY database_name, canton_code, processing_status, risk_band\n"
+        "ORDER BY database_name, net_tax_amount_total_chf DESC, canton_code, processing_status, risk_band\n"
+        "LIMIT 60;"
+        if union_oltp_relation and union_olap_relation
+        else "SELECT 'Run the PostgreSQL OLTP + OLAP UNION Loader from the Ingestion Workbench first.' AS status;"
     )
     oltp_write_test_table = "public.notebook_oltp_write_test"
     oltp_write_test_setup_sql = (
@@ -317,6 +371,23 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
             tags=["smoke", "write-test", "postgres", "oltp"],
             tree_path=("PoC Tests", "Smoke Tests", "Write Access"),
             linked_generator_id="postgres_oltp_smoke_orders",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="postgres-oltp-olap-union-test",
+            title="PostgreSQL OLTP + OLAP UNION",
+            summary="Executes a UNION across PostgreSQL OLTP and PostgreSQL OLAP using the same reference structure in both databases.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="postgres-oltp-olap-union-test-cell-1",
+                    data_sources=["pg_oltp", "pg_olap"],
+                    sql=cross_database_union_sql,
+                )
+            ],
+            tags=["sql", "union", "postgres", "oltp", "olap"],
+            tree_path=("PoC Tests", "SQL Functionalities"),
+            linked_generator_id="pg_union_sql_functionality_loader",
             can_edit=False,
             can_delete=False,
         ),

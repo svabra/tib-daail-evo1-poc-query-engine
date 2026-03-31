@@ -6384,6 +6384,10 @@ function migrateStoredNotebookTree(state) {
       folderPath: ["PoC Tests", "Smoke Tests", "Write Access"],
     },
     {
+      notebookId: "postgres-oltp-olap-union-test",
+      folderPath: ["PoC Tests", "SQL Functionalities"],
+    },
+    {
       notebookId: "pg-vs-s3-contest-oltp",
       folderPath: ["PoC Tests", "Performance Evaluation"],
     },

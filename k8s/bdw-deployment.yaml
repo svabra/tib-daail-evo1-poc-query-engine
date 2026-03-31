@@ -19,7 +19,7 @@ spec:
     spec:
       containers:
         - name: bdw
-          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.15
+          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.16
           imagePullPolicy: Always
           ports:
             - name: http

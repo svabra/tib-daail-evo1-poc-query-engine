@@ -42,6 +42,17 @@ TAX_ASSESSMENT_DATASET_COLUMNS = (
     "assessed_at TIMESTAMP",
 )
 
+CROSS_DATABASE_UNION_DATASET_COLUMNS = (
+    "record_id BIGINT",
+    "taxpayer_uid VARCHAR",
+    "canton_code VARCHAR",
+    "tax_period_end DATE",
+    "net_tax_amount_chf DECIMAL(18,2)",
+    "processing_status VARCHAR",
+    "risk_band VARCHAR",
+    "updated_at TIMESTAMP",
+)
+
 
 def sql_identifier(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
@@ -337,4 +348,80 @@ def tax_assessment_dataset_select(start_row: int, end_row: int) -> str:
             ((row_id % 100) < 12) OR ((row_id % 19) = 0) AS audit_flag,
             TIMESTAMP '2023-01-01 07:00:00' + ((row_id * 73) % 94608000) * INTERVAL 1 SECOND AS assessed_at
         FROM settled
+    """
+
+
+def cross_database_union_dataset_select(start_row: int, end_row: int, profile: str) -> str:
+    normalized_profile = profile.strip().lower()
+    if normalized_profile == "oltp":
+        seed = 11
+        channel_shift = 0
+    elif normalized_profile == "olap":
+        seed = 47
+        channel_shift = 2
+    else:
+        raise ValueError(f"Unsupported cross-database union profile: {profile}")
+
+    if end_row <= start_row:
+        return (
+            "SELECT "
+            "0::BIGINT AS record_id, "
+            "''::VARCHAR AS taxpayer_uid, "
+            "''::VARCHAR AS canton_code, "
+            "DATE '2024-01-01' AS tax_period_end, "
+            "0::DECIMAL(18,2) AS net_tax_amount_chf, "
+            "''::VARCHAR AS processing_status, "
+            "''::VARCHAR AS risk_band, "
+            "TIMESTAMP '2024-01-01 00:00:00' AS updated_at "
+            "LIMIT 0"
+        )
+
+    return f"""
+        WITH base AS (
+            SELECT row_id
+            FROM range({int(start_row)}, {int(end_row)}) AS series(row_id)
+        ),
+        prepared AS (
+            SELECT
+                row_id,
+                DATE '2024-01-01' + CAST(((row_id + {seed}) % 540) AS INTEGER) AS tax_period_end,
+                round(
+                    8500.0
+                    + ((((row_id + {seed} * 101) * 137) % 480000) / 10.0)
+                    + ((row_id % 13) * 75.0),
+                    2
+                ) AS net_tax_amount_raw
+            FROM base
+        )
+        SELECT
+            row_id + 1 AS record_id,
+            'CHE-' || CAST(100000000 + ((row_id + {seed} * 1000) % 900000000) AS VARCHAR) AS taxpayer_uid,
+            CASE (row_id + {seed}) % 10
+                WHEN 0 THEN 'ZH'
+                WHEN 1 THEN 'BE'
+                WHEN 2 THEN 'GE'
+                WHEN 3 THEN 'VD'
+                WHEN 4 THEN 'AG'
+                WHEN 5 THEN 'SG'
+                WHEN 6 THEN 'TI'
+                WHEN 7 THEN 'BS'
+                WHEN 8 THEN 'LU'
+                ELSE 'FR'
+            END AS canton_code,
+            tax_period_end,
+            CAST(net_tax_amount_raw AS DECIMAL(18,2)) AS net_tax_amount_chf,
+            CASE (row_id + {channel_shift}) % 4
+                WHEN 0 THEN 'received'
+                WHEN 1 THEN 'validated'
+                WHEN 2 THEN 'posted'
+                ELSE 'reconciled'
+            END AS processing_status,
+            CASE
+                WHEN ((row_id + {seed}) % 100) < 12 THEN 'critical'
+                WHEN ((row_id + {seed}) % 100) < 35 THEN 'high'
+                WHEN ((row_id + {seed}) % 100) < 68 THEN 'medium'
+                ELSE 'low'
+            END AS risk_band,
+            TIMESTAMP '2024-01-01 06:00:00' + ((row_id * 53 + {seed} * 600) % 63072000) * INTERVAL 1 SECOND AS updated_at
+        FROM prepared
     """

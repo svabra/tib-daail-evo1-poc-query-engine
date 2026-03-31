@@ -5,7 +5,7 @@ import logging
 import re
 import time
 from datetime import UTC, datetime
-from threading import RLock
+from threading import RLock, Thread
 from urllib.parse import urlparse
 
 import duckdb
@@ -129,6 +129,7 @@ class WorkbenchService:
         self._completion_schema: dict[str, object] = {}
         self._source_options: list[dict[str, str]] = []
         self._postgres_health_connections: dict[str, object] = {}
+        self._startup_threads: list[Thread] = []
         self._query_jobs = QueryJobManager(
             max_result_rows=settings.max_result_rows,
             connection_factory=self._create_worker_connection,
@@ -172,23 +173,67 @@ class WorkbenchService:
         )
 
     def start(self) -> None:
+        started = time.perf_counter()
+        self._log_startup(
+            "Workbench startup begin: duckdb=%s extension_dir=%s image_version=%s",
+            self.settings.duckdb_database,
+            self.settings.duckdb_extension_directory,
+            self.settings.image_version,
+        )
+        self._log_startup("Startup step: ensuring DuckDB directories exist")
         self.settings.duckdb_database.parent.mkdir(parents=True, exist_ok=True)
         self.settings.duckdb_extension_directory.mkdir(parents=True, exist_ok=True)
-        conn = self._create_connection()
+        self._log_startup("Startup step: opening primary DuckDB connection")
+        conn = self._create_connection(startup_context=True, run_s3_startup_diagnostics=False)
 
         with self._lock:
             self._conn = conn
-            self._refresh_state()
-        self._data_source_discovery.start()
+        self._log_startup("Startup step complete: primary DuckDB connection is ready")
+        self._log_startup("Startup step: refreshing initial metadata state")
+        try:
+            with self._lock:
+                self._refresh_state()
+        except Exception as exc:
+            with self._lock:
+                self._set_minimal_state()
+            self._log_startup(
+                "Initial metadata refresh failed; continuing with minimal state: %s",
+                exc,
+                level=logging.WARNING,
+                exc_info=True,
+            )
+        else:
+            self._log_startup("Startup step complete: initial metadata state is ready")
+
+        self._log_startup("Startup step: starting data source discovery manager")
+        try:
+            self._data_source_discovery.start()
+        except Exception as exc:
+            self._log_startup(
+                "Data source discovery manager failed to start; continuing without background discovery: %s",
+                exc,
+                level=logging.WARNING,
+                exc_info=True,
+            )
+        else:
+            self._log_startup("Startup step complete: data source discovery manager started")
+
+        self._start_background_s3_startup_diagnostics()
+        self._log_startup("Workbench startup completed in %.2fs", time.perf_counter() - started)
 
     def stop(self) -> None:
+        self._log_startup("Workbench shutdown begin")
         self._data_source_discovery.stop()
         self._close_persistent_postgres_connections()
+        for thread in list(self._startup_threads):
+            if thread.is_alive():
+                thread.join(timeout=0.2)
+        self._startup_threads.clear()
         with self._lock:
-            if self._conn is None:
-                return
-            self._conn.close()
-            self._conn = None
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
+        self._log_startup("Workbench shutdown complete")
 
     def runtime_info(self) -> dict[str, str]:
         return self.settings.runtime_info()
@@ -696,11 +741,82 @@ class WorkbenchService:
                     return notebook.title
         return None
 
-    def _create_connection(self) -> duckdb.DuckDBPyConnection:
+    def _log_startup(
+        self,
+        message: str,
+        *args: object,
+        level: int = logging.INFO,
+        exc_info: bool = False,
+    ) -> None:
+        rendered = message % args if args else message
+        print(f"[bdw-startup] {rendered}", flush=True)
+        logger.log(level, message, *args, exc_info=exc_info)
+
+    def _set_minimal_state(self) -> None:
+        catalogs: list[SourceCatalog] = []
+        self._catalogs = catalogs
+        self._notebooks = build_notebooks(catalogs)
+        self._completion_schema = build_completion_schema(catalogs)
+        self._source_options = build_source_options(catalogs)
+
+    def _open_duckdb_connection(
+        self,
+        *,
+        purpose: str,
+        startup_context: bool,
+    ) -> duckdb.DuckDBPyConnection:
+        max_attempts = 20
+        retry_delay_seconds = 0.5
+        database_path = str(self.settings.duckdb_database)
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                return duckdb.connect(database_path)
+            except duckdb.IOException as exc:
+                message = str(exc).lower()
+                lock_conflict = (
+                    "being used by another process" in message
+                    or "file is already open" in message
+                )
+                if not lock_conflict or attempt >= max_attempts:
+                    raise
+
+                retry_message = (
+                    "DuckDB connection for %s is waiting for the database file lock to clear "
+                    "(attempt %d/%d, path=%s)."
+                )
+                if startup_context:
+                    self._log_startup(
+                        retry_message,
+                        purpose,
+                        attempt,
+                        max_attempts,
+                        self.settings.duckdb_database,
+                        level=logging.WARNING,
+                    )
+                else:
+                    logger.warning(
+                        retry_message,
+                        purpose,
+                        attempt,
+                        max_attempts,
+                        self.settings.duckdb_database,
+                    )
+                time.sleep(retry_delay_seconds)
+
+    def _create_connection(
+        self,
+        *,
+        startup_context: bool = False,
+        run_s3_startup_diagnostics: bool = False,
+    ) -> duckdb.DuckDBPyConnection:
         self.settings.duckdb_database.parent.mkdir(parents=True, exist_ok=True)
         self.settings.duckdb_extension_directory.mkdir(parents=True, exist_ok=True)
 
-        conn = duckdb.connect(str(self.settings.duckdb_database))
+        conn = self._open_duckdb_connection(
+            purpose="primary workbench startup" if startup_context else "worker connection",
+            startup_context=startup_context,
+        )
         conn.execute(
             f"SET extension_directory = {sql_literal(self.settings.duckdb_extension_directory.as_posix())}"
         )
@@ -708,7 +824,11 @@ class WorkbenchService:
 
         self._ensure_extension(conn, "httpfs")
         self._ensure_extension(conn, "postgres")
-        self._bootstrap_integrations(conn)
+        self._bootstrap_integrations(
+            conn,
+            startup_context=startup_context,
+            run_s3_startup_diagnostics=run_s3_startup_diagnostics,
+        )
         return conn
 
     def _configure_s3_tls(self, conn: duckdb.DuckDBPyConnection) -> None:
@@ -725,11 +845,59 @@ class WorkbenchService:
             conn.execute(f"INSTALL {extension}")
             conn.execute(f"LOAD {extension}")
 
-    def _bootstrap_integrations(self, conn: duckdb.DuckDBPyConnection) -> None:
-        self._bootstrap_s3(conn)
-        self._bootstrap_postgres(conn)
+    def _bootstrap_integrations(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        startup_context: bool = False,
+        run_s3_startup_diagnostics: bool = False,
+    ) -> None:
+        if startup_context:
+            self._log_startup("Startup step: bootstrapping optional integrations")
+        try:
+            self._bootstrap_s3(
+                conn,
+                startup_context=startup_context,
+                run_startup_diagnostics=run_s3_startup_diagnostics,
+            )
+        except Exception as exc:
+            if startup_context:
+                self._log_startup(
+                    "S3 bootstrap failed; continuing without S3 integration: %s",
+                    exc,
+                    level=logging.WARNING,
+                    exc_info=True,
+                )
+            else:
+                logger.warning("S3 bootstrap failed; continuing without S3 integration: %s", exc, exc_info=True)
 
-    def _bootstrap_s3(self, conn: duckdb.DuckDBPyConnection) -> None:
+        try:
+            self._bootstrap_postgres(conn, startup_context=startup_context)
+        except Exception as exc:
+            if startup_context:
+                self._log_startup(
+                    "PostgreSQL bootstrap failed; continuing without attached PostgreSQL catalogs: %s",
+                    exc,
+                    level=logging.WARNING,
+                    exc_info=True,
+                )
+            else:
+                logger.warning(
+                    "PostgreSQL bootstrap failed; continuing without attached PostgreSQL catalogs: %s",
+                    exc,
+                    exc_info=True,
+                )
+
+        if startup_context:
+            self._log_startup("Startup step complete: optional integrations bootstrapped")
+
+    def _bootstrap_s3(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        startup_context: bool = False,
+        run_startup_diagnostics: bool = False,
+    ) -> None:
         required_values = (
             self.settings.s3_endpoint,
             self.settings.s3_region,
@@ -739,6 +907,8 @@ class WorkbenchService:
         )
 
         if not any(required_values):
+            if startup_context:
+                self._log_startup("S3 bootstrap skipped: no S3 configuration is present")
             return
 
         missing = [
@@ -753,7 +923,12 @@ class WorkbenchService:
             if value is None
         ]
         if missing:
-            raise ValueError(f"Missing required S3 bootstrap variables: {', '.join(missing)}")
+            message = f"S3 bootstrap skipped because required variables are missing: {', '.join(missing)}"
+            if startup_context:
+                self._log_startup(message, level=logging.WARNING)
+            else:
+                logger.warning(message)
+            return
 
         endpoint, use_ssl = normalize_s3_endpoint(
             self.settings.s3_endpoint,
@@ -762,46 +937,102 @@ class WorkbenchService:
 
         startup_views = parse_s3_startup_views(self.settings.s3_startup_views)
         options = self._s3_secret_options(endpoint=endpoint, use_ssl=use_ssl)
+        if startup_context:
+            self._log_startup(
+                "S3 bootstrap step: configuring DuckDB secret for endpoint=%s bucket=%s url_style=%s startup_views=%d",
+                endpoint,
+                self.settings.s3_bucket,
+                (self.settings.s3_url_style or "").strip() or "default",
+                len(startup_views),
+            )
         conn.execute(f"CREATE OR REPLACE SECRET bdw_s3 ({', '.join(options)})")
-        self._log_s3_startup_diagnostics(
-            conn,
-            endpoint=endpoint,
-            use_ssl=use_ssl,
-            startup_views=startup_views,
-        )
-        conn.execute(f"CREATE OR REPLACE SECRET bdw_s3 ({', '.join(options)})")
+        if startup_context:
+            self._log_startup("S3 bootstrap step complete: DuckDB secret is configured")
+        if run_startup_diagnostics:
+            self._log_s3_startup_diagnostics(
+                conn,
+                endpoint=endpoint,
+                use_ssl=use_ssl,
+                startup_views=startup_views,
+            )
+            conn.execute(f"CREATE OR REPLACE SECRET bdw_s3 ({', '.join(options)})")
+        if startup_context and startup_views:
+            self._log_startup(
+                "S3 startup views deferred to background bootstrap: %d configured view(s)",
+                len(startup_views),
+            )
+            return
+
+        self._ensure_s3_startup_views(conn, startup_views=startup_views, startup_context=startup_context)
+
+    def _ensure_s3_startup_views(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        startup_views: list[tuple[str, str, str]],
+        startup_context: bool,
+    ) -> None:
         for view_name, data_format, path in startup_views:
             view_bucket = self.settings.s3_bucket
+            if startup_context:
+                self._log_startup(
+                    "S3 startup view begin: name=%s format=%s path=%s",
+                    view_name,
+                    data_format,
+                    path,
+                )
             try:
                 parsed = urlparse(path)
                 if parsed.scheme == "s3" and parsed.netloc:
                     view_bucket = parsed.netloc
-            except Exception:
+            except Exception as exc:
                 view_bucket = self.settings.s3_bucket
+                if startup_context:
+                    self._log_startup(
+                        "S3 startup view %s path parsing failed for %s; falling back to configured bucket: %s",
+                        view_name,
+                        path,
+                        exc,
+                        level=logging.WARNING,
+                    )
             schema_name = s3_bucket_schema_name(view_bucket or self.settings.s3_bucket or "s3")
-            conn.execute(f"CREATE SCHEMA IF NOT EXISTS {sql_identifier(schema_name)}")
-            if data_format == "parquet":
-                query = f"SELECT * FROM read_parquet({sql_literal(path)})"
-            elif data_format == "csv":
-                query = f"SELECT * FROM read_csv_auto({sql_literal(path)})"
-            elif data_format == "json":
-                query = f"SELECT * FROM read_json_auto({sql_literal(path)})"
-            else:
-                raise ValueError(f"Unsupported S3 startup view format: {data_format}")
-
             try:
+                conn.execute(f"CREATE SCHEMA IF NOT EXISTS {sql_identifier(schema_name)}")
+                if data_format == "parquet":
+                    query = f"SELECT * FROM read_parquet({sql_literal(path)})"
+                elif data_format == "csv":
+                    query = f"SELECT * FROM read_csv_auto({sql_literal(path)})"
+                elif data_format == "json":
+                    query = f"SELECT * FROM read_json_auto({sql_literal(path)})"
+                else:
+                    raise ValueError(f"Unsupported S3 startup view format: {data_format}")
                 conn.execute(
                     "CREATE OR REPLACE VIEW "
                     f"{qualified_name(schema_name, view_name)} "
                     f"AS {query}"
                 )
-            except duckdb.Error as exc:
+                if startup_context:
+                    self._log_startup(
+                        "S3 startup view configured: %s -> %s.%s",
+                        path,
+                        schema_name,
+                        view_name,
+                    )
+            except Exception as exc:
                 logger.warning(
                     "Skipping S3 startup view '%s' for path '%s': %s",
                     view_name,
                     path,
                     exc,
                 )
+                if startup_context:
+                    self._log_startup(
+                        "S3 startup view skipped: %s for path %s failed: %s",
+                        view_name,
+                        path,
+                        exc,
+                        level=logging.WARNING,
+                    )
 
     def _s3_secret_options(
         self,
@@ -835,12 +1066,13 @@ class WorkbenchService:
         success: bool,
         detail: str,
     ) -> None:
-        logger.info(
+        self._log_startup(
             "S3 startup diagnostic [%s] %s %s: %s",
             backend,
             "ok" if success else "failed",
             trial,
             detail,
+            level=logging.INFO if success else logging.WARNING,
         )
 
     def _s3_duckdb_probe_query(self, data_format: str, path: str) -> str:
@@ -1027,7 +1259,7 @@ class WorkbenchService:
                     detail=f"unsupported startup view path {path!r}",
                 )
 
-        logger.info(
+        self._log_startup(
             "Starting S3 startup diagnostics: endpoint=%s use_ssl=%s verify_ssl=%s verify_value=%s ca_cert_file=%s url_style=%s bucket=%s startup_views=%d",
             endpoint,
             use_ssl,
@@ -1230,7 +1462,116 @@ class WorkbenchService:
                 bucket_name,
             )
 
-    def _bootstrap_postgres(self, conn: duckdb.DuckDBPyConnection) -> None:
+    def _create_s3_diagnostic_connection(self) -> duckdb.DuckDBPyConnection:
+        conn = self._open_duckdb_connection(
+            purpose="background S3 diagnostics",
+            startup_context=False,
+        )
+        conn.execute(
+            f"SET extension_directory = {sql_literal(self.settings.duckdb_extension_directory.as_posix())}"
+        )
+        self._configure_s3_tls(conn)
+        self._ensure_extension(conn, "httpfs")
+        return conn
+
+    def _start_background_s3_startup_diagnostics(self) -> None:
+        if not any(
+            (
+                self.settings.s3_endpoint,
+                self.settings.s3_region,
+                self.settings.s3_bucket,
+                self.settings.s3_access_key_id,
+                self.settings.s3_secret_access_key,
+            )
+        ):
+            self._log_startup("Background S3 startup diagnostics skipped: S3 is not configured")
+            return
+
+        worker = Thread(
+            target=self._run_background_s3_startup_diagnostics,
+            daemon=True,
+            name="bdw-startup-s3-diagnostics",
+        )
+        worker.start()
+        self._startup_threads.append(worker)
+        self._log_startup("Background S3 startup diagnostics scheduled on thread %s", worker.name)
+
+    def _run_background_s3_startup_diagnostics(self) -> None:
+        started = time.perf_counter()
+        self._log_startup("Background S3 startup diagnostics begin")
+        conn: duckdb.DuckDBPyConnection | None = None
+        try:
+            missing = [
+                name
+                for name, value in (
+                    ("S3_ENDPOINT", self.settings.s3_endpoint),
+                    ("S3_REGION", self.settings.s3_region),
+                    ("S3_BUCKET", self.settings.s3_bucket),
+                    ("S3_ACCESS_KEY_ID", self.settings.s3_access_key_id),
+                    ("S3_SECRET_ACCESS_KEY", self.settings.s3_secret_access_key),
+                )
+                if value is None
+            ]
+            if missing:
+                self._log_startup(
+                    "Background S3 startup diagnostics skipped because required variables are missing: %s",
+                    ", ".join(missing),
+                    level=logging.WARNING,
+                )
+                return
+
+            endpoint, use_ssl = normalize_s3_endpoint(
+                self.settings.s3_endpoint,
+                self.settings.s3_use_ssl,
+            )
+            startup_views = parse_s3_startup_views(self.settings.s3_startup_views)
+            conn = self._create_s3_diagnostic_connection()
+            options = self._s3_secret_options(endpoint=endpoint, use_ssl=use_ssl)
+            conn.execute(f"CREATE OR REPLACE SECRET bdw_s3 ({', '.join(options)})")
+            self._log_s3_startup_diagnostics(
+                conn,
+                endpoint=endpoint,
+                use_ssl=use_ssl,
+                startup_views=startup_views,
+            )
+            self._ensure_s3_startup_views(
+                conn,
+                startup_views=startup_views,
+                startup_context=True,
+            )
+            try:
+                self.refresh_metadata_state()
+            except Exception as exc:
+                self._log_startup(
+                    "Background S3 startup metadata refresh failed after diagnostics/views: %s",
+                    exc,
+                    level=logging.WARNING,
+                    exc_info=True,
+                )
+        except Exception as exc:
+            self._log_startup(
+                "Background S3 startup diagnostics failed: %s",
+                exc,
+                level=logging.WARNING,
+                exc_info=True,
+            )
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self._log_startup(
+                "Background S3 startup diagnostics finished in %.2fs",
+                time.perf_counter() - started,
+            )
+
+    def _bootstrap_postgres(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        startup_context: bool = False,
+    ) -> None:
         if not all(
             (
                 self.settings.pg_host,
@@ -1239,11 +1580,20 @@ class WorkbenchService:
                 self.settings.pg_password,
             )
         ):
+            if startup_context:
+                self._log_startup("PostgreSQL bootstrap skipped: core PostgreSQL connection settings are incomplete")
             return
 
         port = normalize_port(self.settings.pg_port, "PG_PORT")
 
         if self.settings.pg_oltp_database:
+            if startup_context:
+                self._log_startup(
+                    "PostgreSQL bootstrap step: attaching OLTP catalog %s on %s:%s",
+                    self.settings.pg_oltp_database,
+                    self.settings.pg_host,
+                    port,
+                )
             self._create_postgres_secret(
                 conn,
                 secret_name="bdw_pg_oltp",
@@ -1256,8 +1606,17 @@ class WorkbenchService:
                 secret_name="bdw_pg_oltp",
                 read_only=False,
             )
+            if startup_context:
+                self._log_startup("PostgreSQL bootstrap step complete: OLTP catalog attached")
 
         if self.settings.pg_olap_database:
+            if startup_context:
+                self._log_startup(
+                    "PostgreSQL bootstrap step: attaching OLAP catalog %s on %s:%s",
+                    self.settings.pg_olap_database,
+                    self.settings.pg_host,
+                    port,
+                )
             self._create_postgres_secret(
                 conn,
                 secret_name="bdw_pg_olap",
@@ -1270,6 +1629,8 @@ class WorkbenchService:
                 secret_name="bdw_pg_olap",
                 read_only=False,
             )
+            if startup_context:
+                self._log_startup("PostgreSQL bootstrap step complete: OLAP catalog attached")
 
     def _create_postgres_secret(
         self,

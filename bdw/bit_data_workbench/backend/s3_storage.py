@@ -46,6 +46,12 @@ def s3_client(
         or ("path" if (settings.s3_url_style or "").strip().lower() == "path" else "auto")
     )
     config = Config(
+        connect_timeout=3,
+        read_timeout=5,
+        retries={
+            "max_attempts": 2,
+            "mode": "standard",
+        },
         s3={
             "addressing_style": addressing_style,
         }
