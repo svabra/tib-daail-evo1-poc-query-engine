@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
+from datetime import UTC, datetime
 from threading import RLock
 from urllib.parse import urlparse
 
@@ -20,7 +22,13 @@ from ..models import (
     SourceObject,
     SourceSchema,
 )
-from .s3_storage import delete_s3_bucket, list_s3_buckets, s3_bucket_schema_name
+from .s3_storage import (
+    delete_s3_bucket,
+    list_s3_buckets,
+    s3_bucket_schema_name,
+    s3_client,
+    s3_verify_value,
+)
 from .data_generation_jobs import DataGenerationJobManager
 from .query_jobs import QueryJobManager
 from .notebooks import build_completion_schema, build_notebook_tree, build_notebooks, build_source_options
@@ -748,22 +756,17 @@ class WorkbenchService:
             self.settings.s3_use_ssl,
         )
 
-        options = [
-            "TYPE s3",
-            "PROVIDER config",
-            f"KEY_ID {sql_literal(self.settings.s3_access_key_id)}",
-            f"SECRET {sql_literal(self.settings.s3_secret_access_key)}",
-            f"REGION {sql_literal(self.settings.s3_region)}",
-            f"ENDPOINT {sql_literal(endpoint)}",
-            f"USE_SSL {'true' if use_ssl else 'false'}",
-        ]
-        if self.settings.s3_url_style:
-            options.append(f"URL_STYLE {sql_literal(self.settings.s3_url_style)}")
-        if self.settings.s3_session_token:
-            options.append(f"SESSION_TOKEN {sql_literal(self.settings.s3_session_token)}")
-
+        startup_views = parse_s3_startup_views(self.settings.s3_startup_views)
+        options = self._s3_secret_options(endpoint=endpoint, use_ssl=use_ssl)
         conn.execute(f"CREATE OR REPLACE SECRET bdw_s3 ({', '.join(options)})")
-        for view_name, data_format, path in parse_s3_startup_views(self.settings.s3_startup_views):
+        self._log_s3_startup_diagnostics(
+            conn,
+            endpoint=endpoint,
+            use_ssl=use_ssl,
+            startup_views=startup_views,
+        )
+        conn.execute(f"CREATE OR REPLACE SECRET bdw_s3 ({', '.join(options)})")
+        for view_name, data_format, path in startup_views:
             view_bucket = self.settings.s3_bucket
             try:
                 parsed = urlparse(path)
@@ -795,6 +798,433 @@ class WorkbenchService:
                     path,
                     exc,
                 )
+
+    def _s3_secret_options(
+        self,
+        *,
+        endpoint: str,
+        use_ssl: bool,
+        url_style: str | None = None,
+    ) -> list[str]:
+        configured_url_style = (self.settings.s3_url_style or "").strip()
+        effective_url_style = configured_url_style if url_style is None else url_style
+        options = [
+            "TYPE s3",
+            "PROVIDER config",
+            f"KEY_ID {sql_literal(self.settings.s3_access_key_id)}",
+            f"SECRET {sql_literal(self.settings.s3_secret_access_key)}",
+            f"REGION {sql_literal(self.settings.s3_region)}",
+            f"ENDPOINT {sql_literal(endpoint)}",
+            f"USE_SSL {'true' if use_ssl else 'false'}",
+        ]
+        if effective_url_style:
+            options.append(f"URL_STYLE {sql_literal(effective_url_style)}")
+        if self.settings.s3_session_token:
+            options.append(f"SESSION_TOKEN {sql_literal(self.settings.s3_session_token)}")
+        return options
+
+    def _log_s3_diagnostic_trial(
+        self,
+        *,
+        backend: str,
+        trial: str,
+        success: bool,
+        detail: str,
+    ) -> None:
+        logger.info(
+            "S3 startup diagnostic [%s] %s %s: %s",
+            backend,
+            "ok" if success else "failed",
+            trial,
+            detail,
+        )
+
+    def _s3_duckdb_probe_query(self, data_format: str, path: str) -> str:
+        if data_format == "parquet":
+            return f"SELECT * FROM read_parquet({sql_literal(path)}) LIMIT 1"
+        if data_format == "csv":
+            return f"SELECT * FROM read_csv_auto({sql_literal(path)}) LIMIT 1"
+        if data_format == "json":
+            return f"SELECT * FROM read_json_auto({sql_literal(path)}) LIMIT 1"
+        raise ValueError(f"Unsupported S3 startup view format: {data_format}")
+
+    def _s3_startup_probe_key(self, style_label: str) -> str:
+        safe_style = re.sub(r"[^a-z0-9]+", "-", style_label.strip().lower()).strip("-") or "default"
+        host_label = (
+            self.settings.pod_name
+            or self.settings.pod_namespace
+            or self.settings.runtime_info().get("hostname")
+            or "local"
+        )
+        safe_host = re.sub(r"[^a-zA-Z0-9._-]+", "-", host_label).strip("-") or "local"
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+        return f"bdw/startup-probes/{safe_host}/{timestamp}-{safe_style}.json"
+
+    def _s3_startup_probe_payload(
+        self,
+        *,
+        style_label: str,
+        endpoint: str,
+        use_ssl: bool,
+        verify_value: bool | str,
+    ) -> bytes:
+        payload = {
+            "service": self.settings.service_name,
+            "image_version": self.settings.image_version,
+            "pod_name": self.settings.pod_name or "unknown",
+            "pod_namespace": self.settings.pod_namespace or "unknown",
+            "node_name": self.settings.node_name or "unknown",
+            "timestamp_utc": datetime.now(UTC).isoformat(),
+            "style": style_label,
+            "endpoint": endpoint,
+            "use_ssl": use_ssl,
+            "verify": verify_value,
+            "ca_cert_file": self.settings.s3_ca_cert_file.as_posix()
+            if self.settings.s3_ca_cert_file is not None
+            else None,
+        }
+        return json.dumps(payload, sort_keys=True).encode("utf-8")
+
+    def _run_s3_boto3_write_probe(
+        self,
+        client,
+        *,
+        style_label: str,
+        bucket_name: str,
+        endpoint: str,
+        use_ssl: bool,
+        verify_value: bool | str,
+    ) -> tuple[bool, bool]:
+        probe_key = self._s3_startup_probe_key(style_label)
+        payload = self._s3_startup_probe_payload(
+            style_label=style_label,
+            endpoint=endpoint,
+            use_ssl=use_ssl,
+            verify_value=verify_value,
+        )
+        wrote_object = False
+        cleaned_up = False
+        body = None
+
+        try:
+            client.put_object(
+                Bucket=bucket_name,
+                Key=probe_key,
+                Body=payload,
+                ContentType="application/json",
+            )
+            wrote_object = True
+            self._log_s3_diagnostic_trial(
+                backend="boto3",
+                trial=f"put_object[{style_label}]",
+                success=True,
+                detail=f"wrote {len(payload)} byte(s) to s3://{bucket_name}/{probe_key}",
+            )
+        except Exception as exc:
+            self._log_s3_diagnostic_trial(
+                backend="boto3",
+                trial=f"put_object[{style_label}]",
+                success=False,
+                detail=str(exc),
+            )
+            return False, False
+
+        try:
+            response = client.head_object(Bucket=bucket_name, Key=probe_key)
+            content_length = int(response.get("ContentLength") or 0)
+            self._log_s3_diagnostic_trial(
+                backend="boto3",
+                trial=f"head_object[{style_label}]",
+                success=True,
+                detail=(
+                    f"confirmed s3://{bucket_name}/{probe_key} "
+                    f"with content_length={content_length}"
+                ),
+            )
+        except Exception as exc:
+            self._log_s3_diagnostic_trial(
+                backend="boto3",
+                trial=f"head_object[{style_label}]",
+                success=False,
+                detail=str(exc),
+            )
+
+        try:
+            response = client.get_object(Bucket=bucket_name, Key=probe_key)
+            body = response.get("Body")
+            downloaded = body.read() if body is not None else b""
+            payload_matches = downloaded == payload
+            self._log_s3_diagnostic_trial(
+                backend="boto3",
+                trial=f"download_object[{style_label}]",
+                success=payload_matches,
+                detail=(
+                    f"downloaded {len(downloaded)} byte(s) from s3://{bucket_name}/{probe_key}; "
+                    f"payload_match={payload_matches}"
+                ),
+            )
+            wrote_object = wrote_object and payload_matches
+        except Exception as exc:
+            wrote_object = False
+            self._log_s3_diagnostic_trial(
+                backend="boto3",
+                trial=f"download_object[{style_label}]",
+                success=False,
+                detail=str(exc),
+            )
+        finally:
+            try:
+                if body is not None:
+                    body.close()
+            except Exception:
+                pass
+
+        try:
+            client.delete_object(Bucket=bucket_name, Key=probe_key)
+            cleaned_up = True
+            self._log_s3_diagnostic_trial(
+                backend="boto3",
+                trial=f"delete_object[{style_label}]",
+                success=True,
+                detail=f"deleted s3://{bucket_name}/{probe_key}",
+            )
+        except Exception as exc:
+            self._log_s3_diagnostic_trial(
+                backend="boto3",
+                trial=f"delete_object[{style_label}]",
+                success=False,
+                detail=f"{exc}; cleanup may be required for s3://{bucket_name}/{probe_key}",
+            )
+
+        return wrote_object, cleaned_up
+
+    def _log_s3_startup_diagnostics(
+        self,
+        conn: duckdb.DuckDBPyConnection,
+        *,
+        endpoint: str,
+        use_ssl: bool,
+        startup_views: list[tuple[str, str, str]],
+    ) -> None:
+        configured_url_style = (self.settings.s3_url_style or "").strip().lower() or None
+        bucket_name = self.settings.s3_bucket or ""
+        verify_value = s3_verify_value(self.settings)
+        startup_targets: list[tuple[str, str, str, str]] = []
+        for view_name, data_format, path in startup_views:
+            parsed = urlparse(path)
+            object_key = parsed.path.lstrip("/")
+            if parsed.scheme == "s3" and parsed.netloc and object_key:
+                startup_targets.append((view_name, data_format, parsed.netloc, object_key))
+            else:
+                self._log_s3_diagnostic_trial(
+                    backend="startup",
+                    trial=f"view-target:{view_name}",
+                    success=False,
+                    detail=f"unsupported startup view path {path!r}",
+                )
+
+        logger.info(
+            "Starting S3 startup diagnostics: endpoint=%s use_ssl=%s verify_ssl=%s verify_value=%s ca_cert_file=%s url_style=%s bucket=%s startup_views=%d",
+            endpoint,
+            use_ssl,
+            self.settings.s3_verify_ssl,
+            verify_value,
+            self.settings.s3_ca_cert_file.as_posix() if self.settings.s3_ca_cert_file else "none",
+            configured_url_style or "default",
+            bucket_name or "n/a",
+            len(startup_views),
+        )
+
+        successful_read_probe = False
+        successful_write_probe = False
+        successful_write_cleanup = False
+        boto3_styles: list[tuple[str, str | None]] = []
+        for label, style in (
+            ((configured_url_style or "auto"), configured_url_style),
+            ("path", "path"),
+            ("virtual", "virtual"),
+        ):
+            if any(existing_label == label for existing_label, _ in boto3_styles):
+                continue
+            boto3_styles.append((label, style))
+
+        try:
+            client = s3_client(self.settings, url_style=configured_url_style)
+            response = client.list_buckets()
+            bucket_count = len(response.get("Buckets") or [])
+            self._log_s3_diagnostic_trial(
+                backend="boto3",
+                trial=f"list_buckets[{configured_url_style or 'auto'}]",
+                success=True,
+                detail=f"discovered {bucket_count} bucket(s)",
+            )
+        except Exception as exc:
+            self._log_s3_diagnostic_trial(
+                backend="boto3",
+                trial=f"list_buckets[{configured_url_style or 'auto'}]",
+                success=False,
+                detail=str(exc),
+            )
+
+        for style_label, style_value in boto3_styles:
+            try:
+                client = s3_client(self.settings, url_style=style_value)
+            except Exception as exc:
+                self._log_s3_diagnostic_trial(
+                    backend="boto3",
+                    trial=f"client[{style_label}]",
+                    success=False,
+                    detail=str(exc),
+                )
+                continue
+
+            try:
+                client.head_bucket(Bucket=bucket_name)
+                self._log_s3_diagnostic_trial(
+                    backend="boto3",
+                    trial=f"head_bucket[{style_label}]",
+                    success=True,
+                    detail=f"bucket {bucket_name!r} is reachable",
+                )
+            except Exception as exc:
+                self._log_s3_diagnostic_trial(
+                    backend="boto3",
+                    trial=f"head_bucket[{style_label}]",
+                    success=False,
+                    detail=str(exc),
+                )
+
+            try:
+                response = client.list_objects_v2(Bucket=bucket_name, MaxKeys=3)
+                discovered_keys = [item.get("Key") for item in (response.get("Contents") or []) if item.get("Key")]
+                successful_read_probe = True
+                self._log_s3_diagnostic_trial(
+                    backend="boto3",
+                    trial=f"list_objects_v2[{style_label}]",
+                    success=True,
+                    detail=f"returned {len(discovered_keys)} object(s): {discovered_keys}",
+                )
+            except Exception as exc:
+                self._log_s3_diagnostic_trial(
+                    backend="boto3",
+                    trial=f"list_objects_v2[{style_label}]",
+                    success=False,
+                    detail=str(exc),
+                )
+
+            for view_name, _data_format, target_bucket, object_key in startup_targets:
+                trial_name = f"get_object[{style_label}]:{view_name}"
+                body = None
+                try:
+                    response = client.get_object(Bucket=target_bucket, Key=object_key, Range="bytes=0-255")
+                    body = response.get("Body")
+                    preview_size = len(body.read(256) if body is not None else b"")
+                    successful_read_probe = True
+                    self._log_s3_diagnostic_trial(
+                        backend="boto3",
+                        trial=trial_name,
+                        success=True,
+                        detail=f"read {preview_size} byte(s) from s3://{target_bucket}/{object_key}",
+                    )
+                except Exception as exc:
+                    self._log_s3_diagnostic_trial(
+                        backend="boto3",
+                    trial=trial_name,
+                    success=False,
+                    detail=str(exc),
+                )
+                finally:
+                    try:
+                        if body is not None:
+                            body.close()
+                    except Exception:
+                        pass
+
+            write_probe_ok, write_cleanup_ok = self._run_s3_boto3_write_probe(
+                client,
+                style_label=style_label,
+                bucket_name=bucket_name,
+                endpoint=endpoint,
+                use_ssl=use_ssl,
+                verify_value=verify_value,
+            )
+            successful_write_probe = successful_write_probe or write_probe_ok
+            successful_write_cleanup = successful_write_cleanup or write_cleanup_ok
+
+        duckdb_styles: list[tuple[str, str | None]] = []
+        for label, style in (
+            ((configured_url_style or "default"), configured_url_style),
+            ("path", "path"),
+            ("vhost", "vhost"),
+        ):
+            if any(existing_label == label for existing_label, _ in duckdb_styles):
+                continue
+            duckdb_styles.append((label, style))
+
+        if not startup_views:
+            self._log_s3_diagnostic_trial(
+                backend="duckdb",
+                trial="read_probe",
+                success=False,
+                detail="skipped because no S3_STARTUP_VIEWS are configured",
+            )
+        else:
+            for style_label, style_value in duckdb_styles:
+                try:
+                    options = self._s3_secret_options(
+                        endpoint=endpoint,
+                        use_ssl=use_ssl,
+                        url_style=style_value,
+                    )
+                    conn.execute(f"CREATE OR REPLACE SECRET bdw_s3 ({', '.join(options)})")
+                    self._log_s3_diagnostic_trial(
+                        backend="duckdb",
+                        trial=f"secret[{style_label}]",
+                        success=True,
+                        detail="secret configured successfully",
+                    )
+                except Exception as exc:
+                    self._log_s3_diagnostic_trial(
+                        backend="duckdb",
+                        trial=f"secret[{style_label}]",
+                        success=False,
+                        detail=str(exc),
+                    )
+                    continue
+
+                for view_name, data_format, path in startup_views:
+                    try:
+                        rows = conn.execute(self._s3_duckdb_probe_query(data_format, path)).fetchmany(1)
+                        successful_read_probe = True
+                        self._log_s3_diagnostic_trial(
+                            backend="duckdb",
+                            trial=f"read[{style_label}]:{view_name}",
+                            success=True,
+                            detail=f"returned {len(rows)} row(s) from {path}",
+                        )
+                    except Exception as exc:
+                        self._log_s3_diagnostic_trial(
+                            backend="duckdb",
+                            trial=f"read[{style_label}]:{view_name}",
+                            success=False,
+                            detail=str(exc),
+                        )
+
+        if not successful_read_probe:
+            logger.warning(
+                "S3 startup diagnostics did not complete a successful read probe for bucket %r. Review the trial logs above.",
+                bucket_name,
+            )
+        if not successful_write_probe:
+            logger.warning(
+                "S3 startup diagnostics did not complete a successful write probe for bucket %r. Review the trial logs above.",
+                bucket_name,
+            )
+        if successful_write_probe and not successful_write_cleanup:
+            logger.warning(
+                "S3 startup diagnostics wrote at least one probe object to bucket %r but could not confirm cleanup. Review the trial logs above.",
+                bucket_name,
+            )
 
     def _bootstrap_postgres(self, conn: duckdb.DuckDBPyConnection) -> None:
         if not all(

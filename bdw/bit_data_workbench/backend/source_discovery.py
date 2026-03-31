@@ -441,17 +441,76 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
         try:
             client = s3_client(self._settings)
             current_buckets = set(list_s3_buckets(self._settings))
+            configured_bucket = (self._settings.s3_bucket or "").strip()
+
+            if configured_bucket and configured_bucket not in current_buckets:
+                fallback_probe = None
+                try:
+                    client.head_bucket(Bucket=configured_bucket)
+                    fallback_probe = "head_bucket"
+                except Exception:
+                    try:
+                        client.list_objects_v2(Bucket=configured_bucket, MaxKeys=1)
+                        fallback_probe = "list_objects_v2"
+                    except Exception:
+                        fallback_probe = None
+
+                if fallback_probe is not None:
+                    current_buckets.add(configured_bucket)
+                    logger.info(
+                        "S3 discovery added configured bucket %r via %s fallback after bucket enumeration returned %d bucket(s).",
+                        configured_bucket,
+                        fallback_probe,
+                        len(current_buckets) - 1,
+                    )
         except Exception as exc:
-            return DataSourceDiscoveryResult(
-                source_type=self.source_type,
-                source_id=self.source_id,
-                source_label=self.source_label,
-                added_relations=[],
-                removed_relations=[],
-                updated_relations=[],
-                message=f"{self.source_label} connection failed.",
-                connection_status=self._disconnected_status(f"{self.source_label} connection failed: {exc}"),
-            )
+            configured_bucket = (self._settings.s3_bucket or "").strip()
+            if configured_bucket:
+                try:
+                    client = s3_client(self._settings)
+                    client.head_bucket(Bucket=configured_bucket)
+                    current_buckets = {configured_bucket}
+                    logger.info(
+                        "S3 discovery fell back to configured bucket %r because list_buckets failed: %s",
+                        configured_bucket,
+                        exc,
+                    )
+                except Exception as head_exc:
+                    try:
+                        client.list_objects_v2(Bucket=configured_bucket, MaxKeys=1)
+                        current_buckets = {configured_bucket}
+                        logger.info(
+                            "S3 discovery fell back to configured bucket %r via list_objects_v2 because list_buckets failed: %s",
+                            configured_bucket,
+                            exc,
+                        )
+                    except Exception as list_exc:
+                        return DataSourceDiscoveryResult(
+                            source_type=self.source_type,
+                            source_id=self.source_id,
+                            source_label=self.source_label,
+                            added_relations=[],
+                            removed_relations=[],
+                            updated_relations=[],
+                            message=f"{self.source_label} connection failed.",
+                            connection_status=self._disconnected_status(
+                                f"{self.source_label} connection failed: list_buckets={exc}; "
+                                f"head_bucket={head_exc}; list_objects_v2={list_exc}"
+                            ),
+                        )
+            else:
+                return DataSourceDiscoveryResult(
+                    source_type=self.source_type,
+                    source_id=self.source_id,
+                    source_label=self.source_label,
+                    added_relations=[],
+                    removed_relations=[],
+                    updated_relations=[],
+                    message=f"{self.source_label} connection failed.",
+                    connection_status=self._disconnected_status(
+                        f"{self.source_label} connection failed: {exc}"
+                    ),
+                )
 
         if not self._current_specs:
             self._current_specs = self._load_existing_specs(connection)

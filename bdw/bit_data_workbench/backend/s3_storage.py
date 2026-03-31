@@ -10,20 +10,46 @@ from botocore.config import Config
 from ..config import Settings
 
 
-def s3_client(settings: Settings):
+def s3_endpoint_url(settings: Settings, *, use_ssl: bool | None = None) -> str:
     endpoint = settings.s3_endpoint
     if not endpoint:
         raise ValueError("S3 endpoint configuration is required for this operation.")
 
-    endpoint_url = endpoint if "://" in endpoint else f"{'https' if settings.s3_use_ssl else 'http'}://{endpoint}"
+    ssl_enabled = settings.s3_use_ssl if use_ssl is None else use_ssl
+    return endpoint if "://" in endpoint else f"{'https' if ssl_enabled else 'http'}://{endpoint}"
+
+
+def s3_verify_value(
+    settings: Settings,
+    *,
+    verify_ssl: bool | str | None = None,
+) -> bool | str:
+    if isinstance(verify_ssl, str):
+        return verify_ssl
+
+    verification_enabled = settings.s3_verify_ssl if verify_ssl is None else verify_ssl
+    if verification_enabled and settings.s3_ca_cert_file is not None:
+        return settings.s3_ca_cert_file.as_posix()
+    return verification_enabled
+
+
+def s3_client(
+    settings: Settings,
+    *,
+    use_ssl: bool | None = None,
+    url_style: str | None = None,
+    verify_ssl: bool | str | None = None,
+):
+    endpoint_url = s3_endpoint_url(settings, use_ssl=use_ssl)
+    addressing_style = (
+        (url_style or "").strip().lower()
+        or ("path" if (settings.s3_url_style or "").strip().lower() == "path" else "auto")
+    )
     config = Config(
         s3={
-            "addressing_style": "path" if (settings.s3_url_style or "").lower() == "path" else "auto",
+            "addressing_style": addressing_style,
         }
     )
-    verify: bool | str = settings.s3_verify_ssl
-    if settings.s3_verify_ssl and settings.s3_ca_cert_file is not None:
-        verify = settings.s3_ca_cert_file.as_posix()
     return boto3.client(
         "s3",
         endpoint_url=endpoint_url,
@@ -32,7 +58,7 @@ def s3_client(settings: Settings):
         aws_secret_access_key=settings.s3_secret_access_key,
         aws_session_token=settings.s3_session_token,
         config=config,
-        verify=verify,
+        verify=s3_verify_value(settings, verify_ssl=verify_ssl),
     )
 
 

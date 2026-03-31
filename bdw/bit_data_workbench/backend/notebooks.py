@@ -189,6 +189,64 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         if contest_postgres_native_relation
         else "SELECT 'Run the PG vs S3 Contest Loader from the Ingestion Workbench first.' AS status;"
     )
+    oltp_write_test_table = "public.notebook_oltp_write_test"
+    oltp_write_test_setup_sql = (
+        "-- Reset the OLTP write-test table so the notebook can be rerun safely.\n"
+        f"DROP TABLE IF EXISTS {oltp_write_test_table};\n"
+        f"CREATE TABLE {oltp_write_test_table} (\n"
+        "  id INTEGER PRIMARY KEY,\n"
+        "  taxpayer_uid TEXT NOT NULL,\n"
+        "  canton_code TEXT NOT NULL,\n"
+        "  declared_turnover_chf NUMERIC(12,2) NOT NULL,\n"
+        "  note TEXT NOT NULL,\n"
+        "  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n"
+        ");"
+    )
+    oltp_write_test_insert_sql = (
+        f"INSERT INTO {oltp_write_test_table} (\n"
+        "  id,\n"
+        "  taxpayer_uid,\n"
+        "  canton_code,\n"
+        "  declared_turnover_chf,\n"
+        "  note\n"
+        ")\n"
+        "SELECT\n"
+        "  series_id,\n"
+        "  'UID-' || LPAD(series_id::text, 5, '0') AS taxpayer_uid,\n"
+        "  CASE MOD(series_id, 5)\n"
+        "    WHEN 0 THEN 'ZH'\n"
+        "    WHEN 1 THEN 'BE'\n"
+        "    WHEN 2 THEN 'GE'\n"
+        "    WHEN 3 THEN 'VD'\n"
+        "    ELSE 'TI'\n"
+        "  END AS canton_code,\n"
+        "  ROUND((1500 + series_id * 87.5)::numeric, 2) AS declared_turnover_chf,\n"
+        "  'OLTP write test row ' || series_id::text AS note\n"
+        "FROM generate_series(1, 20) AS series(series_id);"
+    )
+    oltp_write_test_verify_summary_sql = (
+        "SELECT\n"
+        "  COUNT(*) AS inserted_rows,\n"
+        "  MIN(id) AS min_id,\n"
+        "  MAX(id) AS max_id,\n"
+        "  CAST(ROUND(SUM(declared_turnover_chf), 2) AS NUMERIC(12,2)) AS turnover_total_chf\n"
+        f"FROM {oltp_write_test_table};"
+    )
+    oltp_write_test_verify_rows_sql = (
+        "SELECT\n"
+        "  id,\n"
+        "  taxpayer_uid,\n"
+        "  canton_code,\n"
+        "  declared_turnover_chf,\n"
+        "  note,\n"
+        "  created_at\n"
+        f"FROM {oltp_write_test_table}\n"
+        "ORDER BY id;"
+    )
+    oltp_write_test_cleanup_sql = (
+        "-- Optional cleanup when you are done validating OLTP write access.\n"
+        f"DROP TABLE IF EXISTS {oltp_write_test_table};"
+    )
 
     return [
         NotebookDefinition(
@@ -220,6 +278,42 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
             ],
             tags=["smoke", "postgres"],
             tree_path=("Smoke Tests", "Relational"),
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="postgres-oltp-write-test",
+            title="PostgreSQL OLTP Write Test",
+            summary="Creates a PostgreSQL OLTP test table, inserts 20 rows with pure SQL, verifies the inserted data, and includes an optional cleanup cell.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="postgres-oltp-write-test-cell-1",
+                    data_sources=["pg_oltp_native"],
+                    sql=oltp_write_test_setup_sql,
+                ),
+                NotebookCellDefinition(
+                    cell_id="postgres-oltp-write-test-cell-2",
+                    data_sources=["pg_oltp_native"],
+                    sql=oltp_write_test_insert_sql,
+                ),
+                NotebookCellDefinition(
+                    cell_id="postgres-oltp-write-test-cell-3",
+                    data_sources=["pg_oltp_native"],
+                    sql=oltp_write_test_verify_summary_sql,
+                ),
+                NotebookCellDefinition(
+                    cell_id="postgres-oltp-write-test-cell-4",
+                    data_sources=["pg_oltp_native"],
+                    sql=oltp_write_test_verify_rows_sql,
+                ),
+                NotebookCellDefinition(
+                    cell_id="postgres-oltp-write-test-cell-5",
+                    data_sources=["pg_oltp_native"],
+                    sql=oltp_write_test_cleanup_sql,
+                ),
+            ],
+            tags=["smoke", "write-test", "postgres", "oltp"],
+            tree_path=("Smoke Tests", "Write Access"),
             can_edit=False,
             can_delete=False,
         ),

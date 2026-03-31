@@ -5784,6 +5784,117 @@ function folderContainsNotebookState(node, notebookId) {
   return node.children.some((child) => folderContainsNotebookState(child, notebookId));
 }
 
+function folderMatchesStoredState(node, folderName, parentFolderId = "") {
+  if (!node || typeof node !== "object" || node.type !== "folder") {
+    return false;
+  }
+
+  const folderId = deriveFolderId(folderName, parentFolderId);
+  return node.folderId === folderId || node.name === folderName;
+}
+
+function findStoredFolderPathState(nodes, folderPath, parentFolderId = "") {
+  const normalizedPath = Array.isArray(folderPath)
+    ? folderPath.map((segment) => String(segment ?? "").trim()).filter(Boolean)
+    : [];
+  if (normalizedPath.length === 0) {
+    return null;
+  }
+
+  let currentNodes = Array.isArray(nodes) ? nodes : [];
+  let currentParentFolderId = parentFolderId;
+  let matchedFolder = null;
+
+  for (const folderName of normalizedPath) {
+    matchedFolder =
+      currentNodes.find((node) => folderMatchesStoredState(node, folderName, currentParentFolderId)) ??
+      null;
+    if (!matchedFolder) {
+      return null;
+    }
+
+    currentParentFolderId = deriveFolderId(folderName, currentParentFolderId);
+    currentNodes = Array.isArray(matchedFolder.children) ? matchedFolder.children : [];
+  }
+
+  return matchedFolder;
+}
+
+function insertNotebookIntoStoredFolderPath(
+  nodes,
+  notebookNode,
+  folderPath,
+  parentFolderId = ""
+) {
+  const normalizedNodes = Array.isArray(nodes)
+    ? nodes
+        .map((node) => (node && typeof node === "object" ? node : null))
+        .filter(Boolean)
+    : [];
+  const normalizedPath = Array.isArray(folderPath)
+    ? folderPath.map((segment) => String(segment ?? "").trim()).filter(Boolean)
+    : [];
+
+  if (!notebookNode || normalizedPath.length === 0) {
+    return {
+      state: normalizedNodes,
+      changed: false,
+    };
+  }
+
+  const [folderName, ...remainingPath] = normalizedPath;
+  const nextParentFolderId = deriveFolderId(folderName, parentFolderId);
+  const folderIndex = normalizedNodes.findIndex((node) =>
+    folderMatchesStoredState(node, folderName, parentFolderId)
+  );
+  const existingFolder = folderIndex >= 0 ? normalizedNodes[folderIndex] : null;
+  const fallbackPolicy = defaultFolderPermissions(nextParentFolderId);
+
+  let changed = folderIndex < 0;
+  let folderState =
+    existingFolder && existingFolder.type === "folder"
+      ? {
+          ...existingFolder,
+          children: Array.isArray(existingFolder.children) ? [...existingFolder.children] : [],
+        }
+      : {
+          ...createStoredFolderState(folderName, parentFolderId),
+          canEdit: fallbackPolicy.canEdit,
+          canDelete: fallbackPolicy.canDelete,
+        };
+
+  if (!folderState.open) {
+    folderState.open = true;
+    changed = true;
+  }
+
+  if (remainingPath.length > 0) {
+    const childResult = insertNotebookIntoStoredFolderPath(
+      folderState.children,
+      notebookNode,
+      remainingPath,
+      nextParentFolderId
+    );
+    folderState.children = childResult.state;
+    changed = changed || childResult.changed;
+  } else if (!folderContainsNotebookState(folderState, notebookNode.notebookId)) {
+    folderState.children = [...folderState.children, notebookNode];
+    changed = true;
+  }
+
+  const nextNodes = [...normalizedNodes];
+  if (folderIndex >= 0) {
+    nextNodes[folderIndex] = folderState;
+  } else {
+    nextNodes.push(folderState);
+  }
+
+  return {
+    state: nextNodes,
+    changed,
+  };
+}
+
 function ensureNotebookInRootFolderState(nodes, notebookId, folderName) {
   const folderId = deriveFolderId(folderName);
   const rootNodes = Array.isArray(nodes)
@@ -5840,6 +5951,43 @@ function ensureNotebookInRootFolderState(nodes, notebookId, folderName) {
   };
 }
 
+function ensureNotebookInFolderPathState(nodes, notebookId, folderPath) {
+  const normalizedPath = Array.isArray(folderPath)
+    ? folderPath.map((segment) => String(segment ?? "").trim()).filter(Boolean)
+    : [];
+  const rootNodes = Array.isArray(nodes)
+    ? nodes
+        .map((node) => (node && typeof node === "object" ? node : null))
+        .filter(Boolean)
+    : [];
+
+  if (normalizedPath.length === 0) {
+    return {
+      state: rootNodes,
+      changed: false,
+    };
+  }
+
+  const existingFolder = findStoredFolderPathState(rootNodes, normalizedPath);
+  if (existingFolder && folderContainsNotebookState(existingFolder, notebookId)) {
+    return {
+      state: rootNodes,
+      changed: false,
+    };
+  }
+
+  const removal = removeNotebookFromStoredTree(rootNodes, notebookId);
+  const notebookNode = removal.removed;
+  if (!notebookNode) {
+    return {
+      state: rootNodes,
+      changed: false,
+    };
+  }
+
+  return insertNotebookIntoStoredFolderPath(removal.nodes, notebookNode, normalizedPath);
+}
+
 function migrateStoredNotebookTree(state) {
   let nextState = Array.isArray(state) ? state : [];
   let changed = false;
@@ -5849,14 +5997,16 @@ function migrateStoredNotebookTree(state) {
       notebookId: "pg-vs-s3-contest-pg-native",
       folderName: "Performance Evaluation",
     },
+    {
+      notebookId: "postgres-oltp-write-test",
+      folderPath: ["Smoke Tests", "Write Access"],
+    },
   ];
 
   for (const migration of migrations) {
-    const result = ensureNotebookInRootFolderState(
-      nextState,
-      migration.notebookId,
-      migration.folderName
-    );
+    const result = Array.isArray(migration.folderPath)
+      ? ensureNotebookInFolderPathState(nextState, migration.notebookId, migration.folderPath)
+      : ensureNotebookInRootFolderState(nextState, migration.notebookId, migration.folderName);
     nextState = result.state;
     changed = changed || result.changed;
   }
@@ -6232,8 +6382,8 @@ function renderStoredTreeNode(nodeState, notebookLookup, parentFolderId = "") {
   }
 
   if (nodeState.type === "notebook") {
-    const notebook = notebookLookup.get(nodeState.notebookId);
-    if (!notebook) {
+    const notebookEntry = notebookLookup.get(nodeState.notebookId);
+    if (!notebookEntry) {
       if (isLocalNotebookId(nodeState.notebookId)) {
         const metadata = notebookMetadata(nodeState.notebookId);
         if (!metadata.deleted) {
@@ -6244,7 +6394,7 @@ function renderStoredTreeNode(nodeState, notebookLookup, parentFolderId = "") {
     }
 
     notebookLookup.delete(nodeState.notebookId);
-    return notebook;
+    return notebookEntry.element;
   }
 
   if (nodeState.type === "folder") {
@@ -6326,6 +6476,84 @@ function resolveDropTarget(target) {
   return notebookTreeRoot();
 }
 
+function notebookDefaultFolderPath(notebook) {
+  if (!(notebook instanceof Element)) {
+    return [];
+  }
+
+  const path = [];
+  let currentFolder = notebook.closest("[data-tree-folder]");
+
+  while (currentFolder) {
+    const label = folderLabel(currentFolder)?.textContent?.trim();
+    if (label) {
+      path.push(label);
+    }
+    currentFolder = currentFolder.parentElement?.closest("[data-tree-folder]") ?? null;
+  }
+
+  return path.reverse();
+}
+
+function ensureTreeFolderPath(root, folderPath) {
+  if (!(root instanceof Element)) {
+    return null;
+  }
+
+  const normalizedPath = Array.isArray(folderPath)
+    ? folderPath.map((segment) => String(segment ?? "").trim()).filter(Boolean)
+    : [];
+  if (normalizedPath.length === 0) {
+    return root;
+  }
+
+  let container = root;
+  let parentFolderId = "";
+
+  for (const folderName of normalizedPath) {
+    const folderId = deriveFolderId(folderName, parentFolderId);
+    let folder =
+      Array.from(container.children).find(
+        (child) =>
+          child instanceof Element &&
+          child.matches("[data-tree-folder]") &&
+          (child.dataset.folderId === folderId || folderLabel(child)?.textContent?.trim() === folderName)
+      ) ?? null;
+
+    if (!folder) {
+      const permissions = defaultFolderPermissions(folderId);
+      folder = createFolderNode(folderName, {
+        open: true,
+        folderId,
+        canEdit: permissions.canEdit,
+        canDelete: permissions.canDelete,
+      });
+      container.appendChild(folder);
+    } else {
+      folder.open = true;
+    }
+
+    container = directChildrenContainer(folder) ?? container;
+    parentFolderId = folderId;
+  }
+
+  return container;
+}
+
+function placeNotebookInDefaultFolder(root, notebook, folderPath) {
+  if (!(root instanceof Element) || !(notebook instanceof Element)) {
+    return false;
+  }
+
+  const targetContainer = ensureTreeFolderPath(root, folderPath);
+  if (!(targetContainer instanceof Element)) {
+    return false;
+  }
+
+  targetContainer.appendChild(notebook);
+  return true;
+}
+
 function initializeNotebookTree(root = document) {
   const treeRoot =
     root instanceof Element && root.matches("[data-notebook-tree]") ? root : notebookTreeRoot();
@@ -6339,7 +6567,10 @@ function initializeNotebookTree(root = document) {
     const notebookLookup = new Map(
       Array.from(treeRoot.querySelectorAll("[data-draggable-notebook]")).map((notebook) => [
         notebook.dataset.notebookId,
-        notebook,
+        {
+          element: notebook,
+          defaultFolderPath: notebookDefaultFolderPath(notebook),
+        },
       ])
     );
     const fragment = document.createDocumentFragment();
@@ -6351,11 +6582,24 @@ function initializeNotebookTree(root = document) {
       }
     }
 
-    for (const notebook of notebookLookup.values()) {
-      fragment.appendChild(notebook);
+    treeRoot.replaceChildren(fragment);
+
+    let treeChanged = false;
+    for (const notebookEntry of notebookLookup.values()) {
+      const placed = placeNotebookInDefaultFolder(
+        treeRoot,
+        notebookEntry.element,
+        notebookEntry.defaultFolderPath
+      );
+      if (!placed) {
+        treeRoot.appendChild(notebookEntry.element);
+      }
+      treeChanged = true;
     }
 
-    treeRoot.replaceChildren(fragment);
+    if (treeChanged) {
+      persistNotebookTree();
+    }
   } else {
     persistNotebookTree();
   }
