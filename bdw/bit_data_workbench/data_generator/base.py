@@ -81,6 +81,7 @@ class DataGenerator(ABC):
     description = ""
     target_kind = "unknown"
     module_name = ""
+    tree_path: tuple[str, ...] = ()
     default_size_gb = 1.0
     min_size_gb = 0.1
     max_size_gb = 1024.0
@@ -97,6 +98,7 @@ class DataGenerator(ABC):
             description=self.description,
             target_kind=self.target_kind,
             module_name=self.module_name or self.__class__.__module__,
+            tree_path=self.tree_path,
             default_size_gb=self.default_size_gb,
             min_size_gb=self.min_size_gb,
             max_size_gb=self.max_size_gb,

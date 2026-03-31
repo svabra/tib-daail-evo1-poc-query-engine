@@ -46,6 +46,7 @@ def shell_context(
         "workspace_mode": workspace_mode,
         "workspace_partial_template": workspace_partial_template,
         "data_generators": service.data_generators(),
+        "runbook_tree": service.runbook_tree(),
         "ingestion_cleanup_targets": service.ingestion_cleanup_targets(),
         "completion_schema_json": json.dumps(service.completion_schema()),
     }
@@ -123,6 +124,7 @@ def sidebar_partial(
             "active_notebook_id": active_notebook_id,
             "workspace_mode": workspace_mode,
             "data_generators": service.data_generators(),
+            "runbook_tree": service.runbook_tree(),
             "ingestion_cleanup_targets": service.ingestion_cleanup_targets(),
         },
     )
@@ -153,6 +155,7 @@ def ingestion_workbench_partial(
         name="partials/ingestion_workbench.html",
         context={
             "data_generators": service.data_generators(),
+            "runbook_tree": service.runbook_tree(),
             "ingestion_cleanup_targets": service.ingestion_cleanup_targets(),
         },
     )

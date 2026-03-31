@@ -88,6 +88,37 @@
               </div>
             </div>
           </details>
+          <details class="topbar-notification-menu topbar-settings-menu" data-settings-menu data-runtime-version="{{ runtime.image_version }}">
+            <summary
+              class="topbar-action-button topbar-action-button-icon-only"
+              aria-label="Settings"
+              title="Settings"
+            >
+              <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M6.7 1.9h2.6l.4 1.4c.36.1.7.25 1.02.43l1.31-.69 1.84 1.84-.69 1.31c.18.32.33.66.43 1.02l1.4.4v2.6l-1.4.4c-.1.36-.25.7-.43 1.02l.69 1.31-1.84 1.84-1.31-.69c-.32.18-.66.33-1.02.43l-.4 1.4H6.7l-.4-1.4a4.2 4.2 0 0 1-1.02-.43l-1.31.69-1.84-1.84.69-1.31a4.2 4.2 0 0 1-.43-1.02l-1.4-.4v-2.6l1.4-.4c.1-.36.25-.7.43-1.02l-.69-1.31 1.84-1.84 1.31.69c.32-.18.66-.33 1.02-.43z"></path>
+                <circle cx="8" cy="8" r="2.05"></circle>
+              </svg>
+            </summary>
+            <div class="topbar-notification-panel topbar-settings-panel">
+              <div class="topbar-notification-header">
+                <strong>Settings</strong>
+              </div>
+              <div class="topbar-settings-actions">
+                <button type="button" class="topbar-settings-action" data-clear-local-cache>
+                  <span class="topbar-settings-action-title">Clear local cache</span>
+                  <span class="topbar-settings-action-copy">
+                    Delete all locally stored notebooks, drafts, versions, and browser workspace state.
+                  </span>
+                </button>
+                <button type="button" class="topbar-settings-action" data-open-about>
+                  <span class="topbar-settings-action-title">About</span>
+                  <span class="topbar-settings-action-copy">
+                    Show the running version and the purpose of this prototype.
+                  </span>
+                </button>
+              </div>
+            </div>
+          </details>
           <button type="button" class="topbar-action-button" data-create-notebook>
             Create Notebook
           </button>

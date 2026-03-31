@@ -32,6 +32,7 @@ from .s3_storage import (
 from .data_generation_jobs import DataGenerationJobManager
 from .query_jobs import QueryJobManager
 from .notebooks import build_completion_schema, build_notebook_tree, build_notebooks, build_source_options
+from .runbooks import build_runbook_tree
 from .source_discovery import (
     DataSourceDiscoveryManager,
     S3DataSourceDiscoverer,
@@ -224,6 +225,9 @@ class WorkbenchService:
 
     def data_generators(self) -> list[dict[str, object]]:
         return self._data_generation_jobs.generators_payload()
+
+    def runbook_tree(self):
+        return build_runbook_tree(self.data_generators())
 
     def ingestion_cleanup_targets(self) -> list[dict[str, str]]:
         return [

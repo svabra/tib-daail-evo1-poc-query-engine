@@ -261,7 +261,8 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
                 )
             ],
             tags=["smoke", "s3"],
-            tree_path=("Smoke Tests", "Object Storage"),
+            tree_path=("PoC Tests", "Smoke Tests", "Object Storage"),
+            linked_generator_id="s3_smoke_orders",
             can_edit=False,
             can_delete=False,
         ),
@@ -277,7 +278,8 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
                 )
             ],
             tags=["smoke", "postgres"],
-            tree_path=("Smoke Tests", "Relational"),
+            tree_path=("PoC Tests", "Smoke Tests", "Relational"),
+            linked_generator_id="postgres_oltp_smoke_orders",
             can_edit=False,
             can_delete=False,
         ),
@@ -313,7 +315,8 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
                 ),
             ],
             tags=["smoke", "write-test", "postgres", "oltp"],
-            tree_path=("Smoke Tests", "Write Access"),
+            tree_path=("PoC Tests", "Smoke Tests", "Write Access"),
+            linked_generator_id="postgres_oltp_smoke_orders",
             can_edit=False,
             can_delete=False,
         ),
@@ -329,7 +332,8 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
                 )
             ],
             tags=["performance", "contest", "oltp"],
-            tree_path=("Performance Evaluation",),
+            tree_path=("PoC Tests", "Performance Evaluation"),
+            linked_generator_id="pg_vs_s3_contest_loader",
             can_edit=False,
             can_delete=False,
         ),
@@ -345,7 +349,8 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
                 )
             ],
             tags=["performance", "contest", "s3"],
-            tree_path=("Performance Evaluation",),
+            tree_path=("PoC Tests", "Performance Evaluation"),
+            linked_generator_id="pg_vs_s3_contest_loader",
             can_edit=False,
             can_delete=False,
         ),
@@ -361,7 +366,8 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
                 )
             ],
             tags=["performance", "contest", "postgres", "native"],
-            tree_path=("Performance Evaluation",),
+            tree_path=("PoC Tests", "Performance Evaluation"),
+            linked_generator_id="pg_vs_s3_contest_loader",
             can_edit=False,
             can_delete=False,
         ),
@@ -428,7 +434,7 @@ def build_completion_schema(catalogs: list[SourceCatalog]) -> dict[str, object]:
 def build_notebook_tree(notebooks: list[NotebookDefinition]) -> list[NotebookFolder]:
     roots: list[NotebookFolder] = []
     folder_index: dict[tuple[str, ...], NotebookFolder] = {}
-    protected_roots = {"Smoke Tests", "Performance Evaluation"}
+    protected_roots = {"PoC Tests"}
 
     for notebook in notebooks:
         if not notebook.tree_path:

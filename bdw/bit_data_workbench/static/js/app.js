@@ -24,6 +24,9 @@ let dataGenerationJobsSummary = { runningCount: 0, totalCount: 0 };
 let dataGenerationEventSource = null;
 let dataGenerationClockHandle = null;
 let dataGenerationJobsLoaded = false;
+let selectedIngestionRunbookId = "";
+let spotlightIngestionRunbookId = "";
+let ingestionRunbookSpotlightHandle = null;
 let dataSourceEventsStateVersion = null;
 let dataSourceEventsLatestEventId = null;
 let dataSourceEventsEventSource = null;
@@ -40,6 +43,7 @@ const notebookActivityStorageKey = "bdw.notebookActivity.v1";
 const lastNotebookStorageKey = "bdw.lastNotebook.v1";
 const sidebarCollapsedStorageKey = "bdw.sidebarCollapsed.v1";
 const dismissedNotificationsStorageKey = "bdw.dismissedNotifications.v2";
+const cacheResetStorageKey = "bdw.cacheReset.v1";
 const unassignedFolderName = "Unassigned";
 const localNotebookPrefix = "local-notebook-";
 const localCellPrefix = "local-cell-";
@@ -184,6 +188,10 @@ function messageDialog() {
   return document.querySelector("[data-message-dialog]");
 }
 
+function aboutDialog() {
+  return document.querySelector("[data-about-dialog]");
+}
+
 function appendModalDialog(markup) {
   document.body.insertAdjacentHTML("beforeend", markup.trim());
 }
@@ -240,6 +248,49 @@ function ensureMessageDialog() {
   `);
 
   dialog = messageDialog();
+  return dialog;
+}
+
+function ensureAboutDialog() {
+  let dialog = aboutDialog();
+  if (dialog) {
+    return dialog;
+  }
+
+  appendModalDialog(`
+    <dialog class="modal-dialog modal-dialog-wide" data-about-dialog>
+      <form method="dialog" class="modal-card modal-card-wide" data-about-form>
+        <div class="about-dialog-header">
+          <div class="about-dialog-copy">
+            <h2 class="modal-title">About</h2>
+            <p class="modal-copy">
+              This ProofOfConcept work is a collaborative effort of BIT and ESTV.
+            </p>
+          </div>
+          <div class="about-dialog-version" data-about-version>Version unknown</div>
+        </div>
+        <div class="about-dialog-body">
+          <p class="modal-copy">
+            It's main purpose is to proof the speed of query execution.
+          </p>
+          <p class="modal-copy">
+            The UI shall accelerate the testing experience for a wide range of roles:
+            Data Analyst, Scientist, Data Owner, BIT Product Owner, Software and
+            System Engineer, Decision Makers, etc.
+            This way the client can evaluate and assess without any BIT employee beeing
+            involed in tests.
+          </p>
+        </div>
+        <menu class="modal-actions">
+          <button class="modal-button" type="submit" value="confirm" data-about-submit>
+            Close
+          </button>
+        </menu>
+      </form>
+    </dialog>
+  `);
+
+  dialog = aboutDialog();
   return dialog;
 }
 
@@ -320,6 +371,10 @@ function queryNotificationMenu() {
   return document.querySelector("[data-query-notifications]");
 }
 
+function settingsMenu() {
+  return document.querySelector("[data-settings-menu]");
+}
+
 function queryNotificationList() {
   return document.querySelector("[data-query-notification-list]");
 }
@@ -350,6 +405,22 @@ function ingestionGeneratorList() {
 
 function ingestionJobList() {
   return document.querySelector("[data-ingestion-job-list]");
+}
+
+function ingestionGeneratorSectionTitle() {
+  return document.querySelector("[data-ingestion-generator-section-title]");
+}
+
+function ingestionGeneratorSectionCopy() {
+  return document.querySelector("[data-ingestion-generator-section-copy]");
+}
+
+function ingestionJobSectionTitle() {
+  return document.querySelector("[data-ingestion-job-section-title]");
+}
+
+function ingestionJobSectionCopy() {
+  return document.querySelector("[data-ingestion-job-section-copy]");
 }
 
 function dataGenerationMonitorList() {
@@ -386,6 +457,19 @@ function currentSidebarMode() {
 
 function currentWorkspaceMode() {
   return document.querySelector("[data-ingestion-workbench-page]") ? "ingestion" : "notebook";
+}
+
+function applicationVersion() {
+  const explicitVersion =
+    settingsMenu()?.dataset.runtimeVersion ||
+    document.querySelector("[data-runtime-version]")?.dataset.runtimeVersion ||
+    "";
+  if (explicitVersion) {
+    return explicitVersion.trim();
+  }
+
+  const sidebarVersion = document.querySelector(".runtime-pill-sidebar dd")?.textContent?.trim() || "";
+  return sidebarVersion.replace(/^V/i, "").trim() || "unknown";
 }
 
 function workbenchTitle(mode = currentWorkspaceMode()) {
@@ -549,6 +633,61 @@ function writeDismissedNotificationKeys() {
   }
 }
 
+function clearWorkbenchLocalCache() {
+  const storageKeys = [];
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    const key = window.localStorage.key(index);
+    if (key && key.startsWith("bdw.")) {
+      storageKeys.push(key);
+    }
+  }
+
+  for (const key of storageKeys) {
+    window.localStorage.removeItem(key);
+  }
+
+  const resetMarker = {
+    clearedAt: new Date().toISOString(),
+    reason: "user-settings-reset",
+    version: applicationVersion(),
+  };
+  window.localStorage.setItem(cacheResetStorageKey, JSON.stringify(resetMarker));
+  dismissedNotificationKeys = new Set();
+  return resetMarker;
+}
+
+async function promptClearLocalCache() {
+  const { confirmed } = await showConfirmDialog({
+    title: "Clear local cache",
+    copy:
+      "This will delete all locally stored workbench data in this browser, including your notebooks, drafts, saved versions, folder layout, last-opened notebook, and notification state.",
+    confirmLabel: "Clear local cache",
+    option: {
+      label:
+        "I understand that this permanently deletes all locally stored notebooks and browser workspace data for this workbench.",
+      checkedCopy:
+        "All locally stored workbench data in this browser will be deleted immediately, including your notebooks. The page will then reload with a clean local state.",
+      checkedConfirmLabel: "Delete local data",
+      required: true,
+    },
+  });
+  if (!confirmed) {
+    return;
+  }
+
+  try {
+    clearWorkbenchLocalCache();
+  } catch (_error) {
+    await showMessageDialog({
+      title: "Clear local cache failed",
+      copy: "The browser-local workbench data could not be cleared.",
+    });
+    return;
+  }
+
+  window.location.reload();
+}
+
 function applySidebarCollapsedState(collapsed) {
   document.body.classList.toggle("sidebar-collapsed", collapsed);
 
@@ -603,6 +742,12 @@ function closeDialog(dialog, returnValue = "") {
   if (typeof dialog.close === "function") {
     dialog.close(returnValue);
   }
+}
+
+function closeSettingsMenus() {
+  document.querySelectorAll("[data-settings-menu][open]").forEach((menu) => {
+    menu.removeAttribute("open");
+  });
 }
 
 function showFolderNameDialog({ title, copy, submitLabel, initialValue = "" }) {
@@ -686,6 +831,7 @@ function showConfirmDialog({ title, copy, confirmLabel, option = null }) {
       if (!optionInput || !option) {
         copyNode.textContent = copy;
         submit.textContent = confirmLabel;
+        submit.disabled = false;
         return;
       }
 
@@ -694,6 +840,7 @@ function showConfirmDialog({ title, copy, confirmLabel, option = null }) {
       submit.textContent = optionChecked
         ? option.checkedConfirmLabel ?? confirmLabel
         : confirmLabel;
+      submit.disabled = Boolean(option.required) && !optionChecked;
     };
 
     const onCancel = () => closeDialog(dialog, "cancel");
@@ -709,6 +856,20 @@ function showConfirmDialog({ title, copy, confirmLabel, option = null }) {
     applyOptionState();
     cancel?.addEventListener("click", onCancel);
     optionInput?.addEventListener("change", applyOptionState);
+    dialog.addEventListener("close", onClose, { once: true });
+    dialog.showModal();
+  });
+}
+
+function showAboutDialog() {
+  const dialog = ensureAboutDialog();
+  const versionNode = dialog.querySelector("[data-about-version]");
+  if (versionNode) {
+    versionNode.textContent = `Version ${applicationVersion()}`;
+  }
+
+  return new Promise((resolve) => {
+    const onClose = () => resolve();
     dialog.addEventListener("close", onClose, { once: true });
     dialog.showModal();
   });
@@ -1236,6 +1397,9 @@ function normalizeDataGenerator(generator) {
     description: String(generator.description ?? "").trim(),
     targetKind: String(generator.targetKind ?? "").trim() || "unknown",
     moduleName: String(generator.moduleName ?? "").trim(),
+    treePath: Array.isArray(generator.treePath)
+      ? generator.treePath.map((segment) => String(segment ?? "").trim()).filter(Boolean)
+      : [],
     defaultTargetName: String(generator.defaultTargetName ?? "").trim(),
     defaultSizeGb: Number.isFinite(Number(generator.defaultSizeGb)) ? Number(generator.defaultSizeGb) : 1,
     minSizeGb: Number.isFinite(Number(generator.minSizeGb)) ? Number(generator.minSizeGb) : 0.01,
@@ -1425,6 +1589,27 @@ function formatDataGenerationSize(valueGb) {
   return `${(sizeGb * 1024).toFixed(sizeGb * 1024 >= 10 ? 0 : 1)} MB`;
 }
 
+function dataGenerationJobStartedCopy(job) {
+  return formatQueryTimestamp(job?.startedAt || "") || "Pending";
+}
+
+function dataGenerationJobCompletedCopy(job) {
+  if (job?.completedAt) {
+    return formatQueryTimestamp(job.completedAt) || "Unavailable";
+  }
+  if (dataGenerationJobIsRunning(job)) {
+    return "Running";
+  }
+  if (job?.status === "queued") {
+    return "Pending";
+  }
+  return "Not finished";
+}
+
+function dataGenerationJobTimingCopy(job) {
+  return `Start: ${dataGenerationJobStartedCopy(job)} | End: ${dataGenerationJobCompletedCopy(job)}`;
+}
+
 function dataGenerationJobCopy(job) {
   if (!job) {
     return "";
@@ -1439,6 +1624,114 @@ function dataGenerationJobCopy(job) {
         ? "Starting"
         : "0 rows";
   return `${formatQueryDuration(dataGenerationJobElapsedMs(job))} | ${sizeCopy} | ${rowsCopy}`;
+}
+
+function firstAvailableIngestionRunbookId() {
+  return String(dataGeneratorsCatalog[0]?.generatorId || "").trim();
+}
+
+function ingestionGeneratorById(generatorId) {
+  const normalizedGeneratorId = String(generatorId ?? "").trim();
+  if (!normalizedGeneratorId) {
+    return null;
+  }
+
+  return dataGeneratorsCatalog.find((generator) => generator.generatorId === normalizedGeneratorId) ?? null;
+}
+
+function selectedIngestionGenerator() {
+  return ingestionGeneratorById(selectedIngestionRunbookId);
+}
+
+function resolveSelectedIngestionRunbookId(preferredGeneratorId = "") {
+  const preferred = ingestionGeneratorById(preferredGeneratorId);
+  if (preferred) {
+    selectedIngestionRunbookId = preferred.generatorId;
+    return selectedIngestionRunbookId;
+  }
+
+  const existing = selectedIngestionGenerator();
+  if (existing) {
+    return existing.generatorId;
+  }
+
+  selectedIngestionRunbookId = firstAvailableIngestionRunbookId();
+  return selectedIngestionRunbookId;
+}
+
+function filteredIngestionGenerators() {
+  const selectedGenerator = selectedIngestionGenerator();
+  return selectedGenerator ? [selectedGenerator] : [];
+}
+
+function filteredDataGenerationJobs() {
+  const selectedGeneratorId = resolveSelectedIngestionRunbookId();
+  if (!selectedGeneratorId) {
+    return [];
+  }
+
+  return dataGenerationJobsSnapshot.filter((job) => job.generatorId === selectedGeneratorId);
+}
+
+function openRunbookAncestors(node) {
+  if (!(node instanceof Element)) {
+    return;
+  }
+
+  document.querySelector("[data-ingestion-runbook-section]")?.setAttribute("open", "");
+  let currentFolder = node.closest("[data-runbook-folder]");
+  while (currentFolder) {
+    currentFolder.open = true;
+    currentFolder = currentFolder.parentElement?.closest("[data-runbook-folder]") ?? null;
+  }
+}
+
+function syncSelectedIngestionRunbookState() {
+  const selectedGeneratorId = resolveSelectedIngestionRunbookId();
+  let activeSidebarLink = null;
+
+  document.querySelectorAll("[data-open-ingestion-runbook]").forEach((button) => {
+    const isActive = (button.dataset.openIngestionRunbook || "") === selectedGeneratorId;
+    const isSpotlighted = (button.dataset.openIngestionRunbook || "") === spotlightIngestionRunbookId;
+    button.classList.toggle("is-active", isActive);
+    button.classList.toggle("is-spotlighted", isSpotlighted);
+    if (isActive && button.matches(".runbook-link")) {
+      activeSidebarLink = button;
+    }
+  });
+
+  if (activeSidebarLink) {
+    openRunbookAncestors(activeSidebarLink);
+  }
+}
+
+function scheduleIngestionRunbookSpotlight(generatorId) {
+  spotlightIngestionRunbookId = String(generatorId ?? "").trim();
+  if (ingestionRunbookSpotlightHandle !== null) {
+    window.clearTimeout(ingestionRunbookSpotlightHandle);
+  }
+  syncSelectedIngestionRunbookState();
+  if (currentWorkspaceMode() === "ingestion") {
+    renderIngestionWorkbench();
+  }
+
+  ingestionRunbookSpotlightHandle = window.setTimeout(() => {
+    spotlightIngestionRunbookId = "";
+    ingestionRunbookSpotlightHandle = null;
+    syncSelectedIngestionRunbookState();
+    if (currentWorkspaceMode() === "ingestion") {
+      renderIngestionWorkbench();
+    }
+  }, 3200);
+}
+
+function selectIngestionRunbook(generatorId, { spotlight = false } = {}) {
+  const selectedGeneratorId = resolveSelectedIngestionRunbookId(generatorId);
+  syncSelectedIngestionRunbookState();
+  if (spotlight && selectedGeneratorId) {
+    scheduleIngestionRunbookSpotlight(selectedGeneratorId);
+  }
+  return selectedGeneratorId;
 }
 
 function compareDataGenerationJobsByStartedAt(left, right) {
@@ -1849,12 +2142,14 @@ function queryNotificationItemMarkup(job) {
 }
 
 function dataGeneratorCardMarkup(generator) {
+  const isSelected = generator.generatorId === resolveSelectedIngestionRunbookId();
+  const isSpotlighted = generator.generatorId === spotlightIngestionRunbookId;
   const tagsMarkup = (generator.tags || [])
     .map((tag) => `<span class="ingestion-generator-tag">${escapeHtml(tag)}</span>`)
     .join("");
 
   return `
-    <article class="ingestion-generator-card" data-generator-card data-generator-id="${escapeHtml(generator.generatorId)}">
+    <article class="ingestion-generator-card${isSelected ? " is-selected" : ""}${isSpotlighted ? " is-spotlighted" : ""}" data-generator-card data-generator-id="${escapeHtml(generator.generatorId)}">
       <div class="ingestion-generator-card-header">
         <div class="ingestion-generator-copy">
           <h4>${escapeHtml(generator.title)}</h4>
@@ -1902,6 +2197,8 @@ function dataGenerationJobFactsMarkup(job) {
   const facts = [
     ["Target", job.targetKind.toUpperCase()],
     ["Requested size", formatDataGenerationSize(job.requestedSizeGb)],
+    ["Started", dataGenerationJobStartedCopy(job)],
+    ["Ended", dataGenerationJobCompletedCopy(job)],
     ["Elapsed", formatQueryDuration(dataGenerationJobElapsedMs(job))],
     ["Generated size", formatDataGenerationSize(job.generatedSizeGb || 0)],
     ["Rows", Number(job.generatedRows || 0) > 0 ? Number(job.generatedRows).toLocaleString() : "0"],
@@ -2010,6 +2307,9 @@ function dataGenerationNotificationItemMarkup(job) {
       <span class="topbar-notification-item-copy" data-data-generation-notification-copy data-job-id="${escapeHtml(
         job.jobId
       )}">${escapeHtml(dataGenerationJobCopy(job))}</span>
+      <span class="topbar-notification-item-copy topbar-notification-item-copy-secondary">${escapeHtml(
+        dataGenerationJobTimingCopy(job)
+      )}</span>
     </button>
   `;
 }
@@ -2051,7 +2351,10 @@ function dataGenerationMonitorItemMarkup(job) {
             ? `<button type="button" class="query-monitor-cancel" data-cancel-data-generation-job="${escapeHtml(job.jobId)}">Cancel</button>`
             : ""
         }
-        <span class="query-monitor-updated">${escapeHtml(formatQueryTimestamp(job.updatedAt))}</span>
+        <div class="query-monitor-timestamps">
+          <span class="query-monitor-updated">Start ${escapeHtml(dataGenerationJobStartedCopy(job))}</span>
+          <span class="query-monitor-updated">End ${escapeHtml(dataGenerationJobCompletedCopy(job))}</span>
+        </div>
       </div>
     </article>
   `;
@@ -2130,20 +2433,52 @@ function clearVisibleNotifications() {
 function renderIngestionWorkbench() {
   const generatorList = ingestionGeneratorList();
   const jobList = ingestionJobList();
+  const generatorSectionTitle = ingestionGeneratorSectionTitle();
+  const generatorSectionCopy = ingestionGeneratorSectionCopy();
+  const jobSectionTitle = ingestionJobSectionTitle();
+  const jobSectionCopy = ingestionJobSectionCopy();
+  const selectedGeneratorId = resolveSelectedIngestionRunbookId();
+  const selectedGenerator = ingestionGeneratorById(selectedGeneratorId);
+  const visibleGenerators = filteredIngestionGenerators();
+  const visibleJobs = filteredDataGenerationJobs();
+
+  if (generatorSectionTitle) {
+    generatorSectionTitle.textContent = selectedGenerator ? selectedGenerator.title : "Selected Runbook";
+  }
+
+  if (generatorSectionCopy) {
+    generatorSectionCopy.innerHTML = selectedGenerator
+      ? `Only the selected runbook is shown here. Module: <code>${escapeHtml(
+          selectedGenerator.moduleName || selectedGenerator.generatorId
+        )}</code>`
+      : "No ingestion runbook is currently selected.";
+  }
+
+  if (jobSectionTitle) {
+    jobSectionTitle.textContent = selectedGenerator ? `${selectedGenerator.title} Jobs` : "Runbook Jobs";
+  }
+
+  if (jobSectionCopy) {
+    jobSectionCopy.textContent = selectedGenerator
+      ? "Only executions for the selected runbook are listed here."
+      : "Select a runbook from the left navigation to inspect its executions.";
+  }
 
   if (generatorList) {
-    if (!dataGeneratorsCatalog.length) {
+    if (!visibleGenerators.length) {
       generatorList.innerHTML = '<p class="ingestion-empty">No data generators discovered.</p>';
     } else {
-      generatorList.innerHTML = dataGeneratorsCatalog.map((generator) => dataGeneratorCardMarkup(generator)).join("");
+      generatorList.innerHTML = visibleGenerators.map((generator) => dataGeneratorCardMarkup(generator)).join("");
     }
   }
 
   if (jobList) {
-    if (!dataGenerationJobsSnapshot.length) {
-      jobList.innerHTML = '<p class="ingestion-empty">No data generation jobs yet.</p>';
+    if (!selectedGenerator) {
+      jobList.innerHTML = '<p class="ingestion-empty">Select a runbook from the left navigation.</p>';
+    } else if (!visibleJobs.length) {
+      jobList.innerHTML = '<p class="ingestion-empty">No data generation jobs for this runbook yet.</p>';
     } else {
-      jobList.innerHTML = dataGenerationJobsSnapshot.map((job) => dataGenerationJobCardMarkup(job)).join("");
+      jobList.innerHTML = visibleJobs.map((job) => dataGenerationJobCardMarkup(job)).join("");
     }
   }
 }
@@ -2289,9 +2624,13 @@ function syncDataGenerationClockLoop() {
 
 function captureSidebarState() {
   return {
+    sidebarMode: currentSidebarMode(),
     searchTerm: document.querySelector("[data-sidebar-search]")?.value ?? "",
     notebookSectionOpen: Boolean(notebookSection()?.open),
     ingestionRunbookSectionOpen: Boolean(document.querySelector("[data-ingestion-runbook-section]")?.open),
+    runbookFoldersOpen: Array.from(document.querySelectorAll("[data-runbook-folder][open]")).map(
+      (node) => node.dataset.runbookFolderId || ""
+    ),
     dataSourcesSectionOpen: Boolean(dataSourcesSection()?.open),
     ingestionCleanupSectionOpen: Boolean(document.querySelector("[data-ingestion-cleanup-section]")?.open),
     generationMonitorSectionOpen: Boolean(document.querySelector("[data-generation-monitor-section]")?.open),
@@ -2310,19 +2649,29 @@ function restoreSidebarState(state) {
     return;
   }
 
+  const stateSidebarMode = state.sidebarMode === "ingestion" ? "ingestion" : "notebook";
+  const sidebarMode = currentSidebarMode();
+
   const search = document.querySelector("[data-sidebar-search]");
   if (search) {
     search.value = state.searchTerm || "";
   }
 
   const notebookSectionRoot = notebookSection();
-  if (notebookSectionRoot) {
+  if (notebookSectionRoot && stateSidebarMode === "notebook" && sidebarMode === "notebook") {
     notebookSectionRoot.open = Boolean(state.notebookSectionOpen);
   }
 
   const ingestionRunbookSectionRoot = document.querySelector("[data-ingestion-runbook-section]");
-  if (ingestionRunbookSectionRoot) {
+  if (ingestionRunbookSectionRoot && stateSidebarMode === "ingestion" && sidebarMode === "ingestion") {
     ingestionRunbookSectionRoot.open = Boolean(state.ingestionRunbookSectionOpen);
+  }
+
+  if (stateSidebarMode === "ingestion" && sidebarMode === "ingestion") {
+    const openRunbookFolders = new Set(Array.isArray(state.runbookFoldersOpen) ? state.runbookFoldersOpen : []);
+    document.querySelectorAll("[data-runbook-folder]").forEach((node) => {
+      node.open = openRunbookFolders.has(node.dataset.runbookFolderId || "");
+    });
   }
 
   const dataSourcesRoot = dataSourcesSection();
@@ -2331,17 +2680,17 @@ function restoreSidebarState(state) {
   }
 
   const ingestionCleanupSectionRoot = document.querySelector("[data-ingestion-cleanup-section]");
-  if (ingestionCleanupSectionRoot) {
+  if (ingestionCleanupSectionRoot && stateSidebarMode === "ingestion" && sidebarMode === "ingestion") {
     ingestionCleanupSectionRoot.open = Boolean(state.ingestionCleanupSectionOpen);
   }
 
   const generationMonitorSectionRoot = document.querySelector("[data-generation-monitor-section]");
-  if (generationMonitorSectionRoot) {
+  if (generationMonitorSectionRoot && stateSidebarMode === "ingestion" && sidebarMode === "ingestion") {
     generationMonitorSectionRoot.open = Boolean(state.generationMonitorSectionOpen);
   }
 
   const queryMonitorSectionRoot = document.querySelector("[data-query-monitor-section]");
-  if (queryMonitorSectionRoot) {
+  if (queryMonitorSectionRoot && stateSidebarMode === "notebook" && sidebarMode === "notebook") {
     queryMonitorSectionRoot.open = Boolean(state.queryMonitorSectionOpen);
   }
 
@@ -2382,6 +2731,7 @@ async function refreshSidebar(mode = currentWorkspaceMode()) {
   initializeSidebarToggle();
   applyNotebookMetadata();
   restoreSidebarState(sidebarState);
+  syncSelectedIngestionRunbookState();
   restoreSelectedSourceObject();
   renderDataGenerationMonitor();
   renderQueryMonitor();
@@ -2498,7 +2848,10 @@ function renderDataGenerationMonitor() {
     return;
   }
 
-  const runningCount = Number(dataGenerationJobsSummary.runningCount || 0);
+  const visibleJobs = currentWorkspaceMode() === "ingestion"
+    ? filteredDataGenerationJobs()
+    : dataGenerationJobsSnapshot;
+  const runningCount = visibleJobs.filter((job) => dataGenerationJobIsRunning(job)).length;
   countRoot.textContent = String(runningCount);
   countRoot.classList.toggle("is-live", runningCount > 0);
 
@@ -2510,12 +2863,15 @@ function renderDataGenerationMonitor() {
     });
   }
 
-  if (!dataGenerationJobsSnapshot.length) {
-    listRoot.innerHTML = '<p class="query-monitor-empty">No ingestion jobs yet.</p>';
+  if (!visibleJobs.length) {
+    listRoot.innerHTML =
+      currentWorkspaceMode() === "ingestion"
+        ? '<p class="query-monitor-empty">No ingestion jobs for this runbook yet.</p>'
+        : '<p class="query-monitor-empty">No ingestion jobs yet.</p>';
     return;
   }
 
-  listRoot.innerHTML = dataGenerationJobsSnapshot
+  listRoot.innerHTML = visibleJobs
     .slice(0, 8)
     .map((job) => dataGenerationMonitorItemMarkup(job))
     .join("");
@@ -4045,7 +4401,7 @@ function createNotebookLinkElement(notebookId, metadata) {
   link.dataset.canEdit = metadata.canEdit ? "true" : "false";
   link.dataset.canDelete = metadata.canDelete ? "true" : "false";
   link.dataset.draggableNotebook = "";
-  link.draggable = true;
+  link.draggable = Boolean(metadata.canEdit);
 
   const titleRow = document.createElement("span");
   titleRow.className = "notebook-title-row";
@@ -5988,27 +6344,89 @@ function ensureNotebookInFolderPathState(nodes, notebookId, folderPath) {
   return insertNotebookIntoStoredFolderPath(removal.nodes, notebookNode, normalizedPath);
 }
 
+function collectNotebookIdsFromStoredTree(nodes) {
+  const notebookIds = [];
+
+  const visit = (node) => {
+    if (!node || typeof node !== "object") {
+      return;
+    }
+
+    if (node.type === "notebook" && node.notebookId) {
+      notebookIds.push(String(node.notebookId));
+      return;
+    }
+
+    if (node.type === "folder" && Array.isArray(node.children)) {
+      node.children.forEach((child) => visit(child));
+    }
+  };
+
+  (Array.isArray(nodes) ? nodes : []).forEach((node) => visit(node));
+  return notebookIds;
+}
+
 function migrateStoredNotebookTree(state) {
   let nextState = Array.isArray(state) ? state : [];
   let changed = false;
 
   const migrations = [
     {
-      notebookId: "pg-vs-s3-contest-pg-native",
-      folderName: "Performance Evaluation",
+      notebookId: "s3-smoke-test",
+      folderPath: ["PoC Tests", "Smoke Tests", "Object Storage"],
+    },
+    {
+      notebookId: "postgres-smoke-test",
+      folderPath: ["PoC Tests", "Smoke Tests", "Relational"],
     },
     {
       notebookId: "postgres-oltp-write-test",
-      folderPath: ["Smoke Tests", "Write Access"],
+      folderPath: ["PoC Tests", "Smoke Tests", "Write Access"],
+    },
+    {
+      notebookId: "pg-vs-s3-contest-oltp",
+      folderPath: ["PoC Tests", "Performance Evaluation"],
+    },
+    {
+      notebookId: "pg-vs-s3-contest-s3",
+      folderPath: ["PoC Tests", "Performance Evaluation"],
+    },
+    {
+      notebookId: "pg-vs-s3-contest-pg-native",
+      folderPath: ["PoC Tests", "Performance Evaluation"],
     },
   ];
 
   for (const migration of migrations) {
-    const result = Array.isArray(migration.folderPath)
-      ? ensureNotebookInFolderPathState(nextState, migration.notebookId, migration.folderPath)
-      : ensureNotebookInRootFolderState(nextState, migration.notebookId, migration.folderName);
+    const result = ensureNotebookInFolderPathState(nextState, migration.notebookId, migration.folderPath);
     nextState = result.state;
     changed = changed || result.changed;
+  }
+
+  const obsoleteRootFolders = new Set(["Smoke Tests"]);
+  const obsoleteRootNodes = nextState.filter(
+    (node) =>
+      node &&
+      typeof node === "object" &&
+      node.type === "folder" &&
+      obsoleteRootFolders.has(String(node.name || "").trim())
+  );
+  if (obsoleteRootNodes.length) {
+    collectNotebookIdsFromStoredTree(obsoleteRootNodes).forEach((notebookId) => {
+      if (isLocalNotebookId(notebookId)) {
+        deleteStoredNotebookState(notebookId);
+      }
+    });
+    nextState = nextState.filter(
+      (node) =>
+        !(
+          node &&
+          typeof node === "object" &&
+          node.type === "folder" &&
+          obsoleteRootFolders.has(String(node.name || "").trim())
+        )
+    );
+    changed = true;
   }
 
   return {
@@ -6055,8 +6473,20 @@ function deriveFolderId(name, parentFolderId = "") {
   return parentFolderId ? `${parentFolderId}-${slug}` : slug;
 }
 
+function isProtectedNotebookFolderId(folderId = "") {
+  const normalizedFolderId = String(folderId ?? "").trim();
+  return (
+    normalizedFolderId === "poc-tests" ||
+    normalizedFolderId.startsWith("poc-tests-") ||
+    normalizedFolderId === "smoke-tests" ||
+    normalizedFolderId.startsWith("smoke-tests-") ||
+    normalizedFolderId === "performance-evaluation" ||
+    normalizedFolderId.startsWith("performance-evaluation-")
+  );
+}
+
 function defaultFolderPermissions(folderId = "") {
-  if (folderId === "smoke-tests" || folderId.startsWith("smoke-tests-")) {
+  if (isProtectedNotebookFolderId(folderId)) {
     return {
       canEdit: false,
       canDelete: false,
@@ -6100,10 +6530,11 @@ function createFolderNode(
 
   const createNotebookButton = document.createElement("button");
   createNotebookButton.type = "button";
-  createNotebookButton.className = "tree-add-button tree-add-button-inline";
+  createNotebookButton.className = `tree-add-button tree-add-button-inline${canEdit ? "" : " is-action-disabled"}`;
   createNotebookButton.dataset.createNotebook = "";
-  createNotebookButton.title = "Create notebook";
+  createNotebookButton.title = canEdit ? "Create notebook" : "This folder cannot receive new notebooks.";
   createNotebookButton.setAttribute("aria-label", "Create notebook");
+  createNotebookButton.disabled = !canEdit;
   createNotebookButton.innerHTML = `
     <svg class="tree-action-glyph" viewBox="0 0 16 16" aria-hidden="true">
       <path d="M4 2.2h5.2l2.8 2.8v8.8H4z"></path>
@@ -6138,11 +6569,12 @@ function createFolderNode(
 
   const addButton = document.createElement("button");
   addButton.type = "button";
-  addButton.className = "tree-add-button tree-add-button-inline";
+  addButton.className = `tree-add-button tree-add-button-inline${canEdit ? "" : " is-action-disabled"}`;
   addButton.dataset.addTreeItem = "";
-  addButton.title = "Add subfolder";
+  addButton.title = canEdit ? "Add subfolder" : "This folder cannot be changed.";
   addButton.setAttribute("aria-label", "Add subfolder");
   addButton.textContent = "+";
+  addButton.disabled = !canEdit;
 
   const count = document.createElement("span");
   count.className = "tree-folder-count";
@@ -6476,6 +6908,15 @@ function resolveDropTarget(target) {
   return notebookTreeRoot();
 }
 
+function dropTargetAcceptsNotebookDrop(target) {
+  if (!(target instanceof Element)) {
+    return false;
+  }
+
+  const folder = target.closest("[data-tree-folder]");
+  return !folder || folderCanEdit(folder);
+}
+
 function notebookDefaultFolderPath(notebook) {
   if (!(notebook instanceof Element)) {
     return [];
@@ -6647,6 +7088,19 @@ function applySidebarSearchFilter() {
     button.dataset.searchHidden = matches(button) ? "false" : "true";
   });
 
+  const runbookFolders = Array.from(sidebar.querySelectorAll("[data-runbook-folder]")).reverse();
+  for (const folder of runbookFolders) {
+    const selfMatches = matches(folder.querySelector(":scope > summary"));
+    const visibleChildren = folder.querySelector(
+      ":scope > [data-runbook-children] > :not([data-search-hidden='true'])"
+    );
+    const visible = !term || selfMatches || Boolean(visibleChildren);
+    folder.dataset.searchHidden = visible ? "false" : "true";
+    if (term && visibleChildren) {
+      folder.open = true;
+    }
+  }
+
   sidebar.querySelectorAll("[data-draggable-notebook]").forEach((link) => {
     link.dataset.searchHidden = matches(link) ? "false" : "true";
   });
@@ -6742,6 +7196,8 @@ async function loadDataGeneratorCatalog() {
   dataGeneratorsCatalog = Array.isArray(payload?.generators)
     ? payload.generators.map((generator) => normalizeDataGenerator(generator)).filter(Boolean)
     : [];
+  resolveSelectedIngestionRunbookId();
+  syncSelectedIngestionRunbookState();
   renderIngestionWorkbench();
 }
 
@@ -6886,10 +7342,18 @@ async function openIngestionWorkbench({ focusJobId = "", focusGeneratorId = "" }
   processHtmx(panel);
   applyWorkbenchTitle("ingestion");
   await Promise.allSettled([loadDataGeneratorCatalog(), loadDataGenerationJobsState()]);
+  const focusedJob = focusJobId
+    ? dataGenerationJobsSnapshot.find((job) => job.jobId === focusJobId) ?? null
+    : null;
+  const selectedGeneratorId = selectIngestionRunbook(
+    focusGeneratorId || focusedJob?.generatorId || selectedIngestionRunbookId,
+    { spotlight: Boolean(focusGeneratorId) }
+  );
   renderIngestionWorkbench();
   if (currentSidebarMode() !== "ingestion") {
     await refreshSidebar("ingestion");
   } else {
+    syncSelectedIngestionRunbookState();
     renderDataGenerationMonitor();
   }
   renderQueryNotificationMenu();
@@ -6900,7 +7364,9 @@ async function openIngestionWorkbench({ focusJobId = "", focusGeneratorId = "" }
   }
 
   if (focusGeneratorId) {
-    const target = panel.querySelector(`[data-generator-card][data-generator-id="${focusGeneratorId}"]`);
+    const target = panel.querySelector(
+      `[data-generator-card][data-generator-id="${selectedGeneratorId || focusGeneratorId}"]`
+    );
     target?.scrollIntoView({ block: "center", behavior: "smooth" });
   }
 }
@@ -7368,6 +7834,9 @@ document.body.addEventListener("click", async (event) => {
   if (!event.target.closest("[data-query-notifications]")) {
     queryNotificationMenu()?.removeAttribute("open");
   }
+  if (!event.target.closest("[data-settings-menu]")) {
+    closeSettingsMenus();
+  }
 
   const sourceActionMenu = event.target.closest("[data-source-action-menu]");
   if (sourceActionMenu) {
@@ -7426,8 +7895,10 @@ document.body.addEventListener("click", async (event) => {
   const openIngestionRunbookButton = event.target.closest("[data-open-ingestion-runbook]");
   if (openIngestionRunbookButton) {
     event.preventDefault();
+    const generatorId = openIngestionRunbookButton.dataset.openIngestionRunbook || "";
+    selectIngestionRunbook(generatorId, { spotlight: true });
     await openIngestionWorkbench({
-      focusGeneratorId: openIngestionRunbookButton.dataset.openIngestionRunbook || "",
+      focusGeneratorId: generatorId,
     });
     return;
   }
@@ -7436,6 +7907,24 @@ document.body.addEventListener("click", async (event) => {
   if (clearNotificationsButton) {
     event.preventDefault();
     clearVisibleNotifications();
+    return;
+  }
+
+  const clearLocalCacheButton = event.target.closest("[data-clear-local-cache]");
+  if (clearLocalCacheButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeSettingsMenus();
+    await promptClearLocalCache();
+    return;
+  }
+
+  const openAboutButton = event.target.closest("[data-open-about]");
+  if (openAboutButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeSettingsMenus();
+    await showAboutDialog();
     return;
   }
 
@@ -8174,7 +8663,8 @@ document.body.addEventListener("keydown", (event) => {
 
 document.body.addEventListener("dragstart", (event) => {
   const notebook = event.target.closest("[data-draggable-notebook]");
-  if (!notebook) {
+  if (!notebook || notebook.dataset.canEdit === "false") {
+    event.preventDefault();
     return;
   }
 
@@ -8193,7 +8683,7 @@ document.body.addEventListener("dragover", (event) => {
   }
 
   const dropTarget = resolveDropTarget(event.target);
-  if (!dropTarget) {
+  if (!dropTarget || !dropTargetAcceptsNotebookDrop(dropTarget)) {
     return;
   }
 
@@ -8214,7 +8704,7 @@ document.body.addEventListener("drop", (event) => {
   }
 
   const dropTarget = resolveDropTarget(event.target);
-  if (!dropTarget) {
+  if (!dropTarget || !dropTargetAcceptsNotebookDrop(dropTarget)) {
     return;
   }
 

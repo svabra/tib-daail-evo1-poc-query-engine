@@ -191,11 +191,13 @@ class DataGenerationJobManager:
             record = self._jobs.get(job_id)
             if record is None or record.snapshot.status == "cancelled":
                 return
+            started_at = utc_now_iso()
             record.snapshot.status = "running"
+            record.snapshot.started_at = started_at
             record.snapshot.progress = 0.0
             record.snapshot.progress_label = "Preparing..."
             record.snapshot.message = "Preparing data generation."
-            record.snapshot.updated_at = utc_now_iso()
+            record.snapshot.updated_at = started_at
             self._touch_locked()
 
         started = time.perf_counter()

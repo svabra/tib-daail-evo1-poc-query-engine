@@ -148,6 +148,7 @@ class NotebookDefinition:
     cells: list[NotebookCellDefinition]
     tags: list[str] = field(default_factory=list)
     tree_path: tuple[str, ...] = ()
+    linked_generator_id: str = ""
     can_edit: bool = True
     can_delete: bool = True
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
@@ -218,6 +219,18 @@ class NotebookFolder:
     @property
     def notebook_count(self) -> int:
         return len(self.notebooks) + sum(folder.notebook_count for folder in self.folders)
+
+
+@dataclass(slots=True)
+class DataGeneratorFolder:
+    folder_id: str
+    name: str
+    folders: list["DataGeneratorFolder"] = field(default_factory=list)
+    generators: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def generator_count(self) -> int:
+        return len(self.generators) + sum(folder.generator_count for folder in self.folders)
 
 
 @dataclass(slots=True)
@@ -321,6 +334,7 @@ class DataGeneratorDefinition:
     description: str
     target_kind: str
     module_name: str
+    tree_path: tuple[str, ...] = ()
     default_size_gb: float = 1.0
     min_size_gb: float = 0.1
     max_size_gb: float = 1024.0
@@ -338,6 +352,7 @@ class DataGeneratorDefinition:
             "description": self.description,
             "targetKind": self.target_kind,
             "moduleName": self.module_name,
+            "treePath": list(self.tree_path),
             "defaultSizeGb": self.default_size_gb,
             "minSizeGb": self.min_size_gb,
             "maxSizeGb": self.max_size_gb,

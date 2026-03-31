@@ -12,6 +12,7 @@ class PostgresOltpSmokeDataGenerator(DataGenerator):
         "writes it into PostgreSQL OLTP through the attached DuckDB integration."
     )
     target_kind = "postgres"
+    tree_path = ("PoC Tests", "Smoke Tests")
     default_size_gb = 1.0
     min_size_gb = 0.01
     max_size_gb = 128.0

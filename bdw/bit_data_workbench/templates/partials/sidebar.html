@@ -40,20 +40,9 @@
             <span class="section-count">{{ data_generators | length }}</span>
           </div>
         </summary>
-        <div class="runbook-list" data-runbook-list>
-          {% for generator in data_generators %}
-            <button
-              type="button"
-              class="runbook-link"
-              data-open-ingestion-runbook="{{ generator.generatorId }}"
-              data-searchable-item="{{ generator.title }} {{ generator.description }} {{ generator.targetKind }} {{ generator.tags | join(' ') }}"
-            >
-              <div class="runbook-title-row">
-                <span class="runbook-title">{{ generator.title }}</span>
-                <span class="runbook-kind">{{ generator.targetKind | upper }}</span>
-              </div>
-              <span class="runbook-summary">{{ generator.description }}</span>
-            </button>
+        <div class="runbook-tree" data-runbook-tree>
+          {% for node in runbook_tree %}
+            {% include "partials/runbook_tree_node.html" %}
           {% endfor %}
         </div>
       </details>

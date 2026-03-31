@@ -10,10 +10,11 @@
     <span class="tree-folder-tools">
       <button
         type="button"
-        class="tree-add-button tree-add-button-inline"
+        class="tree-add-button tree-add-button-inline{% if not node.can_edit %} is-action-disabled{% endif %}"
         data-create-notebook
-        title="Create notebook"
+        title="{% if node.can_edit %}Create notebook{% else %}This folder cannot receive new notebooks.{% endif %}"
         aria-label="Create notebook"
+        {% if not node.can_edit %}disabled{% endif %}
       >
         <svg class="tree-action-glyph" viewBox="0 0 16 16" aria-hidden="true">
           <path d="M4 2.2h5.2l2.8 2.8v8.8H4z"></path>
@@ -43,10 +44,11 @@
       </button>
       <button
         type="button"
-        class="tree-add-button tree-add-button-inline"
+        class="tree-add-button tree-add-button-inline{% if not node.can_edit %} is-action-disabled{% endif %}"
         data-add-tree-item
-        title="Add subfolder"
+        title="{% if node.can_edit %}Add subfolder{% else %}This folder cannot be changed.{% endif %}"
         aria-label="Add subfolder"
+        {% if not node.can_edit %}disabled{% endif %}
       >
         +
       </button>
@@ -76,7 +78,7 @@
         data-can-delete="{{ 'true' if notebook.can_delete else 'false' }}"
         data-searchable-item="{{ notebook.title }} {{ notebook.summary }} {{ notebook.tags | join(' ') }}"
         data-draggable-notebook
-        draggable="true"
+        draggable="{{ 'true' if notebook.can_edit else 'false' }}"
         hx-get="/notebooks/{{ notebook.notebook_id }}"
         hx-target="#workspace-panel"
         hx-swap="innerHTML"

@@ -1,0 +1,35 @@
+<details
+  class="tree-folder runbook-folder"
+  data-runbook-folder
+  data-runbook-folder-id="{{ node.folder_id }}"
+  open
+>
+  <summary class="tree-folder-summary runbook-folder-summary" data-searchable-item="{{ node.name }}">
+    <span class="tree-folder-label">{{ node.name }}</span>
+    <span class="tree-folder-tools">
+      <span class="tree-folder-count">{{ node.generator_count }}</span>
+    </span>
+  </summary>
+  <div class="tree-children runbook-tree-children" data-runbook-children>
+    {% for child_folder in node.folders %}
+      {% with node=child_folder %}
+        {% include "partials/runbook_tree_node.html" %}
+      {% endwith %}
+    {% endfor %}
+    {% for generator in node.generators %}
+      <button
+        type="button"
+        class="runbook-link"
+        data-open-ingestion-runbook="{{ generator.generatorId }}"
+        data-generator-id="{{ generator.generatorId }}"
+        data-searchable-item="{{ generator.title }} {{ generator.description }} {{ generator.targetKind }} {{ generator.tags | join(' ') }}"
+      >
+        <div class="runbook-title-row">
+          <span class="runbook-title">{{ generator.title }}</span>
+          <span class="runbook-kind">{{ generator.targetKind | upper }}</span>
+        </div>
+        <span class="runbook-summary">{{ generator.description }}</span>
+      </button>
+    {% endfor %}
+  </div>
+</details>

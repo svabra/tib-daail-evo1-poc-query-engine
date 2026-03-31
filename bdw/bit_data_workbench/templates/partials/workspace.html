@@ -81,6 +81,20 @@
           </button>
         </div>
       </div>
+      {% if active_notebook.linked_generator_id %}
+        <div class="workspace-linked-loader">
+          <button
+            type="button"
+            class="workspace-linked-loader-button"
+            data-open-ingestion-runbook="{{ active_notebook.linked_generator_id }}"
+          >
+            Open Matching Loader
+          </button>
+          <span class="workspace-linked-loader-copy">
+            Opens the linked runbook in the Ingestion Workbench and highlights the generator.
+          </span>
+        </div>
+      {% endif %}
     </div>
     <div class="workspace-actions">
       <details class="workspace-action-menu" data-workspace-action-menu>
