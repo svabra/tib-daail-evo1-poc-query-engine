@@ -477,7 +477,7 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                 removed_relations=[],
                 updated_relations=[],
                 message=f"{self.source_label} connection checked.",
-                connection_status=self._connected_status(f"{self.source_label} is reachable."),
+                connection_status=self._connected_status(f"{self.source_label} is connected."),
             )
 
         for schema_name in sorted({spec.schema_name for spec in desired_specs.values()}):
@@ -547,7 +547,7 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                 removed_relations=[],
                 updated_relations=[],
                 message=f"{self.source_label} connection checked.",
-                connection_status=self._connected_status(f"{self.source_label} is reachable."),
+                connection_status=self._connected_status(f"{self.source_label} is connected."),
             )
 
         self._current_specs = next_specs
@@ -567,7 +567,7 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                 updated_relations=successful_updated,
             ),
             metadata_changed=bool(added_buckets or removed_buckets),
-            connection_status=self._connected_status(f"{self.source_label} is reachable."),
+            connection_status=self._connected_status(f"{self.source_label} is connected."),
         )
 
     def _is_configured(self) -> bool:

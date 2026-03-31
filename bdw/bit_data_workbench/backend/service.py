@@ -586,7 +586,7 @@ class WorkbenchService:
                         source_id=source_id,
                         state="connected",
                         label="Connected",
-                        detail=f"{source_label} is reachable.",
+                        detail=f"{source_label} is connected.",
                     ),
                     relations,
                 )
@@ -603,7 +603,7 @@ class WorkbenchService:
                     source_id=source_id,
                     state="connected",
                     label="Connected",
-                    detail=f"{source_label} is reachable.",
+                    detail=f"{source_label} is connected.",
                 ),
                 relations,
             )
