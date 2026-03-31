@@ -225,7 +225,7 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         ),
         NotebookDefinition(
             notebook_id="pg-vs-s3-contest-oltp",
-            title="PG vs S3 Contest OLTP",
+            title="PG vs S3 Contest OLTP via DuckDB",
             summary="Runs a complex tax-assessment benchmark query against PostgreSQL OLTP using the mirrored contest dataset.",
             cells=[
                 NotebookCellDefinition(
@@ -241,7 +241,7 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         ),
         NotebookDefinition(
             notebook_id="pg-vs-s3-contest-s3",
-            title="PG vs S3 Contest S3",
+            title="PG vs S3 Contest S3 via DuckDB",
             summary="Runs the same complex tax-assessment benchmark query against the mirrored S3-backed dataset.",
             cells=[
                 NotebookCellDefinition(
@@ -257,7 +257,7 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         ),
         NotebookDefinition(
             notebook_id="pg-vs-s3-contest-pg-native",
-            title="PG vs S3 Contest PostgreSQL Native",
+            title="PG vs S3 Contest OLTP via Native",
             summary="Runs the same complex tax-assessment benchmark query directly on PostgreSQL OLTP, without DuckDB in the execution path.",
             cells=[
                 NotebookCellDefinition(
