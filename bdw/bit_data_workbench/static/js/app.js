@@ -296,8 +296,8 @@ function queryMonitorCount() {
   return document.querySelector("[data-query-monitor-count]");
 }
 
-function sidebarQueryCount() {
-  return document.querySelector("[data-sidebar-query-count]");
+function sidebarQueryCounts() {
+  return Array.from(document.querySelectorAll("[data-sidebar-query-count]"));
 }
 
 function queryPerformanceSection() {
@@ -360,8 +360,8 @@ function dataGenerationMonitorCount() {
   return document.querySelector("[data-generation-monitor-count]");
 }
 
-function sidebarToggle() {
-  return document.querySelector("[data-sidebar-toggle]");
+function sidebarToggles() {
+  return Array.from(document.querySelectorAll("[data-sidebar-toggle]"));
 }
 
 function currentActiveNotebookId() {
@@ -552,18 +552,18 @@ function writeDismissedNotificationKeys() {
 function applySidebarCollapsedState(collapsed) {
   document.body.classList.toggle("sidebar-collapsed", collapsed);
 
-  const toggle = sidebarToggle();
-  if (!toggle) {
-    return;
-  }
+  sidebarToggles().forEach((toggle) => {
+    const isFooterToggle = toggle.classList.contains("sidebar-toggle-footer");
+    const labelText = isFooterToggle ? "Expand navigation" : "Collapse navigation";
+    toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    toggle.setAttribute("aria-label", labelText);
+    toggle.title = labelText;
 
-  toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
-  toggle.title = collapsed ? "Expand navigation" : "Collapse navigation";
-
-  const label = toggle.querySelector(".sidebar-toggle-label");
-  if (label) {
-    label.textContent = collapsed ? "Expand navigation" : "Collapse navigation";
-  }
+    const label = toggle.querySelector(".sidebar-toggle-label");
+    if (label) {
+      label.textContent = labelText;
+    }
+  });
 }
 
 function initializeSidebarToggle() {
@@ -2451,7 +2451,7 @@ function syncQueryClockLoop() {
 function renderQueryMonitor() {
   const listRoot = queryMonitorList();
   const countRoot = queryMonitorCount();
-  const toggleCountRoot = sidebarQueryCount();
+  const toggleCountRoots = sidebarQueryCounts();
   const performanceRoot = queryPerformanceSection();
   const performanceStatsRoot = queryPerformanceStats();
   const performanceChartRoot = queryPerformanceChart();
@@ -2463,11 +2463,11 @@ function renderQueryMonitor() {
   const runningCount = Number(queryJobsSummary.runningCount || 0);
   countRoot.textContent = String(runningCount);
   countRoot.classList.toggle("is-live", runningCount > 0);
-  if (toggleCountRoot) {
+  toggleCountRoots.forEach((toggleCountRoot) => {
     toggleCountRoot.textContent = String(runningCount);
     toggleCountRoot.hidden = runningCount === 0;
     toggleCountRoot.classList.toggle("is-live", runningCount > 0);
-  }
+  });
 
   if (!queryJobsSnapshot.length) {
     listRoot.innerHTML = '<p class="query-monitor-empty">No query jobs yet.</p>';
@@ -2493,7 +2493,7 @@ function renderQueryMonitor() {
 function renderDataGenerationMonitor() {
   const listRoot = dataGenerationMonitorList();
   const countRoot = dataGenerationMonitorCount();
-  const toggleCountRoot = sidebarQueryCount();
+  const toggleCountRoots = sidebarQueryCounts();
   if (!listRoot || !countRoot) {
     return;
   }
@@ -2502,10 +2502,12 @@ function renderDataGenerationMonitor() {
   countRoot.textContent = String(runningCount);
   countRoot.classList.toggle("is-live", runningCount > 0);
 
-  if (toggleCountRoot && currentWorkspaceMode() === "ingestion") {
-    toggleCountRoot.textContent = String(runningCount);
-    toggleCountRoot.hidden = runningCount === 0;
-    toggleCountRoot.classList.toggle("is-live", runningCount > 0);
+  if (currentWorkspaceMode() === "ingestion") {
+    toggleCountRoots.forEach((toggleCountRoot) => {
+      toggleCountRoot.textContent = String(runningCount);
+      toggleCountRoot.hidden = runningCount === 0;
+      toggleCountRoot.classList.toggle("is-live", runningCount > 0);
+    });
   }
 
   if (!dataGenerationJobsSnapshot.length) {
@@ -4670,7 +4672,27 @@ function numericCssValue(styles, property) {
   return Number.parseFloat(styles?.[property] ?? "") || 0;
 }
 
+function defaultEditorSql(textarea) {
+  if (!(textarea instanceof HTMLTextAreaElement)) {
+    return "";
+  }
+
+  return textarea.defaultValue ?? textarea.dataset.defaultSql ?? "";
+}
+
+function shouldExpandEditorToFullContent(root, currentValue = null) {
+  const textarea = root?.querySelector?.("[data-editor-source]");
+  if (!(textarea instanceof HTMLTextAreaElement)) {
+    return false;
+  }
+
+  const baselineSql = defaultEditorSql(textarea);
+  const nextValue = currentValue ?? textarea.value ?? "";
+  return Boolean(baselineSql) && nextValue === baselineSql;
+}
+
 function editorHeightMetrics(root) {
+  const textarea = root.querySelector("[data-editor-source]");
   const editor = editorRegistry.get(root);
   if (editor) {
     const editorStyles = window.getComputedStyle(editor.dom);
@@ -4688,15 +4710,16 @@ function editorHeightMetrics(root) {
       numericCssValue(scrollerStyles, "paddingTop") +
       numericCssValue(scrollerStyles, "paddingBottom");
     const minHeight = Math.ceil(lineHeight * 3 + scrollerPadding + borderHeight);
-    const maxAutoHeight = Math.ceil(lineHeight * 10 + scrollerPadding + borderHeight);
     const contentHeight = Math.ceil((scroller?.scrollHeight ?? editor.dom.scrollHeight) + borderHeight);
+    const maxAutoHeight = shouldExpandEditorToFullContent(root, editor.state.doc.toString())
+      ? contentHeight
+      : Math.ceil(lineHeight * 10 + scrollerPadding + borderHeight);
     return {
       minHeight,
       nextHeight: Math.max(minHeight, Math.min(contentHeight, maxAutoHeight)),
     };
   }
 
-  const textarea = root.querySelector("[data-editor-source]");
   if (!textarea) {
     return null;
   }
@@ -4709,12 +4732,14 @@ function editorHeightMetrics(root) {
     numericCssValue(styles, "borderTopWidth") +
     numericCssValue(styles, "borderBottomWidth");
   const minHeight = Math.ceil(lineHeight * 3 + chromeHeight);
-  const maxAutoHeight = Math.ceil(lineHeight * 10 + chromeHeight);
 
   const previousHeight = textarea.style.height;
   textarea.style.height = "auto";
   const contentHeight = Math.ceil(textarea.scrollHeight);
   textarea.style.height = previousHeight;
+  const maxAutoHeight = shouldExpandEditorToFullContent(root)
+    ? contentHeight
+    : Math.ceil(lineHeight * 10 + chromeHeight);
 
   return {
     minHeight,
@@ -4835,6 +4860,7 @@ function createEditor(root) {
     root.classList.add("editor-ready");
     editorRegistry.set(root, editor);
     autosizeEditor(root);
+    window.requestAnimationFrame(() => autosizeEditor(root));
     return editor;
   } catch (error) {
     shell.remove();
@@ -5178,6 +5204,7 @@ function updateWorkspaceCellEditor(cellRoot, sqlText) {
   }
 
   textarea.dataset.defaultSql = sqlText;
+  textarea.defaultValue = sqlText;
   if (textarea.value !== sqlText) {
     textarea.value = sqlText;
   }
@@ -5218,6 +5245,7 @@ function formatCellSql(notebookId, cellId) {
 
   textarea.value = formattedSql;
   textarea.dataset.defaultSql = formattedSql;
+  textarea.defaultValue = formattedSql;
 
   if (editor) {
     const nextCursor = Math.min(editor.state.selection.main.head, formattedSql.length);

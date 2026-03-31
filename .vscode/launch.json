@@ -29,6 +29,7 @@
         "S3_SECRET_ACCESS_KEY": "minioadmin",
         "S3_URL_STYLE": "path",
         "S3_USE_SSL": "false",
+        "S3_VERIFY_SSL": "false",
         "S3_STARTUP_VIEW_SCHEMA": "s3",
         "S3_STARTUP_VIEWS": "vat_smoke=csv:s3://vat-smoke-test/startup/vat_smoke.csv",
         "PG_HOST": "localhost",

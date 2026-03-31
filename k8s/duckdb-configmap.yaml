@@ -16,6 +16,7 @@ data:
   S3_BUCKET: vat-smoke-test
   S3_URL_STYLE: path
   S3_USE_SSL: "true"
+  S3_VERIFY_SSL: "false"
   S3_STARTUP_VIEW_SCHEMA: s3
   # Example:
   # S3_STARTUP_VIEWS: vat_smoke=parquet:s3://vat-smoke-test/startup/vat_smoke.parquet

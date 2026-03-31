@@ -140,6 +140,8 @@ S3_ACCESS_KEY_ID
 S3_SECRET_ACCESS_KEY
 S3_URL_STYLE
 S3_USE_SSL
+S3_VERIFY_SSL
+S3_CA_CERT_FILE
 S3_SESSION_TOKEN
 S3_STARTUP_VIEW_SCHEMA
 S3_STARTUP_VIEWS
@@ -165,7 +167,7 @@ via `envFrom`.
 Build locally:
 
 ```bash
-docker build -f bdw/Dockerfile -t bit-data-workbench:0.3.11 .
+docker build -f bdw/Dockerfile -t bit-data-workbench:0.3.12 .
 ```
 
 Run directly without Compose-managed service wiring:
@@ -175,7 +177,7 @@ docker run --rm -d ^
   --name bit-data-workbench ^
   -p 8000:8000 ^
   -v "%cd%\\workspace:/workspace" ^
-  -e IMAGE_VERSION=0.3.11 ^
+  -e IMAGE_VERSION=0.3.12 ^
   -e DUCKDB_DATABASE=/workspace/bit-data-workbench.duckdb ^
   -e DUCKDB_EXTENSION_DIRECTORY=/opt/duckdb/extensions ^
   -e S3_ENDPOINT=minio:9000 ^
@@ -185,6 +187,7 @@ docker run --rm -d ^
   -e S3_SECRET_ACCESS_KEY=minioadmin ^
   -e S3_URL_STYLE=path ^
   -e S3_USE_SSL=false ^
+  -e S3_VERIFY_SSL=false ^
   -e S3_STARTUP_VIEW_SCHEMA=s3 ^
   -e S3_STARTUP_VIEWS=vat_smoke=csv:s3://vat-smoke-test/startup/vat_smoke.csv ^
   -e PG_HOST=postgres ^
@@ -193,7 +196,7 @@ docker run --rm -d ^
   -e PG_PASSWORD=evo1 ^
   -e PG_OLTP_DATABASE=evo1_oltp ^
   -e PG_OLAP_DATABASE=evo1_olap ^
-  bit-data-workbench:0.3.11
+  bit-data-workbench:0.3.12
 ```
 
 ### TODO
@@ -219,7 +222,7 @@ The route is an OpenShift `edge` route and exposes the HTTP service externally t
 Current image:
 
 ```text
-docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.11
+docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.12
 ```
 
 ## Verification

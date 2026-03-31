@@ -7,6 +7,19 @@
   data-sidebar-mode="{{ workspace_mode }}"
   {% if sidebar_oob %}hx-swap-oob="outerHTML"{% endif %}
 >
+  <div class="sidebar-header">
+    <button
+      type="button"
+      class="sidebar-toggle sidebar-toggle-top"
+      data-sidebar-toggle
+      aria-expanded="true"
+      aria-controls="sidebar"
+      title="Collapse navigation"
+    >
+      <span class="sidebar-toggle-label">Collapse navigation</span>
+    </button>
+  </div>
+
   <div class="sidebar-body" data-sidebar-body>
     <div class="sidebar-search">
       <label class="sidebar-label" for="sidebar-search-input">Search</label>
@@ -414,14 +427,14 @@
   <div class="sidebar-footer">
     <button
       type="button"
-      class="sidebar-toggle"
+      class="sidebar-toggle sidebar-toggle-footer"
       data-sidebar-toggle
-      aria-expanded="true"
+      aria-expanded="false"
       aria-controls="sidebar"
-      title="Collapse navigation"
+      title="Expand navigation"
     >
       <span class="sidebar-toggle-icon" aria-hidden="true">‹</span>
-      <span class="sidebar-toggle-label">Collapse navigation</span>
+      <span class="sidebar-toggle-label">Expand navigation</span>
       <span class="sidebar-toggle-badge" data-sidebar-query-count hidden>0</span>
     </button>
     <dl class="runtime-pill runtime-pill-sidebar" aria-label="Application version">

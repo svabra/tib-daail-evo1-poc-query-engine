@@ -65,6 +65,17 @@ body.sidebar-collapsed .shell {
   overflow-x: hidden;
 }
 
+.sidebar-header {
+  position: sticky;
+  top: -22px;
+  z-index: 12;
+  margin: -22px calc(var(--sidebar-padding-x) * -1) 18px;
+  padding: 22px var(--sidebar-padding-x) 14px;
+  background: rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(18px);
+  border-bottom: 1px solid rgba(124, 140, 158, 0.16);
+}
+
 .sidebar-body {
   min-width: 0;
   transition:
@@ -78,6 +89,19 @@ body.sidebar-collapsed .shell {
   display: grid;
   gap: 10px;
   justify-items: stretch;
+}
+
+.sidebar-toggle-top {
+  justify-content: center;
+}
+
+.sidebar-toggle-top .sidebar-toggle-icon,
+.sidebar-toggle-top .sidebar-toggle-badge {
+  display: none;
+}
+
+.sidebar-toggle-footer {
+  display: none;
 }
 
 .sidebar-source-inspector {
@@ -567,6 +591,10 @@ body.sidebar-collapsed .sidebar {
   overflow: visible;
 }
 
+body.sidebar-collapsed .sidebar-header {
+  display: none;
+}
+
 body.sidebar-collapsed .sidebar-body {
   opacity: 0;
   visibility: hidden;
@@ -584,6 +612,10 @@ body.sidebar-collapsed .sidebar-footer {
   padding: 0;
   justify-items: start;
   z-index: 40;
+}
+
+body.sidebar-collapsed .sidebar-toggle-footer {
+  display: inline-flex;
 }
 
 body.sidebar-collapsed .sidebar-toggle {
