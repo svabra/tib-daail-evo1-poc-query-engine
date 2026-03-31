@@ -67,6 +67,8 @@ Optional custom port:
 
 This starts `uvicorn --reload`, so Python, template, CSS and JS changes are picked up without a manual restart. The script uses port `8000` by default and frees that port first by stopping the local `bit-data-workbench` Docker container or any remaining listener process on the same port.
 
+If you want to launch the app directly from VS Code with `F5`, use the checked-in `DAAIFL Workbench` launch configuration. It uses the workspace venv, brings up the local dependency stack, opens the browser automatically, and runs on `http://127.0.0.1:8010` with a dedicated local DuckDB file (`workspace/bit-data-workbench.f5.duckdb`) so it does not fight with the script-based dev server.
+
 If you want the full app inside Docker instead:
 
 ```bash
@@ -163,7 +165,7 @@ via `envFrom`.
 Build locally:
 
 ```bash
-docker build -f bdw/Dockerfile -t bit-data-workbench:0.3.9 .
+docker build -f bdw/Dockerfile -t bit-data-workbench:0.3.10 .
 ```
 
 Run directly without Compose-managed service wiring:
@@ -173,7 +175,7 @@ docker run --rm -d ^
   --name bit-data-workbench ^
   -p 8000:8000 ^
   -v "%cd%\\workspace:/workspace" ^
-  -e IMAGE_VERSION=0.3.9 ^
+  -e IMAGE_VERSION=0.3.10 ^
   -e DUCKDB_DATABASE=/workspace/bit-data-workbench.duckdb ^
   -e DUCKDB_EXTENSION_DIRECTORY=/opt/duckdb/extensions ^
   -e S3_ENDPOINT=minio:9000 ^
@@ -191,7 +193,7 @@ docker run --rm -d ^
   -e PG_PASSWORD=evo1 ^
   -e PG_OLTP_DATABASE=evo1_oltp ^
   -e PG_OLAP_DATABASE=evo1_olap ^
-  bit-data-workbench:0.3.9
+  bit-data-workbench:0.3.10
 ```
 
 ### TODO
@@ -217,7 +219,7 @@ The route is an OpenShift `edge` route and exposes the HTTP service externally t
 Current image:
 
 ```text
-docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.9
+docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.10
 ```
 
 ## Verification
