@@ -9,7 +9,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import RLock, Thread
-from urllib.parse import urlparse
 
 import duckdb
 
@@ -1116,83 +1115,11 @@ class WorkbenchService:
                 startup_views=startup_views,
             )
             conn.execute(f"CREATE OR REPLACE SECRET bdw_s3 ({', '.join(options)})")
-        if startup_context and startup_views:
+        if startup_views and startup_context:
             self._log_startup(
-                "S3 startup views deferred to background bootstrap: %d configured view(s)",
+                "S3 startup views are managed by S3 data source discovery: %d configured view(s)",
                 len(startup_views),
             )
-            return
-
-        self._ensure_s3_startup_views(conn, startup_views=startup_views, startup_context=startup_context)
-
-    def _ensure_s3_startup_views(
-        self,
-        conn: duckdb.DuckDBPyConnection,
-        *,
-        startup_views: list[tuple[str, str, str]],
-        startup_context: bool,
-    ) -> None:
-        for view_name, data_format, path in startup_views:
-            view_bucket = self.settings.s3_bucket
-            if startup_context:
-                self._log_startup(
-                    "S3 startup view begin: name=%s format=%s path=%s",
-                    view_name,
-                    data_format,
-                    path,
-                )
-            try:
-                parsed = urlparse(path)
-                if parsed.scheme == "s3" and parsed.netloc:
-                    view_bucket = parsed.netloc
-            except Exception as exc:
-                view_bucket = self.settings.s3_bucket
-                if startup_context:
-                    self._log_startup(
-                        "S3 startup view %s path parsing failed for %s; falling back to configured bucket: %s",
-                        view_name,
-                        path,
-                        exc,
-                        level=logging.WARNING,
-                    )
-            schema_name = s3_bucket_schema_name(view_bucket or self.settings.s3_bucket or "s3")
-            try:
-                conn.execute(f"CREATE SCHEMA IF NOT EXISTS {sql_identifier(schema_name)}")
-                if data_format == "parquet":
-                    query = f"SELECT * FROM read_parquet({sql_literal(path)})"
-                elif data_format == "csv":
-                    query = f"SELECT * FROM read_csv_auto({sql_literal(path)})"
-                elif data_format == "json":
-                    query = f"SELECT * FROM read_json_auto({sql_literal(path)})"
-                else:
-                    raise ValueError(f"Unsupported S3 startup view format: {data_format}")
-                conn.execute(
-                    "CREATE OR REPLACE VIEW "
-                    f"{qualified_name(schema_name, view_name)} "
-                    f"AS {query}"
-                )
-                if startup_context:
-                    self._log_startup(
-                        "S3 startup view configured: %s -> %s.%s",
-                        path,
-                        schema_name,
-                        view_name,
-                    )
-            except Exception as exc:
-                logger.warning(
-                    "Skipping S3 startup view '%s' for path '%s': %s",
-                    view_name,
-                    path,
-                    exc,
-                )
-                if startup_context:
-                    self._log_startup(
-                        "S3 startup view skipped: %s for path %s failed: %s",
-                        view_name,
-                        path,
-                        exc,
-                        level=logging.WARNING,
-                    )
 
     def _s3_secret_options(
         self,
@@ -1736,11 +1663,6 @@ class WorkbenchService:
                 endpoint=endpoint,
                 use_ssl=use_ssl,
                 startup_views=startup_views,
-            )
-            self._ensure_s3_startup_views(
-                conn,
-                startup_views=startup_views,
-                startup_context=True,
             )
             try:
                 self.refresh_metadata_state()

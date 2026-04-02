@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 
 from ..backend.s3_storage import (
     delete_s3_bucket,
+    duckdb_scan_query,
     derived_s3_bucket_name,
     ensure_s3_bucket,
     parse_s3_url,
@@ -99,10 +100,8 @@ class S3SmokeDataGenerator(DataGenerator):
                         generated_size_gb=approximate_size_gb(written_rows, self.approximate_row_bytes),
                     )
 
-            connection.execute(
-                f"CREATE OR REPLACE VIEW {relation} AS "
-                f"SELECT * FROM read_parquet({sql_literal(f'{object_prefix}/*.parquet')})"
-            )
+            relation_query = duckdb_scan_query("parquet", [f"{object_prefix}/*.parquet"])
+            connection.execute(f"CREATE OR REPLACE VIEW {relation} AS {relation_query}")
 
             return DataGeneratorResult(
                 target_name=view_name,

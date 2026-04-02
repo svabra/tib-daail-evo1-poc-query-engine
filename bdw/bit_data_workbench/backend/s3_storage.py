@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 import hashlib
 import re
 import time
@@ -218,7 +218,31 @@ def upload_s3_file(client, *, local_path: Path, bucket: str, key: str) -> None:
 
 
 def download_s3_file(client, *, bucket: str, key: str, local_path: Path) -> None:
+    local_path.parent.mkdir(parents=True, exist_ok=True)
     client.download_file(bucket, key, str(local_path))
+
+
+def _sql_literal(value: str) -> str:
+    return "'" + value.replace("'", "''") + "'"
+
+
+def duckdb_scan_query(data_format: str, paths: Sequence[str]) -> str:
+    normalized_paths = [str(path).strip() for path in paths if str(path).strip()]
+    if not normalized_paths:
+        raise ValueError("At least one file path is required to build a DuckDB scan query.")
+
+    if len(normalized_paths) == 1:
+        source_sql = _sql_literal(normalized_paths[0])
+    else:
+        source_sql = "[" + ", ".join(_sql_literal(path) for path in normalized_paths) + "]"
+
+    if data_format == "parquet":
+        return f"SELECT * FROM read_parquet({source_sql})"
+    if data_format == "csv":
+        return f"SELECT * FROM read_csv_auto({source_sql})"
+    if data_format == "json":
+        return f"SELECT * FROM read_json_auto({source_sql})"
+    raise ValueError(f"Unsupported S3 discovery format: {data_format}")
 
 
 def s3_bucket_schema_name(bucket_name: str) -> str:
