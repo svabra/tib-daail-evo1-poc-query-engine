@@ -57,13 +57,24 @@ STARTUP_REDACTED_FILE_HINTS = (
 )
 
 STARTUP_CONFIG_SCAN_ROOTS = (
+    Path("/myconfigmap"),
+    Path("/myconfigmap/daai-brs-d/bit-ros-trusted-certs"),
+    Path("/myconfigmap/bit-ros-trusted-certs"),
     Path("/etc/bit/trusted-certs"),
     Path("/vault/secrets"),
     Path("/var/run/secrets"),
     Path("/var/run/configmaps"),
 )
 
+PREFERRED_S3_CA_CERT_FILES = (
+    Path("/myconfigmap/daai-brs-d/bit-ros-trusted-certs/ca-bundle.crt"),
+    Path("/myconfigmap/bit-ros-trusted-certs/ca-bundle.crt"),
+    Path("/etc/bit/trusted-certs/ca-bundle.crt"),
+)
+
 AUTO_S3_CA_CERT_SEARCH_ROOTS = (
+    Path("/myconfigmap/daai-brs-d/bit-ros-trusted-certs"),
+    Path("/myconfigmap/bit-ros-trusted-certs"),
     Path("/etc/bit/trusted-certs"),
 )
 
@@ -269,6 +280,16 @@ def _describe_startup_path(path: Path, *, depth: int = 0, max_depth: int = 2) ->
     return [f"{prefix}[other] {path}"]
 
 
+def _path_status_summary(path: Path) -> str:
+    if not path.exists():
+        return "missing"
+    if path.is_dir():
+        return "directory"
+    if path.is_file():
+        return "file"
+    return "other"
+
+
 def discover_startup_config_lines() -> list[str]:
     lines = [
         "[bdw-startup] Accessible config mounts and files visible inside the container follow.",
@@ -331,6 +352,16 @@ def discover_s3_ca_cert_source_files() -> list[Path]:
                 continue
             discovered[candidate.as_posix()] = candidate
     return list(discovered.values())
+
+
+def discover_preferred_s3_ca_cert_file() -> Path | None:
+    for candidate in PREFERRED_S3_CA_CERT_FILES:
+        try:
+            if candidate.is_file():
+                return candidate
+        except OSError:
+            continue
+    return None
 
 
 def build_s3_ca_bundle(
@@ -411,7 +442,7 @@ class Settings:
         # Runtime selection is intentionally environment-driven instead of using
         # an explicit APP_ENV flag. Local launchers inject localhost endpoints
         # and direct credentials, while the RHOS deployment injects pod metadata,
-        # Vault-mounted file paths, TLS settings, and cluster endpoints.
+        # Secret-backed credentials, TLS settings, and cluster endpoints.
         return cls(
             service_name="bit-data-workbench",
             ui_title="DAAIFL Workbench",
@@ -462,8 +493,8 @@ class Settings:
         }
 
     def current_s3_access_key_id(self) -> str | None:
-        # Prefer a direct env value for local/dev flows, then fall back to the
-        # file path used by RHOS Vault bindings.
+        # Prefer a direct env value for local/dev and RHOS Secret-backed flows,
+        # then fall back to an optional file path if one is configured.
         return resolve_secret_value(
             value=self.s3_access_key_id,
             file_path=self.s3_access_key_id_file,
@@ -471,8 +502,8 @@ class Settings:
         )
 
     def current_s3_secret_access_key(self) -> str | None:
-        # Prefer a direct env value for local/dev flows, then fall back to the
-        # file path used by RHOS Vault bindings.
+        # Prefer a direct env value for local/dev and RHOS Secret-backed flows,
+        # then fall back to an optional file path if one is configured.
         return resolve_secret_value(
             value=self.s3_secret_access_key,
             file_path=self.s3_secret_access_key_file,
@@ -489,41 +520,73 @@ class Settings:
 
     def effective_s3_ca_cert_file(self) -> Path | None:
         if self.s3_ca_cert_file is not None:
-            return self.s3_ca_cert_file
+            try:
+                if self.s3_ca_cert_file.is_file():
+                    return self.s3_ca_cert_file
+            except OSError:
+                pass
+
+        preferred_file = discover_preferred_s3_ca_cert_file()
+        if preferred_file is not None:
+            return preferred_file
+
         if self._generated_s3_ca_cert_file is not None:
             return self._generated_s3_ca_cert_file
 
         source_files = discover_s3_ca_cert_source_files()
+        if len(source_files) == 1:
+            return source_files[0]
         generated_bundle = build_s3_ca_bundle(source_files)
         self._generated_s3_ca_cert_file = generated_bundle
         return generated_bundle
 
     def startup_s3_certificate_lines(self) -> list[str]:
+        lines: list[str] = []
         if self.s3_ca_cert_file is not None:
-            return [
-                f"[bdw-startup] Explicit S3 CA certificate file configured: {self.s3_ca_cert_file.as_posix()}",
-            ]
+            lines.append(
+                "[bdw-startup] Configured S3_CA_CERT_FILE="
+                f"{self.s3_ca_cert_file.as_posix()} ({_path_status_summary(self.s3_ca_cert_file)})"
+            )
+
+        for candidate in PREFERRED_S3_CA_CERT_FILES:
+            lines.append(
+                "[bdw-startup] Preferred S3 CA candidate "
+                f"{candidate.as_posix()} ({_path_status_summary(candidate)})"
+            )
 
         source_files = discover_s3_ca_cert_source_files()
         if not source_files:
-            return [
-                "[bdw-startup] No mounted S3 CA certificate files were auto-discovered.",
-            ]
+            lines.append("[bdw-startup] No mounted S3 CA certificate files were auto-discovered.")
+        else:
+            lines.extend(
+                f"[bdw-startup] S3 CA source file: {source_file.as_posix()}"
+                for source_file in source_files
+            )
 
         effective_bundle = self.effective_s3_ca_cert_file()
-        lines = []
-        if effective_bundle is not None:
+        if effective_bundle is None:
+            lines.append("[bdw-startup] No effective S3 CA certificate path could be resolved.")
+            return lines
+
+        if self.s3_ca_cert_file is not None and effective_bundle == self.s3_ca_cert_file:
             lines.append(
-                f"[bdw-startup] Auto-generated S3 CA bundle: {effective_bundle.as_posix()}"
+                f"[bdw-startup] Using configured S3 CA certificate file: {effective_bundle.as_posix()}"
             )
-        else:
+            return lines
+
+        if effective_bundle in PREFERRED_S3_CA_CERT_FILES:
             lines.append(
-                "[bdw-startup] Mounted S3 CA certificate files were found, but no bundle could be generated."
+                f"[bdw-startup] Using preferred S3 CA certificate file: {effective_bundle.as_posix()}"
             )
-        lines.extend(
-            f"[bdw-startup] S3 CA source file: {source_file.as_posix()}"
-            for source_file in source_files
-        )
+            return lines
+
+        if effective_bundle in source_files:
+            lines.append(
+                f"[bdw-startup] Using discovered S3 CA certificate file: {effective_bundle.as_posix()}"
+            )
+            return lines
+
+        lines.append(f"[bdw-startup] Auto-generated S3 CA bundle: {effective_bundle.as_posix()}")
         return lines
 
     def apply_runtime_environment(self) -> None:
