@@ -100,6 +100,38 @@ def s3_verify_value(
     return verification_enabled
 
 
+def effective_s3_url_style(
+    settings: Settings,
+    *,
+    endpoint: str | None = None,
+    use_ssl: bool | None = None,
+    explicit_url_style: str | None = None,
+) -> str | None:
+    configured_url_style = (explicit_url_style or settings.s3_url_style or "").strip().lower()
+    if configured_url_style:
+        return configured_url_style
+
+    endpoint_value = (endpoint or settings.s3_endpoint or "").strip()
+    if not endpoint_value:
+        return None
+
+    try:
+        normalized_endpoint, _ssl_enabled, _reason = normalize_s3_endpoint(
+            endpoint_value,
+            use_ssl=settings.s3_use_ssl if use_ssl is None else use_ssl,
+            verify_ssl=settings.s3_verify_ssl,
+        )
+        hostname, _port = _parsed_endpoint_host_port(normalized_endpoint)
+    except Exception:
+        hostname, _port = _parsed_endpoint_host_port(endpoint_value)
+
+    # Custom ECS-style endpoints work reliably in path mode and avoid TLS
+    # hostname mismatches such as bucket.endpoint.example:9021.
+    if not _is_likely_local_s3_host(hostname):
+        return "path"
+    return None
+
+
 def s3_client(
     settings: Settings,
     *,
@@ -108,10 +140,11 @@ def s3_client(
     verify_ssl: bool | str | None = None,
 ):
     endpoint_url = s3_endpoint_url(settings, use_ssl=use_ssl, verify_ssl=verify_ssl)
-    addressing_style = (
-        (url_style or "").strip().lower()
-        or ("path" if (settings.s3_url_style or "").strip().lower() == "path" else "auto")
-    )
+    addressing_style = effective_s3_url_style(
+        settings,
+        use_ssl=use_ssl,
+        explicit_url_style=url_style,
+    ) or "auto"
     config = Config(
         connect_timeout=3,
         read_timeout=5,

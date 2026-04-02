@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 import time
 import uuid
@@ -15,6 +16,7 @@ from ..models import DataGenerationJobDefinition
 RUNNING_GENERATION_STATUSES = {"queued", "running"}
 TERMINAL_GENERATION_STATUSES = {"completed", "failed", "cancelled"}
 MAX_GENERATION_HISTORY = 40
+logger = logging.getLogger(__name__)
 
 
 def utc_now_iso() -> str:
@@ -218,6 +220,11 @@ class DataGenerationJobManager:
         except DataGenerationCancelled:
             pass
         except Exception as exc:  # pragma: no cover - exercised in manual failure flows
+            logger.exception(
+                "Data generation job %s (%s) failed during execution.",
+                job_id,
+                record.snapshot.generator_id,
+            )
             execution_error = exc
 
         duration_ms = (time.perf_counter() - started) * 1000

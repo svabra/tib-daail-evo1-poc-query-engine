@@ -27,6 +27,7 @@ from ..models import (
     SourceSchema,
 )
 from .s3_storage import (
+    effective_s3_url_style,
     list_s3_buckets,
     list_s3_buckets_from_client,
     normalize_s3_endpoint,
@@ -1197,8 +1198,12 @@ class WorkbenchService:
         use_ssl: bool,
         url_style: str | None = None,
     ) -> list[str]:
-        configured_url_style = (self.settings.s3_url_style or "").strip()
-        effective_url_style = configured_url_style if url_style is None else url_style
+        effective_url_style = effective_s3_url_style(
+            self.settings,
+            endpoint=endpoint,
+            use_ssl=use_ssl,
+            explicit_url_style=url_style,
+        )
         access_key_id = self.settings.current_s3_access_key_id()
         secret_access_key = self.settings.current_s3_secret_access_key()
         session_token = self.settings.current_s3_session_token()
@@ -1415,6 +1420,11 @@ class WorkbenchService:
         startup_views: list[tuple[str, str, str]],
     ) -> None:
         configured_url_style = (self.settings.s3_url_style or "").strip().lower() or None
+        effective_default_url_style = effective_s3_url_style(
+            self.settings,
+            endpoint=endpoint,
+            use_ssl=use_ssl,
+        )
         bucket_name = self.settings.s3_bucket or ""
         verify_value = s3_verify_value(self.settings)
 
@@ -1427,7 +1437,7 @@ class WorkbenchService:
             self.settings.effective_s3_ca_cert_file().as_posix()
             if self.settings.effective_s3_ca_cert_file()
             else "none",
-            configured_url_style or "default",
+            effective_default_url_style or "default",
             bucket_name or "n/a",
             len(startup_views),
         )
@@ -1435,7 +1445,7 @@ class WorkbenchService:
         successful_read_probe = False
         boto3_styles: list[tuple[str, str | None]] = []
         for label, style in (
-            ((configured_url_style or "auto"), configured_url_style),
+            ((effective_default_url_style or "auto"), effective_default_url_style),
             ("path", "path"),
             ("virtual", "virtual"),
         ):
@@ -1538,7 +1548,7 @@ class WorkbenchService:
 
         duckdb_styles: list[tuple[str, str | None]] = []
         for label, style in (
-            ((configured_url_style or "default"), configured_url_style),
+            ((effective_default_url_style or "default"), effective_default_url_style),
             ("path", "path"),
             ("vhost", "vhost"),
         ):
@@ -1609,14 +1619,14 @@ class WorkbenchService:
             conn.execute(f"CREATE OR REPLACE SECRET bdw_s3 ({', '.join(restored_options)})")
             self._log_s3_diagnostic_trial(
                 backend="duckdb",
-                trial=f"secret-restore[{configured_url_style or 'default'}]",
+                trial=f"secret-restore[{effective_default_url_style or 'default'}]",
                 success=True,
                 detail="restored configured S3 secret after diagnostics",
             )
         except Exception as exc:
             self._log_s3_diagnostic_trial(
                 backend="duckdb",
-                trial=f"secret-restore[{configured_url_style or 'default'}]",
+                trial=f"secret-restore[{effective_default_url_style or 'default'}]",
                 success=False,
                 detail=str(exc),
             )

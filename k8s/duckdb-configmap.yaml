@@ -18,9 +18,9 @@ data:
   S3_CA_CERT_FILE: /myconfigmap/daai-brs-d/bit-ros-trusted-certs/ca-bundle.crt
   # The app logs whether this exact file exists. If it does not, startup falls
   # back to scanning the mounted configmap directory and logs every candidate file.
-  # Set S3_URL_STYLE only if the target ECS endpoint requires a specific style.
-  # Example:
-  # S3_URL_STYLE: path
+  # ECS is expected to use path-style requests so the TLS certificate matches
+  # the configured endpoint host instead of bucket-prefixed virtual hosts.
+  S3_URL_STYLE: path
   S3_STARTUP_VIEW_SCHEMA: s3
   # Example:
   # S3_STARTUP_VIEWS: vat_smoke=parquet:s3://vat-smoke-test/startup/vat_smoke.parquet
