@@ -31,6 +31,10 @@ async def lifespan(app: FastAPI):
     print("[bdw-startup] Runtime environment applied", flush=True)
     for line in Settings.startup_environment_lines():
         print(line, flush=True)
+    for line in Settings.startup_all_environment_lines():
+        print(line, flush=True)
+    for line in Settings.startup_config_lines():
+        print(line, flush=True)
     workbench = WorkbenchService(settings)
     print("[bdw-startup] Starting workbench service", flush=True)
     try:

@@ -78,7 +78,6 @@ $env:MAX_RESULT_ROWS = "200"
 $env:DUCKDB_DATABASE = $dbPath
 $env:DUCKDB_EXTENSION_DIRECTORY = $extensionDir
 $env:S3_ENDPOINT = "localhost:9000"
-$env:S3_REGION = "us-east-1"
 $env:S3_BUCKET = "vat-smoke-test"
 $env:S3_ACCESS_KEY_ID = "minioadmin"
 $env:S3_SECRET_ACCESS_KEY = "minioadmin"

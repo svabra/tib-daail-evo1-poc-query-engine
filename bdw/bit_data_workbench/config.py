@@ -14,7 +14,6 @@ WORKBENCH_ENVIRONMENT_VARIABLES = (
     "DUCKDB_EXTENSION_DIRECTORY",
     "MAX_RESULT_ROWS",
     "S3_ENDPOINT",
-    "S3_REGION",
     "S3_BUCKET",
     "S3_ACCESS_KEY_ID",
     "S3_ACCESS_KEY_ID_FILE",
@@ -49,6 +48,19 @@ REDACTED_ENVIRONMENT_VARIABLES = {
     "S3_SECRET_ACCESS_KEY",
     "S3_SESSION_TOKEN",
 }
+
+STARTUP_REDACTED_FILE_HINTS = (
+    "secret",
+    "token",
+    "password",
+    "access-key",
+)
+
+STARTUP_CONFIG_SCAN_ROOTS = (
+    Path("/vault/secrets"),
+    Path("/var/run/secrets"),
+    Path("/var/run/configmaps"),
+)
 
 
 def env(name: str, default: str = "") -> str:
@@ -119,6 +131,179 @@ def format_environment_value(name: str) -> str:
     return value
 
 
+def _decode_mount_path(raw_value: str) -> str:
+    return raw_value.replace("\\040", " ")
+
+
+def _mountinfo_paths() -> list[Path]:
+    mountinfo_path = Path("/proc/self/mountinfo")
+    if not mountinfo_path.exists():
+        return []
+
+    paths: list[Path] = []
+    try:
+        lines = mountinfo_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return []
+
+    for line in lines:
+        left_side, _separator, _right_side = line.partition(" - ")
+        parts = left_side.split()
+        if len(parts) < 5:
+            continue
+        mount_path = Path(_decode_mount_path(parts[4]))
+        paths.append(mount_path)
+    return paths
+
+
+def _looks_like_config_mount(path: Path) -> bool:
+    if not path.exists() or not path.is_dir():
+        return False
+
+    normalized_path = path.as_posix().lower()
+    if any(normalized_path.startswith(root.as_posix()) for root in STARTUP_CONFIG_SCAN_ROOTS):
+        return True
+    if "trusted-certs" in normalized_path:
+        return True
+
+    try:
+        child_names = {child.name for child in path.iterdir()}
+    except OSError:
+        return False
+    return "..data" in child_names
+
+
+def _startup_redacted_paths() -> set[str]:
+    paths: set[str] = set()
+    for env_name in ("S3_ACCESS_KEY_ID_FILE", "S3_SECRET_ACCESS_KEY_FILE", "S3_SESSION_TOKEN_FILE"):
+        raw_value = env_optional(env_name)
+        if raw_value is not None:
+            paths.add(Path(raw_value).as_posix().lower())
+    return paths
+
+
+def _should_redact_startup_file(path: Path) -> bool:
+    normalized_path = path.as_posix().lower()
+    if normalized_path in _startup_redacted_paths():
+        return True
+    return any(hint in normalized_path for hint in STARTUP_REDACTED_FILE_HINTS)
+
+
+def _read_startup_file_lines(path: Path, *, max_bytes: int = 262_144) -> list[str]:
+    try:
+        raw_value = path.read_bytes()
+    except OSError as exc:
+        return [f"[unreadable: {exc}]"]
+
+    if len(raw_value) > max_bytes:
+        return [f"[content skipped: file is larger than {max_bytes} bytes]"]
+    if b"\x00" in raw_value:
+        return ["[content skipped: binary file]"]
+
+    try:
+        text = raw_value.decode("utf-8")
+    except UnicodeDecodeError:
+        return ["[content skipped: not valid UTF-8 text]"]
+
+    stripped = text.rstrip("\n")
+    if not stripped:
+        return ['[empty file]']
+    return stripped.splitlines()
+
+
+def _describe_startup_path(path: Path, *, depth: int = 0, max_depth: int = 2) -> list[str]:
+    prefix = "  " * depth
+    try:
+        is_symlink = path.is_symlink()
+    except OSError as exc:
+        return [f"{prefix}[unavailable] {path}: {exc}"]
+
+    if is_symlink:
+        try:
+            target = os.readlink(path)
+        except OSError as exc:
+            return [f"{prefix}[symlink] {path} -> [unreadable target: {exc}]"]
+        lines = [f"{prefix}[symlink] {path} -> {target}"]
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError:
+            return lines
+        if resolved != path:
+            lines.extend(_describe_startup_path(resolved, depth=depth + 1, max_depth=max_depth))
+        return lines
+
+    if path.is_dir():
+        lines = [f"{prefix}[dir] {path}"]
+        if depth >= max_depth:
+            return lines
+        try:
+            children = sorted(path.iterdir(), key=lambda child: child.name.lower())
+        except OSError as exc:
+            lines.append(f"{prefix}  [unreadable directory: {exc}]")
+            return lines
+        for child in children:
+            lines.extend(_describe_startup_path(child, depth=depth + 1, max_depth=max_depth))
+        return lines
+
+    if path.is_file():
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = -1
+        lines = [f"{prefix}[file] {path} ({size} bytes)"]
+        if _should_redact_startup_file(path):
+            lines.append(f"{prefix}  [content redacted]")
+            return lines
+        for line in _read_startup_file_lines(path):
+            lines.append(f"{prefix}  {line}")
+        return lines
+
+    return [f"{prefix}[other] {path}"]
+
+
+def discover_startup_config_lines() -> list[str]:
+    lines = [
+        "[bdw-startup] Accessible config mounts and files visible inside the container follow.",
+        "[bdw-startup] Kubernetes ConfigMaps that are not mounted or injected into this pod will not appear here.",
+    ]
+
+    candidate_paths: dict[str, Path] = {}
+    for raw_root in STARTUP_CONFIG_SCAN_ROOTS:
+        if raw_root.exists():
+            candidate_paths[raw_root.as_posix()] = raw_root
+
+    for env_name in ("S3_ACCESS_KEY_ID_FILE", "S3_SECRET_ACCESS_KEY_FILE", "S3_SESSION_TOKEN_FILE", "S3_CA_CERT_FILE"):
+        raw_value = env_optional(env_name)
+        if raw_value is None:
+            continue
+        path = Path(raw_value)
+        candidate_paths[path.as_posix()] = path
+        candidate_paths[path.parent.as_posix()] = path.parent
+
+    for mount_path in _mountinfo_paths():
+        if _looks_like_config_mount(mount_path):
+            candidate_paths[mount_path.as_posix()] = mount_path
+
+    if not candidate_paths:
+        lines.append("[bdw-startup] No configmap-like mount paths are visible from this process.")
+        return lines
+
+    ordered_paths = sorted(
+        candidate_paths.values(),
+        key=lambda item: (len(item.as_posix()), item.as_posix().lower()),
+    )
+    selected_paths: list[Path] = []
+    for path in ordered_paths:
+        if any(path != selected and path.is_relative_to(selected) for selected in selected_paths):
+            continue
+        selected_paths.append(path)
+
+    for path in selected_paths:
+        for detail_line in _describe_startup_path(path):
+            lines.append(f"[bdw-startup] {detail_line}")
+    return lines
+
+
 def default_image_version() -> str:
     value = env_optional("IMAGE_VERSION")
     if value is not None:
@@ -143,7 +328,6 @@ class Settings:
     duckdb_extension_directory: Path
     max_result_rows: int
     s3_endpoint: str | None
-    s3_region: str | None
     s3_bucket: str | None
     s3_access_key_id: str | None
     s3_access_key_id_file: Path | None
@@ -185,7 +369,6 @@ class Settings:
             ),
             max_result_rows=int(env("MAX_RESULT_ROWS", "200")),
             s3_endpoint=env_optional("S3_ENDPOINT"),
-            s3_region=env_optional("S3_REGION"),
             s3_bucket=env_optional("S3_BUCKET"),
             s3_access_key_id=env_optional("S3_ACCESS_KEY_ID"),
             s3_access_key_id_file=env_path_optional("S3_ACCESS_KEY_ID_FILE"),
@@ -264,3 +447,18 @@ class Settings:
             f"{name}={format_environment_value(name)}"
             for name in WORKBENCH_ENVIRONMENT_VARIABLES
         ]
+
+    @staticmethod
+    def startup_all_environment_lines() -> list[str]:
+        lines = [
+            "[bdw-startup] Full os.environ dump follows. This is a temporary debug block and may include secrets.",
+        ]
+        lines.extend(
+            f"{name}={value}"
+            for name, value in sorted(os.environ.items(), key=lambda item: item[0].lower())
+        )
+        return lines
+
+    @staticmethod
+    def startup_config_lines() -> list[str]:
+        return discover_startup_config_lines()

@@ -12,7 +12,6 @@ data:
   DUCKDB_EXTRA_EXTENSIONS: httpfs,postgres
   DUCKDB_EXTENSION_DIRECTORY: /opt/duckdb/extensions
   S3_ENDPOINT: replace-me.ecs-endpoint:9021
-  S3_REGION: replace-me-region
   S3_BUCKET: replace-me-bucket
   S3_USE_SSL: "true"
   S3_VERIFY_SSL: "true"

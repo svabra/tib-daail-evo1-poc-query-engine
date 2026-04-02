@@ -299,7 +299,6 @@ def create_s3_startup_views(conn: duckdb.DuckDBPyConnection) -> None:
 
 def create_s3_secret(conn: duckdb.DuckDBPyConnection) -> None:
     endpoint = env_optional("S3_ENDPOINT")
-    region = env_optional("S3_REGION")
     bucket = env_optional("S3_BUCKET")
     key_id = env_optional("S3_ACCESS_KEY_ID")
     secret = env_optional("S3_SECRET_ACCESS_KEY")
@@ -307,7 +306,7 @@ def create_s3_secret(conn: duckdb.DuckDBPyConnection) -> None:
     session_token = env_optional("S3_SESSION_TOKEN")
     use_ssl = env_bool("S3_USE_SSL", True)
 
-    required = [endpoint, region, bucket, key_id, secret]
+    required = [endpoint, bucket, key_id, secret]
     if all(value is None for value in required):
         print("Skipping S3 bootstrap because no S3 environment variables were provided.", flush=True)
         return
@@ -316,7 +315,6 @@ def create_s3_secret(conn: duckdb.DuckDBPyConnection) -> None:
         name
         for name, value in (
             ("S3_ENDPOINT", endpoint),
-            ("S3_REGION", region),
             ("S3_BUCKET", bucket),
             ("S3_ACCESS_KEY_ID", key_id),
             ("S3_SECRET_ACCESS_KEY", secret),
@@ -333,7 +331,6 @@ def create_s3_secret(conn: duckdb.DuckDBPyConnection) -> None:
         "PROVIDER config",
         f"KEY_ID {sql_string(key_id)}",
         f"SECRET {sql_string(secret)}",
-        f"REGION {sql_string(region)}",
         f"ENDPOINT {sql_string(endpoint)}",
         f"USE_SSL {'true' if use_ssl else 'false'}",
         f"SCOPE {sql_string(f's3://{bucket}')}",

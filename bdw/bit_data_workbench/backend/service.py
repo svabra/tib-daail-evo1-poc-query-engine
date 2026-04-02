@@ -902,7 +902,6 @@ class WorkbenchService:
         secret_access_key = self.settings.current_s3_secret_access_key()
         required_values = (
             self.settings.s3_endpoint,
-            self.settings.s3_region,
             self.settings.s3_bucket,
             access_key_id,
             secret_access_key,
@@ -917,7 +916,6 @@ class WorkbenchService:
             name
             for name, value in (
                 ("S3_ENDPOINT", self.settings.s3_endpoint),
-                ("S3_REGION", self.settings.s3_region),
                 ("S3_BUCKET", self.settings.s3_bucket),
                 ("S3_ACCESS_KEY_ID", access_key_id),
                 ("S3_SECRET_ACCESS_KEY", secret_access_key),
@@ -1055,7 +1053,6 @@ class WorkbenchService:
             "PROVIDER config",
             f"KEY_ID {sql_literal(access_key_id)}",
             f"SECRET {sql_literal(secret_access_key)}",
-            f"REGION {sql_literal(self.settings.s3_region)}",
             f"ENDPOINT {sql_literal(endpoint)}",
             f"USE_SSL {'true' if use_ssl else 'false'}",
         ]
@@ -1504,7 +1501,6 @@ class WorkbenchService:
         if not any(
             (
                 self.settings.s3_endpoint,
-                self.settings.s3_region,
                 self.settings.s3_bucket,
                 access_key_id,
                 secret_access_key,
@@ -1533,7 +1529,6 @@ class WorkbenchService:
                 name
                 for name, value in (
                     ("S3_ENDPOINT", self.settings.s3_endpoint),
-                    ("S3_REGION", self.settings.s3_region),
                     ("S3_BUCKET", self.settings.s3_bucket),
                     ("S3_ACCESS_KEY_ID", access_key_id),
                     ("S3_SECRET_ACCESS_KEY", secret_access_key),
