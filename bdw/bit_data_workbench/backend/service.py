@@ -4,7 +4,6 @@ import logging
 import re
 import time
 from threading import RLock, Thread
-from urllib.parse import urlparse
 
 import duckdb
 
@@ -23,6 +22,7 @@ from ..models import (
 from .s3_storage import (
     delete_s3_bucket,
     list_s3_buckets,
+    normalize_s3_endpoint,
     s3_bucket_schema_name,
     s3_client,
     s3_verify_value,
@@ -59,17 +59,6 @@ def normalize_port(value: str, variable_name: str) -> str:
     if not value.isdigit():
         raise ValueError(f"{variable_name} must be numeric, got: {value}")
     return value
-
-
-def normalize_s3_endpoint(raw_value: str, use_ssl: bool) -> tuple[str, bool]:
-    if "://" in raw_value:
-        parsed = urlparse(raw_value)
-        if parsed.scheme not in {"http", "https"}:
-            raise ValueError(f"Unsupported S3 endpoint scheme: {parsed.scheme}")
-        if not parsed.netloc:
-            raise ValueError(f"Invalid S3 endpoint: {raw_value}")
-        return parsed.netloc, parsed.scheme == "https"
-    return raw_value, use_ssl
 
 
 def infer_s3_view_format(path: str) -> str:
@@ -927,10 +916,19 @@ class WorkbenchService:
                 logger.warning(message)
             return
 
-        endpoint, use_ssl = normalize_s3_endpoint(
+        endpoint, use_ssl, transport_reason = normalize_s3_endpoint(
             self.settings.s3_endpoint,
-            self.settings.s3_use_ssl,
+            use_ssl=self.settings.s3_use_ssl,
+            verify_ssl=self.settings.s3_verify_ssl,
         )
+        if startup_context and transport_reason:
+            self._log_startup(
+                "S3 transport override: raw_endpoint=%s configured_use_ssl=%s effective_use_ssl=%s reason=%s",
+                self.settings.s3_endpoint,
+                self.settings.s3_use_ssl,
+                use_ssl,
+                transport_reason,
+            )
 
         startup_views = parse_s3_startup_views(self.settings.s3_startup_views)
         options = self._s3_secret_options(endpoint=endpoint, use_ssl=use_ssl)
@@ -1340,10 +1338,19 @@ class WorkbenchService:
                 )
                 return
 
-            endpoint, use_ssl = normalize_s3_endpoint(
+            endpoint, use_ssl, transport_reason = normalize_s3_endpoint(
                 self.settings.s3_endpoint,
-                self.settings.s3_use_ssl,
+                use_ssl=self.settings.s3_use_ssl,
+                verify_ssl=self.settings.s3_verify_ssl,
             )
+            if transport_reason:
+                self._log_startup(
+                    "Background S3 diagnostics transport override: raw_endpoint=%s configured_use_ssl=%s effective_use_ssl=%s reason=%s",
+                    self.settings.s3_endpoint,
+                    self.settings.s3_use_ssl,
+                    use_ssl,
+                    transport_reason,
+                )
             startup_views = parse_s3_startup_views(self.settings.s3_startup_views)
             conn = self._create_s3_diagnostic_connection()
             options = self._s3_secret_options(endpoint=endpoint, use_ssl=use_ssl)

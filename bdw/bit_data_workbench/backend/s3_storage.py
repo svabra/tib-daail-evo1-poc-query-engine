@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 import hashlib
 import re
+from urllib.parse import urlparse
 
 import boto3
 from botocore.config import Config
@@ -10,13 +11,76 @@ from botocore.config import Config
 from ..config import Settings
 
 
-def s3_endpoint_url(settings: Settings, *, use_ssl: bool | None = None) -> str:
+def _parsed_endpoint_host_port(raw_endpoint: str) -> tuple[str | None, int | None]:
+    parsed = urlparse(raw_endpoint if "://" in raw_endpoint else f"//{raw_endpoint}")
+    return parsed.hostname, parsed.port
+
+
+def _is_likely_local_s3_host(hostname: str | None) -> bool:
+    if not hostname:
+        return False
+    normalized = hostname.strip().lower()
+    if normalized in {"localhost", "127.0.0.1", "::1", "minio"}:
+        return True
+    return normalized.endswith(".local")
+
+
+def normalize_s3_endpoint(
+    raw_endpoint: str,
+    *,
+    use_ssl: bool,
+    verify_ssl: bool,
+) -> tuple[str, bool, str | None]:
+    if "://" in raw_endpoint:
+        parsed = urlparse(raw_endpoint)
+        if parsed.scheme not in {"http", "https"}:
+            raise ValueError(f"Unsupported S3 endpoint scheme: {parsed.scheme}")
+        if not parsed.netloc:
+            raise ValueError(f"Invalid S3 endpoint: {raw_endpoint}")
+        return parsed.netloc, parsed.scheme == "https", None
+
+    hostname, port = _parsed_endpoint_host_port(raw_endpoint)
+    if use_ssl:
+        return raw_endpoint, True, None
+
+    if not _is_likely_local_s3_host(hostname) and verify_ssl:
+        return (
+            raw_endpoint,
+            True,
+            "forcing HTTPS because the endpoint has no scheme, is not local, and SSL verification is enabled",
+        )
+
+    if not _is_likely_local_s3_host(hostname) and port == 9021:
+        return (
+            raw_endpoint,
+            True,
+            "forcing HTTPS because the endpoint has no scheme, is not local, and port 9021 is expected to be TLS",
+        )
+
+    return raw_endpoint, False, None
+
+
+def s3_endpoint_url(
+    settings: Settings,
+    *,
+    use_ssl: bool | None = None,
+    verify_ssl: bool | str | None = None,
+) -> str:
     endpoint = settings.s3_endpoint
     if not endpoint:
         raise ValueError("S3 endpoint configuration is required for this operation.")
 
-    ssl_enabled = settings.s3_use_ssl if use_ssl is None else use_ssl
-    return endpoint if "://" in endpoint else f"{'https' if ssl_enabled else 'http'}://{endpoint}"
+    verification_enabled = (
+        settings.s3_verify_ssl
+        if verify_ssl is None
+        else (True if isinstance(verify_ssl, str) else verify_ssl)
+    )
+    normalized_endpoint, ssl_enabled, _reason = normalize_s3_endpoint(
+        endpoint,
+        use_ssl=settings.s3_use_ssl if use_ssl is None else use_ssl,
+        verify_ssl=verification_enabled,
+    )
+    return f"{'https' if ssl_enabled else 'http'}://{normalized_endpoint}"
 
 
 def s3_verify_value(
@@ -41,7 +105,7 @@ def s3_client(
     url_style: str | None = None,
     verify_ssl: bool | str | None = None,
 ):
-    endpoint_url = s3_endpoint_url(settings, use_ssl=use_ssl)
+    endpoint_url = s3_endpoint_url(settings, use_ssl=use_ssl, verify_ssl=verify_ssl)
     addressing_style = (
         (url_style or "").strip().lower()
         or ("path" if (settings.s3_url_style or "").strip().lower() == "path" else "auto")

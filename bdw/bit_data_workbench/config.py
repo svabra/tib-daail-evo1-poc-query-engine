@@ -290,6 +290,16 @@ def _path_status_summary(path: Path) -> str:
     return "other"
 
 
+def _visible_directory_entries(path: Path, *, limit: int = 50) -> list[Path]:
+    if not path.exists() or not path.is_dir():
+        return []
+    try:
+        entries = sorted(path.iterdir(), key=lambda item: item.name.lower())
+    except OSError:
+        return []
+    return entries[:limit]
+
+
 def discover_startup_config_lines() -> list[str]:
     lines = [
         "[bdw-startup] Accessible config mounts and files visible inside the container follow.",
@@ -547,6 +557,15 @@ class Settings:
                 "[bdw-startup] Configured S3_CA_CERT_FILE="
                 f"{self.s3_ca_cert_file.as_posix()} ({_path_status_summary(self.s3_ca_cert_file)})"
             )
+
+        for root in AUTO_S3_CA_CERT_SEARCH_ROOTS:
+            lines.append(
+                f"[bdw-startup] S3 CA search root {root.as_posix()} ({_path_status_summary(root)})"
+            )
+            for entry in _visible_directory_entries(root):
+                lines.append(
+                    f"[bdw-startup] S3 CA search root entry: {entry.as_posix()} ({_path_status_summary(entry)})"
+                )
 
         for candidate in PREFERRED_S3_CA_CERT_FILES:
             lines.append(
