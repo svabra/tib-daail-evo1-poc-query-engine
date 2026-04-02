@@ -7,6 +7,7 @@ import threading
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from threading import RLock, Thread
 from urllib.parse import urlparse
 
@@ -27,6 +28,7 @@ from ..models import (
     SourceSchema,
 )
 from .s3_storage import (
+    download_s3_file,
     effective_s3_url_style,
     list_s3_buckets,
     list_s3_buckets_from_client,
@@ -34,6 +36,7 @@ from .s3_storage import (
     s3_bucket_schema_name,
     s3_client,
     s3_verify_value,
+    upload_s3_file,
 )
 from .data_generation_jobs import DataGenerationJobManager
 from .query_jobs import QueryJobManager
@@ -1355,22 +1358,36 @@ class WorkbenchService:
         if S3_BOOTSTRAP_SAMPLE_KEY not in existing_keys:
             try:
                 payload = S3_BOOTSTRAP_SAMPLE_CSV.encode("utf-8")
-                client.put_object(
-                    Bucket=bucket_name,
-                    Key=S3_BOOTSTRAP_SAMPLE_KEY,
-                    Body=payload,
-                    ContentType="text/csv; charset=utf-8",
-                )
+                with TemporaryDirectory(prefix="bdw-s3-startup-seed-") as temp_dir:
+                    temp_path = Path(temp_dir) / "vat_context_bootstrap.csv"
+                    temp_path.write_bytes(payload)
+                    upload_s3_file(
+                        client,
+                        local_path=temp_path,
+                        bucket=bucket_name,
+                        key=S3_BOOTSTRAP_SAMPLE_KEY,
+                    )
+                    download_path = Path(temp_dir) / "vat_context_bootstrap.download.csv"
+                    download_s3_file(
+                        client,
+                        bucket=bucket_name,
+                        key=S3_BOOTSTRAP_SAMPLE_KEY,
+                        local_path=download_path,
+                    )
+                    downloaded_payload = download_path.read_bytes()
                 self._log_s3_diagnostic_trial(
                     backend="boto3",
-                    trial=f"put_object[startup-seed]:{bucket_name}/{S3_BOOTSTRAP_SAMPLE_KEY}",
+                    trial=f"upload_file[startup-seed]:{bucket_name}/{S3_BOOTSTRAP_SAMPLE_KEY}",
                     success=True,
-                    detail=f"uploaded {len(payload)} byte(s) to the bootstrap bucket",
+                    detail=(
+                        f"uploaded {len(payload)} byte(s), downloaded {len(downloaded_payload)} byte(s), "
+                        f"payload_match={downloaded_payload == payload}"
+                    ),
                 )
             except Exception as exc:
                 self._log_s3_diagnostic_trial(
                     backend="boto3",
-                    trial=f"put_object[startup-seed]:{bucket_name}/{S3_BOOTSTRAP_SAMPLE_KEY}",
+                    trial=f"upload_file[startup-seed]:{bucket_name}/{S3_BOOTSTRAP_SAMPLE_KEY}",
                     success=False,
                     detail=str(exc),
                 )
@@ -1378,7 +1395,7 @@ class WorkbenchService:
         else:
             self._log_s3_diagnostic_trial(
                 backend="boto3",
-                trial=f"put_object[startup-seed]:{bucket_name}/{S3_BOOTSTRAP_SAMPLE_KEY}",
+                trial=f"upload_file[startup-seed]:{bucket_name}/{S3_BOOTSTRAP_SAMPLE_KEY}",
                 success=True,
                 detail="bootstrap CSV already existed; upload was not required",
             )

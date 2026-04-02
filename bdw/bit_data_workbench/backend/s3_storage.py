@@ -4,6 +4,7 @@ from collections.abc import Iterator
 import hashlib
 import re
 import time
+from pathlib import Path
 from urllib.parse import urlparse
 
 import boto3
@@ -145,6 +146,14 @@ def s3_client(
         use_ssl=use_ssl,
         explicit_url_style=url_style,
     ) or "auto"
+    s3_config = {
+        "addressing_style": addressing_style,
+    }
+    if endpoint_url.startswith("https://"):
+        # ECS-compatible HTTPS endpoints work more reliably with unsigned
+        # payloads for boto-managed uploads. This avoids SHA256 payload
+        # mismatches on proxy-backed object-store writes.
+        s3_config["payload_signing_enabled"] = False
     config = Config(
         connect_timeout=3,
         read_timeout=5,
@@ -152,9 +161,7 @@ def s3_client(
             "max_attempts": 2,
             "mode": "standard",
         },
-        s3={
-            "addressing_style": addressing_style,
-        }
+        s3=s3_config,
     )
     return boto3.client(
         "s3",
@@ -202,6 +209,14 @@ def list_s3_buckets_from_client(client) -> list[str]:
         if str(item.get("Name") or "").strip()
     ]
     return sorted(set(buckets))
+
+
+def upload_s3_file(client, *, local_path: Path, bucket: str, key: str) -> None:
+    client.upload_file(str(local_path), bucket, key)
+
+
+def download_s3_file(client, *, bucket: str, key: str, local_path: Path) -> None:
+    client.download_file(bucket, key, str(local_path))
 
 
 def s3_bucket_schema_name(bucket_name: str) -> str:

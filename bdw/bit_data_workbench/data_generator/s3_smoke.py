@@ -1,12 +1,17 @@
 from __future__ import annotations
 
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
 from ..backend.s3_storage import (
     delete_s3_bucket,
     derived_s3_bucket_name,
     ensure_s3_bucket,
     parse_s3_url,
     remove_s3_bucket,
+    s3_client,
     s3_bucket_schema_name,
+    upload_s3_file,
 )
 from .base import DataGenerationCancelled, DataGenerator, DataGeneratorContext, DataGeneratorResult, estimated_rows_for_size, generated_name
 from .helpers import approximate_size_gb, qualified_name, sql_literal, vat_smoke_dataset_select
@@ -44,7 +49,9 @@ class S3SmokeDataGenerator(DataGenerator):
         schema_name = s3_bucket_schema_name(bucket_name)
         relation = qualified_name(schema_name, view_name)
         object_prefix = f"s3://{bucket_name}/generated/{view_name}"
+        object_key_prefix = f"generated/{view_name}"
         connection = context.connect()
+        s3_upload_client = s3_client(settings)
 
         try:
             context.report(
@@ -61,26 +68,36 @@ class S3SmokeDataGenerator(DataGenerator):
             ensure_s3_bucket(settings, bucket_name)
 
             written_rows = 0
-            for batch_index, start_row in enumerate(range(0, total_rows, batch_rows), start=1):
-                context.raise_if_cancelled()
-                end_row = min(total_rows, start_row + batch_rows)
-                part_path = f"{object_prefix}/part-{batch_index:05d}.parquet"
-                connection.execute(
-                    "COPY ("
-                    f"{vat_smoke_dataset_select(start_row, end_row)}"
-                    f") TO {sql_literal(part_path)} (FORMAT PARQUET, COMPRESSION ZSTD)"
-                )
-                written_rows = end_row
-                context.report(
-                    progress=written_rows / total_rows,
-                    progress_label=f"Writing batch {batch_index} / {batch_count}",
-                    message=f"Wrote {written_rows:,} rows to {object_prefix}.",
-                    target_name=view_name,
-                    target_relation=f"{schema_name}.{view_name}",
-                    target_path=object_prefix,
-                    generated_rows=written_rows,
-                    generated_size_gb=approximate_size_gb(written_rows, self.approximate_row_bytes),
-                )
+            with TemporaryDirectory(prefix=f"bdw-{self.generator_id}-{context.job_id[:8]}-") as temp_dir:
+                temp_dir_path = Path(temp_dir)
+                for batch_index, start_row in enumerate(range(0, total_rows, batch_rows), start=1):
+                    context.raise_if_cancelled()
+                    end_row = min(total_rows, start_row + batch_rows)
+                    object_key = f"{object_key_prefix}/part-{batch_index:05d}.parquet"
+                    local_parquet_path = temp_dir_path / f"part-{batch_index:05d}.parquet"
+                    connection.execute(
+                        "COPY ("
+                        f"{vat_smoke_dataset_select(start_row, end_row)}"
+                        f") TO {sql_literal(local_parquet_path.as_posix())} (FORMAT PARQUET, COMPRESSION ZSTD)"
+                    )
+                    upload_s3_file(
+                        s3_upload_client,
+                        local_path=local_parquet_path,
+                        bucket=bucket_name,
+                        key=object_key,
+                    )
+                    local_parquet_path.unlink(missing_ok=True)
+                    written_rows = end_row
+                    context.report(
+                        progress=written_rows / total_rows,
+                        progress_label=f"Writing batch {batch_index} / {batch_count}",
+                        message=f"Wrote {written_rows:,} rows to {object_prefix}.",
+                        target_name=view_name,
+                        target_relation=f"{schema_name}.{view_name}",
+                        target_path=object_prefix,
+                        generated_rows=written_rows,
+                        generated_size_gb=approximate_size_gb(written_rows, self.approximate_row_bytes),
+                    )
 
             connection.execute(
                 f"CREATE OR REPLACE VIEW {relation} AS "
