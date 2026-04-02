@@ -21,12 +21,12 @@ spec:
         # The app expects the binding to inject the following files under /vault/secrets:
         # - s3-access-key-id
         # - s3-secret-access-key
-        # - s3-ca-bundle.pem
+        # The trusted CA material is mounted separately from the bit-ros-trusted-certs ConfigMap.
     spec:
       serviceAccountName: evo1-bdw
       containers:
         - name: bdw
-          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.17
+          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.18
           imagePullPolicy: Always
           ports:
             - name: http
@@ -62,6 +62,9 @@ spec:
           volumeMounts:
             - name: workspace
               mountPath: /workspace
+            - name: bit-ros-trusted-certs
+              mountPath: /etc/bit/trusted-certs
+              readOnly: true
           resources:
             requests:
               cpu: "4"
@@ -93,3 +96,6 @@ spec:
       volumes:
         - name: workspace
           emptyDir: {}
+        - name: bit-ros-trusted-certs
+          configMap:
+            name: bit-ros-trusted-certs

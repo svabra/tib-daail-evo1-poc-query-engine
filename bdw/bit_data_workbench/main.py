@@ -35,6 +35,8 @@ async def lifespan(app: FastAPI):
         print(line, flush=True)
     for line in Settings.startup_config_lines():
         print(line, flush=True)
+    for line in settings.startup_s3_certificate_lines():
+        print(line, flush=True)
     workbench = WorkbenchService(settings)
     print("[bdw-startup] Starting workbench service", flush=True)
     try:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import socket
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -57,10 +57,18 @@ STARTUP_REDACTED_FILE_HINTS = (
 )
 
 STARTUP_CONFIG_SCAN_ROOTS = (
+    Path("/etc/bit/trusted-certs"),
     Path("/vault/secrets"),
     Path("/var/run/secrets"),
     Path("/var/run/configmaps"),
 )
+
+AUTO_S3_CA_CERT_SEARCH_ROOTS = (
+    Path("/etc/bit/trusted-certs"),
+)
+
+AUTO_S3_CA_CERT_FILE_SUFFIXES = {".crt", ".pem", ".cer"}
+AUTO_S3_CA_BUNDLE_PATH = Path("/tmp/bit-data-workbench-s3-ca-bundle.pem")
 
 
 def env(name: str, default: str = "") -> str:
@@ -304,6 +312,51 @@ def discover_startup_config_lines() -> list[str]:
     return lines
 
 
+def discover_s3_ca_cert_source_files() -> list[Path]:
+    discovered: dict[str, Path] = {}
+    for root in AUTO_S3_CA_CERT_SEARCH_ROOTS:
+        if not root.exists():
+            continue
+        try:
+            candidates = sorted(root.rglob("*"), key=lambda item: item.as_posix().lower())
+        except OSError:
+            continue
+        for candidate in candidates:
+            try:
+                if not candidate.is_file():
+                    continue
+            except OSError:
+                continue
+            if candidate.suffix.lower() not in AUTO_S3_CA_CERT_FILE_SUFFIXES:
+                continue
+            discovered[candidate.as_posix()] = candidate
+    return list(discovered.values())
+
+
+def build_s3_ca_bundle(
+    source_files: list[Path],
+    *,
+    destination: Path | None = None,
+) -> Path | None:
+    bundle_parts: list[str] = []
+    for source_file in source_files:
+        try:
+            content = source_file.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if not content:
+            continue
+        bundle_parts.append(content)
+
+    if not bundle_parts:
+        return None
+
+    destination = destination or AUTO_S3_CA_BUNDLE_PATH
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text("\n\n".join(bundle_parts) + "\n", encoding="utf-8")
+    return destination
+
+
 def default_image_version() -> str:
     value = env_optional("IMAGE_VERSION")
     if value is not None:
@@ -351,6 +404,7 @@ class Settings:
     pod_namespace: str | None
     pod_ip: str | None
     node_name: str | None
+    _generated_s3_ca_cert_file: Path | None = field(init=False, default=None, repr=False)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -433,11 +487,51 @@ class Settings:
             variable_name="S3_SESSION_TOKEN",
         )
 
+    def effective_s3_ca_cert_file(self) -> Path | None:
+        if self.s3_ca_cert_file is not None:
+            return self.s3_ca_cert_file
+        if self._generated_s3_ca_cert_file is not None:
+            return self._generated_s3_ca_cert_file
+
+        source_files = discover_s3_ca_cert_source_files()
+        generated_bundle = build_s3_ca_bundle(source_files)
+        self._generated_s3_ca_cert_file = generated_bundle
+        return generated_bundle
+
+    def startup_s3_certificate_lines(self) -> list[str]:
+        if self.s3_ca_cert_file is not None:
+            return [
+                f"[bdw-startup] Explicit S3 CA certificate file configured: {self.s3_ca_cert_file.as_posix()}",
+            ]
+
+        source_files = discover_s3_ca_cert_source_files()
+        if not source_files:
+            return [
+                "[bdw-startup] No mounted S3 CA certificate files were auto-discovered.",
+            ]
+
+        effective_bundle = self.effective_s3_ca_cert_file()
+        lines = []
+        if effective_bundle is not None:
+            lines.append(
+                f"[bdw-startup] Auto-generated S3 CA bundle: {effective_bundle.as_posix()}"
+            )
+        else:
+            lines.append(
+                "[bdw-startup] Mounted S3 CA certificate files were found, but no bundle could be generated."
+            )
+        lines.extend(
+            f"[bdw-startup] S3 CA source file: {source_file.as_posix()}"
+            for source_file in source_files
+        )
+        return lines
+
     def apply_runtime_environment(self) -> None:
-        if not self.s3_ca_cert_file:
+        effective_ca_bundle = self.effective_s3_ca_cert_file()
+        if not effective_ca_bundle:
             return
 
-        ca_bundle_path = self.s3_ca_cert_file.as_posix()
+        ca_bundle_path = effective_ca_bundle.as_posix()
         for env_name in ("AWS_CA_BUNDLE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "SSL_CERT_FILE"):
             os.environ[env_name] = ca_bundle_path
 

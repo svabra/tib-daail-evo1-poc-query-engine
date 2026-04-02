@@ -28,8 +28,9 @@ def s3_verify_value(
         return verify_ssl
 
     verification_enabled = settings.s3_verify_ssl if verify_ssl is None else verify_ssl
-    if verification_enabled and settings.s3_ca_cert_file is not None:
-        return settings.s3_ca_cert_file.as_posix()
+    effective_ca_bundle = settings.effective_s3_ca_cert_file()
+    if verification_enabled and effective_ca_bundle is not None:
+        return effective_ca_bundle.as_posix()
     return verification_enabled
 
 
