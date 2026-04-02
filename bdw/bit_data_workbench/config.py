@@ -230,7 +230,13 @@ def _read_startup_file_lines(path: Path, *, max_bytes: int = 262_144) -> list[st
     return stripped.splitlines()
 
 
-def _describe_startup_path(path: Path, *, depth: int = 0, max_depth: int = 2) -> list[str]:
+def _describe_startup_path(
+    path: Path,
+    *,
+    depth: int = 0,
+    max_depth: int = 2,
+    include_file_contents: bool = True,
+) -> list[str]:
     prefix = "  " * depth
     try:
         is_symlink = path.is_symlink()
@@ -248,7 +254,14 @@ def _describe_startup_path(path: Path, *, depth: int = 0, max_depth: int = 2) ->
         except OSError:
             return lines
         if resolved != path:
-            lines.extend(_describe_startup_path(resolved, depth=depth + 1, max_depth=max_depth))
+            lines.extend(
+                _describe_startup_path(
+                    resolved,
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                    include_file_contents=include_file_contents,
+                )
+            )
         return lines
 
     if path.is_dir():
@@ -261,7 +274,14 @@ def _describe_startup_path(path: Path, *, depth: int = 0, max_depth: int = 2) ->
             lines.append(f"{prefix}  [unreadable directory: {exc}]")
             return lines
         for child in children:
-            lines.extend(_describe_startup_path(child, depth=depth + 1, max_depth=max_depth))
+            lines.extend(
+                _describe_startup_path(
+                    child,
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                    include_file_contents=include_file_contents,
+                )
+            )
         return lines
 
     if path.is_file():
@@ -270,6 +290,8 @@ def _describe_startup_path(path: Path, *, depth: int = 0, max_depth: int = 2) ->
         except OSError:
             size = -1
         lines = [f"{prefix}[file] {path} ({size} bytes)"]
+        if not include_file_contents:
+            return lines
         if _should_redact_startup_file(path):
             lines.append(f"{prefix}  [content redacted]")
             return lines
@@ -560,12 +582,22 @@ class Settings:
 
         for root in AUTO_S3_CA_CERT_SEARCH_ROOTS:
             lines.append(
-                f"[bdw-startup] S3 CA search root {root.as_posix()} ({_path_status_summary(root)})"
+                f"[bdw-startup] Configured S3 configmap mount path {root.as_posix()} ({_path_status_summary(root)})"
             )
             for entry in _visible_directory_entries(root):
                 lines.append(
                     f"[bdw-startup] S3 CA search root entry: {entry.as_posix()} ({_path_status_summary(entry)})"
                 )
+            if root.exists():
+                lines.append(
+                    f"[bdw-startup] Recursive S3 configmap tree for {root.as_posix()} follows."
+                )
+                for detail_line in _describe_startup_path(
+                    root,
+                    max_depth=8,
+                    include_file_contents=False,
+                ):
+                    lines.append(f"[bdw-startup] {detail_line}")
 
         for candidate in PREFERRED_S3_CA_CERT_FILES:
             lines.append(
