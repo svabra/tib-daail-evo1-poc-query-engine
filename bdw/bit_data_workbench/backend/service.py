@@ -3,6 +3,10 @@ from __future__ import annotations
 import logging
 import re
 import time
+import threading
+import uuid
+from datetime import UTC, datetime
+from pathlib import Path
 from threading import RLock, Thread
 from urllib.parse import urlparse
 
@@ -11,8 +15,10 @@ import duckdb
 from ..config import Settings
 from ..data_generator.registry import DataGeneratorRegistry
 from ..models import (
-    IngestionCleanupTargetDefinition,
+    NotebookCellDefinition,
     NotebookDefinition,
+    NotebookEventDefinition,
+    NotebookVersionDefinition,
     QueryResult,
     SourceCatalog,
     SourceConnectionStatus,
@@ -21,7 +27,6 @@ from ..models import (
     SourceSchema,
 )
 from .s3_storage import (
-    delete_s3_bucket,
     list_s3_buckets,
     list_s3_buckets_from_client,
     normalize_s3_endpoint,
@@ -33,6 +38,7 @@ from .data_generation_jobs import DataGenerationJobManager
 from .query_jobs import QueryJobManager
 from .notebooks import build_completion_schema, build_notebook_tree, build_notebooks, build_source_options
 from .runbooks import build_runbook_tree
+from .shared_notebooks import SharedNotebookStore
 from .source_discovery import (
     DataSourceDiscoveryManager,
     S3DataSourceDiscoverer,
@@ -45,6 +51,7 @@ SUPPORTED_S3_VIEW_FORMATS = {"parquet", "csv", "json"}
 logger = logging.getLogger(__name__)
 STARTUP_DIVIDER = "-------------------------------"
 S3_BOOTSTRAP_SAMPLE_KEY = "startup/vat_context_bootstrap.csv"
+MAX_NOTEBOOK_EVENT_HISTORY = 40
 S3_BOOTSTRAP_SAMPLE_CSV = """company_uid,company_name,canton_code,tax_period_end,transaction_id,declared_turnover_chf,net_vat_due_chf,refund_claim_chf,filing_status,category
 CHE-100.000.001,Alpine Foods AG,ZH,2025-03-31,TX-10001,124000.00,9300.00,0.00,filed,standard
 CHE-100.000.002,Bern Logistics GmbH,BE,2025-03-31,TX-10002,88000.00,4200.00,0.00,filed,reduced
@@ -128,9 +135,13 @@ class WorkbenchService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self._lock = RLock()
+        self._condition = threading.Condition(self._lock)
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._catalogs: list[SourceCatalog] = []
         self._notebooks: list[NotebookDefinition] = []
+        self._shared_notebook_store = SharedNotebookStore(self._shared_notebook_store_path())
+        self._notebook_events: list[NotebookEventDefinition] = []
+        self._notebook_events_version = 0
         self._completion_schema: dict[str, object] = {}
         self._source_options: list[dict[str, str]] = []
         self._postgres_health_connections: dict[str, object] = {}
@@ -273,6 +284,143 @@ class WorkbenchService:
         with self._lock:
             return build_notebook_tree(self._notebooks)
 
+    def notebook_events_state(self) -> dict[str, object]:
+        with self._condition:
+            return self._notebook_events_state_locked()
+
+    def wait_for_notebook_events_state(
+        self,
+        last_version: int | None,
+        timeout: float = 15.0,
+    ) -> dict[str, object]:
+        with self._condition:
+            if last_version is None or last_version != self._notebook_events_version:
+                return self._notebook_events_state_locked()
+
+            self._condition.wait_for(lambda: self._notebook_events_version != last_version, timeout=timeout)
+            return self._notebook_events_state_locked()
+
+    def upsert_shared_notebook(
+        self,
+        *,
+        notebook_id: str | None,
+        title: str,
+        summary: str,
+        tags: list[str],
+        tree_path: list[str],
+        linked_generator_id: str,
+        cells: list[dict[str, object]],
+        versions: list[dict[str, object]],
+        created_at: str | None = None,
+        origin_client_id: str = "",
+    ) -> dict[str, object]:
+        normalized_notebook_id = str(notebook_id or "").strip() or f"shared-notebook-{uuid.uuid4().hex}"
+        existing_notebook = next(
+            (item for item in self._shared_notebook_store.list_notebooks() if item.notebook_id == normalized_notebook_id),
+            None,
+        )
+        normalized_title = str(title).strip() or "Untitled Notebook"
+        normalized_summary = str(summary).strip() or "Describe this notebook."
+        provided_tree_path = tuple(
+            segment for segment in (str(item).strip() for item in tree_path) if segment
+        )
+        normalized_tree_path = provided_tree_path or (
+            existing_notebook.tree_path if existing_notebook is not None else ("Shared Notebooks",)
+        )
+        normalized_tags = [tag for tag in (str(item).strip() for item in tags) if tag]
+
+        normalized_cells = [
+            NotebookCellDefinition(
+                cell_id=str(cell.get("cellId") or "").strip() or f"shared-cell-{uuid.uuid4().hex[:12]}",
+                sql=str(cell.get("sql") or ""),
+                data_sources=[
+                    source_id
+                    for source_id in (str(value).strip() for value in cell.get("dataSources", []) or [])
+                    if source_id
+                ],
+            )
+            for cell in cells
+            if isinstance(cell, dict)
+        ]
+        if not normalized_cells:
+            normalized_cells = [NotebookCellDefinition(cell_id=f"shared-cell-{uuid.uuid4().hex[:12]}", sql="", data_sources=[])]
+
+        normalized_versions = [
+            NotebookVersionDefinition(
+                version_id=str(version.get("versionId") or "").strip() or f"shared-version-{uuid.uuid4().hex[:12]}",
+                created_at=str(version.get("createdAt") or created_at or datetime.now(UTC).isoformat()),
+                title=str(version.get("title") or normalized_title),
+                summary=str(version.get("summary") or normalized_summary),
+                tags=[
+                    tag
+                    for tag in (str(item).strip() for item in version.get("tags", []) or [])
+                    if tag
+                ],
+                cells=[
+                    NotebookCellDefinition(
+                        cell_id=str(cell.get("cellId") or "").strip() or f"shared-cell-{uuid.uuid4().hex[:12]}",
+                        sql=str(cell.get("sql") or ""),
+                        data_sources=[
+                            source_id
+                            for source_id in (str(value).strip() for value in cell.get("dataSources", []) or [])
+                            if source_id
+                        ],
+                    ).payload
+                    for cell in version.get("cells", []) or []
+                    if isinstance(cell, dict)
+                ],
+            )
+            for version in versions
+            if isinstance(version, dict)
+        ]
+
+        notebook = NotebookDefinition(
+            notebook_id=normalized_notebook_id,
+            title=normalized_title,
+            summary=normalized_summary,
+            cells=normalized_cells,
+            tags=normalized_tags,
+            tree_path=normalized_tree_path,
+            linked_generator_id=str(linked_generator_id or "").strip(),
+            can_edit=True,
+            can_delete=True,
+            shared=True,
+            saved_versions=normalized_versions,
+            created_at=str(created_at or (existing_notebook.created_at if existing_notebook is not None else datetime.now(UTC).isoformat())),
+        )
+
+        with self._condition:
+            refreshed, action = self._shared_notebook_store.upsert_notebook(notebook)
+            self._rebuild_notebooks_locked()
+            self._append_notebook_event_locked(
+                event_type=action,
+                notebook=refreshed,
+                origin_client_id=origin_client_id,
+            )
+            return {
+                "action": action,
+                "notebook": refreshed.payload,
+            }
+
+    def delete_shared_notebook(
+        self,
+        notebook_id: str,
+        *,
+        origin_client_id: str = "",
+    ) -> dict[str, object]:
+        with self._condition:
+            removed = self._shared_notebook_store.delete_notebook(notebook_id)
+            self._rebuild_notebooks_locked()
+            self._append_notebook_event_locked(
+                event_type="deleted",
+                notebook=removed,
+                origin_client_id=origin_client_id,
+            )
+            return {
+                "action": "deleted",
+                "notebook": removed.payload,
+            }
+
     def query_jobs_state(self) -> dict[str, object]:
         return self._query_jobs.state_payload()
 
@@ -281,28 +429,6 @@ class WorkbenchService:
 
     def runbook_tree(self):
         return build_runbook_tree(self.data_generators())
-
-    def ingestion_cleanup_targets(self) -> list[dict[str, str]]:
-        return [
-            IngestionCleanupTargetDefinition(
-                target_id="pg_oltp_public",
-                title="Clean PostgreSQL OLTP",
-                description="Drop all tables and views in pg_oltp.public.",
-                confirm_copy="Drop every table and view in pg_oltp.public? This cannot be undone.",
-            ).payload,
-            IngestionCleanupTargetDefinition(
-                target_id="pg_olap_public",
-                title="Clean PostgreSQL OLAP",
-                description="Drop all tables and views in pg_olap.public.",
-                confirm_copy="Drop every table and view in pg_olap.public? This cannot be undone.",
-            ).payload,
-            IngestionCleanupTargetDefinition(
-                target_id="s3_workspace",
-                title="Clean S3 Workspace",
-                description="Delete all objects in the configured S3 bucket and remove workspace s3 views.",
-                confirm_copy="Delete all objects from the configured S3 bucket and drop every view in workspace.s3? This cannot be undone.",
-            ).payload,
-        ]
 
     def data_generation_jobs_state(self) -> dict[str, object]:
         return self._data_generation_jobs.state_payload()
@@ -379,37 +505,6 @@ class WorkbenchService:
         snapshot = self._data_generation_jobs.cleanup_job(job_id)
         self.refresh_metadata_state()
         return snapshot.payload
-
-    def cleanup_ingestion_target(self, target_id: str) -> dict[str, str]:
-        normalized_target_id = target_id.strip()
-        if normalized_target_id == "pg_oltp_public":
-            removed_count = self._drop_catalog_schema_objects("pg_oltp", "public")
-            self.refresh_metadata_state()
-            return {
-                "targetId": normalized_target_id,
-                "message": f"Dropped {removed_count} table(s)/view(s) from pg_oltp.public.",
-            }
-        if normalized_target_id == "pg_olap_public":
-            removed_count = self._drop_catalog_schema_objects("pg_olap", "public")
-            self.refresh_metadata_state()
-            return {
-                "targetId": normalized_target_id,
-                "message": f"Dropped {removed_count} table(s)/view(s) from pg_olap.public.",
-            }
-        if normalized_target_id == "s3_workspace":
-            if not self.settings.s3_bucket:
-                raise ValueError("S3 cleanup requires a configured S3 bucket.")
-            deleted_object_count = delete_s3_bucket(self.settings, self.settings.s3_bucket)
-            dropped_view_count = self._drop_workspace_schema_objects(self.settings.s3_startup_view_schema)
-            self.refresh_metadata_state()
-            return {
-                "targetId": normalized_target_id,
-                "message": (
-                    f"Deleted {deleted_object_count} object(s) from s3://{self.settings.s3_bucket} "
-                    f"and dropped {dropped_view_count} workspace view(s) in schema {self.settings.s3_startup_view_schema}."
-                ),
-            }
-        raise KeyError(f"Unknown ingestion cleanup target: {target_id}")
 
     def source_object_fields(self, relation: str) -> list[SourceField]:
         normalized_relation = relation.strip()
@@ -764,10 +859,47 @@ class WorkbenchService:
         self._log_startup(STARTUP_DIVIDER)
         self._log_startup("Startup task: %s", title)
 
+    def _shared_notebook_store_path(self) -> Path:
+        return self.settings.duckdb_database.parent / "shared-notebooks.json"
+
+    def _combined_notebooks(self, catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
+        return [*build_notebooks(catalogs), *self._shared_notebook_store.list_notebooks()]
+
+    def _rebuild_notebooks_locked(self) -> None:
+        self._notebooks = self._combined_notebooks(self._catalogs)
+
+    def _notebook_events_state_locked(self) -> dict[str, object]:
+        return {
+            "version": self._notebook_events_version,
+            "events": [event.payload for event in self._notebook_events],
+        }
+
+    def _append_notebook_event_locked(
+        self,
+        *,
+        event_type: str,
+        notebook: NotebookDefinition,
+        origin_client_id: str = "",
+    ) -> None:
+        self._notebook_events.append(
+            NotebookEventDefinition(
+                event_id=f"notebook-event-{uuid.uuid4().hex}",
+                event_type=event_type,
+                notebook_id=notebook.notebook_id,
+                notebook_title=notebook.title,
+                occurred_at=datetime.now(UTC).isoformat(),
+                origin_client_id=origin_client_id,
+            )
+        )
+        if len(self._notebook_events) > MAX_NOTEBOOK_EVENT_HISTORY:
+            self._notebook_events = self._notebook_events[-MAX_NOTEBOOK_EVENT_HISTORY:]
+        self._notebook_events_version += 1
+        self._condition.notify_all()
+
     def _set_minimal_state(self) -> None:
         catalogs: list[SourceCatalog] = []
         self._catalogs = catalogs
-        self._notebooks = build_notebooks(catalogs)
+        self._notebooks = self._combined_notebooks(catalogs)
         self._completion_schema = build_completion_schema(catalogs)
         self._source_options = build_source_options(catalogs)
 
@@ -1831,7 +1963,7 @@ class WorkbenchService:
                 )
 
         self._catalogs = catalogs
-        self._notebooks = build_notebooks(catalogs)
+        self._notebooks = self._combined_notebooks(catalogs)
         self._completion_schema = build_completion_schema(catalogs)
         self._source_options = build_source_options(catalogs)
 

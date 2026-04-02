@@ -30,23 +30,33 @@ let ingestionRunbookSpotlightHandle = null;
 let dataSourceEventsStateVersion = null;
 let dataSourceEventsLatestEventId = null;
 let dataSourceEventsEventSource = null;
+let notebookEventsStateVersion = null;
+let notebookEventsEventSource = null;
+let notebookEventsLoaded = false;
+const processedNotebookEventIds = new Set();
 let pendingDataSourceSidebarRefreshHandle = null;
 let dataSourceSidebarRefreshPromise = null;
 let dataSourceSidebarRefreshQueued = false;
 const pendingSourceCatalogBlinks = new Set();
 const sourceConnectionRequests = new Set();
 const refreshedDataGenerationJobIds = new Set();
+const sharedNotebookDrafts = new Map();
+const sharedNotebookSyncHandles = new Map();
 
 const notebookTreeStorageKey = "bdw.notebookTree.v2";
 const notebookMetadataStorageKey = "bdw.notebookMeta.v1";
 const notebookActivityStorageKey = "bdw.notebookActivity.v1";
+const workbenchClientIdStorageKey = "bdw.clientId.v1";
 const lastNotebookStorageKey = "bdw.lastNotebook.v1";
 const sidebarCollapsedStorageKey = "bdw.sidebarCollapsed.v1";
 const dismissedNotificationsStorageKey = "bdw.dismissedNotifications.v2";
 const cacheResetStorageKey = "bdw.cacheReset.v1";
 const unassignedFolderName = "Unassigned";
 const localNotebookPrefix = "local-notebook-";
+const sharedNotebookPrefix = "shared-notebook-";
 const localCellPrefix = "local-cell-";
+const initialSqlEditorRows = 5;
+const defaultSqlEditorAutoRows = 10;
 const queryJobTerminalStatuses = new Set(["completed", "failed", "cancelled"]);
 const queryJobRunningStatuses = new Set(["queued", "running"]);
 const dataGenerationTerminalStatuses = new Set(["completed", "failed", "cancelled"]);
@@ -533,8 +543,26 @@ function isLocalNotebookId(notebookId) {
   return String(notebookId ?? "").startsWith(localNotebookPrefix);
 }
 
+function isSharedNotebookId(notebookId) {
+  return String(notebookId ?? "").startsWith(sharedNotebookPrefix);
+}
+
 function createCellId() {
   return `${localCellPrefix}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function workbenchClientId() {
+  try {
+    let clientId = window.localStorage.getItem(workbenchClientIdStorageKey);
+    if (clientId) {
+      return clientId;
+    }
+    clientId = `client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    window.localStorage.setItem(workbenchClientIdStorageKey, clientId);
+    return clientId;
+  } catch (_error) {
+    return `client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
 }
 
 function readLastNotebookId() {
@@ -955,6 +983,13 @@ function parseDefaultTags(value) {
   return normalizeTags(String(value).split("||"));
 }
 
+function parseBooleanDatasetValue(value, fallback = false) {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+  return String(value).trim().toLowerCase() === "true";
+}
+
 function readSourceOptions() {
   const node = document.getElementById("source-options");
   if (!node?.textContent) {
@@ -1220,6 +1255,7 @@ function readNotebookDefaults(notebookId) {
   const metaCells = parseCellsPayload(metaRoot?.dataset.defaultCells);
   const linkCells = parseCellsPayload(link?.dataset.defaultNotebookCells);
   const metaVersions = parseVersionsPayload(metaRoot?.dataset.defaultVersions);
+  const linkVersions = parseVersionsPayload(link?.dataset.defaultNotebookVersions);
   const metaDataSources = parseDefaultDataSources(metaRoot?.dataset.defaultDataSources);
   const linkDataSources = parseDefaultDataSources(link?.dataset.defaultNotebookDataSources);
   const legacyDataSource = sourceIdFromLegacyTargetLabel(
@@ -1257,6 +1293,12 @@ function readNotebookDefaults(notebookId) {
       link?.dataset.defaultNotebookSummary ??
       link?.dataset.notebookSummary ??
       "",
+    createdAt:
+      metaRoot?.dataset.defaultCreatedAt ??
+      metaRoot?.dataset.createdAt ??
+      link?.dataset.createdAt ??
+      new Date().toISOString(),
+    linkedGeneratorId: metaRoot?.dataset.linkedGeneratorId ?? "",
     cells: normalizeNotebookCells(metaCells.length ? metaCells : linkCells, {
       dataSources: fallbackDataSources,
       sql: legacySql,
@@ -1264,8 +1306,12 @@ function readNotebookDefaults(notebookId) {
     tags: metaTags.length ? metaTags : linkTags.length ? linkTags : domTags,
     canEdit: (metaRoot?.dataset.canEdit ?? link?.dataset.canEdit ?? "true") !== "false",
     canDelete: (metaRoot?.dataset.canDelete ?? link?.dataset.canDelete ?? "true") !== "false",
+    shared: parseBooleanDatasetValue(
+      metaRoot?.dataset.defaultShared ?? metaRoot?.dataset.shared ?? link?.dataset.defaultNotebookShared ?? link?.dataset.shared,
+      false
+    ),
     deleted: false,
-    versions: metaVersions,
+    versions: metaVersions.length ? metaVersions : linkVersions,
   };
   if (!defaults.versions.length) {
     defaults.versions = [createInitialNotebookVersion(notebookId, defaults)];
@@ -1348,6 +1394,12 @@ function normalizeStoredNotebookState(storedState) {
                   : [],
               sql: typeof storedState.sql === "string" ? storedState.sql : "",
             })
+          : undefined,
+    shared:
+      storedState.shared === true
+        ? true
+        : storedState.shared === false
+          ? false
           : undefined,
     deleted: storedState.deleted === true,
     versions: sortVersionsDescending(
@@ -2266,7 +2318,7 @@ function dataGenerationJobCardMarkup(job) {
           }
           ${
             job.canCleanup
-              ? `<button type="button" class="ingestion-job-clean" data-cleanup-data-generation-job="${escapeHtml(job.jobId)}">Clean data</button>`
+              ? `<button type="button" class="ingestion-job-clean" data-cleanup-data-generation-job="${escapeHtml(job.jobId)}">Clean loader data</button>`
               : ""
           }
         </div>
@@ -2476,7 +2528,8 @@ function renderIngestionWorkbench() {
     if (!selectedGenerator) {
       jobList.innerHTML = '<p class="ingestion-empty">Select a runbook from the left navigation.</p>';
     } else if (!visibleJobs.length) {
-      jobList.innerHTML = '<p class="ingestion-empty">No data generation jobs for this runbook yet.</p>';
+      jobList.innerHTML =
+        '<p class="ingestion-empty">No data generation jobs for this runbook yet. Run the loader first, then clean its output from the completed job card.</p>';
     } else {
       jobList.innerHTML = visibleJobs.map((job) => dataGenerationJobCardMarkup(job)).join("");
     }
@@ -2632,7 +2685,6 @@ function captureSidebarState() {
       (node) => node.dataset.runbookFolderId || ""
     ),
     dataSourcesSectionOpen: Boolean(dataSourcesSection()?.open),
-    ingestionCleanupSectionOpen: Boolean(document.querySelector("[data-ingestion-cleanup-section]")?.open),
     generationMonitorSectionOpen: Boolean(document.querySelector("[data-generation-monitor-section]")?.open),
     queryMonitorSectionOpen: Boolean(document.querySelector("[data-query-monitor-section]")?.open),
     sourceCatalogsOpen: Array.from(document.querySelectorAll("[data-source-catalog][open]")).map(
@@ -2677,11 +2729,6 @@ function restoreSidebarState(state) {
   const dataSourcesRoot = dataSourcesSection();
   if (dataSourcesRoot) {
     dataSourcesRoot.open = Boolean(state.dataSourcesSectionOpen);
-  }
-
-  const ingestionCleanupSectionRoot = document.querySelector("[data-ingestion-cleanup-section]");
-  if (ingestionCleanupSectionRoot && stateSidebarMode === "ingestion" && sidebarMode === "ingestion") {
-    ingestionCleanupSectionRoot.open = Boolean(state.ingestionCleanupSectionOpen);
   }
 
   const generationMonitorSectionRoot = document.querySelector("[data-generation-monitor-section]");
@@ -4254,7 +4301,7 @@ function buildCellMarkup(notebookId, cell, index, canEdit, totalCells) {
           </div>
         </div>
         <div class="editor-frame" data-editor-root data-editor-name="sql-${escapeHtml(cell.cellId)}">
-          <textarea name="sql" data-editor-source data-default-sql="${escapeHtml(cell.sql)}" rows="3" spellcheck="false">${escapeHtml(cell.sql)}</textarea>
+          <textarea name="sql" data-editor-source data-default-sql="${escapeHtml(cell.sql)}" rows="${initialSqlEditorRows}" spellcheck="false">${escapeHtml(cell.sql)}</textarea>
         </div>
       </form>
       ${emptyQueryResultsMarkup(cell.cellId)}
@@ -4295,10 +4342,14 @@ function buildWorkspaceMarkup(notebookId, metadata) {
       data-workspace-notebook
       data-notebook-meta
       data-notebook-id="${escapeHtml(notebookId)}"
+      data-created-at="${escapeHtml(metadata.createdAt || new Date().toISOString())}"
+      data-shared="${metadata.shared ? "true" : "false"}"
       data-can-edit="true"
       data-can-delete="true"
       data-default-title="${escapeHtml(metadata.title)}"
       data-default-summary="${escapeHtml(metadata.summary)}"
+      data-default-created-at="${escapeHtml(metadata.createdAt || new Date().toISOString())}"
+      data-linked-generator-id="${escapeHtml(metadata.linkedGeneratorId || "")}"
       data-default-cells='${escapeHtml(JSON.stringify((metadata.cells ?? []).map((cell) => ({
         cellId: cell.cellId,
         dataSources: normalizeDataSources(cell.dataSources),
@@ -4317,6 +4368,7 @@ function buildWorkspaceMarkup(notebookId, metadata) {
         })),
       }))))}'
       data-default-tags="${escapeHtml(metadata.tags.join("||"))}"
+      data-default-shared="${metadata.shared ? "true" : "false"}"
     >
       <header class="workspace-header">
         <div class="workspace-title-block">
@@ -4328,6 +4380,20 @@ function buildWorkspaceMarkup(notebookId, metadata) {
             <textarea class="workspace-summary-input" data-summary-input rows="3" placeholder="Notebook description">${escapeHtml(metadata.summary)}</textarea>
           </div>
           <div class="workspace-header-tags">
+            <button
+              type="button"
+              class="workspace-sharing-toggle${metadata.shared ? " is-on" : ""}"
+              data-notebook-shared-toggle
+              aria-pressed="${metadata.shared ? "true" : "false"}"
+            >
+              <span class="workspace-sharing-toggle-switch" aria-hidden="true">
+                <span class="workspace-sharing-toggle-thumb"></span>
+              </span>
+              <span class="workspace-sharing-toggle-copy">
+                Shared with all users
+                <small>Stores this notebook on the server and announces it to connected users.</small>
+              </span>
+            </button>
             <div class="workspace-tag-toolbar">
               <div class="workspace-tag-list" data-tag-list>${tagsMarkup}</div>
               <button type="button" class="workspace-tag-badge workspace-tag-badge-add" data-tag-toggle title="Add tag" aria-label="Add tag">+</button>
@@ -4381,14 +4447,16 @@ function buildWorkspaceMarkup(notebookId, metadata) {
 
 function createNotebookLinkElement(notebookId, metadata) {
   const link = document.createElement("a");
-  link.href = "#";
+  link.href = notebookUrl(notebookId) || "#";
   link.className = "notebook-link notebook-tree-leaf";
   link.dataset.notebookId = notebookId;
   link.dataset.notebookTitle = metadata.title;
   link.dataset.notebookSummary = metadata.summary;
+  link.dataset.createdAt = metadata.createdAt || new Date().toISOString();
   link.dataset.notebookDataSources = normalizeDataSources(metadata.dataSources).join("||");
   link.dataset.defaultNotebookTitle = metadata.title;
   link.dataset.defaultNotebookSummary = metadata.summary;
+  link.dataset.defaultNotebookVersions = JSON.stringify(metadata.versions ?? []);
   link.dataset.defaultNotebookCells = JSON.stringify(
     (metadata.cells ?? []).map((cell) => ({
       cellId: cell.cellId,
@@ -4398,6 +4466,8 @@ function createNotebookLinkElement(notebookId, metadata) {
   );
   link.dataset.defaultNotebookDataSources = normalizeDataSources(metadata.dataSources).join("||");
   link.dataset.defaultNotebookTags = metadata.tags.join("||");
+  link.dataset.shared = metadata.shared ? "true" : "false";
+  link.dataset.defaultNotebookShared = metadata.shared ? "true" : "false";
   link.dataset.canEdit = metadata.canEdit ? "true" : "false";
   link.dataset.canDelete = metadata.canDelete ? "true" : "false";
   link.dataset.draggableNotebook = "";
@@ -4409,6 +4479,14 @@ function createNotebookLinkElement(notebookId, metadata) {
   const title = document.createElement("span");
   title.className = "notebook-title";
   title.textContent = metadata.title;
+  titleRow.append(title);
+
+  if (metadata.shared) {
+    const sharedBadge = document.createElement("small");
+    sharedBadge.className = "notebook-sharing-pill";
+    sharedBadge.textContent = "Shared";
+    titleRow.append(sharedBadge);
+  }
 
   const tools = document.createElement("span");
   tools.className = "notebook-item-tools";
@@ -4450,7 +4528,7 @@ function createNotebookLinkElement(notebookId, metadata) {
   deleteButton.disabled = !metadata.canDelete;
 
   tools.append(renameButton, editButton, deleteButton);
-  titleRow.append(title, tools);
+  titleRow.append(tools);
   link.append(titleRow);
 
   const summary = document.createElement("span");
@@ -4488,12 +4566,16 @@ function notebookMetadata(notebookId) {
       cells: readOnlyMetadata.cells,
       deleted: false,
       versions: readOnlyMetadata.versions,
+      shared: defaults.shared,
     }));
 
     return readOnlyMetadata;
   }
 
-  const storedState = normalizeStoredNotebookState(readStoredNotebookMetadata()[notebookId]);
+  const sharedDraftState = defaults.shared ? normalizeStoredNotebookState(sharedNotebookDrafts.get(notebookId)) : {};
+  const storedState = defaults.shared
+    ? sharedDraftState
+    : normalizeStoredNotebookState(readStoredNotebookMetadata()[notebookId]);
   const cells = normalizeNotebookCells(storedState.cells ?? defaults.cells);
   const resolvedTitle = normalizeNotebookTitleValue(storedState.title, defaults.title);
   const resolvedSummary = normalizeNotebookSummaryValue(storedState.summary, defaults.summary);
@@ -4502,10 +4584,13 @@ function notebookMetadata(notebookId) {
     notebookId,
     title: resolvedTitle,
     summary: resolvedSummary,
+    createdAt: defaults.createdAt,
+    linkedGeneratorId: defaults.linkedGeneratorId,
     cells,
     dataSources: notebookSourceIds({ cells }),
     tags: normalizeTags(storedState.tags ?? defaults.tags),
     sql: cells[0]?.sql ?? "",
+    shared: storedState.shared ?? defaults.shared,
     deleted: storedState.deleted ?? defaults.deleted,
   };
   let versionsRepaired = false;
@@ -4536,6 +4621,7 @@ function notebookMetadata(notebookId) {
       summary: normalizeNotebookSummaryValue(currentState.summary, baseMetadata.summary),
       tags: currentState.tags ?? baseMetadata.tags,
       cells: currentState.cells ?? baseMetadata.cells,
+      shared: currentState.shared ?? baseMetadata.shared,
       deleted: currentState.deleted ?? baseMetadata.deleted,
       versions,
     }));
@@ -4548,11 +4634,19 @@ function notebookMetadata(notebookId) {
 }
 
 function updateStoredNotebookState(notebookId, updater) {
-  const state = readStoredNotebookMetadata();
-  const currentState = normalizeStoredNotebookState(state[notebookId]);
+  const defaults = readNotebookDefaults(notebookId);
+  const usingSharedDrafts = defaults.shared === true || sharedNotebookDrafts.has(notebookId);
+  const state = usingSharedDrafts ? null : readStoredNotebookMetadata();
+  const currentState = usingSharedDrafts
+    ? normalizeStoredNotebookState(sharedNotebookDrafts.get(notebookId))
+    : normalizeStoredNotebookState(state?.[notebookId]);
   const nextState = normalizeStoredNotebookState(updater({ ...currentState }));
-  state[notebookId] = nextState;
-  writeStoredNotebookMetadata(state);
+  if (usingSharedDrafts) {
+    sharedNotebookDrafts.set(notebookId, nextState);
+  } else if (state) {
+    state[notebookId] = nextState;
+    writeStoredNotebookMetadata(state);
+  }
   return nextState;
 }
 
@@ -4587,6 +4681,192 @@ function createNotebookVersionSnapshot(metadata) {
       sql: cell.sql,
     })),
   };
+}
+
+function notebookTreePathForId(notebookId) {
+  const link = notebookLinks(notebookId)[0];
+  const path = notebookDefaultFolderPath(link);
+  return path.length ? path : ["Shared Notebooks"];
+}
+
+function sharedNotebookPayload(notebookId) {
+  const metadata = notebookMetadata(notebookId);
+  return {
+    notebookId: isSharedNotebookId(notebookId) ? notebookId : null,
+    title: metadata.title,
+    summary: metadata.summary,
+    tags: normalizeTags(metadata.tags),
+    treePath: notebookTreePathForId(notebookId),
+    linkedGeneratorId: metadata.linkedGeneratorId || "",
+    createdAt: metadata.createdAt || new Date().toISOString(),
+    cells: (metadata.cells ?? []).map((cell) => ({
+      cellId: cell.cellId,
+      sql: cell.sql,
+      dataSources: normalizeDataSources(cell.dataSources),
+    })),
+    versions: (metadata.versions ?? []).map((version) => ({
+      versionId: version.versionId,
+      createdAt: version.createdAt,
+      title: version.title,
+      summary: version.summary,
+      tags: normalizeTags(version.tags),
+      cells: normalizeNotebookCells(version.cells).map((cell) => ({
+        cellId: cell.cellId,
+        sql: cell.sql,
+        dataSources: normalizeDataSources(cell.dataSources),
+      })),
+    })),
+  };
+}
+
+function removeNotebookFromStoredTreeState(notebookId) {
+  const currentTree = readStoredNotebookTree();
+  if (!currentTree) {
+    return;
+  }
+
+  const removal = removeNotebookFromStoredTree(currentTree, notebookId);
+  if (!removal.changed) {
+    return;
+  }
+  writeStoredNotebookTree(removal.nodes);
+}
+
+function insertNotebookIntoStoredTreePath(notebookId, folderPath) {
+  const notebookNode = { type: "notebook", notebookId };
+  const currentTree = readStoredNotebookTree() ?? [];
+  const nextTree = Array.isArray(folderPath) && folderPath.length
+    ? insertNotebookIntoStoredFolderPath(currentTree, notebookNode, folderPath)
+    : { state: [...currentTree, notebookNode], changed: true };
+  writeStoredNotebookTree(nextTree.state);
+}
+
+async function syncSharedNotebookNow(notebookId) {
+  if (!notebookId || !notebookMetadata(notebookId).shared) {
+    return null;
+  }
+
+  const response = await window.fetch("/api/notebooks/shared", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-Workbench-Client-Id": workbenchClientId(),
+    },
+    body: JSON.stringify(sharedNotebookPayload(notebookId)),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to sync shared notebook ${notebookId}: ${response.status}`);
+  }
+
+  const payload = await response.json();
+  const sharedNotebook = payload?.notebook;
+  if (!sharedNotebook?.notebookId) {
+    return payload;
+  }
+
+  sharedNotebookDrafts.delete(sharedNotebook.notebookId);
+  return payload;
+}
+
+function scheduleSharedNotebookSync(notebookId, delayMs = 450) {
+  if (!notebookId || !notebookMetadata(notebookId).shared) {
+    return;
+  }
+
+  const existingHandle = sharedNotebookSyncHandles.get(notebookId);
+  if (existingHandle) {
+    window.clearTimeout(existingHandle);
+  }
+
+  const handle = window.setTimeout(() => {
+    sharedNotebookSyncHandles.delete(notebookId);
+    syncSharedNotebookNow(notebookId).catch((error) => {
+      console.error("Failed to sync shared notebook.", error);
+    });
+  }, delayMs);
+  sharedNotebookSyncHandles.set(notebookId, handle);
+}
+
+async function shareNotebook(notebookId) {
+  const response = await window.fetch("/api/notebooks/shared", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-Workbench-Client-Id": workbenchClientId(),
+    },
+    body: JSON.stringify(sharedNotebookPayload(notebookId)),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to share notebook ${notebookId}: ${response.status}`);
+  }
+
+  const payload = await response.json();
+  const sharedNotebookId = payload?.notebook?.notebookId;
+  if (!sharedNotebookId) {
+    throw new Error("The server did not return a shared notebook identifier.");
+  }
+
+  const treePath = notebookTreePathForId(notebookId);
+  if (isLocalNotebookId(notebookId)) {
+    removeNotebookFromStoredTreeState(notebookId);
+    deleteStoredNotebookState(notebookId);
+  }
+
+  await refreshSidebar(currentWorkspaceMode());
+  await loadNotebookWorkspace(sharedNotebookId);
+  pushNotebookHistory(sharedNotebookId);
+  revealNotebookLink(sharedNotebookId);
+  insertNotebookIntoStoredTreePath(sharedNotebookId, treePath);
+  persistNotebookTree();
+  return payload;
+}
+
+async function unshareNotebook(notebookId) {
+  const metadata = notebookMetadata(notebookId);
+  const folderPath = notebookTreePathForId(notebookId);
+  const localNotebookId = `${localNotebookPrefix}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  const localMetadata = {
+    title: metadata.title,
+    summary: metadata.summary,
+    tags: normalizeTags(metadata.tags),
+    cells: normalizeNotebookCells(metadata.cells),
+    canEdit: true,
+    canDelete: true,
+    shared: false,
+    deleted: false,
+    versions: (metadata.versions ?? []).map((version) => ({
+      versionId: version.versionId,
+      createdAt: version.createdAt,
+      title: version.title,
+      summary: version.summary,
+      tags: normalizeTags(version.tags),
+      cells: normalizeNotebookCells(version.cells),
+    })),
+  };
+
+  persistNotebookDraft(localNotebookId, localMetadata);
+  insertNotebookIntoStoredTreePath(localNotebookId, folderPath);
+
+  const response = await window.fetch(`/api/notebooks/shared/${encodeURIComponent(notebookId)}`, {
+    method: "DELETE",
+    headers: {
+      Accept: "application/json",
+      "X-Workbench-Client-Id": workbenchClientId(),
+    },
+  });
+  if (!response.ok) {
+    deleteStoredNotebookState(localNotebookId);
+    throw new Error(`Failed to unshare notebook ${notebookId}: ${response.status}`);
+  }
+
+  deleteStoredNotebookState(notebookId);
+  await refreshSidebar(currentWorkspaceMode());
+  await loadNotebookWorkspace(localNotebookId);
+  revealNotebookLink(localNotebookId);
+  persistNotebookTree();
+  return localNotebookId;
 }
 
 function formatVersionTimestamp(value) {
@@ -4742,6 +5022,8 @@ function updateSidebarNotebookLink(link, metadata) {
   link.dataset.notebookTitle = metadata.title;
   link.dataset.notebookSummary = metadata.summary;
   link.dataset.notebookDataSources = normalizeDataSources(metadata.dataSources).join("||");
+  link.dataset.shared = metadata.shared ? "true" : "false";
+  link.dataset.defaultNotebookShared = metadata.shared ? "true" : "false";
   link.dataset.defaultNotebookCells = JSON.stringify(
     (metadata.cells ?? []).map((cell) => ({
       cellId: cell.cellId,
@@ -4753,6 +5035,17 @@ function updateSidebarNotebookLink(link, metadata) {
   const titleNode = link.querySelector(".notebook-title");
   if (titleNode) {
     titleNode.textContent = metadata.title;
+  }
+
+  let sharedBadge = link.querySelector(".notebook-sharing-pill");
+  if (metadata.shared && !sharedBadge) {
+    sharedBadge = document.createElement("small");
+    sharedBadge.className = "notebook-sharing-pill";
+    sharedBadge.textContent = "Shared";
+    titleNode?.after(sharedBadge);
+  }
+  if (!metadata.shared && sharedBadge) {
+    sharedBadge.remove();
   }
 
   const summaryNode = link.querySelector(".notebook-summary");
@@ -4795,6 +5088,7 @@ function setNotebookTitle(notebookId, title) {
   persistNotebookDraft(notebookId, { title });
   applyNotebookMetadata();
   recordNotebookActivity(notebookId, "edited");
+  scheduleSharedNotebookSync(notebookId);
 }
 
 function setNotebookSummary(notebookId, summary) {
@@ -4809,6 +5103,7 @@ function setNotebookSummary(notebookId, summary) {
   }
   applySidebarSearchFilter();
   recordNotebookActivity(notebookId, "edited");
+  scheduleSharedNotebookSync(notebookId);
 }
 
 function createEmptyCellState(initial = {}) {
@@ -4841,11 +5136,13 @@ function setNotebookCells(notebookId, cells, options = {}) {
 
   if (options.rerender && isLocalNotebookId(notebookId)) {
     renderLocalNotebookWorkspace(notebookId);
+    scheduleSharedNotebookSync(notebookId);
     return metadata;
   }
 
   applyNotebookMetadata();
   applySidebarSearchFilter();
+  scheduleSharedNotebookSync(notebookId);
   return metadata;
 }
 
@@ -4853,6 +5150,7 @@ function setNotebookTags(notebookId, tags) {
   persistNotebookDraft(notebookId, { tags: normalizeTags(tags) });
   applyNotebookMetadata();
   recordNotebookActivity(notebookId, "edited");
+  scheduleSharedNotebookSync(notebookId);
 }
 
 function setCellDataSources(notebookId, cellId, dataSources) {
@@ -4876,6 +5174,7 @@ function setCellDataSources(notebookId, cellId, dataSources) {
   applyNotebookMetadata();
   applySidebarSearchFilter();
   recordNotebookActivity(notebookId, "edited");
+  scheduleSharedNotebookSync(notebookId);
 }
 
 function setCellSql(notebookId, cellId, sqlText) {
@@ -4894,6 +5193,7 @@ function setCellSql(notebookId, cellId, sqlText) {
     };
   });
   recordNotebookActivity(notebookId, "edited");
+  scheduleSharedNotebookSync(notebookId);
 }
 
 function saveNotebookVersion(notebookId) {
@@ -4908,6 +5208,7 @@ function saveNotebookVersion(notebookId) {
     versions: [version, ...(currentState.versions ?? [])],
   }));
   applyNotebookMetadata();
+  scheduleSharedNotebookSync(notebookId);
 }
 
 async function loadNotebookVersion(notebookId, versionId) {
@@ -4934,10 +5235,12 @@ async function loadNotebookVersion(notebookId, versionId) {
   });
   if (isLocalNotebookId(notebookId)) {
     renderLocalNotebookWorkspace(notebookId);
+    scheduleSharedNotebookSync(notebookId);
     return;
   }
 
   applyNotebookMetadata();
+  scheduleSharedNotebookSync(notebookId);
 }
 
 function addCell(notebookId, afterCellId = null) {
@@ -5036,20 +5339,10 @@ function defaultEditorSql(textarea) {
   return textarea.defaultValue ?? textarea.dataset.defaultSql ?? "";
 }
 
-function shouldExpandEditorToFullContent(root, currentValue = null) {
-  const textarea = root?.querySelector?.("[data-editor-source]");
-  if (!(textarea instanceof HTMLTextAreaElement)) {
-    return false;
-  }
-
-  const baselineSql = defaultEditorSql(textarea);
-  const nextValue = currentValue ?? textarea.value ?? "";
-  return Boolean(baselineSql) && nextValue === baselineSql;
-}
-
 function editorHeightMetrics(root) {
   const textarea = root.querySelector("[data-editor-source]");
   const editor = editorRegistry.get(root);
+  const sizingState = editorSizingState(root);
   if (editor) {
     const editorStyles = window.getComputedStyle(editor.dom);
     const scroller = editor.dom.querySelector(".cm-scroller");
@@ -5065,11 +5358,13 @@ function editorHeightMetrics(root) {
     const scrollerPadding =
       numericCssValue(scrollerStyles, "paddingTop") +
       numericCssValue(scrollerStyles, "paddingBottom");
-    const minHeight = Math.ceil(lineHeight * 3 + scrollerPadding + borderHeight);
+    const minHeight = Math.ceil(lineHeight * initialSqlEditorRows + scrollerPadding + borderHeight);
     const contentHeight = Math.ceil((scroller?.scrollHeight ?? editor.dom.scrollHeight) + borderHeight);
-    const maxAutoHeight = shouldExpandEditorToFullContent(root, editor.state.doc.toString())
-      ? contentHeight
-      : Math.ceil(lineHeight * 10 + scrollerPadding + borderHeight);
+    const maxAutoHeight = Math.ceil(
+      lineHeight * (sizingState.interacted ? defaultSqlEditorAutoRows : initialSqlEditorRows) +
+      scrollerPadding +
+      borderHeight
+    );
     return {
       minHeight,
       nextHeight: Math.max(minHeight, Math.min(contentHeight, maxAutoHeight)),
@@ -5087,15 +5382,15 @@ function editorHeightMetrics(root) {
     numericCssValue(styles, "paddingBottom") +
     numericCssValue(styles, "borderTopWidth") +
     numericCssValue(styles, "borderBottomWidth");
-  const minHeight = Math.ceil(lineHeight * 3 + chromeHeight);
+  const minHeight = Math.ceil(lineHeight * initialSqlEditorRows + chromeHeight);
 
   const previousHeight = textarea.style.height;
   textarea.style.height = "auto";
   const contentHeight = Math.ceil(textarea.scrollHeight);
   textarea.style.height = previousHeight;
-  const maxAutoHeight = shouldExpandEditorToFullContent(root)
-    ? contentHeight
-    : Math.ceil(lineHeight * 10 + chromeHeight);
+  const maxAutoHeight = Math.ceil(
+    lineHeight * (sizingState.interacted ? defaultSqlEditorAutoRows : initialSqlEditorRows) + chromeHeight
+  );
 
   return {
     minHeight,
@@ -5109,6 +5404,7 @@ function editorSizingState(root) {
     state = {
       applying: false,
       autoHeight: 0,
+      interacted: false,
       manual: false,
       observer: null,
     };
@@ -5192,6 +5488,9 @@ function createEditor(root) {
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             textarea.value = update.state.doc.toString();
+            if (!applyingNotebookState) {
+              editorSizingState(root).interacted = true;
+            }
             autosizeEditor(root);
             const workspaceRoot = root.closest("[data-workspace-notebook]") ?? root;
             const notebookId = workspaceNotebookId(workspaceRoot);
@@ -5762,6 +6061,10 @@ function workspaceCellIds(workspaceRoot) {
 
 function applyWorkspaceMetadata(metaRoot, metadata) {
   const workspaceRoot = metaRoot.closest("[data-workspace-notebook]");
+  metaRoot.dataset.shared = metadata.shared ? "true" : "false";
+  if (workspaceRoot) {
+    workspaceRoot.dataset.shared = metadata.shared ? "true" : "false";
+  }
   metaRoot.dataset.canEdit = metadata.canEdit ? "true" : "false";
   metaRoot.dataset.canDelete = metadata.canDelete ? "true" : "false";
   metaRoot.dataset.defaultCells = JSON.stringify(
@@ -5815,6 +6118,13 @@ function applyWorkspaceMetadata(metaRoot, metadata) {
   if (!metadata.canEdit) {
     workspaceRoot?.querySelector("[data-summary-container]")?.classList.remove("is-editing");
     setTagControlsOpen(metaRoot, false);
+  }
+
+  const sharedToggle = metaRoot.querySelector("[data-notebook-shared-toggle]");
+  if (sharedToggle) {
+    sharedToggle.classList.toggle("is-on", metadata.shared === true);
+    sharedToggle.setAttribute("aria-pressed", metadata.shared === true ? "true" : "false");
+    sharedToggle.disabled = !metadata.canEdit && metadata.shared !== true;
   }
 
   syncWorkspaceActionButton(workspaceRoot?.querySelector("[data-rename-notebook]"), {
@@ -6007,10 +6317,36 @@ async function deleteNotebook(notebookId) {
 
   const { confirmed } = await showConfirmDialog({
     title: "Delete notebook",
-    copy: `Delete "${metadata.title}" from this browser workspace?`,
+    copy: metadata.shared
+      ? `Delete shared notebook "${metadata.title}" for all connected users?`
+      : `Delete "${metadata.title}" from this browser workspace?`,
     confirmLabel: "Delete notebook",
   });
   if (!confirmed) {
+    return;
+  }
+
+  if (metadata.shared) {
+    const response = await window.fetch(`/api/notebooks/shared/${encodeURIComponent(notebookId)}`, {
+      method: "DELETE",
+      headers: {
+        Accept: "application/json",
+        "X-Workbench-Client-Id": workbenchClientId(),
+      },
+    });
+    if (!response.ok) {
+      throw new Error(`Failed to delete shared notebook ${notebookId}: ${response.status}`);
+    }
+    removeNotebookFromStoredTreeState(notebookId);
+    deleteStoredNotebookState(notebookId);
+    await refreshSidebar(currentWorkspaceMode());
+    const fallbackNotebookId = nextVisibleNotebookId(notebookId);
+    if (!fallbackNotebookId) {
+      renderEmptyWorkspace();
+      writeLastNotebookId("");
+      return;
+    }
+    await loadNotebookWorkspace(fallbackNotebookId);
     return;
   }
 
@@ -6694,6 +7030,14 @@ function deleteStoredNotebookState(notebookId) {
     return;
   }
 
+  sharedNotebookDrafts.delete(notebookId);
+  removeNotebookFromStoredTreeState(notebookId);
+  const pendingSync = sharedNotebookSyncHandles.get(notebookId);
+  if (pendingSync) {
+    window.clearTimeout(pendingSync);
+    sharedNotebookSyncHandles.delete(notebookId);
+  }
+
   const state = readStoredNotebookMetadata();
   if (!(notebookId in state)) {
     return;
@@ -7244,6 +7588,79 @@ async function loadDataSourceEventsState() {
   applyDataSourceEventsState(await response.json());
 }
 
+async function applyNotebookEvent(eventPayload) {
+  if (!eventPayload || typeof eventPayload !== "object") {
+    return;
+  }
+
+  if (String(eventPayload.originClientId || "").trim() === workbenchClientId()) {
+    return;
+  }
+
+  const notebookId = String(eventPayload.notebookId || "").trim();
+  if (!notebookId) {
+    return;
+  }
+
+  sharedNotebookDrafts.delete(notebookId);
+  const mode = currentWorkspaceMode();
+  const activeNotebookId = currentWorkspaceNotebookId();
+
+  await refreshSidebar(mode);
+
+  if (eventPayload.eventType === "deleted" && activeNotebookId === notebookId) {
+    const fallbackNotebookId = visibleNotebookLinks()[0]?.dataset.notebookId ?? "";
+    if (fallbackNotebookId) {
+      writeLastNotebookId(fallbackNotebookId);
+      await loadNotebookWorkspace(fallbackNotebookId);
+    } else {
+      writeLastNotebookId("");
+      renderEmptyWorkspace();
+    }
+    return;
+  }
+
+  if (eventPayload.eventType === "deleted" && readLastNotebookId() === notebookId) {
+    writeLastNotebookId(visibleNotebookLinks()[0]?.dataset.notebookId ?? "");
+  }
+
+  if (mode === "notebook" && activeNotebookId === notebookId && eventPayload.eventType === "updated") {
+    await loadNotebookWorkspace(notebookId);
+  }
+}
+
+function applyNotebookEventsState(snapshot) {
+  notebookEventsStateVersion = Number(snapshot?.version || 0);
+  const events = Array.isArray(snapshot?.events) ? snapshot.events : [];
+  const unseenEvents = events.filter((event) => {
+    const eventId = String(event?.eventId || "").trim();
+    if (!eventId || processedNotebookEventIds.has(eventId)) {
+      return false;
+    }
+    processedNotebookEventIds.add(eventId);
+    return true;
+  });
+
+  while (processedNotebookEventIds.size > 120) {
+    const oldestId = processedNotebookEventIds.values().next().value;
+    if (!oldestId) {
+      break;
+    }
+    processedNotebookEventIds.delete(oldestId);
+  }
+
+  if (!notebookEventsLoaded) {
+    notebookEventsLoaded = true;
+    return;
+  }
+
+  unseenEvents.forEach((eventPayload) => {
+    applyNotebookEvent(eventPayload).catch((error) => {
+      console.error("Failed to apply notebook event.", error);
+    });
+  });
+}
+
 async function openQueryWorkbench(notebookId = "") {
   applyWorkbenchTitle("notebook");
 
@@ -7327,6 +7744,25 @@ function ensureQueryJobsEventSource() {
     }
   };
   queryJobsEventSource = eventSource;
+}
+
+function ensureNotebookEventsEventSource() {
+  if (notebookEventsEventSource || typeof window.EventSource !== "function") {
+    return;
+  }
+
+  const eventSource = new window.EventSource("/api/notebooks/stream");
+  eventSource.addEventListener("notebooks", (event) => {
+    try {
+      applyNotebookEventsState(JSON.parse(event.data));
+    } catch (error) {
+      console.error("Failed to parse notebook event.", error);
+    }
+  });
+  eventSource.onerror = () => {
+    // Let the browser reconnect automatically.
+  };
+  notebookEventsEventSource = eventSource;
 }
 
 async function openIngestionWorkbench({ focusJobId = "", focusGeneratorId = "" } = {}) {
@@ -7496,44 +7932,6 @@ async function cleanupDataGenerationJob(jobId) {
   refreshSidebar().catch((error) => {
     console.error("Failed to refresh the sidebar after cleanup.", error);
   });
-}
-
-async function runIngestionCleanup(targetId) {
-  if (!targetId) {
-    return;
-  }
-
-  const response = await window.fetch(`/api/ingestion-cleanup/${encodeURIComponent(targetId)}`, {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-    },
-  });
-
-  if (!response.ok) {
-    let message = "The ingestion target could not be cleaned.";
-    try {
-      const payload = await response.json();
-      message = payload?.detail || message;
-    } catch (_error) {
-      // Ignore invalid JSON bodies.
-    }
-    await showMessageDialog({
-      title: "Environment cleanup failed",
-      copy: message,
-    });
-    return;
-  }
-
-  const payload = await response.json();
-  await Promise.allSettled([refreshSidebar(), loadDataGenerationJobsState()]);
-  renderQueryNotificationMenu();
-  if (payload?.message) {
-    await showMessageDialog({
-      title: "Environment cleanup complete",
-      copy: payload.message,
-    });
-  }
 }
 
 async function openNotebookForQueryJob(notebookId, cellId = "") {
@@ -7759,6 +8157,9 @@ async function loadNotebookWorkspace(notebookId) {
   }
 
   panel.innerHTML = workspaceMarkup;
+  if (panel.querySelector(`[data-notebook-meta][data-notebook-id="${CSS.escape(notebookId)}"][data-shared="true"]`)) {
+    sharedNotebookDrafts.delete(notebookId);
+  }
   processHtmx(panel);
   initializeEditors(panel);
   applyNotebookMetadata();
@@ -7932,25 +8333,6 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
-  const runIngestionCleanupButton = event.target.closest("[data-run-ingestion-cleanup]");
-  if (runIngestionCleanupButton) {
-    event.preventDefault();
-    const targetTitle = runIngestionCleanupButton.dataset.cleanupTargetTitle || "Environment cleanup";
-    const confirmCopy =
-      runIngestionCleanupButton.dataset.cleanupTargetCopy ||
-      "Clean the selected ingestion target? This cannot be undone.";
-    const { confirmed } = await showConfirmDialog({
-      title: targetTitle,
-      copy: confirmCopy,
-      confirmLabel: "Clean target",
-    });
-    if (!confirmed) {
-      return;
-    }
-    await runIngestionCleanup(runIngestionCleanupButton.dataset.runIngestionCleanup || "");
-    return;
-  }
-
   const createNotebookButton = event.target.closest("[data-create-notebook]");
   if (createNotebookButton) {
     event.preventDefault();
@@ -7992,9 +8374,9 @@ document.body.addEventListener("click", async (event) => {
     const jobTitle =
       jobCard?.querySelector(".ingestion-job-copy h4")?.textContent?.trim() || "Generated data";
     const { confirmed } = await showConfirmDialog({
-      title: "Clean generated data",
-      copy: `Clean the generated data for ${jobTitle}? This keeps the target structure but removes the loaded data.`,
-      confirmLabel: "Clean data",
+      title: "Clean loader data",
+      copy: `Clean the generated loader data for ${jobTitle}? This keeps the target structure but removes the loaded data.`,
+      confirmLabel: "Clean loader data",
     });
     if (!confirmed) {
       return;
@@ -8609,6 +8991,34 @@ document.body.addEventListener("input", (event) => {
   }
 });
 
+document.body.addEventListener("click", (event) => {
+  const sharedToggle = event.target.closest("[data-notebook-shared-toggle]");
+  if (sharedToggle) {
+    const notebookId = workspaceNotebookId(sharedToggle.closest("[data-workspace-notebook]"));
+    if (!notebookId) {
+      return;
+    }
+
+    const nextSharedState = sharedToggle.getAttribute("aria-pressed") !== "true";
+    sharedToggle.classList.toggle("is-on", nextSharedState);
+    sharedToggle.setAttribute("aria-pressed", nextSharedState ? "true" : "false");
+    sharedToggle.disabled = true;
+    const action = nextSharedState ? shareNotebook(notebookId) : unshareNotebook(notebookId);
+    action.catch(async (error) => {
+      console.error("Failed to toggle shared notebook state.", error);
+      sharedToggle.classList.toggle("is-on", !nextSharedState);
+      sharedToggle.setAttribute("aria-pressed", !nextSharedState ? "true" : "false");
+      await showMessageDialog({
+        title: "Notebook sharing failed",
+        copy: "The notebook could not be updated for shared access.",
+      });
+    }).finally(() => {
+      sharedToggle.disabled = false;
+    });
+    return;
+  }
+});
+
 document.body.addEventListener("change", (event) => {
   const sourceOption = event.target.closest("[data-cell-source-option]");
   if (!sourceOption) {
@@ -8832,6 +9242,7 @@ restoreSelectedSourceObject();
 ensureDataGenerationEventSource();
 ensureDataSourceEventsEventSource();
 ensureQueryJobsEventSource();
+ensureNotebookEventsEventSource();
 const initialWorkspaceMode = currentWorkspaceMode();
 const initialLoadTasks = [
   loadQueryJobsState().catch((error) => {

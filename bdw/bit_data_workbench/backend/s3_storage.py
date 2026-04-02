@@ -3,10 +3,12 @@ from __future__ import annotations
 from collections.abc import Iterator
 import hashlib
 import re
+import time
 from urllib.parse import urlparse
 
 import boto3
 from botocore.config import Config
+from botocore.exceptions import ClientError
 
 from ..config import Settings
 
@@ -202,21 +204,72 @@ def parse_s3_url(path: str) -> tuple[str, str]:
     return parsed.netloc, parsed.path.lstrip("/")
 
 
-def ensure_s3_bucket(settings: Settings, bucket: str) -> bool:
-    client = s3_client(settings)
+def _s3_error_code(error: Exception) -> str | None:
+    if not isinstance(error, ClientError):
+        return None
+    code = error.response.get("Error", {}).get("Code")
+    if code is None:
+        return None
+    return str(code).strip()
+
+
+def _is_missing_bucket_error(error: Exception) -> bool:
+    code = _s3_error_code(error)
+    if code is None:
+        return False
+    return code in {"404", "NoSuchBucket", "NotFound"}
+
+
+def _bucket_is_accessible(client, bucket: str) -> bool:
     try:
-        existing_buckets = list_s3_buckets_from_client(client)
-    except Exception:
-        existing_buckets = []
-    if bucket in existing_buckets:
+        client.head_bucket(Bucket=bucket)
+        return True
+    except Exception as head_error:
+        try:
+            client.list_objects_v2(Bucket=bucket, MaxKeys=1)
+            return True
+        except Exception as list_error:
+            if _is_missing_bucket_error(head_error) or _is_missing_bucket_error(list_error):
+                return False
+            raise list_error from head_error
+
+
+def ensure_s3_bucket(
+    settings: Settings,
+    bucket: str,
+    *,
+    max_create_attempts: int = 4,
+    max_ready_attempts: int = 10,
+    base_delay_seconds: float = 0.2,
+) -> bool:
+    client = s3_client(settings)
+    if _bucket_is_accessible(client, bucket):
         return False
 
-    try:
-        client.create_bucket(Bucket=bucket)
-        return True
-    except Exception:
-        client.list_objects_v2(Bucket=bucket, MaxKeys=1)
-        return False
+    created = False
+    for create_attempt in range(max_create_attempts):
+        try:
+            client.create_bucket(Bucket=bucket)
+            created = True
+            break
+        except Exception as exc:
+            error_code = _s3_error_code(exc)
+            if error_code in {"BucketAlreadyExists", "BucketAlreadyOwnedByYou"}:
+                break
+            if error_code == "OperationAborted" and create_attempt + 1 < max_create_attempts:
+                time.sleep(base_delay_seconds * (create_attempt + 1))
+                continue
+            if _bucket_is_accessible(client, bucket):
+                return False
+            raise
+
+    for ready_attempt in range(max_ready_attempts):
+        if _bucket_is_accessible(client, bucket):
+            return created
+        time.sleep(base_delay_seconds * (ready_attempt + 1))
+
+    client.list_objects_v2(Bucket=bucket, MaxKeys=1)
+    return created
 
 
 def delete_s3_keys(client, bucket: str, keys: list[str]) -> int:
@@ -239,18 +292,24 @@ def delete_s3_keys(client, bucket: str, keys: list[str]) -> int:
 
 def delete_s3_prefix(settings: Settings, bucket: str, prefix: str) -> int:
     client = s3_client(settings)
+    if not _bucket_is_accessible(client, bucket):
+        return 0
     keys = list(iter_s3_keys(client, bucket, prefix))
     return delete_s3_keys(client, bucket, keys)
 
 
 def delete_s3_bucket(settings: Settings, bucket: str) -> int:
     client = s3_client(settings)
+    if not _bucket_is_accessible(client, bucket):
+        return 0
     keys = list(iter_s3_keys(client, bucket))
     return delete_s3_keys(client, bucket, keys)
 
 
 def remove_s3_bucket(settings: Settings, bucket: str) -> bool:
     client = s3_client(settings)
+    if not _bucket_is_accessible(client, bucket):
+        return False
     response = client.list_objects_v2(Bucket=bucket, MaxKeys=1)
     if response.get("KeyCount") or response.get("Contents"):
         return False

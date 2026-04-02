@@ -81,6 +81,7 @@ class PgVsS3ContestDataGenerator(DataGenerator):
             connection.execute(f"DROP TABLE IF EXISTS {postgres_relation}")
             connection.execute(f"CREATE TABLE {postgres_relation} ({', '.join(TAX_ASSESSMENT_DATASET_COLUMNS)})")
             delete_s3_bucket(settings, bucket_name)
+            ensure_s3_bucket(settings, bucket_name)
 
             written_rows = 0
             for batch_index, start_row in enumerate(range(0, total_rows, batch_rows), start=1):

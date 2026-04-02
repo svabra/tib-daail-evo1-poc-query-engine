@@ -1969,6 +1969,96 @@ details:not([open]) > .source-schema > summary::before {
   min-width: 0;
 }
 
+.workspace-sharing-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+  padding: 10px 12px;
+  border: 1px solid rgba(11, 68, 121, 0.12);
+  border-radius: var(--radius-control);
+  background: rgba(11, 68, 121, 0.04);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.workspace-sharing-toggle:hover,
+.workspace-sharing-toggle:focus-visible {
+  border-color: rgba(11, 68, 121, 0.28);
+  background: rgba(11, 68, 121, 0.08);
+}
+
+.workspace-sharing-toggle:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.workspace-sharing-toggle-switch {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 44px;
+  height: 24px;
+  border-radius: 999px;
+  background: rgba(73, 92, 110, 0.24);
+  transition: background-color 0.18s ease;
+}
+
+.workspace-sharing-toggle-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgba(16, 24, 40, 0.18);
+  transition:
+    transform 0.18s ease,
+    background-color 0.18s ease;
+}
+
+.workspace-sharing-toggle.is-on {
+  border-color: rgba(11, 68, 121, 0.2);
+  background: rgba(11, 68, 121, 0.08);
+}
+
+.workspace-sharing-toggle.is-on .workspace-sharing-toggle-switch {
+  background: var(--accent-strong);
+}
+
+.workspace-sharing-toggle.is-on .workspace-sharing-toggle-thumb {
+  transform: translateX(20px);
+}
+
+.workspace-sharing-toggle-copy {
+  display: grid;
+  gap: 2px;
+  font-size: 0.88rem;
+  font-weight: 700;
+}
+
+.workspace-sharing-toggle-copy small {
+  color: var(--text-muted);
+  font-size: 0.77rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.notebook-sharing-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: rgba(11, 68, 121, 0.08);
+  color: var(--accent-strong);
+  font-size: 0.72rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .workspace-linked-loader {
   display: flex;
   align-items: center;
@@ -3311,7 +3401,7 @@ details:not([open]) > .source-schema > summary::before {
 .editor-frame {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
-  min-height: 92px;
+  min-height: 136px;
   overflow: hidden;
   background: #fbfcfe;
   resize: vertical;
@@ -3320,7 +3410,7 @@ details:not([open]) > .source-schema > summary::before {
 .editor-frame textarea {
   width: 100%;
   height: 100%;
-  min-height: 92px;
+  min-height: 136px;
   padding: 10px 12px;
   border: none;
   resize: vertical;

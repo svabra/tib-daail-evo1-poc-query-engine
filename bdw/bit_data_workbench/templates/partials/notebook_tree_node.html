@@ -68,12 +68,16 @@
         data-notebook-id="{{ notebook.notebook_id }}"
         data-notebook-title="{{ notebook.title }}"
         data-notebook-summary="{{ notebook.summary }}"
+        data-created-at="{{ notebook.created_at }}"
         data-default-notebook-title="{{ notebook.title }}"
         data-default-notebook-summary="{{ notebook.summary }}"
         data-default-notebook-cells='{{ notebook.cells_payload | tojson }}'
+        data-default-notebook-versions='{{ notebook.versions_payload | tojson }}'
         data-notebook-data-sources="{{ notebook.data_sources | join('||') }}"
         data-default-notebook-data-sources="{{ notebook.data_sources | join('||') }}"
         data-default-notebook-tags="{{ notebook.tags | join('||') }}"
+        data-shared="{{ 'true' if notebook.shared else 'false' }}"
+        data-default-notebook-shared="{{ 'true' if notebook.shared else 'false' }}"
         data-can-edit="{{ 'true' if notebook.can_edit else 'false' }}"
         data-can-delete="{{ 'true' if notebook.can_delete else 'false' }}"
         data-searchable-item="{{ notebook.title }} {{ notebook.summary }} {{ notebook.tags | join(' ') }}"
@@ -85,6 +89,9 @@
       >
         <span class="notebook-title-row">
           <span class="notebook-title">{{ notebook.title }}</span>
+          {% if notebook.shared %}
+            <small class="notebook-sharing-pill">Shared</small>
+          {% endif %}
           <span class="notebook-item-tools">
             <button
               type="button"

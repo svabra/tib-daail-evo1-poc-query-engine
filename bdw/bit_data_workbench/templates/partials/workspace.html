@@ -4,13 +4,18 @@
   data-workspace-notebook
   data-notebook-meta
   data-notebook-id="{{ active_notebook.notebook_id }}"
+  data-created-at="{{ active_notebook.created_at }}"
+  data-shared="{{ 'true' if active_notebook.shared else 'false' }}"
   data-can-edit="{{ 'true' if active_notebook.can_edit else 'false' }}"
   data-can-delete="{{ 'true' if active_notebook.can_delete else 'false' }}"
   data-default-title="{{ active_notebook.title }}"
   data-default-summary="{{ active_notebook.summary }}"
+  data-default-created-at="{{ active_notebook.created_at }}"
+  data-linked-generator-id="{{ active_notebook.linked_generator_id }}"
   data-default-cells='{{ active_notebook.cells_payload | tojson }}'
   data-default-versions='{{ active_notebook.versions_payload | tojson }}'
   data-default-tags="{{ active_notebook.tags | join('||') }}"
+  data-default-shared="{{ 'true' if active_notebook.shared else 'false' }}"
 >
   <header class="workspace-header">
     <div class="workspace-title-block">
@@ -45,6 +50,23 @@
         >{{ active_notebook.summary }}</textarea>
       </div>
       <div class="workspace-header-tags">
+        {% if active_notebook.can_edit or active_notebook.shared %}
+          <button
+            type="button"
+            class="workspace-sharing-toggle{% if active_notebook.shared %} is-on{% endif %}"
+            data-notebook-shared-toggle
+            aria-pressed="{{ 'true' if active_notebook.shared else 'false' }}"
+            {% if not active_notebook.can_edit and not active_notebook.shared %}disabled{% endif %}
+          >
+            <span class="workspace-sharing-toggle-switch" aria-hidden="true">
+              <span class="workspace-sharing-toggle-thumb"></span>
+            </span>
+            <span class="workspace-sharing-toggle-copy">
+              Shared with all users
+              <small>Stores this notebook on the server and announces it to connected users.</small>
+            </span>
+          </button>
+        {% endif %}
         <div class="workspace-tag-toolbar">
           <div class="workspace-tag-list" data-tag-list>
             {% for tag in active_notebook.tags %}
@@ -384,7 +406,7 @@
               name="sql"
               data-editor-source
               data-default-sql="{{ cell.sql }}"
-              rows="3"
+              rows="5"
               spellcheck="false"
             >{{ cell.sql }}</textarea>
           </div>

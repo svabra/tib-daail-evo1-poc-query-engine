@@ -4,10 +4,11 @@ import asyncio
 import json
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel, Field
 
 from ..backend.service import WorkbenchService
 from ..dependencies import get_workbench_service
@@ -15,6 +16,33 @@ from ..dependencies import get_workbench_service
 
 router = APIRouter(tags=["api"])
 templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / "templates"))
+
+
+class NotebookCellPayload(BaseModel):
+    cell_id: str = Field(alias="cellId")
+    sql: str = ""
+    data_sources: list[str] = Field(default_factory=list, alias="dataSources")
+
+
+class NotebookVersionPayload(BaseModel):
+    version_id: str = Field(alias="versionId")
+    created_at: str = Field(alias="createdAt")
+    title: str = ""
+    summary: str = ""
+    tags: list[str] = Field(default_factory=list)
+    cells: list[NotebookCellPayload] = Field(default_factory=list)
+
+
+class SharedNotebookUpsertPayload(BaseModel):
+    notebook_id: str | None = Field(default=None, alias="notebookId")
+    title: str = ""
+    summary: str = ""
+    tags: list[str] = Field(default_factory=list)
+    tree_path: list[str] = Field(default_factory=list, alias="treePath")
+    linked_generator_id: str = Field(default="", alias="linkedGeneratorId")
+    created_at: str | None = Field(default=None, alias="createdAt")
+    cells: list[NotebookCellPayload] = Field(default_factory=list)
+    versions: list[NotebookVersionPayload] = Field(default_factory=list)
 
 
 @router.get("/info")
@@ -147,21 +175,6 @@ def cleanup_data_generation_job(
     return JSONResponse(jsonable_encoder(snapshot))
 
 
-@router.post("/api/ingestion-cleanup/{target_id}")
-def cleanup_ingestion_target(
-    target_id: str,
-    service: WorkbenchService = Depends(get_workbench_service),
-) -> JSONResponse:
-    try:
-        payload = service.cleanup_ingestion_target(target_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    return JSONResponse(jsonable_encoder(payload))
-
-
 @router.get("/api/data-generation-jobs/stream")
 async def stream_data_generation_jobs(
     request: Request,
@@ -291,6 +304,82 @@ async def stream_query_jobs(
             if last_version is None or version != last_version:
                 last_version = version
                 yield f"event: jobs\ndata: {json.dumps(jsonable_encoder(snapshot))}\n\n"
+            else:
+                yield "event: ping\ndata: {}\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/api/notebooks/shared")
+def upsert_shared_notebook(
+    payload: SharedNotebookUpsertPayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+    workbench_client_id: str | None = Header(default=None, alias="X-Workbench-Client-Id"),
+) -> JSONResponse:
+    try:
+        result = service.upsert_shared_notebook(
+            notebook_id=payload.notebook_id,
+            title=payload.title,
+            summary=payload.summary,
+            tags=list(payload.tags),
+            tree_path=list(payload.tree_path),
+            linked_generator_id=payload.linked_generator_id,
+            created_at=payload.created_at,
+            cells=[cell.model_dump(by_alias=True) for cell in payload.cells],
+            versions=[version.model_dump(by_alias=True) for version in payload.versions],
+            origin_client_id=str(workbench_client_id or "").strip(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(result))
+
+
+@router.delete("/api/notebooks/shared/{notebook_id}")
+def delete_shared_notebook(
+    notebook_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+    workbench_client_id: str | None = Header(default=None, alias="X-Workbench-Client-Id"),
+) -> JSONResponse:
+    try:
+        result = service.delete_shared_notebook(
+            notebook_id,
+            origin_client_id=str(workbench_client_id or "").strip(),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(result))
+
+
+@router.get("/api/notebooks/stream")
+async def stream_notebooks(
+    request: Request,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> StreamingResponse:
+    async def event_stream():
+        last_version: int | None = None
+        while True:
+            if await request.is_disconnected():
+                break
+
+            snapshot = await asyncio.to_thread(
+                service.wait_for_notebook_events_state,
+                last_version,
+                15.0,
+            )
+            version = int(snapshot.get("version", 0))
+            if last_version is None or version != last_version:
+                last_version = version
+                yield f"event: notebooks\ndata: {json.dumps(jsonable_encoder(snapshot))}\n\n"
             else:
                 yield "event: ping\ndata: {}\n\n"
 

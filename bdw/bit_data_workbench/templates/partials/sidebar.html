@@ -350,29 +350,6 @@
   {% if workspace_mode == 'ingestion' %}
     <div class="sidebar-divider" aria-hidden="true"></div>
 
-    <details class="sidebar-section" data-ingestion-cleanup-section>
-      <summary class="section-heading section-summary">
-        <h2>Environment Cleanup</h2>
-        <div class="section-tools">
-          <span class="section-count">{{ ingestion_cleanup_targets | length }}</span>
-        </div>
-      </summary>
-      <div class="ingestion-cleanup-list">
-        {% for target in ingestion_cleanup_targets %}
-          <button
-            type="button"
-            class="ingestion-cleanup-button"
-            data-run-ingestion-cleanup="{{ target.targetId }}"
-            data-cleanup-target-title="{{ target.title }}"
-            data-cleanup-target-copy="{{ target.confirmCopy }}"
-          >
-            <span class="ingestion-cleanup-title">{{ target.title }}</span>
-            <span class="ingestion-cleanup-copy">{{ target.description }}</span>
-          </button>
-        {% endfor %}
-      </div>
-    </details>
-
     <details class="sidebar-section sidebar-query-monitor" data-generation-monitor-section>
       <summary class="section-heading section-summary">
         <h2>Ingestion Monitoring</h2>

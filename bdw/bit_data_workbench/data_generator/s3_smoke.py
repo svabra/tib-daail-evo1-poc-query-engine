@@ -58,6 +58,7 @@ class S3SmokeDataGenerator(DataGenerator):
             ensure_s3_bucket(settings, bucket_name)
             connection.execute(f"CREATE SCHEMA IF NOT EXISTS {qualified_name(schema_name)}")
             delete_s3_bucket(settings, bucket_name)
+            ensure_s3_bucket(settings, bucket_name)
 
             written_rows = 0
             for batch_index, start_row in enumerate(range(0, total_rows, batch_rows), start=1):

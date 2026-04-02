@@ -151,6 +151,8 @@ class NotebookDefinition:
     linked_generator_id: str = ""
     can_edit: bool = True
     can_delete: bool = True
+    shared: bool = False
+    saved_versions: list[NotebookVersionDefinition] = field(default_factory=list)
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     @property
@@ -196,7 +198,7 @@ class NotebookDefinition:
 
     @property
     def versions(self) -> list[NotebookVersionDefinition]:
-        return [self.initial_version]
+        return list(self.saved_versions) if self.saved_versions else [self.initial_version]
 
     @property
     def versions_payload(self) -> list[dict[str, Any]]:
@@ -205,6 +207,44 @@ class NotebookDefinition:
     @property
     def cells_payload(self) -> list[dict[str, Any]]:
         return [cell.payload for cell in self.cells]
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {
+            "notebookId": self.notebook_id,
+            "title": self.title,
+            "summary": self.summary,
+            "cells": self.cells_payload,
+            "tags": list(self.tags),
+            "treePath": list(self.tree_path),
+            "linkedGeneratorId": self.linked_generator_id,
+            "canEdit": self.can_edit,
+            "canDelete": self.can_delete,
+            "shared": self.shared,
+            "createdAt": self.created_at,
+            "versions": self.versions_payload,
+        }
+
+
+@dataclass(slots=True)
+class NotebookEventDefinition:
+    event_id: str
+    event_type: str
+    notebook_id: str
+    notebook_title: str
+    occurred_at: str
+    origin_client_id: str = ""
+
+    @property
+    def payload(self) -> dict[str, str]:
+        return {
+            "eventId": self.event_id,
+            "eventType": self.event_type,
+            "notebookId": self.notebook_id,
+            "notebookTitle": self.notebook_title,
+            "occurredAt": self.occurred_at,
+            "originClientId": self.origin_client_id,
+        }
 
 
 @dataclass(slots=True)
@@ -416,21 +456,4 @@ class DataGenerationJobDefinition:
             "backendName": self.backend_name,
             "canCancel": self.can_cancel,
             "canCleanup": self.can_cleanup,
-        }
-
-
-@dataclass(slots=True)
-class IngestionCleanupTargetDefinition:
-    target_id: str
-    title: str
-    description: str
-    confirm_copy: str
-
-    @property
-    def payload(self) -> dict[str, str]:
-        return {
-            "targetId": self.target_id,
-            "title": self.title,
-            "description": self.description,
-            "confirmCopy": self.confirm_copy,
         }
