@@ -761,6 +761,27 @@ details:not([open]) > .source-schema > summary::before {
   gap: 8px;
 }
 
+.section-tools > :not(.section-count) {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-1px);
+  transition:
+    opacity 0.14s ease,
+    visibility 0.14s ease,
+    transform 0.14s ease;
+}
+
+.section-summary:hover .section-tools > :not(.section-count),
+.section-summary:focus-visible .section-tools > :not(.section-count),
+.section-summary:focus-within .section-tools > :not(.section-count),
+.section-tools:focus-within > :not(.section-count) {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
+}
+
 .info-badge {
   display: inline-flex;
   align-items: center;
@@ -815,9 +836,9 @@ details:not([open]) > .source-schema > summary::before {
 .tree-add-button.is-action-disabled,
 .tree-add-button.is-action-disabled:hover {
   border-color: var(--border);
-  color: var(--text-muted);
+  color: #98a6b5;
   background: rgba(255, 255, 255, 0.78);
-  text-decoration: line-through;
+  text-decoration: none;
   cursor: not-allowed;
 }
 
@@ -3536,6 +3557,28 @@ details:not([open]) > .source-schema > summary::before {
   color: var(--text);
 }
 
+.query-progress-card-indeterminate {
+  gap: 8px;
+}
+
+.query-progress-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.query-progress-status-dot {
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 999px;
+  background: #2f7d4a;
+  box-shadow: 0 0 0 4px rgba(47, 125, 74, 0.12);
+}
+
 .query-progress-track {
   position: relative;
   height: 8px;
@@ -3550,11 +3593,6 @@ details:not([open]) > .source-schema > summary::before {
   display: block;
   border-radius: inherit;
   background: linear-gradient(90deg, rgba(11, 68, 121, 0.7), var(--accent));
-}
-
-.query-progress-track.is-indeterminate > span {
-  width: 38%;
-  animation: query-indeterminate 1.2s ease-in-out infinite;
 }
 
 .result-empty {

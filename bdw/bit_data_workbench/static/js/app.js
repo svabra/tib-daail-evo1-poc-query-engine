@@ -1835,6 +1835,34 @@ function queryRowsShownLabel(job) {
   return job.message || "Statement executed successfully.";
 }
 
+function queryProgressActivityCopy(job) {
+  if (!job || !queryJobIsRunning(job)) {
+    return "Query activity is idle.";
+  }
+
+  if (job.status === "queued") {
+    return "Waiting for the query worker to start this statement.";
+  }
+
+  if (Number(job.rowsShown || 0) > 0) {
+    return `${job.rowsShown} row(s) are already available in the live preview.`;
+  }
+
+  const progressLabel = String(job.progressLabel || "").toLowerCase();
+  const message = String(job.message || "").toLowerCase();
+  const combined = `${progressLabel} ${message}`;
+
+  if (combined.includes("fetch")) {
+    return "Fetching the first rows for the live preview.";
+  }
+
+  if (combined.includes("finaliz")) {
+    return "Finalizing the statement result.";
+  }
+
+  return "Completion percent is not available for this query yet.";
+}
+
 function queryProgressMarkup(job) {
   if (!queryJobIsRunning(job)) {
     return "";
@@ -1844,15 +1872,32 @@ function queryProgressMarkup(job) {
     typeof job.progress === "number" && Number.isFinite(job.progress)
       ? Math.max(0, Math.min(100, job.progress * 100))
       : null;
+  const backendCopy = escapeHtml(job.backendName || "VMTP DUCKDB");
+  const progressLabel = escapeHtml(job.progressLabel || "Running...");
+
+  if (progressValue === null) {
+    return `
+      <div class="query-progress-card query-progress-card-indeterminate">
+        <div class="query-progress-copy">
+          <strong>${progressLabel}</strong>
+          <span>${backendCopy}</span>
+        </div>
+        <div class="query-progress-status">
+          <span class="query-progress-status-dot" aria-hidden="true"></span>
+          <span>${escapeHtml(queryProgressActivityCopy(job))}</span>
+        </div>
+      </div>
+    `;
+  }
 
   return `
     <div class="query-progress-card">
       <div class="query-progress-copy">
-        <strong>${escapeHtml(job.progressLabel || "Running...")}</strong>
-        <span>${escapeHtml(job.backendName || "VMTP DUCKDB")}</span>
+        <strong>${progressLabel}</strong>
+        <span>${backendCopy} | ${Math.round(progressValue)}%</span>
       </div>
-      <div class="query-progress-track${progressValue === null ? " is-indeterminate" : ""}">
-        <span style="${progressValue === null ? "" : `width:${progressValue}%;`}"></span>
+      <div class="query-progress-track">
+        <span style="width:${progressValue}%;"></span>
       </div>
     </div>
   `;
