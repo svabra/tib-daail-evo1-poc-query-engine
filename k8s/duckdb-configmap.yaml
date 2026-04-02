@@ -11,12 +11,15 @@ data:
   DUCKDB_DATABASE: /tmp/workspace/workspace.duckdb
   DUCKDB_EXTRA_EXTENSIONS: httpfs,postgres
   DUCKDB_EXTENSION_DIRECTORY: /opt/duckdb/extensions
-  S3_ENDPOINT: replace-me.example
-  S3_REGION: eu-central-1
-  S3_BUCKET: vat-smoke-test
-  S3_URL_STYLE: path
+  S3_ENDPOINT: replace-me.ecs-endpoint:9021
+  S3_REGION: replace-me-region
+  S3_BUCKET: replace-me-bucket
   S3_USE_SSL: "true"
-  S3_VERIFY_SSL: "false"
+  S3_VERIFY_SSL: "true"
+  S3_CA_CERT_FILE: /vault/secrets/s3-ca-bundle.pem
+  # Set S3_URL_STYLE only if the target ECS endpoint requires a specific style.
+  # Example:
+  # S3_URL_STYLE: path
   S3_STARTUP_VIEW_SCHEMA: s3
   # Example:
   # S3_STARTUP_VIEWS: vat_smoke=parquet:s3://vat-smoke-test/startup/vat_smoke.parquet

@@ -4,16 +4,13 @@
     {
       "label": "bdw: start local dependencies",
       "type": "shell",
-      "command": "docker",
+      "command": "powershell",
       "args": [
-        "compose",
-        "up",
-        "-d",
-        "minio",
-        "minio-init",
-        "minio-seed",
-        "postgres",
-        "pgadmin"
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "${workspaceFolder}\\scripts\\start-f5-dependencies.ps1"
       ],
       "options": {
         "cwd": "${workspaceFolder}"

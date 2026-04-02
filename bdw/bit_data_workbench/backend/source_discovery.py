@@ -634,8 +634,8 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
             (
                 self._settings.s3_endpoint,
                 self._settings.s3_bucket,
-                self._settings.s3_access_key_id,
-                self._settings.s3_secret_access_key,
+                self._settings.current_s3_access_key_id(),
+                self._settings.current_s3_secret_access_key(),
             )
         )
 

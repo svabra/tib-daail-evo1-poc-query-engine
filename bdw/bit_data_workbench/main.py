@@ -22,6 +22,9 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     started = time.perf_counter()
     print("[bdw-startup] FastAPI lifespan startup begin", flush=True)
+    # There is no explicit "local" or "cluster" mode switch in the app.
+    # The same startup path runs everywhere and the launcher/deployment decides
+    # the runtime behavior by injecting different environment variables.
     settings = Settings.from_env()
     print("[bdw-startup] Settings loaded from environment", flush=True)
     settings.apply_runtime_environment()

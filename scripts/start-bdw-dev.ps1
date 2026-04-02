@@ -70,6 +70,8 @@ New-Item -ItemType Directory -Force -Path $localDir | Out-Null
 New-Item -ItemType Directory -Force -Path $workspaceDir | Out-Null
 New-Item -ItemType Directory -Force -Path $extensionDir | Out-Null
 
+# The application itself has no "local mode" branch. This launcher makes the
+# run local by injecting localhost endpoints and inline development credentials.
 $env:IMAGE_VERSION = $imageVersion
 $env:PORT = "$Port"
 $env:MAX_RESULT_ROWS = "200"

@@ -15,10 +15,10 @@
         "--host",
         "127.0.0.1",
         "--port",
-        "8010"
+        "8000"
       ],
       "env": {
-        "PORT": "8010",
+        "PORT": "8000",
         "MAX_RESULT_ROWS": "200",
         "DUCKDB_DATABASE": "${workspaceFolder}\\workspace\\bit-data-workbench.f5.duckdb",
         "DUCKDB_EXTENSION_DIRECTORY": "${workspaceFolder}\\.local\\bdw\\duckdb\\extensions",
@@ -44,7 +44,8 @@
       "preLaunchTask": "bdw: start local dependencies",
       "serverReadyAction": {
         "action": "openExternally",
-        "pattern": "Uvicorn running on (http://\\S+)"
+        "pattern": "Uvicorn running on .*",
+        "uriFormat": "http://127.0.0.1:8000"
       }
     }
   ]

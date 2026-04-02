@@ -17,12 +17,15 @@ WORKBENCH_ENVIRONMENT_VARIABLES = (
     "S3_REGION",
     "S3_BUCKET",
     "S3_ACCESS_KEY_ID",
+    "S3_ACCESS_KEY_ID_FILE",
     "S3_SECRET_ACCESS_KEY",
+    "S3_SECRET_ACCESS_KEY_FILE",
     "S3_URL_STYLE",
     "S3_USE_SSL",
     "S3_VERIFY_SSL",
     "S3_CA_CERT_FILE",
     "S3_SESSION_TOKEN",
+    "S3_SESSION_TOKEN_FILE",
     "S3_STARTUP_VIEW_SCHEMA",
     "S3_STARTUP_VIEWS",
     "PG_HOST",
@@ -61,6 +64,11 @@ def env_optional(name: str) -> str | None:
     return value or None
 
 
+def env_path_optional(name: str) -> Path | None:
+    value = env_optional(name)
+    return Path(value) if value is not None else None
+
+
 def env_bool(name: str, default: bool) -> bool:
     raw = env_optional(name)
     if raw is None:
@@ -73,6 +81,31 @@ def env_bool(name: str, default: bool) -> bool:
         return False
 
     raise ValueError(f"Unsupported boolean value for {name}: {raw}")
+
+
+def read_secret_file(path: Path, *, variable_name: str) -> str:
+    try:
+        raw_value = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"{variable_name} file '{path}' could not be read: {exc}") from exc
+
+    value = raw_value.strip()
+    if not value:
+        raise ValueError(f"{variable_name} file '{path}' is empty.")
+    return value
+
+
+def resolve_secret_value(
+    *,
+    value: str | None,
+    file_path: Path | None,
+    variable_name: str,
+) -> str | None:
+    if value is not None:
+        return value
+    if file_path is None:
+        return None
+    return read_secret_file(file_path, variable_name=f"{variable_name}_FILE")
 
 
 def format_environment_value(name: str) -> str:
@@ -113,12 +146,15 @@ class Settings:
     s3_region: str | None
     s3_bucket: str | None
     s3_access_key_id: str | None
+    s3_access_key_id_file: Path | None
     s3_secret_access_key: str | None
+    s3_secret_access_key_file: Path | None
     s3_url_style: str | None
     s3_use_ssl: bool
     s3_verify_ssl: bool
     s3_ca_cert_file: Path | None
     s3_session_token: str | None
+    s3_session_token_file: Path | None
     s3_startup_view_schema: str
     s3_startup_views: str | None
     pg_host: str | None
@@ -134,6 +170,10 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        # Runtime selection is intentionally environment-driven instead of using
+        # an explicit APP_ENV flag. Local launchers inject localhost endpoints
+        # and direct credentials, while the RHOS deployment injects pod metadata,
+        # Vault-mounted file paths, TLS settings, and cluster endpoints.
         return cls(
             service_name="bit-data-workbench",
             ui_title="DAAIFL Workbench",
@@ -148,14 +188,15 @@ class Settings:
             s3_region=env_optional("S3_REGION"),
             s3_bucket=env_optional("S3_BUCKET"),
             s3_access_key_id=env_optional("S3_ACCESS_KEY_ID"),
+            s3_access_key_id_file=env_path_optional("S3_ACCESS_KEY_ID_FILE"),
             s3_secret_access_key=env_optional("S3_SECRET_ACCESS_KEY"),
+            s3_secret_access_key_file=env_path_optional("S3_SECRET_ACCESS_KEY_FILE"),
             s3_url_style=env_optional("S3_URL_STYLE"),
             s3_use_ssl=env_bool("S3_USE_SSL", True),
             s3_verify_ssl=env_bool("S3_VERIFY_SSL", True),
-            s3_ca_cert_file=(
-                Path(value) if (value := env_optional("S3_CA_CERT_FILE")) is not None else None
-            ),
+            s3_ca_cert_file=env_path_optional("S3_CA_CERT_FILE"),
             s3_session_token=env_optional("S3_SESSION_TOKEN"),
+            s3_session_token_file=env_path_optional("S3_SESSION_TOKEN_FILE"),
             s3_startup_view_schema=env("S3_STARTUP_VIEW_SCHEMA", "s3"),
             s3_startup_views=env_optional("S3_STARTUP_VIEWS"),
             pg_host=env_optional("PG_HOST"),
@@ -182,6 +223,32 @@ class Settings:
             "duckdb_database": self.duckdb_database.as_posix(),
             "timestamp_utc": datetime.now(UTC).isoformat(),
         }
+
+    def current_s3_access_key_id(self) -> str | None:
+        # Prefer a direct env value for local/dev flows, then fall back to the
+        # file path used by RHOS Vault bindings.
+        return resolve_secret_value(
+            value=self.s3_access_key_id,
+            file_path=self.s3_access_key_id_file,
+            variable_name="S3_ACCESS_KEY_ID",
+        )
+
+    def current_s3_secret_access_key(self) -> str | None:
+        # Prefer a direct env value for local/dev flows, then fall back to the
+        # file path used by RHOS Vault bindings.
+        return resolve_secret_value(
+            value=self.s3_secret_access_key,
+            file_path=self.s3_secret_access_key_file,
+            variable_name="S3_SECRET_ACCESS_KEY",
+        )
+
+    def current_s3_session_token(self) -> str | None:
+        # Session tokens follow the same env-first, file-second pattern.
+        return resolve_secret_value(
+            value=self.s3_session_token,
+            file_path=self.s3_session_token_file,
+            variable_name="S3_SESSION_TOKEN",
+        )
 
     def apply_runtime_environment(self) -> None:
         if not self.s3_ca_cert_file:

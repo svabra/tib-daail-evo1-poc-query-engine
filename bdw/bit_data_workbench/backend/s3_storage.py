@@ -60,9 +60,9 @@ def s3_client(
         "s3",
         endpoint_url=endpoint_url,
         region_name=settings.s3_region or "us-east-1",
-        aws_access_key_id=settings.s3_access_key_id,
-        aws_secret_access_key=settings.s3_secret_access_key,
-        aws_session_token=settings.s3_session_token,
+        aws_access_key_id=settings.current_s3_access_key_id(),
+        aws_secret_access_key=settings.current_s3_secret_access_key(),
+        aws_session_token=settings.current_s3_session_token(),
         config=config,
         verify=s3_verify_value(settings, verify_ssl=verify_ssl),
     )

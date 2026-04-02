@@ -898,12 +898,14 @@ class WorkbenchService:
         startup_context: bool = False,
         run_startup_diagnostics: bool = False,
     ) -> None:
+        access_key_id = self.settings.current_s3_access_key_id()
+        secret_access_key = self.settings.current_s3_secret_access_key()
         required_values = (
             self.settings.s3_endpoint,
             self.settings.s3_region,
             self.settings.s3_bucket,
-            self.settings.s3_access_key_id,
-            self.settings.s3_secret_access_key,
+            access_key_id,
+            secret_access_key,
         )
 
         if not any(required_values):
@@ -917,8 +919,8 @@ class WorkbenchService:
                 ("S3_ENDPOINT", self.settings.s3_endpoint),
                 ("S3_REGION", self.settings.s3_region),
                 ("S3_BUCKET", self.settings.s3_bucket),
-                ("S3_ACCESS_KEY_ID", self.settings.s3_access_key_id),
-                ("S3_SECRET_ACCESS_KEY", self.settings.s3_secret_access_key),
+                ("S3_ACCESS_KEY_ID", access_key_id),
+                ("S3_SECRET_ACCESS_KEY", secret_access_key),
             )
             if value is None
         ]
@@ -1043,19 +1045,24 @@ class WorkbenchService:
     ) -> list[str]:
         configured_url_style = (self.settings.s3_url_style or "").strip()
         effective_url_style = configured_url_style if url_style is None else url_style
+        access_key_id = self.settings.current_s3_access_key_id()
+        secret_access_key = self.settings.current_s3_secret_access_key()
+        session_token = self.settings.current_s3_session_token()
+        if access_key_id is None or secret_access_key is None:
+            raise ValueError("S3 credentials are incomplete. Configure access key and secret key values or file paths.")
         options = [
             "TYPE s3",
             "PROVIDER config",
-            f"KEY_ID {sql_literal(self.settings.s3_access_key_id)}",
-            f"SECRET {sql_literal(self.settings.s3_secret_access_key)}",
+            f"KEY_ID {sql_literal(access_key_id)}",
+            f"SECRET {sql_literal(secret_access_key)}",
             f"REGION {sql_literal(self.settings.s3_region)}",
             f"ENDPOINT {sql_literal(endpoint)}",
             f"USE_SSL {'true' if use_ssl else 'false'}",
         ]
         if effective_url_style:
             options.append(f"URL_STYLE {sql_literal(effective_url_style)}")
-        if self.settings.s3_session_token:
-            options.append(f"SESSION_TOKEN {sql_literal(self.settings.s3_session_token)}")
+        if session_token:
+            options.append(f"SESSION_TOKEN {sql_literal(session_token)}")
         return options
 
     def _log_s3_diagnostic_trial(
@@ -1441,10 +1448,27 @@ class WorkbenchService:
                     except Exception as exc:
                         self._log_s3_diagnostic_trial(
                             backend="duckdb",
-                            trial=f"read[{style_label}]:{view_name}",
-                            success=False,
-                            detail=str(exc),
-                        )
+                        trial=f"read[{style_label}]:{view_name}",
+                        success=False,
+                        detail=str(exc),
+                    )
+
+        try:
+            restored_options = self._s3_secret_options(endpoint=endpoint, use_ssl=use_ssl)
+            conn.execute(f"CREATE OR REPLACE SECRET bdw_s3 ({', '.join(restored_options)})")
+            self._log_s3_diagnostic_trial(
+                backend="duckdb",
+                trial=f"secret-restore[{configured_url_style or 'default'}]",
+                success=True,
+                detail="restored configured S3 secret after diagnostics",
+            )
+        except Exception as exc:
+            self._log_s3_diagnostic_trial(
+                backend="duckdb",
+                trial=f"secret-restore[{configured_url_style or 'default'}]",
+                success=False,
+                detail=str(exc),
+            )
 
         if not successful_read_probe:
             logger.warning(
@@ -1475,13 +1499,15 @@ class WorkbenchService:
         return conn
 
     def _start_background_s3_startup_diagnostics(self) -> None:
+        access_key_id = self.settings.current_s3_access_key_id()
+        secret_access_key = self.settings.current_s3_secret_access_key()
         if not any(
             (
                 self.settings.s3_endpoint,
                 self.settings.s3_region,
                 self.settings.s3_bucket,
-                self.settings.s3_access_key_id,
-                self.settings.s3_secret_access_key,
+                access_key_id,
+                secret_access_key,
             )
         ):
             self._log_startup("Background S3 startup diagnostics skipped: S3 is not configured")
@@ -1501,14 +1527,16 @@ class WorkbenchService:
         self._log_startup("Background S3 startup diagnostics begin")
         conn: duckdb.DuckDBPyConnection | None = None
         try:
+            access_key_id = self.settings.current_s3_access_key_id()
+            secret_access_key = self.settings.current_s3_secret_access_key()
             missing = [
                 name
                 for name, value in (
                     ("S3_ENDPOINT", self.settings.s3_endpoint),
                     ("S3_REGION", self.settings.s3_region),
                     ("S3_BUCKET", self.settings.s3_bucket),
-                    ("S3_ACCESS_KEY_ID", self.settings.s3_access_key_id),
-                    ("S3_SECRET_ACCESS_KEY", self.settings.s3_secret_access_key),
+                    ("S3_ACCESS_KEY_ID", access_key_id),
+                    ("S3_SECRET_ACCESS_KEY", secret_access_key),
                 )
                 if value is None
             ]
@@ -1700,8 +1728,8 @@ class WorkbenchService:
         if (
             workspace_discovery_enabled
             and self.settings.s3_endpoint
-            and self.settings.s3_access_key_id
-            and self.settings.s3_secret_access_key
+            and self.settings.current_s3_access_key_id()
+            and self.settings.current_s3_secret_access_key()
         ):
             try:
                 bucket_names = list_s3_buckets(self.settings)
