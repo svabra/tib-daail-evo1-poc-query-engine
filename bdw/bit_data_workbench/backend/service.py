@@ -1076,7 +1076,7 @@ class WorkbenchService:
             "ok" if success else "failed",
             trial,
             detail,
-            level=logging.INFO if success else logging.WARNING,
+            level=logging.INFO,
         )
 
     def _s3_duckdb_probe_query(self, data_format: str, path: str) -> str:
@@ -1307,6 +1307,7 @@ class WorkbenchService:
             )
 
         for style_label, style_value in boto3_styles:
+            style_read_or_write_ok = False
             try:
                 client = s3_client(self.settings, url_style=style_value)
             except Exception as exc:
@@ -1344,6 +1345,7 @@ class WorkbenchService:
                     success=True,
                     detail=f"returned {len(discovered_keys)} object(s): {discovered_keys}",
                 )
+                style_read_or_write_ok = True
             except Exception as exc:
                 self._log_s3_diagnostic_trial(
                     backend="boto3",
@@ -1366,13 +1368,14 @@ class WorkbenchService:
                         success=True,
                         detail=f"read {preview_size} byte(s) from s3://{target_bucket}/{object_key}",
                     )
+                    style_read_or_write_ok = True
                 except Exception as exc:
                     self._log_s3_diagnostic_trial(
                         backend="boto3",
-                    trial=trial_name,
-                    success=False,
-                    detail=str(exc),
-                )
+                        trial=trial_name,
+                        success=False,
+                        detail=str(exc),
+                    )
                 finally:
                     try:
                         if body is not None:
@@ -1390,6 +1393,14 @@ class WorkbenchService:
             )
             successful_write_probe = successful_write_probe or write_probe_ok
             successful_write_cleanup = successful_write_cleanup or write_cleanup_ok
+            style_read_or_write_ok = style_read_or_write_ok or write_probe_ok
+
+            if style_read_or_write_ok:
+                self._log_startup(
+                    "S3 startup diagnostic [boto3] using style %s succeeded; skipping additional boto3 style probes.",
+                    style_label,
+                )
+                break
 
         duckdb_styles: list[tuple[str, str | None]] = []
         for label, style in (
@@ -1410,6 +1421,7 @@ class WorkbenchService:
             )
         else:
             for style_label, style_value in duckdb_styles:
+                style_read_ok = False
                 try:
                     options = self._s3_secret_options(
                         endpoint=endpoint,
@@ -1442,13 +1454,21 @@ class WorkbenchService:
                             success=True,
                             detail=f"returned {len(rows)} row(s) from {path}",
                         )
+                        style_read_ok = True
                     except Exception as exc:
                         self._log_s3_diagnostic_trial(
                             backend="duckdb",
-                        trial=f"read[{style_label}]:{view_name}",
-                        success=False,
-                        detail=str(exc),
+                            trial=f"read[{style_label}]:{view_name}",
+                            success=False,
+                            detail=str(exc),
+                        )
+
+                if style_read_ok:
+                    self._log_startup(
+                        "S3 startup diagnostic [duckdb] using style %s succeeded; skipping additional DuckDB style probes.",
+                        style_label,
                     )
+                    break
 
         try:
             restored_options = self._s3_secret_options(endpoint=endpoint, use_ssl=use_ssl)

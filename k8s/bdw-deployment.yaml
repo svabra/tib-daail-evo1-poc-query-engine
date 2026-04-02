@@ -26,7 +26,7 @@ spec:
       serviceAccountName: evo1-bdw
       containers:
         - name: bdw
-          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.16
+          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.17
           imagePullPolicy: Always
           ports:
             - name: http
