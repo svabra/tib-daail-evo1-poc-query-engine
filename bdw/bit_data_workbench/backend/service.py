@@ -4,6 +4,7 @@ import logging
 import re
 import time
 from threading import RLock, Thread
+from urllib.parse import urlparse
 
 import duckdb
 
@@ -22,6 +23,7 @@ from ..models import (
 from .s3_storage import (
     delete_s3_bucket,
     list_s3_buckets,
+    list_s3_buckets_from_client,
     normalize_s3_endpoint,
     s3_bucket_schema_name,
     s3_client,
@@ -41,6 +43,21 @@ from .source_discovery import (
 
 SUPPORTED_S3_VIEW_FORMATS = {"parquet", "csv", "json"}
 logger = logging.getLogger(__name__)
+S3_BOOTSTRAP_SAMPLE_KEY = "startup/vat_context_bootstrap.csv"
+S3_BOOTSTRAP_SAMPLE_CSV = """company_uid,company_name,canton_code,tax_period_end,transaction_id,declared_turnover_chf,net_vat_due_chf,refund_claim_chf,filing_status,category
+CHE-100.000.001,Alpine Foods AG,ZH,2025-03-31,TX-10001,124000.00,9300.00,0.00,filed,standard
+CHE-100.000.002,Bern Logistics GmbH,BE,2025-03-31,TX-10002,88000.00,4200.00,0.00,filed,reduced
+CHE-100.000.003,Lac Retail SA,GE,2025-03-31,TX-10003,146000.00,11800.00,0.00,assessed,standard
+CHE-100.000.004,Helvetic Advisory AG,ZH,2025-06-30,TX-10004,211000.00,18450.00,0.00,filed,services
+CHE-100.000.005,Romandie Pharma SA,VD,2025-06-30,TX-10005,175500.00,0.00,6200.00,refund,health
+CHE-100.000.006,Transit Basel AG,BS,2025-06-30,TX-10006,99000.00,5100.00,0.00,filed,transport
+CHE-100.000.007,Ticino Hospitality SA,TI,2025-09-30,TX-10007,132400.00,8400.00,0.00,under_review,hospitality
+CHE-100.000.008,Winterthur Components AG,ZH,2025-09-30,TX-10008,265000.00,22700.00,0.00,filed,manufacturing
+CHE-100.000.009,Lausanne Digital SARL,VD,2025-09-30,TX-10009,118500.00,7600.00,0.00,filed,services
+CHE-100.000.010,Lucerne Trade AG,LU,2025-12-31,TX-10010,142200.00,9600.00,0.00,filed,standard
+CHE-100.000.011,St. Gallen Medical AG,SG,2025-12-31,TX-10011,156300.00,0.00,7100.00,refund,health
+CHE-100.000.012,Valais Hydro SA,VS,2025-12-31,TX-10012,301400.00,25400.00,0.00,assessed,energy
+"""
 
 
 def sql_identifier(value: str) -> str:
@@ -929,6 +946,8 @@ class WorkbenchService:
                 use_ssl,
                 transport_reason,
             )
+        if startup_context:
+            self._ensure_s3_startup_seed_data(use_ssl=use_ssl)
 
         startup_views = parse_s3_startup_views(self.settings.s3_startup_views)
         options = self._s3_secret_options(endpoint=endpoint, use_ssl=use_ssl)
@@ -1083,6 +1102,168 @@ class WorkbenchService:
             return f"SELECT * FROM read_json_auto({sql_literal(path)}) LIMIT 1"
         raise ValueError(f"Unsupported S3 startup view format: {data_format}")
 
+    def _ensure_s3_startup_seed_data(self, *, use_ssl: bool) -> None:
+        bucket_name = (self.settings.s3_bucket or "").strip()
+        if not bucket_name:
+            self._log_startup(
+                "S3 startup seed skipped: no S3_BUCKET is configured",
+                level=logging.INFO,
+            )
+            return
+
+        try:
+            client = s3_client(self.settings, use_ssl=use_ssl)
+        except Exception as exc:
+            self._log_startup(
+                "S3 startup seed skipped because the boto3 client could not be created: %s",
+                exc,
+                level=logging.WARNING,
+            )
+            return
+
+        try:
+            initial_buckets = list_s3_buckets_from_client(client)
+            self._log_s3_diagnostic_trial(
+                backend="boto3",
+                trial="list_buckets[startup-seed:before]",
+                success=True,
+                detail=f"discovered {len(initial_buckets)} bucket(s): {initial_buckets}",
+            )
+        except Exception as exc:
+            initial_buckets = []
+            self._log_s3_diagnostic_trial(
+                backend="boto3",
+                trial="list_buckets[startup-seed:before]",
+                success=False,
+                detail=str(exc),
+            )
+
+        bucket_created = False
+        if bucket_name not in initial_buckets:
+            try:
+                client.create_bucket(Bucket=bucket_name)
+                bucket_created = True
+                self._log_s3_diagnostic_trial(
+                    backend="boto3",
+                    trial=f"create_bucket[startup-seed]:{bucket_name}",
+                    success=True,
+                    detail="created bootstrap bucket successfully",
+                )
+            except Exception as exc:
+                self._log_s3_diagnostic_trial(
+                    backend="boto3",
+                    trial=f"create_bucket[startup-seed]:{bucket_name}",
+                    success=False,
+                    detail=str(exc),
+                )
+                return
+        else:
+            self._log_s3_diagnostic_trial(
+                backend="boto3",
+                trial=f"create_bucket[startup-seed]:{bucket_name}",
+                success=True,
+                detail="bucket already existed; creation was not required",
+            )
+
+        try:
+            bucket_names = list_s3_buckets_from_client(client)
+            self._log_s3_diagnostic_trial(
+                backend="boto3",
+                trial="list_buckets[startup-seed:after]",
+                success=True,
+                detail=f"discovered {len(bucket_names)} bucket(s): {bucket_names}",
+            )
+        except Exception as exc:
+            bucket_names = initial_buckets
+            self._log_s3_diagnostic_trial(
+                backend="boto3",
+                trial="list_buckets[startup-seed:after]",
+                success=False,
+                detail=str(exc),
+            )
+
+        existing_keys: list[str] = []
+        try:
+            response = client.list_objects_v2(Bucket=bucket_name, MaxKeys=20)
+            existing_keys = [
+                str(item.get("Key"))
+                for item in (response.get("Contents") or [])
+                if str(item.get("Key") or "").strip()
+            ]
+            self._log_s3_diagnostic_trial(
+                backend="boto3",
+                trial=f"list_objects_v2[startup-seed:before]:{bucket_name}",
+                success=True,
+                detail=f"returned {len(existing_keys)} object(s): {existing_keys}",
+            )
+        except Exception as exc:
+            self._log_s3_diagnostic_trial(
+                backend="boto3",
+                trial=f"list_objects_v2[startup-seed:before]:{bucket_name}",
+                success=False,
+                detail=str(exc),
+            )
+            return
+
+        if S3_BOOTSTRAP_SAMPLE_KEY not in existing_keys:
+            try:
+                payload = S3_BOOTSTRAP_SAMPLE_CSV.encode("utf-8")
+                client.put_object(
+                    Bucket=bucket_name,
+                    Key=S3_BOOTSTRAP_SAMPLE_KEY,
+                    Body=payload,
+                    ContentType="text/csv; charset=utf-8",
+                )
+                self._log_s3_diagnostic_trial(
+                    backend="boto3",
+                    trial=f"put_object[startup-seed]:{bucket_name}/{S3_BOOTSTRAP_SAMPLE_KEY}",
+                    success=True,
+                    detail=f"uploaded {len(payload)} byte(s) to the bootstrap bucket",
+                )
+            except Exception as exc:
+                self._log_s3_diagnostic_trial(
+                    backend="boto3",
+                    trial=f"put_object[startup-seed]:{bucket_name}/{S3_BOOTSTRAP_SAMPLE_KEY}",
+                    success=False,
+                    detail=str(exc),
+                )
+                return
+        else:
+            self._log_s3_diagnostic_trial(
+                backend="boto3",
+                trial=f"put_object[startup-seed]:{bucket_name}/{S3_BOOTSTRAP_SAMPLE_KEY}",
+                success=True,
+                detail="bootstrap CSV already existed; upload was not required",
+            )
+
+        try:
+            response = client.list_objects_v2(Bucket=bucket_name, MaxKeys=20)
+            listed_keys = [
+                str(item.get("Key"))
+                for item in (response.get("Contents") or [])
+                if str(item.get("Key") or "").strip()
+            ]
+            self._log_s3_diagnostic_trial(
+                backend="boto3",
+                trial=f"list_objects_v2[startup-seed:after]:{bucket_name}",
+                success=True,
+                detail=f"returned {len(listed_keys)} object(s): {listed_keys}",
+            )
+        except Exception as exc:
+            self._log_s3_diagnostic_trial(
+                backend="boto3",
+                trial=f"list_objects_v2[startup-seed:after]:{bucket_name}",
+                success=False,
+                detail=str(exc),
+            )
+
+        if bucket_created:
+            self._log_startup(
+                "S3 startup seed complete: created bootstrap bucket %s and ensured %s is present.",
+                bucket_name,
+                S3_BOOTSTRAP_SAMPLE_KEY,
+            )
+
     def _log_s3_startup_diagnostics(
         self,
         conn: duckdb.DuckDBPyConnection,
@@ -1177,6 +1358,31 @@ class WorkbenchService:
                     self._log_s3_diagnostic_trial(
                         backend="boto3",
                         trial=f"list_objects_v2[{style_label}]:{discovered_bucket_name}",
+                        success=False,
+                        detail=str(exc),
+                    )
+
+            configured_bucket_name = bucket_name.strip()
+            if configured_bucket_name and configured_bucket_name not in bucket_names:
+                try:
+                    response = client.list_objects_v2(Bucket=configured_bucket_name, MaxKeys=20)
+                    configured_keys = [
+                        item.get("Key")
+                        for item in (response.get("Contents") or [])
+                        if item.get("Key")
+                    ]
+                    successful_read_probe = True
+                    style_read_ok = True
+                    self._log_s3_diagnostic_trial(
+                        backend="boto3",
+                        trial=f"list_objects_v2[{style_label}]:configured:{configured_bucket_name}",
+                        success=True,
+                        detail=f"returned {len(configured_keys)} object(s): {configured_keys}",
+                    )
+                except Exception as exc:
+                    self._log_s3_diagnostic_trial(
+                        backend="boto3",
+                        trial=f"list_objects_v2[{style_label}]:configured:{configured_bucket_name}",
                         success=False,
                         detail=str(exc),
                     )

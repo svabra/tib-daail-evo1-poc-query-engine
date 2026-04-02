@@ -110,9 +110,17 @@ At startup the backend:
 - opens the local DuckDB database file
 - loads the `httpfs` and `postgres` extensions
 - creates the S3 secret from `S3_*`
+- ensures the configured bootstrap S3 bucket exists and seeds `startup/vat_context_bootstrap.csv` when the ordered storage is empty
 - creates startup views from `S3_STARTUP_VIEWS`
 - attaches PostgreSQL as `pg_oltp` and `pg_olap`
 - introspects available schemas, tables and views for the sidebar and SQL completion
+
+The S3-backed loaders do not share one output bucket anymore:
+
+- `S3 VAT Smoke Loader` writes into a dedicated bucket derived from `S3_BUCKET` with suffix `-s3-smoke`
+- `PG vs S3 Contest Loader` writes its parquet output into a dedicated bucket derived from `S3_BUCKET` with suffix `-pg-vs-s3-contest`
+
+That keeps loader cleanup isolated so removing one loader's S3 data does not wipe another loader's test bucket.
 
 The UI ships two preinstalled notebooks:
 
@@ -215,7 +223,7 @@ The practical rule is simple: the app does not detect "where it is" by hostname.
 Build locally:
 
 ```bash
-docker build -f bdw/Dockerfile -t bit-data-workbench:0.3.21 .
+docker build -f bdw/Dockerfile -t bit-data-workbench:0.3.22 .
 ```
 
 Run directly without Compose-managed service wiring:
@@ -225,7 +233,7 @@ docker run --rm -d ^
   --name bit-data-workbench ^
   -p 8000:8000 ^
   -v "%cd%\\workspace:/workspace" ^
-  -e IMAGE_VERSION=0.3.21 ^
+  -e IMAGE_VERSION=0.3.22 ^
   -e DUCKDB_DATABASE=/workspace/bit-data-workbench.duckdb ^
   -e DUCKDB_EXTENSION_DIRECTORY=/opt/duckdb/extensions ^
   -e S3_ENDPOINT=minio:9000 ^
@@ -243,7 +251,7 @@ docker run --rm -d ^
   -e PG_PASSWORD=evo1 ^
   -e PG_OLTP_DATABASE=evo1_oltp ^
   -e PG_OLAP_DATABASE=evo1_olap ^
-  bit-data-workbench:0.3.21
+  bit-data-workbench:0.3.22
 ```
 
 ### TODO
@@ -270,7 +278,7 @@ The route is an OpenShift `edge` route and exposes the HTTP service externally t
 Current image:
 
 ```text
-docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.21
+docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.22
 ```
 
 ### RHOS S3 Authentication

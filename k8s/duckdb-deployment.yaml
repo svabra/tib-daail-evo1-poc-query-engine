@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: duckdb
-          image: docker-hub.nexus.bit.admin.ch/svabra/tib-daail-evo1-poc-query-engine:0.3.21
+          image: docker-hub.nexus.bit.admin.ch/svabra/tib-daail-evo1-poc-query-engine:0.3.22
           imagePullPolicy: Always
           ports:
             - name: http
@@ -61,6 +61,9 @@ spec:
           volumeMounts:
             - name: workspace
               mountPath: /workspace
+            - name: bit-ros-trusted-certs
+              mountPath: /myconfigmap/daai-brs-d/bit-ros-trusted-certs
+              readOnly: true
           startupProbe:
             httpGet:
               path: /info
@@ -85,3 +88,6 @@ spec:
       volumes:
         - name: workspace
           emptyDir: {}
+        - name: bit-ros-trusted-certs
+          configMap:
+            name: bit-ros-trusted-certs

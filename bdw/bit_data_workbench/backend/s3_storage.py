@@ -156,6 +156,10 @@ def iter_s3_keys(client, bucket: str, prefix: str = "") -> Iterator[str]:
 
 def list_s3_buckets(settings: Settings) -> list[str]:
     client = s3_client(settings)
+    return list_s3_buckets_from_client(client)
+
+
+def list_s3_buckets_from_client(client) -> list[str]:
     response = client.list_buckets()
     buckets = [
         str(item.get("Name")).strip()
@@ -176,6 +180,43 @@ def s3_bucket_schema_name(bucket_name: str) -> str:
     max_base_length = max(1, 56 - len(suffix) - 1)
     base = normalized[:max_base_length].rstrip("_") or "s3_bucket"
     return f"{base}_{suffix}"
+
+
+def derived_s3_bucket_name(base_bucket_name: str, suffix: str) -> str:
+    normalized_base = re.sub(r"[^a-z0-9-]+", "-", str(base_bucket_name).strip().lower())
+    normalized_base = re.sub(r"-{2,}", "-", normalized_base).strip("-") or "s3-bucket"
+    normalized_suffix = re.sub(r"[^a-z0-9-]+", "-", str(suffix).strip().lower())
+    normalized_suffix = re.sub(r"-{2,}", "-", normalized_suffix).strip("-")
+    if not normalized_suffix:
+        return normalized_base[:63].rstrip("-") or "s3-bucket"
+
+    max_base_length = max(3, 63 - len(normalized_suffix) - 1)
+    trimmed_base = normalized_base[:max_base_length].rstrip("-") or "s3"
+    return f"{trimmed_base}-{normalized_suffix}"
+
+
+def parse_s3_url(path: str) -> tuple[str, str]:
+    parsed = urlparse(path)
+    if parsed.scheme != "s3" or not parsed.netloc:
+        raise ValueError(f"Unsupported S3 path: {path}")
+    return parsed.netloc, parsed.path.lstrip("/")
+
+
+def ensure_s3_bucket(settings: Settings, bucket: str) -> bool:
+    client = s3_client(settings)
+    try:
+        existing_buckets = list_s3_buckets_from_client(client)
+    except Exception:
+        existing_buckets = []
+    if bucket in existing_buckets:
+        return False
+
+    try:
+        client.create_bucket(Bucket=bucket)
+        return True
+    except Exception:
+        client.list_objects_v2(Bucket=bucket, MaxKeys=1)
+        return False
 
 
 def delete_s3_keys(client, bucket: str, keys: list[str]) -> int:
@@ -206,3 +247,12 @@ def delete_s3_bucket(settings: Settings, bucket: str) -> int:
     client = s3_client(settings)
     keys = list(iter_s3_keys(client, bucket))
     return delete_s3_keys(client, bucket, keys)
+
+
+def remove_s3_bucket(settings: Settings, bucket: str) -> bool:
+    client = s3_client(settings)
+    response = client.list_objects_v2(Bucket=bucket, MaxKeys=1)
+    if response.get("KeyCount") or response.get("Contents"):
+        return False
+    client.delete_bucket(Bucket=bucket)
+    return True

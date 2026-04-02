@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from ..backend.s3_storage import delete_s3_prefix, s3_bucket_schema_name
+from ..backend.s3_storage import (
+    delete_s3_bucket,
+    derived_s3_bucket_name,
+    ensure_s3_bucket,
+    parse_s3_url,
+    remove_s3_bucket,
+    s3_bucket_schema_name,
+)
 from .base import (
     DataGenerationCancelled,
     DataGenerator,
@@ -35,6 +42,9 @@ class PgVsS3ContestDataGenerator(DataGenerator):
     default_target_name = "tax_assessment_pg_vs_s3"
     tags = ("postgres", "s3", "oltp", "contest", "tax", "assessment")
 
+    def _loader_bucket_name(self, base_bucket: str) -> str:
+        return derived_s3_bucket_name(base_bucket, "pg-vs-s3-contest")
+
     def run(self, context: DataGeneratorContext) -> DataGeneratorResult:
         settings = context.settings
         if not settings.s3_bucket:
@@ -47,10 +57,11 @@ class PgVsS3ContestDataGenerator(DataGenerator):
         target_name = generated_name(self.default_target_name, context.job_id)
         postgres_relation_name = f"pg_oltp.public.{target_name}"
         postgres_relation = qualified_name("pg_oltp", "public", target_name)
-        s3_schema = s3_bucket_schema_name(settings.s3_bucket)
+        bucket_name = self._loader_bucket_name(settings.s3_bucket)
+        s3_schema = s3_bucket_schema_name(bucket_name)
         s3_relation_name = f"{s3_schema}.{target_name}"
         s3_relation = qualified_name(s3_schema, target_name)
-        object_prefix = f"s3://{settings.s3_bucket}/generated/{target_name}"
+        object_prefix = f"s3://{bucket_name}/generated/{target_name}"
         connection = context.connect()
 
         try:
@@ -59,16 +70,17 @@ class PgVsS3ContestDataGenerator(DataGenerator):
                 progress_label="Preparing targets...",
                 message=(
                     f"Creating paired targets {postgres_relation_name} and {s3_relation_name} "
-                    f"from the same generated records."
+                    f"with S3 bucket {bucket_name} from the same generated records."
                 ),
                 target_name=target_name,
                 target_relation=postgres_relation_name,
                 target_path=object_prefix,
             )
+            ensure_s3_bucket(settings, bucket_name)
             connection.execute(f"CREATE SCHEMA IF NOT EXISTS {qualified_name(s3_schema)}")
             connection.execute(f"DROP TABLE IF EXISTS {postgres_relation}")
             connection.execute(f"CREATE TABLE {postgres_relation} ({', '.join(TAX_ASSESSMENT_DATASET_COLUMNS)})")
-            delete_s3_prefix(settings, settings.s3_bucket, f"generated/{target_name}")
+            delete_s3_bucket(settings, bucket_name)
 
             written_rows = 0
             for batch_index, start_row in enumerate(range(0, total_rows, batch_rows), start=1):
@@ -150,31 +162,25 @@ class PgVsS3ContestDataGenerator(DataGenerator):
         if not relation or not target_name or not target_path:
             raise ValueError("This contest generation job does not have both PostgreSQL and S3 targets to clean.")
 
-        bucket = context.settings.s3_bucket
-        if not bucket:
-            raise ValueError("S3_BUCKET must be configured before cleaning generated S3 data.")
-
-        expected_prefix = f"s3://{bucket}/"
-        if not target_path.startswith(expected_prefix):
-            raise ValueError(f"Unsupported S3 target path: {target_path}")
-
-        prefix = target_path.removeprefix(expected_prefix).strip("/")
-        s3_relation = qualified_name(s3_bucket_schema_name(context.settings.s3_bucket), target_name)
+        bucket, _prefix = parse_s3_url(target_path)
+        s3_relation = qualified_name(s3_bucket_schema_name(bucket), target_name)
         connection = context.connect()
 
         try:
-            context.report(message=f"Cleaning mirrored PostgreSQL and S3 data for {target_name}...")
+            context.report(message=f"Cleaning mirrored PostgreSQL data and dedicated S3 bucket {bucket} for {target_name}...")
             connection.execute(f"DELETE FROM {relation}")
             connection.execute(f"DROP VIEW IF EXISTS {s3_relation}")
-            deleted_objects = delete_s3_prefix(context.settings, bucket, prefix)
+            deleted_objects = delete_s3_bucket(context.settings, bucket)
+            bucket_deleted = remove_s3_bucket(context.settings, bucket)
             return DataGeneratorResult(
                 target_name=target_name,
                 target_relation=relation,
                 generated_rows=0,
                 generated_size_gb=0.0,
                 message=(
-                    f"Deleted all rows from {relation}, removed the S3 workspace view, and deleted "
-                    f"{deleted_objects:,} object(s) under {target_path}."
+                    f"Deleted all rows from {relation}, removed the S3 workspace view, deleted "
+                    f"{deleted_objects:,} object(s) from s3://{bucket}, and "
+                    f"{'removed the bucket' if bucket_deleted else 'left the empty bucket in place'}."
                 ),
             )
         finally:
@@ -198,16 +204,16 @@ class PgVsS3ContestDataGenerator(DataGenerator):
         except Exception:
             pass
 
-        bucket = context.settings.s3_bucket
-        if not bucket:
-            return
-        expected_prefix = f"s3://{bucket}/"
-        if not target_path.startswith(expected_prefix):
-            return
-
-        prefix = target_path.removeprefix(expected_prefix).strip("/")
         try:
-            delete_s3_prefix(context.settings, bucket, prefix)
+            bucket, _prefix = parse_s3_url(target_path)
+        except Exception:
+            return
+        try:
+            delete_s3_bucket(context.settings, bucket)
+        except Exception:
+            pass
+        try:
+            remove_s3_bucket(context.settings, bucket)
         except Exception:
             pass
 
