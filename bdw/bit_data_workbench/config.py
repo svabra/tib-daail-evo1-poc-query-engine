@@ -43,11 +43,19 @@ WORKBENCH_ENVIRONMENT_VARIABLES = (
 )
 
 REDACTED_ENVIRONMENT_VARIABLES = {
+    "S3_ACCESS_KEY_ID",
     "PG_PASSWORD",
     "PGPASSWORD",
     "S3_SECRET_ACCESS_KEY",
     "S3_SESSION_TOKEN",
 }
+
+SENSITIVE_ENVIRONMENT_VARIABLE_HINTS = (
+    "PASSWORD",
+    "SECRET",
+    "TOKEN",
+    "ACCESS_KEY",
+)
 
 STARTUP_REDACTED_FILE_HINTS = (
     "secret",
@@ -141,10 +149,21 @@ def resolve_secret_value(
 
 def format_environment_value(name: str) -> str:
     value = os.getenv(name)
+    return format_environment_pair(name, value)
+
+
+def should_redact_environment_variable(name: str) -> bool:
+    normalized_name = name.strip().upper()
+    if normalized_name in REDACTED_ENVIRONMENT_VARIABLES:
+        return True
+    return any(hint in normalized_name for hint in SENSITIVE_ENVIRONMENT_VARIABLE_HINTS)
+
+
+def format_environment_pair(name: str, value: str | None) -> str:
     if value is None:
         return "null"
-    if name in REDACTED_ENVIRONMENT_VARIABLES:
-        return "[REDACTED]"
+    if should_redact_environment_variable(name):
+        return "[MASKED]"
     if value == "":
         return '""'
     return value
@@ -659,10 +678,10 @@ class Settings:
     @staticmethod
     def startup_all_environment_lines() -> list[str]:
         lines = [
-            "[bdw-startup] Full os.environ dump follows. This is a temporary debug block and may include secrets.",
+            "[bdw-startup] Full os.environ dump follows. Sensitive values are masked.",
         ]
         lines.extend(
-            f"{name}={value}"
+            f"{name}={format_environment_pair(name, value)}"
             for name, value in sorted(os.environ.items(), key=lambda item: item[0].lower())
         )
         return lines

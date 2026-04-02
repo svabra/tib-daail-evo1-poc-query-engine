@@ -2,12 +2,15 @@
 
 This repository now contains the `DAAIFL Data Workbench` web UI and the supporting local integration stack.
 
-`DAAIFL Data Workbench` is a small FastAPI application that:
+`DAAIFL Workbench` is a small FastAPI application that:
 
 - serves a notebook-style SQL UI with Jinja2, HTMX and CodeMirror 6
 - executes SQL through DuckDB in the backend
 - exposes S3/MinIO and PostgreSQL as configured data sources
 - ships two preinstalled smoke-test notebooks for S3 and PostgreSQL
+
+## PoC in Progress
+For the sake for fast development the DAAIFL Workbench is developed in one single container. Later it will be decomposed in multiple components (UI, query cordinator, ingestion engine, API, etc.)
 
 ## Architecture
 
@@ -223,7 +226,7 @@ The practical rule is simple: the app does not detect "where it is" by hostname.
 Build locally:
 
 ```bash
-docker build -f bdw/Dockerfile -t bit-data-workbench:0.3.22 .
+docker build -f bdw/Dockerfile -t bit-data-workbench:0.3.23 .
 ```
 
 Run directly without Compose-managed service wiring:
@@ -233,7 +236,7 @@ docker run --rm -d ^
   --name bit-data-workbench ^
   -p 8000:8000 ^
   -v "%cd%\\workspace:/workspace" ^
-  -e IMAGE_VERSION=0.3.22 ^
+  -e IMAGE_VERSION=0.3.23 ^
   -e DUCKDB_DATABASE=/workspace/bit-data-workbench.duckdb ^
   -e DUCKDB_EXTENSION_DIRECTORY=/opt/duckdb/extensions ^
   -e S3_ENDPOINT=minio:9000 ^
@@ -251,7 +254,7 @@ docker run --rm -d ^
   -e PG_PASSWORD=evo1 ^
   -e PG_OLTP_DATABASE=evo1_oltp ^
   -e PG_OLAP_DATABASE=evo1_olap ^
-  bit-data-workbench:0.3.22
+  bit-data-workbench:0.3.23
 ```
 
 ### TODO
@@ -278,7 +281,7 @@ The route is an OpenShift `edge` route and exposes the HTTP service externally t
 Current image:
 
 ```text
-docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.22
+docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.23
 ```
 
 ### RHOS S3 Authentication
@@ -293,6 +296,43 @@ Use this model in the cluster:
 3. Set `S3_CA_CERT_FILE=/myconfigmap/daai-brs-d/bit-ros-trusted-certs/ca-bundle.crt` in `k8s/duckdb-configmap.yaml`.
 4. Keep `S3_ENDPOINT=https://...` and `S3_VERIFY_SSL=true`.
 5. If `ca-bundle.crt` is not the real file name, use the startup logs to see which files actually exist in the mounted directory.
+
+This is how the S3 connection is wired in the deployment:
+
+```yaml
+envFrom:
+  - configMapRef:
+      name: tib-daail-evo1-poc-query-engine-config
+  - secretRef:
+      name: tib-daail-evo1-poc-query-engine-secret
+
+volumeMounts:
+  - name: bit-ros-trusted-certs
+    mountPath: /myconfigmap/daai-brs-d/bit-ros-trusted-certs
+    readOnly: true
+
+volumes:
+  - name: bit-ros-trusted-certs
+    configMap:
+      name: bit-ros-trusted-certs
+```
+
+And this is the matching cluster config for the application:
+
+```yaml
+data:
+  S3_ENDPOINT: https://ecspr01.sz.admin.ch:9021
+  S3_USE_SSL: "true"
+  S3_VERIFY_SSL: "true"
+  S3_CA_CERT_FILE: /myconfigmap/daai-brs-d/bit-ros-trusted-certs/ca-bundle.crt
+```
+
+In plain terms:
+
+- the Secret provides `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY`
+- the trusted-certs ConfigMap is mounted as files into the pod
+- boto3 and DuckDB use the mounted `ca-bundle.crt` file for TLS verification
+- the startup logs recursively print the mounted cert directory so the actual file name can be verified quickly
 
 RHOS currently injects:
 
@@ -356,7 +396,8 @@ Notes:
 - If RHOS still supplies `S3_ENDPOINT=host:9021` without a scheme, the app now normalizes that non-local endpoint to HTTPS automatically when SSL verification is enabled.
 - Only set `S3_URL_STYLE` if the target ECS endpoint explicitly requires it.
 - Prefer a concrete file path such as `.../ca-bundle.crt` over a bare directory for boto `verify=...`.
-- Startup logs print the mounted configmap contents, the configured `S3_CA_CERT_FILE`, the visible files under each cert search root, and the effective CA path that was finally used.
+- Startup logs print masked environment values, the mounted configmap contents, the configured `S3_CA_CERT_FILE`, the visible files under each cert search root, and the effective CA path that was finally used.
+- Startup tasks are separated with `-------------------------------` markers so the sequential work is easy to follow in the logs.
 
 ## Verification
 

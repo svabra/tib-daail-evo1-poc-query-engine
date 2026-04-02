@@ -43,6 +43,7 @@ from .source_discovery import (
 
 SUPPORTED_S3_VIEW_FORMATS = {"parquet", "csv", "json"}
 logger = logging.getLogger(__name__)
+STARTUP_DIVIDER = "-------------------------------"
 S3_BOOTSTRAP_SAMPLE_KEY = "startup/vat_context_bootstrap.csv"
 S3_BOOTSTRAP_SAMPLE_CSV = """company_uid,company_name,canton_code,tax_period_end,transaction_id,declared_turnover_chf,net_vat_due_chf,refund_claim_chf,filing_status,category
 CHE-100.000.001,Alpine Foods AG,ZH,2025-03-31,TX-10001,124000.00,9300.00,0.00,filed,standard
@@ -178,22 +179,23 @@ class WorkbenchService:
 
     def start(self) -> None:
         started = time.perf_counter()
+        self._log_startup_section("Initialize workbench startup")
         self._log_startup(
             "Workbench startup begin: duckdb=%s extension_dir=%s image_version=%s",
             self.settings.duckdb_database,
             self.settings.duckdb_extension_directory,
             self.settings.image_version,
         )
-        self._log_startup("Startup step: ensuring DuckDB directories exist")
+        self._log_startup_section("Ensure DuckDB directories exist")
         self.settings.duckdb_database.parent.mkdir(parents=True, exist_ok=True)
         self.settings.duckdb_extension_directory.mkdir(parents=True, exist_ok=True)
-        self._log_startup("Startup step: opening primary DuckDB connection")
+        self._log_startup_section("Open primary DuckDB connection")
         conn = self._create_connection(startup_context=True, run_s3_startup_diagnostics=False)
 
         with self._lock:
             self._conn = conn
         self._log_startup("Startup step complete: primary DuckDB connection is ready")
-        self._log_startup("Startup step: refreshing initial metadata state")
+        self._log_startup_section("Refresh initial metadata state")
         try:
             with self._lock:
                 self._refresh_state()
@@ -209,7 +211,7 @@ class WorkbenchService:
         else:
             self._log_startup("Startup step complete: initial metadata state is ready")
 
-        self._log_startup("Startup step: starting data source discovery manager")
+        self._log_startup_section("Start data source discovery manager")
         try:
             self._data_source_discovery.start()
         except Exception as exc:
@@ -222,10 +224,12 @@ class WorkbenchService:
         else:
             self._log_startup("Startup step complete: data source discovery manager started")
 
+        self._log_startup_section("Schedule background S3 startup diagnostics")
         self._start_background_s3_startup_diagnostics()
         self._log_startup("Workbench startup completed in %.2fs", time.perf_counter() - started)
 
     def stop(self) -> None:
+        self._log_startup_section("Shutdown workbench service")
         self._log_startup("Workbench shutdown begin")
         self._data_source_discovery.stop()
         self._close_persistent_postgres_connections()
@@ -756,6 +760,10 @@ class WorkbenchService:
         print(f"[bdw-startup] {rendered}", flush=True)
         logger.log(level, message, *args, exc_info=exc_info)
 
+    def _log_startup_section(self, title: str) -> None:
+        self._log_startup(STARTUP_DIVIDER)
+        self._log_startup("Startup task: %s", title)
+
     def _set_minimal_state(self) -> None:
         catalogs: list[SourceCatalog] = []
         self._catalogs = catalogs
@@ -858,7 +866,7 @@ class WorkbenchService:
         run_s3_startup_diagnostics: bool = False,
     ) -> None:
         if startup_context:
-            self._log_startup("Startup step: bootstrapping optional integrations")
+            self._log_startup_section("Bootstrap optional integrations")
         try:
             self._bootstrap_s3(
                 conn,
@@ -947,11 +955,13 @@ class WorkbenchService:
                 transport_reason,
             )
         if startup_context:
+            self._log_startup_section("Ensure bootstrap S3 bucket and seed data")
             self._ensure_s3_startup_seed_data(use_ssl=use_ssl)
 
         startup_views = parse_s3_startup_views(self.settings.s3_startup_views)
         options = self._s3_secret_options(endpoint=endpoint, use_ssl=use_ssl)
         if startup_context:
+            self._log_startup_section("Configure DuckDB S3 secret")
             self._log_startup(
                 "S3 bootstrap step: configuring DuckDB secret for endpoint=%s bucket=%s url_style=%s startup_views=%d",
                 endpoint,
@@ -1522,6 +1532,7 @@ class WorkbenchService:
 
     def _run_background_s3_startup_diagnostics(self) -> None:
         started = time.perf_counter()
+        self._log_startup_section("Run background S3 startup diagnostics")
         self._log_startup("Background S3 startup diagnostics begin")
         conn: duckdb.DuckDBPyConnection | None = None
         try:
@@ -1621,6 +1632,7 @@ class WorkbenchService:
 
         if self.settings.pg_oltp_database:
             if startup_context:
+                self._log_startup_section("Attach PostgreSQL OLTP catalog")
                 self._log_startup(
                     "PostgreSQL bootstrap step: attaching OLTP catalog %s on %s:%s",
                     self.settings.pg_oltp_database,
@@ -1644,6 +1656,7 @@ class WorkbenchService:
 
         if self.settings.pg_olap_database:
             if startup_context:
+                self._log_startup_section("Attach PostgreSQL OLAP catalog")
                 self._log_startup(
                     "PostgreSQL bootstrap step: attaching OLAP catalog %s on %s:%s",
                     self.settings.pg_olap_database,
