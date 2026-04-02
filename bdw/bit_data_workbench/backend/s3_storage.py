@@ -162,6 +162,8 @@ def s3_client(
             "mode": "standard",
         },
         s3=s3_config,
+        request_checksum_calculation="when_required",
+        response_checksum_validation="when_required",
     )
     return boto3.client(
         "s3",
