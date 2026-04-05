@@ -6,6 +6,9 @@ $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $python = Join-Path $repoRoot ".venv\Scripts\python.exe"
+$logConfigPath = Join-Path $repoRoot "bdw\logging.json"
+$logsRoot = Join-Path $repoRoot "logs"
+$bdwLogDir = Join-Path $logsRoot "bdw"
 
 function Get-ListeningProcessIds {
     param(
@@ -60,12 +63,16 @@ if (-not (Test-Path $python)) {
     throw "Virtual environment Python not found at '$python'. Create .venv first."
 }
 
+& (Join-Path $PSScriptRoot "cleanup-logs.ps1")
+
 $imageVersion = (Get-Content -Raw (Join-Path $repoRoot "VERSION")).Trim()
 $localDir = Join-Path $repoRoot ".local\bdw"
 $workspaceDir = Join-Path $repoRoot "workspace"
 $extensionDir = Join-Path $localDir "duckdb\extensions"
 $dbPath = Join-Path $workspaceDir "bit-data-workbench.dev.duckdb"
 
+New-Item -ItemType Directory -Force -Path $logsRoot | Out-Null
+New-Item -ItemType Directory -Force -Path $bdwLogDir | Out-Null
 New-Item -ItemType Directory -Force -Path $localDir | Out-Null
 New-Item -ItemType Directory -Force -Path $workspaceDir | Out-Null
 New-Item -ItemType Directory -Force -Path $extensionDir | Out-Null
@@ -99,11 +106,19 @@ Write-Host "Starting DAAIFL Data Workbench dev server with auto-reload..."
 Write-Host "URL: http://localhost:$Port"
 Write-Host "DuckDB database: $dbPath"
 Write-Host "DuckDB extension directory: $extensionDir"
+Write-Host "Application log: $(Join-Path $bdwLogDir 'server.log')"
 Write-Host "Requires local dependencies on localhost:9000 and localhost:5432."
 
-& $python -m uvicorn bit_data_workbench.main:app `
-    --app-dir (Join-Path $repoRoot "bdw") `
-    --host 127.0.0.1 `
-    --port $Port `
-    --reload `
-    --reload-dir (Join-Path $repoRoot "bdw")
+Push-Location $repoRoot
+try {
+    & $python -m uvicorn bit_data_workbench.main:app `
+        --app-dir (Join-Path $repoRoot "bdw") `
+        --host 127.0.0.1 `
+        --port $Port `
+        --reload `
+        --reload-dir (Join-Path $repoRoot "bdw") `
+        --log-config $logConfigPath
+}
+finally {
+    Pop-Location
+}

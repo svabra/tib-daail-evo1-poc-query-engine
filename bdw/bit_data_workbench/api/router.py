@@ -3,12 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+import shutil
 
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
 from ..backend.service import WorkbenchService
 from ..dependencies import get_workbench_service
@@ -43,6 +45,23 @@ class SharedNotebookUpsertPayload(BaseModel):
     created_at: str | None = Field(default=None, alias="createdAt")
     cells: list[NotebookCellPayload] = Field(default_factory=list)
     versions: list[NotebookVersionPayload] = Field(default_factory=list)
+
+
+class S3BucketCreatePayload(BaseModel):
+    bucket_name: str = Field(alias="bucketName")
+
+
+class S3FolderCreatePayload(BaseModel):
+    bucket: str = ""
+    prefix: str = ""
+    folder_name: str = Field(alias="folderName")
+
+
+class QueryResultS3ExportPayload(BaseModel):
+    export_format: str = Field(alias="format")
+    bucket: str = ""
+    prefix: str = ""
+    file_name: str = Field(default="", alias="fileName")
 
 
 @router.get("/info")
@@ -85,6 +104,50 @@ def source_object_fields(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return JSONResponse({"fields": [field.payload for field in fields]})
+
+
+@router.get("/api/s3/explorer")
+def s3_explorer_snapshot(
+    bucket: str = Query(""),
+    prefix: str = Query(""),
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        snapshot = service.s3_explorer_snapshot(bucket=bucket, prefix=prefix)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(snapshot))
+
+
+@router.post("/api/s3/explorer/buckets")
+def create_s3_bucket(
+    payload: S3BucketCreatePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        result = service.create_s3_bucket(payload.bucket_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(result))
+
+
+@router.post("/api/s3/explorer/folders")
+def create_s3_folder(
+    payload: S3FolderCreatePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        result = service.create_s3_folder(
+            bucket=payload.bucket,
+            prefix=payload.prefix,
+            folder_name=payload.folder_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(result))
 
 
 @router.get("/api/data-source-events")
@@ -282,6 +345,49 @@ def cancel_query_job(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return JSONResponse(jsonable_encoder(snapshot))
+
+
+@router.get("/api/query-jobs/{job_id}/export/download")
+def download_query_job_export(
+    job_id: str,
+    export_format: str = Query(alias="format"),
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> FileResponse:
+    try:
+        artifact = service.download_query_result_export(job_id=job_id, export_format=export_format)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return FileResponse(
+        path=artifact.local_path,
+        media_type=artifact.export.content_type,
+        filename=artifact.export.filename,
+        background=BackgroundTask(shutil.rmtree, artifact.cleanup_dir, True),
+    )
+
+
+@router.post("/api/query-jobs/{job_id}/export/s3")
+def save_query_job_export_to_s3(
+    job_id: str,
+    payload: QueryResultS3ExportPayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        result = service.save_query_result_export_to_s3(
+            job_id=job_id,
+            export_format=payload.export_format,
+            bucket=payload.bucket,
+            prefix=payload.prefix,
+            file_name=payload.file_name,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(result))
 
 
 @router.get("/api/query-jobs/stream")

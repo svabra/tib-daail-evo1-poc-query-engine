@@ -229,6 +229,13 @@ class QueryJobManager:
             record = self._jobs[job_id]
             return record.snapshot
 
+    def snapshot(self, job_id: str) -> QueryJobDefinition:
+        with self._condition:
+            record = self._jobs.get(job_id)
+            if record is None:
+                raise KeyError(f"Unknown query job: {job_id}")
+            return record.snapshot
+
     def state_payload(self) -> dict[str, Any]:
         with self._condition:
             return self._state_payload_locked()

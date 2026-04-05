@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "disable_existing_loggers": false,
+  "formatters": {
+    "default": {
+      "()": "uvicorn.logging.DefaultFormatter",
+      "fmt": "%(levelprefix)s %(message)s",
+      "use_colors": null
+    },
+    "access": {
+      "()": "uvicorn.logging.AccessFormatter",
+      "fmt": "%(levelprefix)s %(client_addr)s - \"%(request_line)s\" %(status_code)s"
+    },
+    "file": {
+      "format": "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+    }
+  },
+  "handlers": {
+    "default": {
+      "class": "logging.StreamHandler",
+      "formatter": "default",
+      "stream": "ext://sys.stderr"
+    },
+    "access": {
+      "class": "logging.StreamHandler",
+      "formatter": "access",
+      "stream": "ext://sys.stdout"
+    },
+    "bdw_file": {
+      "class": "logging.FileHandler",
+      "formatter": "file",
+      "filename": "logs/bdw/server.log",
+      "encoding": "utf-8"
+    }
+  },
+  "loggers": {
+    "uvicorn": {
+      "handlers": [
+        "default",
+        "bdw_file"
+      ],
+      "level": "INFO",
+      "propagate": false
+    },
+    "uvicorn.access": {
+      "handlers": [
+        "access",
+        "bdw_file"
+      ],
+      "level": "INFO",
+      "propagate": false
+    }
+  },
+  "root": {
+    "handlers": [
+      "default",
+      "bdw_file"
+    ],
+    "level": "INFO"
+  }
+}

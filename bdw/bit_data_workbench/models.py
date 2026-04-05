@@ -274,6 +274,75 @@ class DataGeneratorFolder:
 
 
 @dataclass(slots=True)
+class S3ExplorerEntry:
+    entry_kind: str
+    name: str
+    bucket: str
+    prefix: str = ""
+    path: str = ""
+    file_format: str = ""
+    size_bytes: int = 0
+    has_children: bool = False
+    selectable: bool = False
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {
+            "entryKind": self.entry_kind,
+            "name": self.name,
+            "bucket": self.bucket,
+            "prefix": self.prefix,
+            "path": self.path,
+            "fileFormat": self.file_format,
+            "sizeBytes": self.size_bytes,
+            "hasChildren": self.has_children,
+            "selectable": self.selectable,
+        }
+
+
+@dataclass(slots=True)
+class S3ExplorerBreadcrumb:
+    label: str
+    bucket: str = ""
+    prefix: str = ""
+    path: str = ""
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {
+            "label": self.label,
+            "bucket": self.bucket,
+            "prefix": self.prefix,
+            "path": self.path,
+        }
+
+
+@dataclass(slots=True)
+class S3ExplorerSnapshot:
+    bucket: str = ""
+    prefix: str = ""
+    path: str = ""
+    entries: list[S3ExplorerEntry] = field(default_factory=list)
+    breadcrumbs: list[S3ExplorerBreadcrumb] = field(default_factory=list)
+    can_create_bucket: bool = True
+    can_create_folder: bool = False
+    empty_message: str = ""
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {
+            "bucket": self.bucket,
+            "prefix": self.prefix,
+            "path": self.path,
+            "entries": [entry.payload for entry in self.entries],
+            "breadcrumbs": [breadcrumb.payload for breadcrumb in self.breadcrumbs],
+            "canCreateBucket": self.can_create_bucket,
+            "canCreateFolder": self.can_create_folder,
+            "emptyMessage": self.empty_message,
+        }
+
+
+@dataclass(slots=True)
 class QueryResult:
     sql: str
     columns: list[str] = field(default_factory=list)
@@ -287,6 +356,33 @@ class QueryResult:
     @property
     def ok(self) -> bool:
         return self.error is None
+
+
+@dataclass(slots=True)
+class QueryResultExportDefinition:
+    job_id: str
+    export_format: str
+    destination: str
+    filename: str
+    content_type: str
+    message: str
+    bucket: str = ""
+    key: str = ""
+    path: str = ""
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {
+            "jobId": self.job_id,
+            "format": self.export_format,
+            "destination": self.destination,
+            "filename": self.filename,
+            "contentType": self.content_type,
+            "message": self.message,
+            "bucket": self.bucket,
+            "key": self.key,
+            "path": self.path,
+        }
 
 
 @dataclass(slots=True)

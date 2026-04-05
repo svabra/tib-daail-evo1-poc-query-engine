@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 
 ARG DUCKDB_VERSION=1.4.4
-ARG IMAGE_VERSION=0.3.30
+ARG IMAGE_VERSION=0.3.31
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -23,7 +23,7 @@ COPY bdw/requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt \
     && rm -f /tmp/requirements.txt
 
-RUN mkdir -p /opt/duckdb/extensions
+RUN mkdir -p /opt/duckdb/extensions /app/logs/bdw /app/logs/playwright /app/logs/schema-panel /app/logs/misc
 
 RUN python - <<'PY'
 from pathlib import Path
@@ -45,4 +45,4 @@ COPY bdw /app
 EXPOSE 8000
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["uvicorn", "bit_data_workbench.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "bit_data_workbench.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-config", "logging.json"]

@@ -1,0 +1,105 @@
+from __future__ import annotations
+
+
+# Derived from git history through version 0.3.31. Keep entries concise and
+# focused on user-visible improvements or severe reliability fixes.
+RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.3.31",
+        "releasedAt": "2026-04-05T16:20:00+02:00",
+        "features": [
+            "Performance Evaluation benchmarks are now split into Single-Table Test and Multi-Table Test folders, with a new multi-table federal-tax benchmark spanning DuckDB on S3, DuckDB on PostgreSQL, and PostgreSQL native execution.",
+            "Benchmark notebooks now explain the business semantics of the query, so users can see what each single-table and multi-table test is approximating.",
+            "Query results now use a single Export / Save menu for JSON, CSV, and Parquet downloads, and can be saved directly to S3 through a reusable explorer with bucket and folder creation.",
+            "Result export handling was hardened so downloads and S3 saves work reliably for completed query jobs, including DuckDB plus PostgreSQL benchmark runs.",
+        ],
+    },
+    {
+        "version": "0.3.30",
+        "releasedAt": "2026-04-02T22:25:28+02:00",
+        "features": [
+            "Running queries now show clearer progress feedback, including a percentage when the backend can provide one.",
+            "Queued or indeterminate queries now explain what the backend is doing instead of only showing a spinner.",
+        ],
+    },
+    {
+        "version": "0.3.29",
+        "releasedAt": "2026-04-02T22:01:16+02:00",
+        "features": [
+            "Pinned DuckDB to 1.4.4 for a more stable and predictable runtime.",
+            "Aligned S3 integration with the pinned DuckDB version to reduce storage compatibility issues.",
+        ],
+    },
+    {
+        "version": "0.3.28",
+        "releasedAt": "2026-04-02T17:52:27+02:00",
+        "features": [
+            "Adjusted S3 checksum handling to avoid compatibility failures on stricter object-storage endpoints.",
+        ],
+    },
+    {
+        "version": "0.3.27",
+        "releasedAt": "2026-04-02T17:26:38+02:00",
+        "features": [
+            "S3 loaders now upload through boto3, improving reliability when generated files are written to object storage.",
+            "Loader write and cleanup flow was hardened for S3-backed test data.",
+        ],
+    },
+    {
+        "version": "0.3.26",
+        "releasedAt": "2026-04-02T17:02:20+02:00",
+        "features": [
+            "Fixed cluster S3 URL-style handling to restore loader compatibility in RHOS/OpenShift environments.",
+        ],
+    },
+    {
+        "version": "0.3.25",
+        "releasedAt": "2026-04-02T16:42:25+02:00",
+        "features": [
+            "Sidebar controls and navigation interactions were polished for quicker notebook browsing.",
+        ],
+    },
+    {
+        "version": "0.3.24",
+        "releasedAt": "2026-04-02T16:31:26+02:00",
+        "features": [
+            "Notebooks can be shared with all connected users and stay synchronized through server-side events.",
+            "Shared notebooks are marked in the sidebar and can be switched back to local mode.",
+        ],
+    },
+    {
+        "version": "0.3.23",
+        "releasedAt": "2026-04-02T15:21:56+02:00",
+        "features": [
+            "Startup diagnostics now print environment, config mounts, and certificate mapping more clearly.",
+            "Deployment issues around S3 certificates and mounted config are easier to troubleshoot.",
+        ],
+    },
+    {
+        "version": "0.3.22",
+        "releasedAt": "2026-04-02T15:17:53+02:00",
+        "features": [
+            "Empty S3 startup storage is seeded automatically when needed.",
+            "S3 Smoke and PG vs S3 Contest loaders now use separate buckets, so cleanup stays isolated.",
+        ],
+    },
+    {
+        "version": "0.3.21",
+        "releasedAt": "2026-04-02T14:35:10+02:00",
+        "features": [
+            "Improved RHOS/OpenShift S3 connectivity with mounted trust-store support and secret-backed credentials.",
+            "Safer HTTPS and transport defaults reduce cluster S3 setup issues.",
+        ],
+    },
+]
+
+
+def release_notes() -> list[dict[str, object]]:
+    return [
+        {
+            "version": str(entry["version"]),
+            "releasedAt": str(entry["releasedAt"]),
+            "features": [str(feature) for feature in entry["features"]],
+        }
+        for entry in RELEASE_NOTES
+    ]

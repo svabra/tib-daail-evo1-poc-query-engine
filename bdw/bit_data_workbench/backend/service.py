@@ -39,8 +39,10 @@ from .s3_storage import (
 )
 from .data_generation_jobs import DataGenerationJobManager
 from .query_jobs import QueryJobManager
+from .query_result_exports import QueryResultExportManager
 from .notebooks import build_completion_schema, build_notebook_tree, build_notebooks, build_source_options
 from .runbooks import build_runbook_tree
+from .s3_explorer import S3ExplorerManager
 from .shared_notebooks import SharedNotebookStore
 from .source_discovery import (
     DataSourceDiscoveryManager,
@@ -155,6 +157,13 @@ class WorkbenchService:
             postgres_connection_factory=self._create_postgres_native_connection,
             notebook_title_resolver=self._resolve_notebook_title,
             metadata_refresher=self.refresh_metadata_state,
+        )
+        self._s3_explorer = S3ExplorerManager(settings)
+        self._query_result_exports = QueryResultExportManager(
+            settings=settings,
+            connection_factory=self._create_worker_connection,
+            postgres_connection_factory=self._create_postgres_native_connection,
+            query_job_resolver=self._query_jobs.snapshot,
         )
         self._data_generators = DataGeneratorRegistry()
         self._data_generation_jobs = DataGenerationJobManager(
@@ -487,6 +496,36 @@ class WorkbenchService:
     def cancel_query_job(self, job_id: str) -> dict[str, object]:
         snapshot = self._query_jobs.cancel_job(job_id)
         return snapshot.payload
+
+    def s3_explorer_snapshot(self, *, bucket: str = "", prefix: str = "") -> dict[str, object]:
+        return self._s3_explorer.snapshot(bucket=bucket, prefix=prefix).payload
+
+    def create_s3_bucket(self, bucket_name: str) -> dict[str, object]:
+        return self._s3_explorer.create_bucket(bucket_name).payload
+
+    def create_s3_folder(self, *, bucket: str, prefix: str = "", folder_name: str) -> dict[str, object]:
+        return self._s3_explorer.create_folder(bucket=bucket, prefix=prefix, folder_name=folder_name).payload
+
+    def download_query_result_export(self, *, job_id: str, export_format: str):
+        return self._query_result_exports.download(job_id=job_id, export_format=export_format)
+
+    def save_query_result_export_to_s3(
+        self,
+        *,
+        job_id: str,
+        export_format: str,
+        bucket: str,
+        prefix: str = "",
+        file_name: str = "",
+    ) -> dict[str, object]:
+        result = self._query_result_exports.save_to_s3(
+            job_id=job_id,
+            export_format=export_format,
+            bucket=bucket,
+            prefix=prefix,
+            file_name=file_name,
+        )
+        return result.payload
 
     def start_data_generation_job(
         self,
@@ -854,9 +893,7 @@ class WorkbenchService:
         level: int = logging.INFO,
         exc_info: bool = False,
     ) -> None:
-        rendered = message % args if args else message
-        print(f"[bdw-startup] {rendered}", flush=True)
-        logger.log(level, message, *args, exc_info=exc_info)
+        logger.log(level, f"[bdw-startup] {message}", *args, exc_info=exc_info)
 
     def _log_startup_section(self, title: str) -> None:
         self._log_startup(STARTUP_DIVIDER)

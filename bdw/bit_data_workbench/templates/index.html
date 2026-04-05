@@ -117,6 +117,12 @@
                     Show the running version and the purpose of this prototype.
                   </span>
                 </button>
+                <button type="button" class="topbar-settings-action" data-open-feature-list>
+                  <span class="topbar-settings-action-title">Feature list</span>
+                  <span class="topbar-settings-action-copy">
+                    Review user-facing changes and major fixes by version.
+                  </span>
+                </button>
               </div>
             </div>
           </details>
@@ -132,4 +138,5 @@
     </main>
   </div>
   <script id="source-options" type="application/json">{{ source_options_json | safe }}</script>
+  <script id="feature-release-notes" type="application/json">{{ release_notes_json | safe }}</script>
 {% endblock %}

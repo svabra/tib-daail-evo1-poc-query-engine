@@ -12,6 +12,8 @@
         "bit_data_workbench.main:app",
         "--app-dir",
         "${workspaceFolder}\\bdw",
+        "--log-config",
+        "${workspaceFolder}\\bdw\\logging.json",
         "--host",
         "127.0.0.1",
         "--port",

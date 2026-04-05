@@ -209,4 +209,18 @@ __marimo__/
 # Local compose/runtime data
 .local/
 workspace/
+/logs/*
+!/logs/.gitkeep
+!/logs/bdw/
+!/logs/playwright/
+!/logs/schema-panel/
+!/logs/misc/
+/logs/bdw/*
+!/logs/bdw/.gitkeep
+/logs/playwright/*
+!/logs/playwright/.gitkeep
+/logs/schema-panel/*
+!/logs/schema-panel/.gitkeep
+/logs/misc/*
+!/logs/misc/.gitkeep
 k8s/duckdb-secret.yaml

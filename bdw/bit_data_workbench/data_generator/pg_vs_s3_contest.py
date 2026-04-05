@@ -40,7 +40,7 @@ class PgVsS3ContestDataGenerator(DataGenerator):
         "benchmarked against each other."
     )
     target_kind = "contest"
-    tree_path = ("PoC Tests", "Performance Evaluation")
+    tree_path = ("PoC Tests", "Performance Evaluation", "Single-Table Test")
     default_size_gb = 1.0
     min_size_gb = 0.01
     max_size_gb = 128.0

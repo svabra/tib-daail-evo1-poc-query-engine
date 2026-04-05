@@ -412,7 +412,7 @@
           </div>
         </form>
 
-        <section id="query-results-{{ cell.cell_id }}" class="result-panel" data-cell-result hidden>
+        <section id="query-results-{{ cell.cell_id }}" class="result-panel" data-cell-result data-query-job-id="" hidden>
           <header class="result-header">
             <div class="result-header-copy">
               <h3>Result</h3>
@@ -420,20 +420,48 @@
             </div>
             <div class="result-header-actions">
               <span class="result-badge">Run this cell to inspect the selected data sources.</span>
-              <div class="result-download-actions" aria-label="Result download actions">
-                <button
-                  type="button"
-                  class="result-action-button"
-                  data-result-download-json
-                  title="Download result as JSON"
-                >JSON</button>
-                <button
-                  type="button"
-                  class="result-action-button"
-                  data-result-download-csv
-                  title="Download result as CSV"
-                >CSV</button>
-              </div>
+              <details class="workspace-action-menu result-action-menu" data-result-action-menu data-result-job-id="" hidden>
+                <summary
+                  class="workspace-action-menu-toggle result-action-menu-toggle"
+                  aria-label="Export or save query results"
+                  title="Export or save query results"
+                >
+                  <span class="result-action-menu-label">Export / Save</span>
+                </summary>
+                <div class="workspace-action-menu-panel result-action-menu-panel">
+                  <button
+                    type="button"
+                    class="workspace-action-menu-item"
+                    data-result-export-s3="parquet"
+                    data-result-job-id=""
+                  >Save Results in Parquet Format on S3 ...</button>
+                  <button
+                    type="button"
+                    class="workspace-action-menu-item"
+                    data-result-export-s3="json"
+                    data-result-job-id=""
+                  >Save Results in JSON Format on S3 ...</button>
+                  <div class="workspace-action-menu-separator" aria-hidden="true"></div>
+                  <button
+                    type="button"
+                    class="workspace-action-menu-item"
+                    data-result-export-download="parquet"
+                    data-result-job-id=""
+                  >Download Results in Parquet Format</button>
+                  <button
+                    type="button"
+                    class="workspace-action-menu-item"
+                    data-result-export-download="json"
+                    data-result-job-id=""
+                  >Download Results in JSON Format</button>
+                  <button
+                    type="button"
+                    class="workspace-action-menu-item"
+                    data-result-export-download="csv"
+                    data-result-job-id=""
+                  >Download Results in CSV Format</button>
+                </div>
+              </details>
             </div>
           </header>
           <div class="result-empty">
