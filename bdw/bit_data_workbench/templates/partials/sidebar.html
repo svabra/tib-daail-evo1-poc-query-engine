@@ -16,6 +16,7 @@
       aria-controls="sidebar"
       title="Collapse navigation"
     >
+      <span class="sidebar-toggle-icon" aria-hidden="true"></span>
       <span class="sidebar-toggle-label">Collapse navigation</span>
     </button>
   </div>
@@ -145,11 +146,9 @@
             <span class="section-count">{{ notebooks | length }}</span>
           </div>
         </summary>
-        <div class="notebook-tree tree-children" data-notebook-tree data-tree-children>
-          {% for node in notebook_tree %}
-            {% include "partials/notebook_tree_node.html" %}
-          {% endfor %}
-        </div>
+        {% set notebook_browser_live = true %}
+        {% set notebook_browser_manage = true %}
+        {% include "partials/notebook_browser_tree.html" %}
       </details>
     {% endif %}
 
@@ -199,20 +198,22 @@
       </div>
       <div class="source-tree">
         {% for catalog in catalogs %}
+          {% set catalog_source_id = catalog.connection_source_id or catalog.name %}
+          {% set catalog_display_name = "Shared Workspace" if catalog_source_id == "workspace.s3" else "Local Workspace" if catalog_source_id == "workspace.local" else catalog.name %}
           <details
             class="source-catalog"
             data-source-catalog
             data-source-catalog-name="{{ catalog.name }}"
-            data-source-catalog-source-id="{{ catalog.connection_source_id or catalog.name }}"
+            data-source-catalog-source-id="{{ catalog_source_id }}"
           >
-            <summary data-searchable-item="{{ catalog.name }} {{ catalog.connection_label or '' }} {{ catalog.connection_detail or '' }}">
+            <summary data-searchable-item="{{ catalog_display_name }} {{ catalog.connection_label or '' }} {{ catalog.connection_detail or '' }}">
               <span class="source-node-label">
                 <svg class="source-icon source-icon-catalog" viewBox="0 0 16 16" aria-hidden="true">
                   <ellipse cx="8" cy="3.3" rx="4.8" ry="1.9"></ellipse>
                   <path d="M3.2 3.3v8c0 1 2.15 1.9 4.8 1.9s4.8-.9 4.8-1.9v-8"></path>
                   <path d="M3.2 7c0 1 2.15 1.9 4.8 1.9s4.8-.9 4.8-1.9"></path>
                 </svg>
-                <span>{{ catalog.name }}</span>
+                <span>{{ catalog_display_name }}</span>
               </span>
               {% if catalog.connection_label or catalog.connection_controls_enabled or catalog.name == "workspace" %}
                 <span
@@ -250,9 +251,9 @@
                       <button
                         type="button"
                         class="source-control-button source-control-button-connect"
-                        data-source-connect="{{ catalog.connection_source_id or catalog.name }}"
-                        title="Connect {{ catalog.name }}"
-                        aria-label="Connect {{ catalog.name }}"
+                        data-source-connect="{{ catalog_source_id }}"
+                        title="Connect {{ catalog_display_name }}"
+                        aria-label="Connect {{ catalog_display_name }}"
                       >
                         <svg class="source-control-icon" viewBox="0 0 16 16" aria-hidden="true">
                           <path d="M6.5 3.5v3"></path>
@@ -264,9 +265,9 @@
                       <button
                         type="button"
                         class="source-control-button source-control-button-disconnect"
-                        data-source-disconnect="{{ catalog.connection_source_id or catalog.name }}"
-                        title="Disconnect {{ catalog.name }}"
-                        aria-label="Disconnect {{ catalog.name }}"
+                        data-source-disconnect="{{ catalog_source_id }}"
+                        title="Disconnect {{ catalog_display_name }}"
+                        aria-label="Disconnect {{ catalog_display_name }}"
                       >
                         <svg class="source-control-icon" viewBox="0 0 16 16" aria-hidden="true">
                           <path d="M6.5 3.5v3"></path>
@@ -490,18 +491,6 @@
   {% endif %}
 
   <div class="sidebar-footer">
-    <button
-      type="button"
-      class="sidebar-toggle sidebar-toggle-footer"
-      data-sidebar-toggle
-      aria-expanded="false"
-      aria-controls="sidebar"
-      title="Expand navigation"
-    >
-      <span class="sidebar-toggle-icon" aria-hidden="true">‹</span>
-      <span class="sidebar-toggle-label">Expand navigation</span>
-      <span class="sidebar-toggle-badge" data-sidebar-query-count hidden>0</span>
-    </button>
     <dl class="runtime-pill runtime-pill-sidebar" aria-label="Application version">
       <dt>DAAIFL Workbench</dt>
       <dd>V{{ runtime.image_version }}</dd>

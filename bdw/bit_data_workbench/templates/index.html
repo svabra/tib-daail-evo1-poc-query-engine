@@ -1,7 +1,7 @@
 {% extends "layout.html" %}
 
 {% block body %}
-  <div class="shell">
+  <div class="shell{% if shell_sidebar_hidden %} shell-sidebar-hidden{% endif %}" data-shell>
     {% include "partials/sidebar.html" %}
     <div
       class="sidebar-resizer"
@@ -46,6 +46,23 @@
               <rect x="2.1" y="2.4" width="11.8" height="11.2" rx="1.2"></rect>
               <path d="M2.8 6.2h10.4"></path>
               <path d="M5.4 9.1 7 10.7 10.6 7.1"></path>
+            </svg>
+          </button>
+          <button
+            type="button"
+            class="topbar-action-button topbar-action-button-icon-only"
+            data-open-query-data-sources
+            aria-label="Data Source Workbench"
+            title="Data Source Workbench"
+          >
+            <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <ellipse cx="5.2" cy="4.2" rx="3.1" ry="1.35"></ellipse>
+              <path d="M2.1 4.2v4.5c0 .76 1.39 1.35 3.1 1.35s3.1-.59 3.1-1.35V4.2"></path>
+              <path d="M2.1 6.45c0 .75 1.39 1.35 3.1 1.35s3.1-.6 3.1-1.35"></path>
+              <path d="M9.2 2.8h3.35l1.35 1.35v6.15H9.2z"></path>
+              <path d="M12.55 2.8v1.35h1.35"></path>
+              <path d="M10.05 10.55h4"></path>
+              <path d="M10.05 12.15h2.55"></path>
             </svg>
           </button>
           <button
@@ -116,10 +133,15 @@
                 <strong>Settings</strong>
               </div>
               <div class="topbar-settings-actions">
-                <button type="button" class="topbar-settings-action" data-clear-local-cache>
-                  <span class="topbar-settings-action-title">Clear local cache</span>
+                <button
+                  type="button"
+                  class="topbar-settings-action"
+                  data-clear-local-workspace
+                  title="Deletes all browser-local Local Workspace data for this workbench."
+                >
+                  <span class="topbar-settings-action-title">Clear Local Workspace</span>
                   <span class="topbar-settings-action-copy">
-                    Delete all locally stored notebooks, drafts, versions, and browser workspace state.
+                    Delete all browser-local notebooks, drafts, versions, and Local Workspace state after a caution prompt.
                   </span>
                 </button>
                 <button type="button" class="topbar-settings-action" data-open-about>

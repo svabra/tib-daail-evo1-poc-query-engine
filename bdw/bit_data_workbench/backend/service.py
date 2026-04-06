@@ -1852,6 +1852,23 @@ class WorkbenchService:
                     )
                 )
 
+        catalogs.insert(
+            0,
+            SourceCatalog(
+                name="workspace_local",
+                connection_source_id="workspace.local",
+                schemas=[],
+                connection_status="connected",
+                connection_label="Available",
+                connection_detail=(
+                    "Stored locally in this browser via IndexedDB. "
+                    "Visible in the workbench for everyone, but private to "
+                    "each user's browser profile."
+                ),
+                connection_controls_enabled=False,
+            )
+        )
+
         self._catalogs = catalogs
         self._notebooks = self._combined_notebooks(catalogs)
         self._completion_schema = build_completion_schema(catalogs)

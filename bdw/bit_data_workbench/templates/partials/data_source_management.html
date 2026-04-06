@@ -1,0 +1,135 @@
+{% macro data_source_icon(kind) -%}
+  {% if kind == "postgres" %}
+    <svg viewBox="0 0 64 64" aria-hidden="true">
+      <ellipse cx="23" cy="21" rx="12" ry="4.8"></ellipse>
+      <path d="M11 21v16.5c0 2.7 5.4 4.8 12 4.8s12-2.1 12-4.8V21"></path>
+      <path d="M11 29.2c0 2.6 5.4 4.8 12 4.8s12-2.2 12-4.8"></path>
+      <path d="M39 16h12.5l5.5 5.5v25H39z"></path>
+      <path d="M51.5 16v5.5H57"></path>
+      <path d="M43.5 31h9"></path>
+      <path d="M43.5 38h9"></path>
+      <path d="M43.5 45h6"></path>
+    </svg>
+  {% elif kind == "local-browser" %}
+    <svg viewBox="0 0 64 64" aria-hidden="true">
+      <path d="M10 20h18l4 4h22v24H10z"></path>
+      <path d="M10 20v28"></path>
+      <path d="M34 14h14l6 6v22"></path>
+      <path d="M48 14v6h6"></path>
+      <path d="M20 34h24"></path>
+      <path d="M20 42h16"></path>
+    </svg>
+  {% else %}
+    <svg viewBox="0 0 64 64" aria-hidden="true">
+      <path d="M10 22.5c0-4.7 9.8-8.5 22-8.5s22 3.8 22 8.5S44.2 31 32 31s-22-3.8-22-8.5Z"></path>
+      <path d="M10 22.5v12.8c0 4.7 9.8 8.5 22 8.5s22-3.8 22-8.5V22.5"></path>
+      <path d="M10 35.3v13.2C10 53.2 19.8 57 32 57s22-3.8 22-8.5V35.3"></path>
+      <path d="M40 11h12.2l4.8 4.8V30H40z"></path>
+      <path d="M52.2 11v4.8H57"></path>
+      <path d="M43.5 21.3h10"></path>
+      <path d="M43.5 26.8h6.5"></path>
+    </svg>
+  {% endif %}
+{%- endmacro %}
+
+<section class="data-source-management-page" data-data-source-management-page>
+  <div class="home-hero data-source-management-hero">
+    <div class="home-hero-copy">
+      <span class="home-eyebrow">Managed Data Sources</span>
+      <h2>Inspect source configurations in one place</h2>
+      <p>
+        This prototype stays read-only for data source management. Select a source card to inspect its current connection settings, discovered catalog footprint, and runtime status.
+      </p>
+    </div>
+    <div class="data-source-management-note">
+      <span class="data-source-readonly-pill">Read-only PoC</span>
+      <p>Creating, editing, and deleting sources is intentionally disabled in this prototype.</p>
+      <a href="/query-workbench" class="data-source-management-back-link" data-open-query-workbench-entry>
+        Back to Query Workbench
+      </a>
+    </div>
+  </div>
+
+  <div class="data-source-management-layout">
+    <section class="home-section data-source-management-section">
+      <div class="home-section-header">
+        <h3>Source Types</h3>
+        <p>Choose a source to review the current configuration and availability.</p>
+      </div>
+      <div class="data-source-card-grid">
+        {% for source in data_sources %}
+          <a
+            href="/query-workbench/data-sources?source_id={{ source.source_id }}"
+            class="data-source-card{% if selected_data_source and source.source_id == selected_data_source.source_id %} is-active{% endif %}"
+            data-open-query-data-source="{{ source.source_id }}"
+            aria-current="{% if selected_data_source and source.source_id == selected_data_source.source_id %}page{% else %}false{% endif %}"
+            {% if source.storage_tooltip %}title="{{ source.storage_tooltip }}"{% endif %}
+          >
+            <span class="data-source-card-icon" aria-hidden="true">
+              {{ data_source_icon(source.kind) }}
+            </span>
+            <span class="data-source-card-copy">
+              <span class="data-source-card-title-row">
+                <strong class="data-source-card-title">{{ source.name }}</strong>
+                <span class="data-source-status-pill" data-tone="{{ source.status_tone }}">{{ source.status_label }}</span>
+              </span>
+              <span class="data-source-card-type">{{ source.source_type }}</span>
+              <span class="data-source-card-subtitle">{{ source.label }}</span>
+              <span class="data-source-card-summary">{{ source.summary }}</span>
+            </span>
+            <span class="data-source-card-meta">
+              <span>{{ source.schema_count }} schema{% if source.schema_count != 1 %}s{% endif %}</span>
+              <span>{{ source.object_count }} object{% if source.object_count != 1 %}s{% endif %}</span>
+            </span>
+          </a>
+        {% endfor %}
+      </div>
+    </section>
+
+    <section class="home-section data-source-management-section data-source-detail-section">
+      {% if selected_data_source %}
+        <div class="data-source-detail-header">
+          <div class="data-source-detail-title-group">
+            <span class="data-source-detail-icon" aria-hidden="true">
+              {{ data_source_icon(selected_data_source.kind) }}
+            </span>
+            <div class="data-source-detail-copy">
+              <span class="home-eyebrow">{{ selected_data_source.source_type }} • {{ selected_data_source.family }}</span>
+              <h3{% if selected_data_source.storage_tooltip %} title="{{ selected_data_source.storage_tooltip }}"{% endif %}>{{ selected_data_source.name }}</h3>
+              <p>{{ selected_data_source.summary }}</p>
+            </div>
+          </div>
+          <div class="data-source-detail-status-panel">
+            <span class="data-source-status-pill" data-tone="{{ selected_data_source.status_tone }}">
+              {{ selected_data_source.status_label }}
+            </span>
+            <p>{{ selected_data_source.status_detail }}</p>
+          </div>
+        </div>
+
+        <div class="data-source-detail-metric-grid">
+          {% for metric in selected_data_source.summary_metrics %}
+            <article class="data-source-metric-card">
+              <span class="data-source-metric-label">{{ metric.label }}</span>
+              <strong class="data-source-metric-value">{{ metric.value }}</strong>
+            </article>
+          {% endfor %}
+        </div>
+
+        <div class="data-source-settings-grid">
+          {% for setting in selected_data_source.settings %}
+            <article class="data-source-setting-card">
+              <span class="data-source-setting-label">{{ setting.label }}</span>
+              <strong class="data-source-setting-value">{{ setting.value }}</strong>
+              {% if setting.hint %}
+                <p class="data-source-setting-hint">{{ setting.hint }}</p>
+              {% endif %}
+            </article>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p class="home-empty">No data sources are available in the current runtime.</p>
+      {% endif %}
+    </section>
+  </div>
+</section>

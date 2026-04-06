@@ -53,6 +53,14 @@ const resultExportDialogState = {
   fileName: "",
   saving: false,
 };
+const localWorkspaceSaveDialogState = {
+  jobId: "",
+  exportFormat: "",
+  fileName: "",
+  folderPath: "",
+  saving: false,
+  createdFolderPaths: [],
+};
 const sidebarMinWidth = 360;
 const sidebarMaxWidth = 720;
 const sidebarResizeStep = 32;
@@ -71,6 +79,12 @@ const lastNotebookStorageKey = "bdw.lastNotebook.v1";
 const sidebarCollapsedStorageKey = "bdw.sidebarCollapsed.v1";
 const dismissedNotificationsStorageKey = "bdw.dismissedNotifications.v2";
 const cacheResetStorageKey = "bdw.cacheReset.v1";
+const localWorkspaceDatabaseName = "bdw.localWorkspace.v1";
+const localWorkspaceDatabaseVersion = 1;
+const localWorkspaceExportStoreName = "exports";
+const localWorkspaceCatalogSourceId = "workspace.local";
+const localWorkspaceSchemaKey = "workspace_local::saved-results";
+const localWorkspaceRelationPrefix = "workspace.local.saved_results.";
 const unassignedFolderName = "Unassigned";
 const localNotebookPrefix = "local-notebook-";
 const sharedNotebookPrefix = "shared-notebook-";
@@ -82,6 +96,7 @@ const queryJobRunningStatuses = new Set(["queued", "running"]);
 const dataGenerationTerminalStatuses = new Set(["completed", "failed", "cancelled"]);
 const dataGenerationRunningStatuses = new Set(["queued", "running"]);
 let dismissedNotificationKeys = readDismissedNotificationKeys();
+let localWorkspaceDatabasePromise = null;
 const sqlFormatKeywordPhrases = [
   ["LEFT", "OUTER", "JOIN"],
   ["RIGHT", "OUTER", "JOIN"],
@@ -230,6 +245,10 @@ function resultExportDialog() {
   return document.querySelector("[data-result-export-dialog]");
 }
 
+function localWorkspaceSaveDialog() {
+  return document.querySelector("[data-local-workspace-save-dialog]");
+}
+
 function appendModalDialog(markup) {
   document.body.insertAdjacentHTML("beforeend", markup.trim());
 }
@@ -375,9 +394,9 @@ function ensureResultExportDialog() {
       <form method="dialog" class="modal-card modal-card-wide result-export-dialog-card" data-result-export-form>
         <div class="result-export-dialog-header">
           <div class="result-export-dialog-copy">
-            <h2 class="modal-title" data-result-export-title>Save Results to S3</h2>
+            <h2 class="modal-title" data-result-export-title>Save Results to Shared Workspace</h2>
             <p class="modal-copy" data-result-export-copy>
-              Choose an S3 bucket or folder, create new locations if needed, and provide a file name.
+              Choose a Shared Workspace bucket or folder, create new locations if needed, and provide a file name.
             </p>
           </div>
           <div class="result-export-dialog-toolbar">
@@ -392,7 +411,10 @@ function ensureResultExportDialog() {
         <div class="result-export-dialog-body">
           <section class="result-export-explorer-panel">
             <div class="result-export-explorer-header">
-              <span class="workspace-tags-label">S3 Explorer</span>
+              <span
+                class="workspace-tags-label"
+                title="Shared Workspace data is stored in the configured MinIO / S3 bucket."
+              >Shared Workspace Explorer</span>
               <div class="result-export-breadcrumbs" data-s3-explorer-breadcrumbs></div>
             </div>
             <div class="result-export-explorer-shell">
@@ -401,9 +423,9 @@ function ensureResultExportDialog() {
           </section>
           <aside class="result-export-target-panel">
             <div class="result-export-target-card">
-              <span class="workspace-tags-label">Selected Location</span>
+              <span class="workspace-tags-label">Selected Shared Workspace Location</span>
               <p class="result-export-target-path" data-result-export-selected-path>
-                Select a bucket or folder from the S3 explorer.
+                Select a bucket or folder from the Shared Workspace explorer.
               </p>
             </div>
             <label class="result-export-field">
@@ -427,7 +449,7 @@ function ensureResultExportDialog() {
             Cancel
           </button>
           <button class="modal-button" type="submit" value="confirm" data-result-export-submit disabled>
-            Save to S3
+            Save to Shared Workspace
           </button>
         </menu>
       </form>
@@ -435,6 +457,90 @@ function ensureResultExportDialog() {
   `);
 
   dialog = resultExportDialog();
+  return dialog;
+}
+
+function ensureLocalWorkspaceSaveDialog() {
+  let dialog = localWorkspaceSaveDialog();
+  if (dialog) {
+    return dialog;
+  }
+
+  appendModalDialog(`
+    <dialog class="modal-dialog modal-dialog-wide" data-local-workspace-save-dialog>
+      <form method="dialog" class="modal-card modal-card-wide result-export-dialog-card" data-local-workspace-save-form>
+        <div class="result-export-dialog-header">
+          <div class="result-export-dialog-copy">
+            <h2 class="modal-title" data-local-workspace-save-title>Save Results to Local Workspace</h2>
+            <p class="modal-copy" data-local-workspace-save-copy>
+              Choose a Local Workspace folder path and provide the file name to save in this browser.
+            </p>
+          </div>
+          <div class="result-export-dialog-toolbar">
+            <button type="button" class="modal-button modal-button-secondary" data-local-workspace-create-folder>
+              New folder
+            </button>
+          </div>
+        </div>
+        <div class="result-export-dialog-body">
+          <section class="result-export-explorer-panel">
+            <div class="result-export-explorer-header">
+              <span
+                class="workspace-tags-label"
+                title="Local Workspace data is stored in this browser profile using IndexedDB."
+              >Local Workspace Folders</span>
+              <div class="result-export-breadcrumbs" data-local-workspace-breadcrumbs></div>
+            </div>
+            <div class="result-export-explorer-shell">
+              <div class="local-workspace-folder-list" data-local-workspace-folder-list></div>
+            </div>
+          </section>
+          <aside class="result-export-target-panel">
+            <div class="result-export-target-card">
+              <span class="workspace-tags-label">Selected Local Workspace Location</span>
+              <p class="result-export-target-path" data-local-workspace-selected-path>
+                Local Workspace /
+              </p>
+            </div>
+            <label class="result-export-field">
+              <span class="result-export-field-label">Folder path</span>
+              <input
+                class="modal-input"
+                type="text"
+                data-local-workspace-folder-path
+                autocomplete="off"
+                placeholder="optional/subfolder"
+              >
+            </label>
+            <label class="result-export-field">
+              <span class="result-export-field-label">File name</span>
+              <input
+                class="modal-input"
+                type="text"
+                data-local-workspace-file-name
+                autocomplete="off"
+                placeholder="query-result.parquet"
+              >
+            </label>
+            <div class="result-export-target-card">
+              <span class="workspace-tags-label">Export Format</span>
+              <p class="result-export-target-path" data-local-workspace-format-copy>Format: Parquet</p>
+            </div>
+          </aside>
+        </div>
+        <menu class="modal-actions">
+          <button class="modal-button modal-button-secondary" type="button" data-modal-cancel>
+            Cancel
+          </button>
+          <button class="modal-button" type="submit" value="confirm" data-local-workspace-save-submit disabled>
+            Save to Local Workspace
+          </button>
+        </menu>
+      </form>
+    </dialog>
+  `);
+
+  dialog = localWorkspaceSaveDialog();
   return dialog;
 }
 
@@ -580,6 +686,42 @@ function homePageRoot() {
   return document.querySelector("[data-home-page]");
 }
 
+function queryWorkbenchEntryPageRoot() {
+  return document.querySelector("[data-query-workbench-entry-page]");
+}
+
+function queryWorkbenchDataSourcesPageRoot() {
+  return document.querySelector("[data-data-source-management-page]");
+}
+
+function shellRoot() {
+  return document.querySelector("[data-shell]");
+}
+
+function setShellSidebarHidden(hidden) {
+  const shell = shellRoot();
+  if (!shell) {
+    return;
+  }
+
+  shell.classList.toggle("shell-sidebar-hidden", hidden);
+  syncSidebarResizerAria();
+}
+
+function restoreSidebarVisibilityForWorkspace() {
+  setShellSidebarHidden(false);
+  applySidebarCollapsedState(readSidebarCollapsed());
+}
+
+function syncShellVisibility() {
+  if (homePageRoot() || queryWorkbenchEntryPageRoot() || queryWorkbenchDataSourcesPageRoot()) {
+    setShellSidebarHidden(true);
+    return;
+  }
+
+  restoreSidebarVisibilityForWorkspace();
+}
+
 function homeRecentNotebooksRoot() {
   return document.querySelector("[data-home-recent-notebooks]");
 }
@@ -652,6 +794,18 @@ function currentWorkspaceMode() {
   return document.querySelector("[data-ingestion-workbench-page]") ? "ingestion" : "notebook";
 }
 
+function currentWorkbenchSection() {
+  if (homePageRoot()) {
+    return "home";
+  }
+
+  if (queryWorkbenchDataSourcesPageRoot()) {
+    return "data-sources";
+  }
+
+  return currentWorkspaceMode() === "ingestion" ? "ingestion" : "query";
+}
+
 function applicationVersion() {
   const explicitVersion =
     settingsMenu()?.dataset.runtimeVersion ||
@@ -665,12 +819,22 @@ function applicationVersion() {
   return sidebarVersion.replace(/^V/i, "").trim() || "unknown";
 }
 
-function workbenchTitle(mode = currentWorkspaceMode()) {
-  return mode === "ingestion" ? "DAAIFL Ingestion Workbench" : "DAAIFL Query Workbench";
+function workbenchTitle(section = currentWorkbenchSection()) {
+  if (section === "home") {
+    return "DAAIFL Workbench";
+  }
+
+  if (section === "data-sources") {
+    return "DAAIFL Data Source Workbench";
+  }
+
+  return section === "ingestion"
+    ? "DAAIFL Ingestion Workbench"
+    : "DAAIFL Query Workbench";
 }
 
-function applyWorkbenchTitle(mode = currentWorkspaceMode()) {
-  const title = workbenchTitle(mode);
+function applyWorkbenchTitle(section = currentWorkbenchSection()) {
+  const title = workbenchTitle(section);
   const brandTitle = document.querySelector(".brand-copy h1");
   if (brandTitle) {
     brandTitle.textContent = title;
@@ -781,6 +945,36 @@ function pushNotebookHistory(notebookId) {
   window.history.pushState({ mode: "notebook", notebookId }, "", nextUrl);
 }
 
+function pushQueryWorkbenchHistory() {
+  if (window.location.pathname === "/query-workbench") {
+    return;
+  }
+
+  window.history.pushState({ mode: "query-workbench" }, "", "/query-workbench");
+}
+
+function queryWorkbenchDataSourcesUrl(sourceId = "") {
+  const normalizedSourceId = String(sourceId || "").trim();
+  if (!normalizedSourceId) {
+    return "/query-workbench/data-sources";
+  }
+
+  return `/query-workbench/data-sources?source_id=${encodeURIComponent(normalizedSourceId)}`;
+}
+
+function pushQueryWorkbenchDataSourcesHistory(sourceId = "") {
+  const nextUrl = queryWorkbenchDataSourcesUrl(sourceId);
+  if (`${window.location.pathname}${window.location.search}` === nextUrl) {
+    return;
+  }
+
+  window.history.pushState(
+    { mode: "query-workbench-data-sources", sourceId: String(sourceId || "").trim() },
+    "",
+    nextUrl
+  );
+}
+
 function readSidebarCollapsed() {
   try {
     return window.localStorage.getItem(sidebarCollapsedStorageKey) === "true";
@@ -859,7 +1053,7 @@ function clearWorkbenchLocalCache() {
 
   const resetMarker = {
     clearedAt: new Date().toISOString(),
-    reason: "user-settings-reset",
+    reason: "clear-local-workspace",
     version: applicationVersion(),
   };
   window.localStorage.setItem(cacheResetStorageKey, JSON.stringify(resetMarker));
@@ -867,18 +1061,18 @@ function clearWorkbenchLocalCache() {
   return resetMarker;
 }
 
-async function promptClearLocalCache() {
+async function promptClearLocalWorkspace() {
   const { confirmed } = await showConfirmDialog({
-    title: "Clear local cache",
+    title: "Clear Local Workspace",
     copy:
-      "This will delete all locally stored workbench data in this browser, including your notebooks, drafts, saved versions, folder layout, last-opened notebook, and notification state.",
-    confirmLabel: "Clear local cache",
+      "This will permanently delete all browser-local Local Workspace data in this browser, including notebooks, drafts, saved versions, folder layout, last-opened notebook, and notification state.",
+    confirmLabel: "Clear Local Workspace",
     option: {
       label:
-        "I understand that this permanently deletes all locally stored notebooks and browser workspace data for this workbench.",
+        "I understand that this permanently deletes all browser-local Local Workspace data for this workbench.",
       checkedCopy:
-        "All locally stored workbench data in this browser will be deleted immediately, including your notebooks. The page will then reload with a clean local state.",
-      checkedConfirmLabel: "Delete local data",
+        "All Local Workspace data stored in this browser will be deleted immediately, including your notebooks. The page will then reload with a clean local state.",
+      checkedConfirmLabel: "Delete Local Workspace",
       required: true,
     },
   });
@@ -887,11 +1081,12 @@ async function promptClearLocalCache() {
   }
 
   try {
+    await clearLocalWorkspaceExports();
     clearWorkbenchLocalCache();
   } catch (_error) {
     await showMessageDialog({
-      title: "Clear local cache failed",
-      copy: "The browser-local workbench data could not be cleared.",
+      title: "Clear Local Workspace failed",
+      copy: "The browser-local Local Workspace data could not be cleared.",
     });
     return;
   }
@@ -903,8 +1098,7 @@ function applySidebarCollapsedState(collapsed) {
   document.body.classList.toggle("sidebar-collapsed", collapsed);
 
   sidebarToggles().forEach((toggle) => {
-    const isFooterToggle = toggle.classList.contains("sidebar-toggle-footer");
-    const labelText = isFooterToggle ? "Expand navigation" : "Collapse navigation";
+    const labelText = collapsed ? "Expand navigation" : "Collapse navigation";
     toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
     toggle.setAttribute("aria-label", labelText);
     toggle.title = labelText;
@@ -1453,6 +1647,479 @@ async function fetchJsonOrThrow(url, options = {}) {
   return response.json();
 }
 
+function ensureLocalWorkspaceDatabaseSupport() {
+  if (typeof window.indexedDB === "undefined") {
+    throw new Error("IndexedDB is not available in this browser, so Local Workspace storage cannot be used.");
+  }
+}
+
+function openLocalWorkspaceDatabase() {
+  ensureLocalWorkspaceDatabaseSupport();
+  if (localWorkspaceDatabasePromise) {
+    return localWorkspaceDatabasePromise;
+  }
+
+  localWorkspaceDatabasePromise = new Promise((resolve, reject) => {
+    const request = window.indexedDB.open(
+      localWorkspaceDatabaseName,
+      localWorkspaceDatabaseVersion
+    );
+
+    request.onupgradeneeded = () => {
+      const database = request.result;
+      if (!database.objectStoreNames.contains(localWorkspaceExportStoreName)) {
+        database.createObjectStore(localWorkspaceExportStoreName, {
+          keyPath: "id",
+        });
+      }
+    };
+
+    request.onsuccess = () => {
+      const database = request.result;
+      database.onversionchange = () => {
+        database.close();
+      };
+      resolve(database);
+    };
+
+    request.onerror = () => {
+      reject(request.error || new Error("Could not open the Local Workspace database."));
+    };
+
+    request.onblocked = () => {
+      reject(new Error("The Local Workspace database is blocked by another tab or session."));
+    };
+  });
+
+  return localWorkspaceDatabasePromise;
+}
+
+async function clearLocalWorkspaceExports() {
+  const database = await openLocalWorkspaceDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(localWorkspaceExportStoreName, "readwrite");
+    const store = transaction.objectStore(localWorkspaceExportStoreName);
+    const request = store.clear();
+
+    request.onsuccess = () => {
+      resolve();
+    };
+
+    request.onerror = () => {
+      reject(request.error || new Error("Could not clear Local Workspace files."));
+    };
+  });
+}
+
+function normalizeLocalWorkspaceFolderPath(path) {
+  return String(path || "")
+    .split("/")
+    .map((segment) => String(segment || "").trim())
+    .filter(Boolean)
+    .join("/");
+}
+
+function localWorkspaceFolderPaths(paths = []) {
+  const knownPaths = new Set([""]);
+
+  paths.forEach((path) => {
+    const normalizedPath = normalizeLocalWorkspaceFolderPath(path);
+    if (!normalizedPath) {
+      return;
+    }
+
+    let currentPath = "";
+    normalizedPath.split("/").forEach((segment) => {
+      currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+      knownPaths.add(currentPath);
+    });
+  });
+
+  return Array.from(knownPaths).sort((left, right) => {
+    if (!left && right) {
+      return -1;
+    }
+    if (left && !right) {
+      return 1;
+    }
+
+    return left.localeCompare(right, undefined, { sensitivity: "base" });
+  });
+}
+
+function localWorkspaceDisplayPath(folderPath = "", fileName = "") {
+  const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(folderPath);
+  const folderSuffix = normalizedFolderPath ? `${normalizedFolderPath}/` : "";
+  const normalizedFileName = String(fileName || "").trim();
+  return `Local Workspace / ${folderSuffix}${normalizedFileName}`.trim();
+}
+
+function localWorkspaceFolderName(folderPath = "") {
+  const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(folderPath);
+  if (!normalizedFolderPath) {
+    return "Root";
+  }
+
+  return normalizedFolderPath.split("/").at(-1) || normalizedFolderPath;
+}
+
+function localWorkspaceFolderDepth(folderPath = "") {
+  const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(folderPath);
+  return normalizedFolderPath ? normalizedFolderPath.split("/").length : 0;
+}
+
+function localWorkspaceRelation(entryId) {
+  return `${localWorkspaceRelationPrefix}${String(entryId || "").trim()}`;
+}
+
+function normalizeLocalWorkspaceExportEntry(entry) {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+
+  const id = String(entry.id || "").trim();
+  if (!id) {
+    return null;
+  }
+
+  return {
+    id,
+    fileName: String(entry.fileName || "").trim() || "local-workspace-file",
+    folderPath: normalizeLocalWorkspaceFolderPath(entry.folderPath),
+    exportFormat: String(entry.exportFormat || "").trim().toLowerCase() || "json",
+    mimeType: String(entry.mimeType || "").trim(),
+    sizeBytes: Number.isFinite(Number(entry.sizeBytes)) ? Number(entry.sizeBytes) : 0,
+    createdAt: String(entry.createdAt || "").trim(),
+    updatedAt: String(entry.updatedAt || entry.createdAt || "").trim(),
+    notebookTitle: String(entry.notebookTitle || "").trim(),
+    cellId: String(entry.cellId || "").trim(),
+    columnCount: Number.isFinite(Number(entry.columnCount)) ? Number(entry.columnCount) : 0,
+    rowCount: Number.isFinite(Number(entry.rowCount)) ? Number(entry.rowCount) : 0,
+    blob: entry.blob instanceof Blob ? entry.blob : null,
+  };
+}
+
+async function listLocalWorkspaceExports() {
+  const database = await openLocalWorkspaceDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(localWorkspaceExportStoreName, "readonly");
+    const store = transaction.objectStore(localWorkspaceExportStoreName);
+    const request = store.getAll();
+
+    request.onsuccess = () => {
+      const entries = Array.isArray(request.result)
+        ? request.result.map((entry) => normalizeLocalWorkspaceExportEntry(entry)).filter(Boolean)
+        : [];
+      entries.sort((left, right) => {
+        return String(right.updatedAt || right.createdAt || "").localeCompare(
+          String(left.updatedAt || left.createdAt || "")
+        );
+      });
+      resolve(entries);
+    };
+
+    request.onerror = () => {
+      reject(request.error || new Error("Could not read Local Workspace files."));
+    };
+  });
+}
+
+async function getLocalWorkspaceExport(entryId) {
+  const normalizedEntryId = String(entryId || "").trim();
+  if (!normalizedEntryId) {
+    return null;
+  }
+
+  const database = await openLocalWorkspaceDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(localWorkspaceExportStoreName, "readonly");
+    const store = transaction.objectStore(localWorkspaceExportStoreName);
+    const request = store.get(normalizedEntryId);
+
+    request.onsuccess = () => {
+      resolve(normalizeLocalWorkspaceExportEntry(request.result));
+    };
+
+    request.onerror = () => {
+      reject(request.error || new Error("Could not load the Local Workspace file."));
+    };
+  });
+}
+
+async function saveLocalWorkspaceExport(entry) {
+  const normalizedEntry = normalizeLocalWorkspaceExportEntry(entry);
+  if (!normalizedEntry || !(normalizedEntry.blob instanceof Blob)) {
+    throw new Error("The Local Workspace file is incomplete and could not be saved.");
+  }
+
+  const database = await openLocalWorkspaceDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(localWorkspaceExportStoreName, "readwrite");
+    const store = transaction.objectStore(localWorkspaceExportStoreName);
+    const request = store.put(normalizedEntry);
+
+    request.onsuccess = () => {
+      resolve(normalizedEntry);
+    };
+
+    request.onerror = () => {
+      reject(request.error || new Error("Could not save the Local Workspace file."));
+    };
+  });
+}
+
+async function deleteLocalWorkspaceExport(entryId) {
+  const normalizedEntryId = String(entryId || "").trim();
+  if (!normalizedEntryId) {
+    return;
+  }
+
+  const database = await openLocalWorkspaceDatabase();
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction(localWorkspaceExportStoreName, "readwrite");
+    const store = transaction.objectStore(localWorkspaceExportStoreName);
+    const request = store.delete(normalizedEntryId);
+
+    request.onsuccess = () => {
+      resolve();
+    };
+
+    request.onerror = () => {
+      reject(request.error || new Error("Could not delete the Local Workspace file."));
+    };
+  });
+}
+
+function localWorkspaceSaveFolderListRoot() {
+  return localWorkspaceSaveDialog()?.querySelector("[data-local-workspace-folder-list]") ?? null;
+}
+
+function localWorkspaceSaveBreadcrumbRoot() {
+  return localWorkspaceSaveDialog()?.querySelector("[data-local-workspace-breadcrumbs]") ?? null;
+}
+
+function localWorkspaceSaveSelectedPathNode() {
+  return localWorkspaceSaveDialog()?.querySelector("[data-local-workspace-selected-path]") ?? null;
+}
+
+function localWorkspaceSaveFolderPathInput() {
+  return localWorkspaceSaveDialog()?.querySelector("[data-local-workspace-folder-path]") ?? null;
+}
+
+function localWorkspaceSaveFileNameInput() {
+  return localWorkspaceSaveDialog()?.querySelector("[data-local-workspace-file-name]") ?? null;
+}
+
+function localWorkspaceSaveSubmitButton() {
+  return localWorkspaceSaveDialog()?.querySelector("[data-local-workspace-save-submit]") ?? null;
+}
+
+function localWorkspaceFolderOptionMarkup(folderPath) {
+  const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(folderPath);
+  const depth = localWorkspaceFolderDepth(normalizedFolderPath);
+  const selected = normalizedFolderPath === localWorkspaceSaveDialogState.folderPath;
+  const locationCopy = localWorkspaceDisplayPath(normalizedFolderPath);
+
+  return `
+    <button
+      type="button"
+      class="local-workspace-folder-option${selected ? " is-selected" : ""}"
+      data-local-workspace-folder-option
+      data-local-workspace-folder-path="${escapeHtml(normalizedFolderPath)}"
+      style="--local-workspace-folder-depth: ${escapeHtml(String(depth))}"
+      title="${escapeHtml(locationCopy)}"
+    >
+      <span class="local-workspace-folder-option-name">${escapeHtml(localWorkspaceFolderName(normalizedFolderPath))}</span>
+      <span class="local-workspace-folder-option-path">${escapeHtml(locationCopy)}</span>
+    </button>
+  `;
+}
+
+function localWorkspaceFolderListMarkup(folderPaths) {
+  if (!folderPaths.length) {
+    return '<p class="local-workspace-folder-empty">No Local Workspace folders exist yet. Save into Root or create a new folder.</p>';
+  }
+
+  return folderPaths.map((folderPath) => localWorkspaceFolderOptionMarkup(folderPath)).join("");
+}
+
+function renderLocalWorkspaceSaveBreadcrumbs(folderPath = "") {
+  const root = localWorkspaceSaveBreadcrumbRoot();
+  if (!(root instanceof Element)) {
+    return;
+  }
+
+  const segments = normalizeLocalWorkspaceFolderPath(folderPath)
+    .split("/")
+    .filter(Boolean);
+  const crumbs = [
+    { label: "Local Workspace", path: "" },
+    ...segments.map((segment, index) => ({
+      label: segment,
+      path: segments.slice(0, index + 1).join("/"),
+    })),
+  ];
+
+  root.innerHTML = crumbs
+    .map((crumb, index) => {
+      const current = index === crumbs.length - 1;
+      return `
+        <button
+          type="button"
+          class="result-export-breadcrumb${current ? " is-current" : ""}"
+          data-local-workspace-breadcrumb
+          data-local-workspace-folder-path="${escapeHtml(crumb.path)}"
+          ${current ? "aria-current=\"true\"" : ""}
+        >${escapeHtml(crumb.label)}</button>
+        ${current ? "" : '<span class="result-export-breadcrumb-separator" aria-hidden="true">/</span>'}
+      `;
+    })
+    .join("");
+}
+
+function syncLocalWorkspaceSaveDialogState() {
+  const dialog = localWorkspaceSaveDialog();
+  if (!dialog) {
+    return;
+  }
+
+  localWorkspaceSaveDialogState.folderPath = normalizeLocalWorkspaceFolderPath(
+    localWorkspaceSaveDialogState.folderPath
+  );
+  renderLocalWorkspaceSaveBreadcrumbs(localWorkspaceSaveDialogState.folderPath);
+
+  const selectedPathNode = localWorkspaceSaveSelectedPathNode();
+  if (selectedPathNode) {
+    selectedPathNode.textContent = localWorkspaceDisplayPath(localWorkspaceSaveDialogState.folderPath);
+  }
+
+  const folderPathInput = localWorkspaceSaveFolderPathInput();
+  if (folderPathInput && folderPathInput.value !== localWorkspaceSaveDialogState.folderPath) {
+    folderPathInput.value = localWorkspaceSaveDialogState.folderPath;
+  }
+
+  const fileNameInput = localWorkspaceSaveFileNameInput();
+  if (fileNameInput && fileNameInput.value !== localWorkspaceSaveDialogState.fileName) {
+    fileNameInput.value = localWorkspaceSaveDialogState.fileName;
+  }
+
+  const formatCopy = dialog.querySelector("[data-local-workspace-format-copy]");
+  if (formatCopy) {
+    formatCopy.textContent = `Format: ${String(localWorkspaceSaveDialogState.exportFormat || "").toUpperCase()}`;
+  }
+
+  const submitButton = localWorkspaceSaveSubmitButton();
+  if (submitButton) {
+    submitButton.disabled =
+      localWorkspaceSaveDialogState.saving ||
+      !String(localWorkspaceSaveDialogState.fileName || "").trim();
+    submitButton.textContent = localWorkspaceSaveDialogState.saving
+      ? "Saving..."
+      : "Save to Local Workspace";
+  }
+
+  dialog.querySelectorAll("[data-local-workspace-folder-option]").forEach((node) => {
+    const selected =
+      normalizeLocalWorkspaceFolderPath(node.dataset.localWorkspaceFolderPath || "") ===
+      localWorkspaceSaveDialogState.folderPath;
+    node.classList.toggle("is-selected", selected);
+  });
+}
+
+function setLocalWorkspaceSaveDialogBusy(busy) {
+  localWorkspaceSaveDialogState.saving = busy;
+  const dialog = localWorkspaceSaveDialog();
+  if (dialog) {
+    const createFolderButton = dialog.querySelector("[data-local-workspace-create-folder]");
+    if (createFolderButton instanceof HTMLButtonElement) {
+      createFolderButton.disabled = busy;
+    }
+
+    const folderPathInput = localWorkspaceSaveFolderPathInput();
+    if (folderPathInput instanceof HTMLInputElement) {
+      folderPathInput.disabled = busy;
+    }
+
+    const fileNameInput = localWorkspaceSaveFileNameInput();
+    if (fileNameInput instanceof HTMLInputElement) {
+      fileNameInput.disabled = busy;
+    }
+  }
+
+  syncLocalWorkspaceSaveDialogState();
+}
+
+async function renderLocalWorkspaceSaveFolderList() {
+  const root = localWorkspaceSaveFolderListRoot();
+  if (!(root instanceof Element)) {
+    return;
+  }
+
+  const entries = await listLocalWorkspaceExports();
+  const folderPaths = localWorkspaceFolderPaths([
+    ...entries.map((entry) => entry.folderPath),
+    ...localWorkspaceSaveDialogState.createdFolderPaths,
+  ]);
+  root.innerHTML = localWorkspaceFolderListMarkup(folderPaths);
+  syncLocalWorkspaceSaveDialogState();
+}
+
+async function createLocalWorkspaceFolderFromDialog() {
+  const parentPath = localWorkspaceSaveDialogState.folderPath;
+  const folderName = await showFolderNameDialog({
+    title: "New Local Workspace folder",
+    copy: `Create a folder under ${localWorkspaceDisplayPath(parentPath)}.`,
+    submitLabel: "Create folder",
+  });
+  if (!folderName) {
+    return;
+  }
+
+  const nextPath = normalizeLocalWorkspaceFolderPath(
+    parentPath ? `${parentPath}/${folderName}` : folderName
+  );
+  if (!nextPath) {
+    return;
+  }
+
+  if (!localWorkspaceSaveDialogState.createdFolderPaths.includes(nextPath)) {
+    localWorkspaceSaveDialogState.createdFolderPaths.push(nextPath);
+  }
+  localWorkspaceSaveDialogState.folderPath = nextPath;
+  await renderLocalWorkspaceSaveFolderList();
+}
+
+async function openLocalWorkspaceSaveDialog(job, exportFormat) {
+  if (!job?.jobId || !job?.columns?.length) {
+    return;
+  }
+
+  const dialog = ensureLocalWorkspaceSaveDialog();
+  localWorkspaceSaveDialogState.jobId = job.jobId;
+  localWorkspaceSaveDialogState.exportFormat = String(exportFormat || "").trim().toLowerCase();
+  localWorkspaceSaveDialogState.fileName = defaultQueryResultExportFilename(
+    job,
+    localWorkspaceSaveDialogState.exportFormat
+  );
+  localWorkspaceSaveDialogState.folderPath = "";
+  localWorkspaceSaveDialogState.saving = false;
+  localWorkspaceSaveDialogState.createdFolderPaths = [];
+
+  const titleNode = dialog.querySelector("[data-local-workspace-save-title]");
+  const copyNode = dialog.querySelector("[data-local-workspace-save-copy]");
+  if (titleNode) {
+    titleNode.textContent = `Save Results in ${localWorkspaceSaveDialogState.exportFormat.toUpperCase()} Format to Local Workspace`;
+  }
+  if (copyNode) {
+    copyNode.textContent =
+      "Choose a Local Workspace folder path or create a new one, then provide the file name to save in this browser.";
+  }
+
+  syncLocalWorkspaceSaveDialogState();
+  dialog.showModal();
+  await renderLocalWorkspaceSaveFolderList();
+}
+
 function normalizeTags(tags) {
   const uniqueTags = [];
   const seen = new Set();
@@ -1585,6 +2252,10 @@ function sourceComputationModeForId(sourceId) {
   return sourceOptionForId(sourceId)?.computation_mode ?? "VMTP";
 }
 
+function sourceStorageTooltipForId(sourceId) {
+  return sourceOptionForId(sourceId)?.storage_tooltip ?? "";
+}
+
 function sourceLabelsForIds(sourceIds) {
   return normalizeDataSources(sourceIds).map((sourceId) => sourceLabelForId(sourceId));
 }
@@ -1615,6 +2286,19 @@ function sourceClassificationDisplayText(dataSources) {
 
 function sourceComputationModeDisplayText(dataSources) {
   return `Processing Mode: ${sourceComputationModeForIds(dataSources)}`;
+}
+
+function sourceStorageTooltipForIds(sourceIds) {
+  const selectedSourceIds = normalizeDataSources(sourceIds);
+  if (!selectedSourceIds.length) {
+    return "";
+  }
+
+  if (selectedSourceIds.length === 1) {
+    return sourceStorageTooltipForId(selectedSourceIds[0]);
+  }
+
+  return "Selected sources span multiple storage locations.";
 }
 
 function sourceComputationModeTooltipText() {
@@ -2825,6 +3509,10 @@ function queryResultTableMarkup(job) {
 
 function resultExportMenuMarkup(showActions, jobId = "") {
   const normalizedJobId = String(jobId || "").trim();
+  const sharedWorkspaceTooltip =
+    "Saves into the configured Shared Workspace MinIO / S3 bucket.";
+  const localWorkspaceTooltip =
+    "Saves in this browser's Local Workspace using IndexedDB.";
   return `
     <details
       class="workspace-action-menu result-action-menu"
@@ -2845,13 +3533,30 @@ function resultExportMenuMarkup(showActions, jobId = "") {
           class="workspace-action-menu-item"
           data-result-export-s3="parquet"
           data-result-job-id="${escapeHtml(normalizedJobId)}"
-        >Save Results in Parquet Format on S3 ...</button>
+          title="${escapeHtml(sharedWorkspaceTooltip)}"
+        >Save Results in Parquet Format to Shared Workspace ...</button>
         <button
           type="button"
           class="workspace-action-menu-item"
           data-result-export-s3="json"
           data-result-job-id="${escapeHtml(normalizedJobId)}"
-        >Save Results in JSON Format on S3 ...</button>
+          title="${escapeHtml(sharedWorkspaceTooltip)}"
+        >Save Results in JSON Format to Shared Workspace ...</button>
+        <div class="workspace-action-menu-separator"></div>
+        <button
+          type="button"
+          class="workspace-action-menu-item"
+          data-result-export-local="parquet"
+          data-result-job-id="${escapeHtml(normalizedJobId)}"
+          title="${escapeHtml(localWorkspaceTooltip)}"
+        >Save Results in Parquet Format to Local Workspace</button>
+        <button
+          type="button"
+          class="workspace-action-menu-item"
+          data-result-export-local="json"
+          data-result-job-id="${escapeHtml(normalizedJobId)}"
+          title="${escapeHtml(localWorkspaceTooltip)}"
+        >Save Results in JSON Format to Local Workspace</button>
         <div class="workspace-action-menu-separator"></div>
         <button
           type="button"
@@ -3806,6 +4511,7 @@ async function refreshSidebar(mode = currentWorkspaceMode()) {
   initializeSidebarToggle();
   initializeSidebarResizer();
   applyNotebookMetadata();
+  await renderLocalWorkspaceSidebarEntries();
   restoreSidebarState(sidebarState);
   syncSelectedIngestionRunbookState();
   restoreSelectedSourceObject();
@@ -4111,6 +4817,183 @@ function sourceSchemaBucketNode(bucketName) {
   );
 }
 
+function localWorkspaceSchemaNode() {
+  return document.querySelector(
+    `[data-source-schema][data-source-schema-key="${escapeSelectorValue(localWorkspaceSchemaKey)}"]`
+  );
+}
+
+function localWorkspaceEntryNode(entryId) {
+  const normalizedEntryId = String(entryId || "").trim();
+  if (!normalizedEntryId) {
+    return null;
+  }
+
+  return document.querySelector(
+    `[data-local-workspace-entry-id="${escapeSelectorValue(normalizedEntryId)}"]`
+  );
+}
+
+function isLocalWorkspaceSourceObject(sourceObjectRoot) {
+  return Boolean(sourceObjectRoot?.dataset.localWorkspaceEntryId?.trim());
+}
+
+function formatByteCount(sizeBytes) {
+  const normalizedSize = Number(sizeBytes) || 0;
+  if (normalizedSize < 1024) {
+    return `${normalizedSize} B`;
+  }
+  if (normalizedSize < 1024 * 1024) {
+    return `${(normalizedSize / 1024).toFixed(1)} KB`;
+  }
+  return `${(normalizedSize / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function ensureLocalWorkspaceCatalogOrder() {
+  const sourceTree = document.querySelector(".source-tree");
+  const localWorkspaceCatalog = sourceCatalogNode(localWorkspaceCatalogSourceId);
+  if (!(sourceTree instanceof Element) || !(localWorkspaceCatalog instanceof Element)) {
+    return;
+  }
+
+  if (sourceTree.firstElementChild !== localWorkspaceCatalog) {
+    sourceTree.prepend(localWorkspaceCatalog);
+  }
+}
+
+function localWorkspaceSchemaMarkup(entries, open = false) {
+  const entriesMarkup = entries
+    .map((entry) => {
+      const relation = localWorkspaceRelation(entry.id);
+      const formatLabel = String(entry.exportFormat || "file").toUpperCase();
+      const displayPath = localWorkspaceDisplayPath(entry.folderPath, entry.fileName);
+      return `
+        <li
+          class="source-object source-object-file"
+          data-searchable-item="${escapeHtml(entry.fileName)} ${escapeHtml(displayPath)} ${escapeHtml(formatLabel)}"
+          data-source-object
+          data-source-object-kind="file"
+          data-source-object-name="${escapeHtml(entry.fileName)}"
+          data-source-object-relation="${escapeHtml(relation)}"
+          data-source-option-id="${escapeHtml(localWorkspaceCatalogSourceId)}"
+          data-local-workspace-entry-id="${escapeHtml(entry.id)}"
+          data-local-workspace-folder-path="${escapeHtml(entry.folderPath)}"
+          data-local-workspace-export-format="${escapeHtml(entry.exportFormat)}"
+          data-local-workspace-size-bytes="${escapeHtml(entry.sizeBytes)}"
+          data-local-workspace-created-at="${escapeHtml(entry.createdAt)}"
+          data-local-workspace-column-count="${escapeHtml(entry.columnCount)}"
+          data-local-workspace-row-count="${escapeHtml(entry.rowCount)}"
+          data-local-workspace-mime-type="${escapeHtml(entry.mimeType)}"
+        >
+          <span class="source-node-label">
+            <svg
+              class="source-icon source-icon-object source-icon-object-view"
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+            >
+              <rect x="2.4" y="3" width="11.2" height="9.6" rx="1.1"></rect>
+              <path d="M4.2 5.2h7.6M4.2 7.7h7.6"></path>
+              <path d="M3.2 10.7c1.5-1.7 3.1-2.6 4.8-2.6s3.3.9 4.8 2.6"></path>
+              <circle cx="8" cy="10.2" r="1"></circle>
+            </svg>
+            <span>${escapeHtml(entry.fileName)}</span>
+          </span>
+          <span class="source-object-meta">
+            <small>${escapeHtml(formatLabel)}</small>
+            <small title="${escapeHtml(displayPath)}">${escapeHtml(entry.folderPath || "Root")}</small>
+            <details class="workspace-action-menu source-action-menu" data-source-action-menu>
+              <summary
+                class="workspace-action-menu-toggle"
+                data-source-action-menu-toggle
+                aria-label="Source actions"
+                title="Source actions"
+              >
+                <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
+              </summary>
+              <div class="workspace-action-menu-panel">
+                <button
+                  type="button"
+                  class="workspace-action-menu-item"
+                  data-download-local-workspace-object
+                  title="Download the Local Workspace file"
+                >
+                  Download local file
+                </button>
+                <div class="workspace-action-menu-separator" aria-hidden="true"></div>
+                <button
+                  type="button"
+                  class="workspace-action-menu-item workspace-action-menu-item-danger"
+                  data-delete-local-workspace-object
+                  title="Delete the Local Workspace file"
+                >
+                  Delete local file
+                </button>
+              </div>
+            </details>
+          </span>
+        </li>
+      `;
+    })
+    .join("");
+
+  return `
+    <details
+      class="source-schema"
+      data-source-schema
+      data-source-schema-key="${escapeHtml(localWorkspaceSchemaKey)}"
+      ${open ? "open" : ""}
+    >
+      <summary data-searchable-item="Saved Results Local Workspace IndexedDB">
+        <span class="source-node-label">
+          <svg class="source-icon source-icon-schema" viewBox="0 0 16 16" aria-hidden="true">
+            <rect x="1.6" y="1.8" width="3.7" height="3.7" rx="0.7"></rect>
+            <rect x="10.7" y="1.8" width="3.7" height="3.7" rx="0.7"></rect>
+            <rect x="10.7" y="10.5" width="3.7" height="3.7" rx="0.7"></rect>
+            <path d="M5.3 3.7h2.8a2 2 0 0 1 2 2v1.5"></path>
+            <path d="M10.1 8H7.4a2 2 0 0 0-2 2v.5"></path>
+          </svg>
+          <span>Saved Results</span>
+        </span>
+        <span class="source-schema-meta">
+          <small>${escapeHtml(String(entries.length))} file${entries.length === 1 ? "" : "s"}</small>
+        </span>
+      </summary>
+      <ul class="source-object-list">
+        ${entriesMarkup}
+      </ul>
+    </details>
+  `;
+}
+
+async function renderLocalWorkspaceSidebarEntries() {
+  ensureLocalWorkspaceCatalogOrder();
+
+  const localWorkspaceCatalog = sourceCatalogNode(localWorkspaceCatalogSourceId);
+  if (!(localWorkspaceCatalog instanceof Element)) {
+    return;
+  }
+
+  const entries = await listLocalWorkspaceExports();
+  const existingSchema = localWorkspaceSchemaNode();
+  const schemaOpen = existingSchema instanceof HTMLDetailsElement ? existingSchema.open : true;
+
+  if (!entries.length) {
+    existingSchema?.remove();
+    if (activeSourceObjectRelation?.startsWith(localWorkspaceRelationPrefix)) {
+      setSelectedSourceObjectState(null);
+      renderSourceInspectorMarkup("", true);
+    }
+    return;
+  }
+
+  const markup = localWorkspaceSchemaMarkup(entries, schemaOpen);
+  if (existingSchema instanceof Element) {
+    existingSchema.outerHTML = markup;
+  } else {
+    localWorkspaceCatalog.insertAdjacentHTML("beforeend", markup);
+  }
+}
+
 function syncSourceConnectionControls(catalogNode, status) {
   if (!(catalogNode instanceof Element)) {
     return;
@@ -4331,6 +5214,7 @@ async function refreshDataSourcesSection(mode = currentWorkspaceMode()) {
   }
 
   currentSection.outerHTML = nextSection.outerHTML;
+  await renderLocalWorkspaceSidebarEntries();
   restoreSidebarState(sidebarState);
   restoreSelectedSourceObject();
   renderSidebarSourceOperationStatus();
@@ -4819,6 +5703,13 @@ async function fetchSourceObjectFields(relation) {
 async function loadSourceObjectFields(sourceObjectRoot, { renderLoading = true } = {}) {
   const relation = sourceObjectFieldCacheKey(sourceObjectRoot);
   if (!relation) {
+    return [];
+  }
+
+  if (isLocalWorkspaceSourceObject(sourceObjectRoot)) {
+    if (activeSourceObjectRelation === relation) {
+      renderSourceInspectorMarkup(localWorkspaceInspectorMarkup(sourceObjectRoot));
+    }
     return [];
   }
 
@@ -5368,6 +6259,8 @@ function cellSourceSummaryText(dataSources) {
 
 function cellSourceSummaryMarkup(dataSources) {
   const selectedSources = normalizeDataSources(dataSources);
+  const storageTooltip = sourceStorageTooltipForIds(selectedSources);
+  const summaryTitle = storageTooltip ? ` title="${escapeHtml(storageTooltip)}"` : "";
   const metadataMarkup = selectedSources.length
     ? `
         <span class="cell-source-classification" data-cell-source-classification>${escapeHtml(sourceClassificationDisplayText(selectedSources))}</span>
@@ -5376,7 +6269,7 @@ function cellSourceSummaryMarkup(dataSources) {
     : "";
 
   return `
-    <span class="cell-source-summary-label" data-cell-source-summary-label>${escapeHtml(cellSourceSummaryText(dataSources))}</span>
+    <span class="cell-source-summary-label" data-cell-source-summary-label${summaryTitle}>${escapeHtml(cellSourceSummaryText(dataSources))}</span>
     ${metadataMarkup}
   `;
 }
@@ -5391,8 +6284,11 @@ function buildCellMarkup(notebookId, cell, index, canEdit, totalCells) {
     readSourceOptions()
       .map((option) => {
         const selected = selectedSources.includes(option.source_id);
+        const storageTitle = option.storage_tooltip
+          ? ` title="${escapeHtml(option.storage_tooltip)}"`
+          : "";
         return `
-          <label class="workspace-source-option cell-source-option${selected ? " is-selected" : ""}">
+          <label class="workspace-source-option cell-source-option${selected ? " is-selected" : ""}"${storageTitle}>
             <input
               class="workspace-source-checkbox"
               type="checkbox"
@@ -6847,6 +7743,7 @@ function renderEmptyWorkspace() {
       </header>
     </article>
   `;
+  syncShellVisibility();
   if (currentSidebarMode() !== "notebook") {
     refreshSidebar("notebook").catch((error) => {
       console.error("Failed to restore the notebook sidebar.", error);
@@ -6863,6 +7760,7 @@ function renderLocalNotebookWorkspace(notebookId) {
 
   const metadata = notebookMetadata(notebookId);
   panel.innerHTML = buildWorkspaceMarkup(notebookId, metadata);
+  syncShellVisibility();
   processHtmx(panel);
   initializeEditors(panel);
   applyNotebookMetadata();
@@ -8847,8 +9745,6 @@ function applyNotebookEventsState(snapshot) {
 }
 
 async function openQueryWorkbench(notebookId = "") {
-  applyWorkbenchTitle("notebook");
-
   if (currentSidebarMode() !== "notebook") {
     await refreshSidebar("notebook");
   }
@@ -8858,7 +9754,82 @@ async function openQueryWorkbench(notebookId = "") {
     return;
   }
 
-  await restoreLastNotebook();
+  await loadQueryWorkbenchEntry();
+}
+
+async function loadWorkspacePanelPartial(path) {
+  const panel = document.getElementById("workspace-panel");
+  if (!panel) {
+    return null;
+  }
+
+  const response = await window.fetch(path, {
+    headers: {
+      Accept: "text/html",
+      "HX-Request": "true",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load ${path}: ${response.status}`);
+  }
+
+  panel.innerHTML = await response.text();
+  processHtmx(panel);
+  initializeEditors(panel);
+  applyNotebookMetadata();
+  renderQueryNotificationMenu();
+  return panel;
+}
+
+async function loadQueryWorkbenchEntry({ pushHistory = true } = {}) {
+  const panel = await loadWorkspacePanelPartial("/query-workbench");
+  if (!panel) {
+    return;
+  }
+
+  syncShellVisibility();
+  activateNotebookLink("");
+  applyWorkbenchTitle("query");
+  if (pushHistory) {
+    pushQueryWorkbenchHistory();
+  }
+}
+
+async function loadQueryWorkbenchDataSources(sourceId = "", { pushHistory = true } = {}) {
+  const panel = await loadWorkspacePanelPartial(queryWorkbenchDataSourcesUrl(sourceId));
+  if (!panel) {
+    return;
+  }
+
+  syncShellVisibility();
+  activateNotebookLink("");
+  applyWorkbenchTitle("data-sources");
+  if (pushHistory) {
+    pushQueryWorkbenchDataSourcesHistory(sourceId);
+  }
+}
+
+async function loadHomePage({ pushHistory = true } = {}) {
+  const panel = await loadWorkspacePanelPartial("/");
+  if (!panel) {
+    return;
+  }
+
+  syncShellVisibility();
+  activateNotebookLink("");
+  applyWorkbenchTitle("home");
+  renderHomePage();
+  if (pushHistory && window.location.pathname !== "/") {
+    window.history.pushState({ mode: "home" }, "", "/");
+  }
+}
+
+async function openQueryWorkbenchDataSources() {
+  if (currentSidebarMode() !== "notebook") {
+    await refreshSidebar("notebook");
+  }
+
+  await loadQueryWorkbenchDataSources();
 }
 
 function ensureDataGenerationEventSource() {
@@ -9301,6 +10272,188 @@ function defaultQueryResultExportFilename(job, format) {
     .replace(/^-|-$/g, "")
     .toLowerCase();
   return `${baseName || "query-result"}.${normalizedFormat}`;
+}
+
+async function fetchQueryResultExportBlob(job, exportFormat) {
+  const response = await window.fetch(
+    `/api/query-jobs/${encodeURIComponent(job.jobId)}/export/download?format=${encodeURIComponent(exportFormat)}`,
+    {
+      headers: {
+        Accept: "application/octet-stream",
+      },
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      await responseErrorMessage(response, "The query result could not be exported.")
+    );
+  }
+
+  const blob = await response.blob();
+  const fileName =
+    filenameFromContentDisposition(response.headers.get("Content-Disposition")) ||
+    defaultQueryResultExportFilename(job, exportFormat);
+
+  return {
+    blob,
+    fileName,
+  };
+}
+
+function localWorkspaceEntryIdFromSourceObject(sourceObjectRoot) {
+  return String(sourceObjectRoot?.dataset.localWorkspaceEntryId || "").trim();
+}
+
+function localWorkspaceInspectorMarkup(sourceObjectRoot) {
+  const objectName = sourceObjectDisplayName(sourceObjectRoot);
+  const folderPath = normalizeLocalWorkspaceFolderPath(
+    String(sourceObjectRoot?.dataset.localWorkspaceFolderPath || "").trim()
+  );
+  const exportFormat = String(sourceObjectRoot?.dataset.localWorkspaceExportFormat || "file")
+    .trim()
+    .toUpperCase();
+  const createdAt = formatVersionTimestamp(
+    String(sourceObjectRoot?.dataset.localWorkspaceCreatedAt || "").trim()
+  );
+  const sizeLabel = formatByteCount(sourceObjectRoot?.dataset.localWorkspaceSizeBytes);
+  const columnCount = Number(sourceObjectRoot?.dataset.localWorkspaceColumnCount || 0) || 0;
+  const rowCount = Number(sourceObjectRoot?.dataset.localWorkspaceRowCount || 0) || 0;
+
+  return `
+    <header class="sidebar-source-inspector-header">
+      <div class="sidebar-source-inspector-copy">
+        <h3 class="sidebar-source-inspector-title">${escapeHtml(objectName)}</h3>
+        <p class="sidebar-source-inspector-meta">${escapeHtml(exportFormat)} FILE - ${escapeHtml(localWorkspaceDisplayPath(folderPath, objectName))}</p>
+      </div>
+    </header>
+    <div class="sidebar-source-inspector-body">
+      <ul class="sidebar-source-field-list">
+        <li class="sidebar-source-field">
+          <span class="sidebar-source-field-name"><span class="sidebar-source-field-name-text">Folder path</span></span>
+          <span class="sidebar-source-field-type">${escapeHtml(folderPath || "Root")}</span>
+        </li>
+        <li class="sidebar-source-field">
+          <span class="sidebar-source-field-name"><span class="sidebar-source-field-name-text">Storage backend</span></span>
+          <span class="sidebar-source-field-type">IndexedDB</span>
+        </li>
+        <li class="sidebar-source-field">
+          <span class="sidebar-source-field-name"><span class="sidebar-source-field-name-text">Saved at</span></span>
+          <span class="sidebar-source-field-type">${escapeHtml(createdAt)}</span>
+        </li>
+        <li class="sidebar-source-field">
+          <span class="sidebar-source-field-name"><span class="sidebar-source-field-name-text">Size</span></span>
+          <span class="sidebar-source-field-type">${escapeHtml(sizeLabel)}</span>
+        </li>
+        <li class="sidebar-source-field">
+          <span class="sidebar-source-field-name"><span class="sidebar-source-field-name-text">Columns</span></span>
+          <span class="sidebar-source-field-type">${escapeHtml(String(columnCount))}</span>
+        </li>
+        <li class="sidebar-source-field">
+          <span class="sidebar-source-field-name"><span class="sidebar-source-field-name-text">Rows</span></span>
+          <span class="sidebar-source-field-type">${escapeHtml(String(rowCount))}</span>
+        </li>
+      </ul>
+    </div>
+  `;
+}
+
+async function saveQueryResultExportToLocalWorkspace(job, exportFormat, options = {}) {
+  if (!job?.jobId || !job?.columns?.length) {
+    return;
+  }
+
+  const exported = await fetchQueryResultExportBlob(job, exportFormat);
+  const timestamp = new Date().toISOString();
+  const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(options.folderPath);
+  const fileName = String(options.fileName || exported.fileName || "").trim() || exported.fileName;
+  const storedEntry = await saveLocalWorkspaceExport({
+    id: `local-workspace-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    fileName,
+    folderPath: normalizedFolderPath,
+    exportFormat: String(exportFormat || "").trim().toLowerCase(),
+    mimeType: exported.blob.type,
+    sizeBytes: exported.blob.size,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    notebookTitle: String(job.notebookTitle || "").trim(),
+    cellId: String(job.cellId || "").trim(),
+    columnCount: Array.isArray(job.columns) ? job.columns.length : 0,
+    rowCount: Array.isArray(job.rows) ? job.rows.length : 0,
+    blob: exported.blob,
+  });
+
+  await renderLocalWorkspaceSidebarEntries();
+
+  const sourcesRoot = dataSourcesSection();
+  if (sourcesRoot instanceof HTMLDetailsElement) {
+    sourcesRoot.open = true;
+  }
+  const localWorkspaceCatalog = sourceCatalogNode(localWorkspaceCatalogSourceId);
+  if (localWorkspaceCatalog instanceof HTMLDetailsElement) {
+    localWorkspaceCatalog.open = true;
+  }
+  const schemaNode = localWorkspaceSchemaNode();
+  if (schemaNode instanceof HTMLDetailsElement) {
+    schemaNode.open = true;
+  }
+  blinkSourceCatalog(localWorkspaceCatalogSourceId);
+
+  const sourceObjectRoot = localWorkspaceEntryNode(storedEntry.id);
+  if (sourceObjectRoot instanceof Element) {
+    setSelectedSourceObjectState(sourceObjectRoot);
+    renderSourceInspectorMarkup(localWorkspaceInspectorMarkup(sourceObjectRoot));
+    sourceObjectRoot.scrollIntoView({ block: "nearest" });
+  }
+
+  await showMessageDialog({
+    title: "Results saved to Local Workspace",
+    copy: `${storedEntry.fileName} was saved to ${localWorkspaceDisplayPath(storedEntry.folderPath)} using IndexedDB in this browser.`,
+  });
+}
+
+async function downloadLocalWorkspaceExportFromSource(sourceObjectRoot) {
+  const entryId = localWorkspaceEntryIdFromSourceObject(sourceObjectRoot);
+  if (!entryId) {
+    return false;
+  }
+
+  const entry = await getLocalWorkspaceExport(entryId);
+  if (!entry || !(entry.blob instanceof Blob)) {
+    return false;
+  }
+
+  downloadBlobFile(entry.fileName, entry.blob);
+  return true;
+}
+
+async function deleteLocalWorkspaceExportFromSource(sourceObjectRoot) {
+  const entryId = localWorkspaceEntryIdFromSourceObject(sourceObjectRoot);
+  if (!entryId) {
+    return false;
+  }
+
+  const entry = await getLocalWorkspaceExport(entryId);
+  if (!entry) {
+    return false;
+  }
+
+  const { confirmed } = await showConfirmDialog({
+    title: "Delete Local Workspace file",
+    copy: `Delete ${entry.fileName} from this browser's Local Workspace?`,
+    confirmLabel: "Delete local file",
+  });
+  if (!confirmed) {
+    return true;
+  }
+
+  await deleteLocalWorkspaceExport(entryId);
+  if (activeSourceObjectRelation === localWorkspaceRelation(entryId)) {
+    setSelectedSourceObjectState(null);
+    renderSourceInspectorMarkup("", true);
+  }
+  await renderLocalWorkspaceSidebarEntries();
+  return true;
 }
 
 function s3ExplorerPath(bucket, prefix = "") {
@@ -9849,7 +11002,7 @@ function syncResultExportSelectionState() {
   if (selectedPathNode) {
     selectedPathNode.textContent =
       s3ExplorerPath(resultExportDialogState.selectedBucket, resultExportDialogState.selectedPrefix) ||
-      "Select a bucket or folder from the S3 explorer.";
+      "Select a bucket or folder from the Shared Workspace explorer.";
   }
 
   const formatCopy = dialog.querySelector("[data-result-export-format-copy]");
@@ -9873,7 +11026,9 @@ function syncResultExportSelectionState() {
       resultExportDialogState.saving ||
       !resultExportDialogState.selectedBucket ||
       !String(resultExportDialogState.fileName || "").trim();
-    submitButton.textContent = resultExportDialogState.saving ? "Saving..." : "Save to S3";
+    submitButton.textContent = resultExportDialogState.saving
+      ? "Saving..."
+      : "Save to Shared Workspace";
   }
 
   dialog.querySelectorAll("[data-s3-explorer-node]").forEach((node) => {
@@ -10158,10 +11313,10 @@ async function saveResultExportToS3() {
     );
     closeDialog(dialog, "confirm");
     await showMessageDialog({
-      title: "Results saved to S3",
+      title: "Results saved to Shared Workspace",
       copy: payload?.path
         ? `Saved the exported result file to ${payload.path}.`
-        : String(payload?.message || "Saved the exported result file to S3."),
+        : String(payload?.message || "Saved the exported result file to Shared Workspace."),
     });
   } finally {
     setResultExportDialogBusy(false);
@@ -10182,11 +11337,11 @@ async function openResultExportDialog(job, exportFormat) {
   const titleNode = dialog.querySelector("[data-result-export-title]");
   const copyNode = dialog.querySelector("[data-result-export-copy]");
   if (titleNode) {
-    titleNode.textContent = `Save Results in ${resultExportDialogState.exportFormat.toUpperCase()} Format to S3`;
+    titleNode.textContent = `Save Results in ${resultExportDialogState.exportFormat.toUpperCase()} Format to Shared Workspace`;
   }
   if (copyNode) {
     copyNode.textContent =
-      "Choose an S3 bucket or folder, create new locations if needed, and provide the file name to save.";
+      "Choose a Shared Workspace bucket or folder, create new locations if needed, and provide the file name to save.";
   }
 
   syncResultExportSelectionState();
@@ -10258,6 +11413,8 @@ async function loadNotebookWorkspace(notebookId) {
   }
 
   panel.innerHTML = workspaceMarkup;
+  syncShellVisibility();
+  applyWorkbenchTitle("query");
   if (panel.querySelector(`[data-notebook-meta][data-notebook-id="${CSS.escape(notebookId)}"][data-shared="true"]`)) {
     sharedNotebookDrafts.delete(notebookId);
   }
@@ -10320,11 +11477,42 @@ document.body.addEventListener(
       try {
         await saveResultExportToS3();
       } catch (error) {
-        console.error("Failed to save the exported query result to S3.", error);
+        console.error("Failed to save the exported query result to Shared Workspace.", error);
         await showMessageDialog({
           title: "Result export failed",
-          copy: error instanceof Error ? error.message : "The query result could not be saved to S3.",
+          copy: error instanceof Error ? error.message : "The query result could not be saved to Shared Workspace.",
         });
+      }
+      return;
+    }
+
+    const localWorkspaceSaveForm = event.target.closest("[data-local-workspace-save-form]");
+    if (localWorkspaceSaveForm) {
+      event.preventDefault();
+      const job = queryJobById(localWorkspaceSaveDialogState.jobId);
+      if (!job) {
+        await showMessageDialog({
+          title: "Local Workspace save unavailable",
+          copy: "Run the cell again so the current query result can be saved to Local Workspace.",
+        });
+        return;
+      }
+
+      try {
+        setLocalWorkspaceSaveDialogBusy(true);
+        await saveQueryResultExportToLocalWorkspace(job, localWorkspaceSaveDialogState.exportFormat, {
+          fileName: localWorkspaceSaveDialogState.fileName,
+          folderPath: localWorkspaceSaveDialogState.folderPath,
+        });
+        closeDialog(localWorkspaceSaveDialog(), "confirm");
+      } catch (error) {
+        console.error("Failed to save the query result to Local Workspace.", error);
+        await showMessageDialog({
+          title: "Local Workspace save failed",
+          copy: error instanceof Error ? error.message : "The query result could not be saved to Local Workspace.",
+        });
+      } finally {
+        setLocalWorkspaceSaveDialogBusy(false);
       }
       return;
     }
@@ -10410,6 +11598,33 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const openQueryDataSourcesButton = event.target.closest("[data-open-query-data-sources]");
+  if (openQueryDataSourcesButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    queryNotificationMenu()?.removeAttribute("open");
+    await openQueryWorkbenchDataSources();
+    return;
+  }
+
+  const openQueryDataSourceButton = event.target.closest("[data-open-query-data-source]");
+  if (openQueryDataSourceButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    queryNotificationMenu()?.removeAttribute("open");
+    await loadQueryWorkbenchDataSources(openQueryDataSourceButton.dataset.openQueryDataSource || "");
+    return;
+  }
+
+  const openQueryWorkbenchEntryButton = event.target.closest("[data-open-query-workbench-entry]");
+  if (openQueryWorkbenchEntryButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    queryNotificationMenu()?.removeAttribute("open");
+    await loadQueryWorkbenchEntry();
+    return;
+  }
+
   const openRecentNotebookButton = event.target.closest("[data-open-recent-notebook]");
   if (openRecentNotebookButton) {
     event.preventDefault();
@@ -10437,12 +11652,12 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
-  const clearLocalCacheButton = event.target.closest("[data-clear-local-cache]");
-  if (clearLocalCacheButton) {
+  const clearLocalWorkspaceButton = event.target.closest("[data-clear-local-workspace]");
+  if (clearLocalWorkspaceButton) {
     event.preventDefault();
     event.stopPropagation();
     closeSettingsMenus();
-    await promptClearLocalCache();
+    await promptClearLocalWorkspace();
     return;
   }
 
@@ -10589,7 +11804,7 @@ document.body.addEventListener("click", async (event) => {
     if (!job) {
       await showMessageDialog({
         title: "Result export unavailable",
-        copy: "Run the cell again so the current query result can be saved to S3.",
+        copy: "Run the cell again so the current query result can be saved to Shared Workspace.",
       });
       return;
     }
@@ -10602,6 +11817,74 @@ document.body.addEventListener("click", async (event) => {
         copy: error instanceof Error ? error.message : "The query result export dialog could not be opened.",
       });
     }
+    return;
+  }
+
+  const saveLocalResultExportButton = event.target.closest("[data-result-export-local]");
+  if (saveLocalResultExportButton) {
+    event.preventDefault();
+    closeResultActionMenus();
+    const job = queryJobForResultActionTarget(saveLocalResultExportButton);
+    if (!job) {
+      await showMessageDialog({
+        title: "Result export unavailable",
+        copy: "Run the cell again so the current query result can be saved to Local Workspace.",
+      });
+      return;
+    }
+    try {
+      await openLocalWorkspaceSaveDialog(
+        job,
+        saveLocalResultExportButton.dataset.resultExportLocal || ""
+      );
+    } catch (error) {
+      console.error("Failed to open the Local Workspace save dialog.", error);
+      await showMessageDialog({
+        title: "Local Workspace save unavailable",
+        copy: error instanceof Error ? error.message : "The Local Workspace save dialog could not be opened.",
+      });
+    }
+    return;
+  }
+
+  const createLocalWorkspaceFolderButton = event.target.closest(
+    "[data-local-workspace-create-folder]"
+  );
+  if (createLocalWorkspaceFolderButton) {
+    event.preventDefault();
+    try {
+      await createLocalWorkspaceFolderFromDialog();
+    } catch (error) {
+      console.error("Failed to create a Local Workspace folder.", error);
+      await showMessageDialog({
+        title: "Local Workspace folder error",
+        copy: error instanceof Error ? error.message : "The Local Workspace folder could not be created.",
+      });
+    }
+    return;
+  }
+
+  const localWorkspaceFolderOptionButton = event.target.closest(
+    "[data-local-workspace-folder-option]"
+  );
+  if (localWorkspaceFolderOptionButton) {
+    event.preventDefault();
+    localWorkspaceSaveDialogState.folderPath = normalizeLocalWorkspaceFolderPath(
+      localWorkspaceFolderOptionButton.dataset.localWorkspaceFolderPath || ""
+    );
+    syncLocalWorkspaceSaveDialogState();
+    return;
+  }
+
+  const localWorkspaceBreadcrumbButton = event.target.closest(
+    "[data-local-workspace-breadcrumb]"
+  );
+  if (localWorkspaceBreadcrumbButton) {
+    event.preventDefault();
+    localWorkspaceSaveDialogState.folderPath = normalizeLocalWorkspaceFolderPath(
+      localWorkspaceBreadcrumbButton.dataset.localWorkspaceFolderPath || ""
+    );
+    syncLocalWorkspaceSaveDialogState();
     return;
   }
 
@@ -10821,6 +12104,25 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const downloadLocalWorkspaceObjectButton = event.target.closest(
+    "[data-download-local-workspace-object]"
+  );
+  if (downloadLocalWorkspaceObjectButton) {
+    event.preventDefault();
+    closeSourceActionMenus();
+
+    const downloaded = await downloadLocalWorkspaceExportFromSource(
+      downloadLocalWorkspaceObjectButton.closest("[data-source-object]")
+    );
+    if (downloaded === false) {
+      await showMessageDialog({
+        title: "Local Workspace download unavailable",
+        copy: "This Local Workspace file could not be downloaded from browser storage.",
+      });
+    }
+    return;
+  }
+
   const deleteSourceS3ObjectButton = event.target.closest("[data-delete-source-s3-object]");
   if (deleteSourceS3ObjectButton) {
     event.preventDefault();
@@ -10845,6 +12147,26 @@ document.body.addEventListener("click", async (event) => {
       await showMessageDialog({
         title: "S3 delete failed",
         copy: error instanceof Error ? error.message : "The selected S3 object could not be deleted.",
+      });
+    }
+    return;
+  }
+
+  const deleteLocalWorkspaceObjectButton = event.target.closest(
+    "[data-delete-local-workspace-object]"
+  );
+  if (deleteLocalWorkspaceObjectButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeSourceActionMenus();
+
+    const deleted = await deleteLocalWorkspaceExportFromSource(
+      deleteLocalWorkspaceObjectButton.closest("[data-source-object]")
+    );
+    if (deleted === false) {
+      await showMessageDialog({
+        title: "Local Workspace delete unavailable",
+        copy: "This Local Workspace file could not be deleted from browser storage.",
       });
     }
     return;
@@ -11363,6 +12685,22 @@ document.body.addEventListener("input", (event) => {
     return;
   }
 
+  const localWorkspaceFolderPathInput = event.target.closest("[data-local-workspace-folder-path]");
+  if (localWorkspaceFolderPathInput) {
+    localWorkspaceSaveDialogState.folderPath = normalizeLocalWorkspaceFolderPath(
+      localWorkspaceFolderPathInput.value
+    );
+    syncLocalWorkspaceSaveDialogState();
+    return;
+  }
+
+  const localWorkspaceFileNameInput = event.target.closest("[data-local-workspace-file-name]");
+  if (localWorkspaceFileNameInput) {
+    localWorkspaceSaveDialogState.fileName = localWorkspaceFileNameInput.value;
+    syncLocalWorkspaceSaveDialogState();
+    return;
+  }
+
   const editorSource = event.target.closest("[data-editor-source]");
   if (editorSource) {
     const workspaceRoot = editorSource.closest("[data-workspace-notebook]");
@@ -11599,7 +12937,11 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
   initializeNotebookTree();
   initializeSidebarToggle();
   initializeSidebarResizer();
-  applyWorkbenchTitle(currentWorkspaceMode());
+  renderLocalWorkspaceSidebarEntries().catch((error) => {
+    console.error("Failed to render Local Workspace entries after a partial swap.", error);
+  });
+  syncShellVisibility();
+  applyWorkbenchTitle();
   applyNotebookMetadata();
   restoreSelectedSourceObject();
   renderQueryMonitor();
@@ -11619,6 +12961,42 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
 });
 
 window.addEventListener("popstate", async () => {
+  if (window.location.pathname === "/query-workbench/data-sources") {
+    try {
+      await loadQueryWorkbenchDataSources(
+        new URLSearchParams(window.location.search).get("source_id") || "",
+        { pushHistory: false }
+      );
+    } catch (error) {
+      if (error?.name !== "AbortError") {
+        console.error("Failed to restore managed data sources from browser history.", error);
+      }
+    }
+    return;
+  }
+
+  if (window.location.pathname === "/query-workbench") {
+    try {
+      await loadQueryWorkbenchEntry({ pushHistory: false });
+    } catch (error) {
+      if (error?.name !== "AbortError") {
+        console.error("Failed to restore query workbench from browser history.", error);
+      }
+    }
+    return;
+  }
+
+  if (window.location.pathname === "/") {
+    try {
+      await loadHomePage({ pushHistory: false });
+    } catch (error) {
+      if (error?.name !== "AbortError") {
+        console.error("Failed to restore the welcome page from browser history.", error);
+      }
+    }
+    return;
+  }
+
   if (window.location.pathname.startsWith("/notebooks/")) {
     const notebookId = decodeURIComponent(window.location.pathname.slice("/notebooks/".length));
     if (!notebookId) {
@@ -11640,7 +13018,11 @@ initializeSidebarSearch();
 initializeNotebookTree();
 initializeSidebarToggle();
 initializeSidebarResizer();
-applyWorkbenchTitle(currentWorkspaceMode());
+renderLocalWorkspaceSidebarEntries().catch((error) => {
+  console.error("Failed to render Local Workspace entries during startup.", error);
+});
+syncShellVisibility();
+applyWorkbenchTitle();
 applyNotebookMetadata();
 restoreSelectedSourceObject();
 ensureDataGenerationEventSource();
@@ -11667,6 +13049,10 @@ if (initialWorkspaceMode === "ingestion") {
 
 Promise.allSettled(initialLoadTasks)
   .finally(() => {
+    refreshSidebar(initialWorkspaceMode).catch((error) => {
+      console.error("Failed to refresh the sidebar during startup.", error);
+    });
+
     if (initialWorkspaceMode === "ingestion") {
       renderIngestionWorkbench();
       renderDataGenerationMonitor();

@@ -256,22 +256,28 @@
               >CHE Data Souvereignity</span>
               <details class="cell-source-picker" data-cell-source-picker>
                 {% set computation_mode_tooltip = "MPP = Massive Parallel Processing. Distributed query execution across multiple workers and partitions for larger-scale data processing.&#10;VMTP = Vectorized Multi-Threaded Processing. Single-node vectorized execution across multiple CPU threads for fast local analytical queries." %}
-                {% set source_summary = namespace(label="Select sources", classification="NA", computation_mode="NA") %}
+                {% set source_summary = namespace(label="Select sources", classification="NA", computation_mode="NA", storage_tooltip="") %}
                 {% if cell.data_sources | length == 1 %}
                   {% for source in source_options %}
                     {% if source.source_id == cell.data_sources[0] %}
                       {% set source_summary.label = source.label %}
                       {% set source_summary.classification = source.classification %}
                       {% set source_summary.computation_mode = source.computation_mode %}
+                      {% set source_summary.storage_tooltip = source.storage_tooltip %}
                     {% endif %}
                   {% endfor %}
                 {% elif cell.data_sources %}
                   {% set source_summary.label = cell.data_sources | length ~ " sources" %}
                   {% set source_summary.classification = "Mixed" %}
                   {% set source_summary.computation_mode = "Mixed" %}
+                  {% set source_summary.storage_tooltip = "Selected sources span multiple storage locations." %}
                 {% endif %}
                 <summary class="cell-source-picker-toggle" data-cell-source-summary>
-                  <span class="cell-source-summary-label" data-cell-source-summary-label>{{ source_summary.label }}</span>
+                  <span
+                    class="cell-source-summary-label"
+                    data-cell-source-summary-label
+                    {% if source_summary.storage_tooltip %}title="{{ source_summary.storage_tooltip }}"{% endif %}
+                  >{{ source_summary.label }}</span>
                   {% if cell.data_sources %}
                     <span class="cell-source-classification" data-cell-source-classification>Classification: {{ source_summary.classification }}</span>
                     <span
@@ -283,7 +289,10 @@
                 </summary>
                 <div class="cell-source-selection" data-cell-source-selection>
                   {% for source in source_options %}
-                    <label class="workspace-source-option cell-source-option{% if source.source_id in cell.data_sources %} is-selected{% endif %}">
+                    <label
+                      class="workspace-source-option cell-source-option{% if source.source_id in cell.data_sources %} is-selected{% endif %}"
+                      {% if source.storage_tooltip %}title="{{ source.storage_tooltip }}"{% endif %}
+                    >
                       <input
                         class="workspace-source-checkbox"
                         type="checkbox"
@@ -434,13 +443,30 @@
                     class="workspace-action-menu-item"
                     data-result-export-s3="parquet"
                     data-result-job-id=""
-                  >Save Results in Parquet Format on S3 ...</button>
+                    title="Saves into the configured Shared Workspace MinIO / S3 bucket."
+                  >Save Results in Parquet Format to Shared Workspace ...</button>
                   <button
                     type="button"
                     class="workspace-action-menu-item"
                     data-result-export-s3="json"
                     data-result-job-id=""
-                  >Save Results in JSON Format on S3 ...</button>
+                    title="Saves into the configured Shared Workspace MinIO / S3 bucket."
+                  >Save Results in JSON Format to Shared Workspace ...</button>
+                  <div class="workspace-action-menu-separator" aria-hidden="true"></div>
+                  <button
+                    type="button"
+                    class="workspace-action-menu-item"
+                    data-result-export-local="parquet"
+                    data-result-job-id=""
+                    title="Saves in this browser's Local Workspace using IndexedDB."
+                  >Save Results in Parquet Format to Local Workspace</button>
+                  <button
+                    type="button"
+                    class="workspace-action-menu-item"
+                    data-result-export-local="json"
+                    data-result-job-id=""
+                    title="Saves in this browser's Local Workspace using IndexedDB."
+                  >Save Results in JSON Format to Local Workspace</button>
                   <div class="workspace-action-menu-separator" aria-hidden="true"></div>
                   <button
                     type="button"

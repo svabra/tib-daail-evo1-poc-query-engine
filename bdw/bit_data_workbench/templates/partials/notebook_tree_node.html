@@ -1,61 +1,70 @@
+{% set notebook_browser_live = notebook_browser_live | default(true) %}
+{% set notebook_browser_manage = notebook_browser_manage | default(true) %}
 <details
   class="tree-folder"
-  data-tree-folder
-  data-folder-id="{{ node.folder_id }}"
-  data-can-edit="{{ 'true' if node.can_edit else 'false' }}"
-  data-can-delete="{{ 'true' if node.can_delete else 'false' }}"
+  {% if notebook_browser_live %}
+    data-tree-folder
+    data-folder-id="{{ node.folder_id }}"
+    data-can-edit="{{ 'true' if node.can_edit else 'false' }}"
+    data-can-delete="{{ 'true' if node.can_delete else 'false' }}"
+  {% endif %}
 >
-  <summary class="tree-folder-summary" data-searchable-item="{{ node.name }}">
+  <summary
+    class="tree-folder-summary"
+    {% if notebook_browser_live %}data-searchable-item="{{ node.name }}"{% endif %}
+  >
     <span class="tree-folder-label">{{ node.name }}</span>
     <span class="tree-folder-tools">
-      <button
-        type="button"
-        class="tree-add-button tree-add-button-inline{% if not node.can_edit %} is-action-disabled{% endif %}"
-        data-create-notebook
-        title="{% if node.can_edit %}Create notebook{% else %}This folder cannot receive new notebooks.{% endif %}"
-        aria-label="Create notebook"
-        {% if not node.can_edit %}disabled{% endif %}
-      >
-        <svg class="tree-action-glyph" viewBox="0 0 16 16" aria-hidden="true">
-          <path d="M4 2.2h5.2l2.8 2.8v8.8H4z"></path>
-          <path d="M9.2 2.2v2.7h2.8"></path>
-          <path d="M8 6.9v4.2M5.9 9h4.2"></path>
-        </svg>
-      </button>
-      <button
-        type="button"
-        class="tree-add-button tree-add-button-inline{% if not node.can_edit %} is-action-disabled{% endif %}"
-        data-rename-tree-folder
-        title="{% if node.can_edit %}Rename folder{% else %}This folder cannot be renamed.{% endif %}"
-        aria-label="Rename folder"
-        {% if not node.can_edit %}disabled{% endif %}
-      >
-        Edit
-      </button>
-      <button
-        type="button"
-        class="tree-add-button tree-add-button-inline tree-delete-button{% if not node.can_delete %} is-action-disabled{% endif %}"
-        data-delete-tree-folder
-        title="{% if node.can_delete %}Delete folder. Notebooks will be moved to the unassigned folder.{% else %}This folder cannot be deleted.{% endif %}"
-        aria-label="Delete folder"
-        {% if not node.can_delete %}disabled{% endif %}
-      >
-        Delete
-      </button>
-      <button
-        type="button"
-        class="tree-add-button tree-add-button-inline{% if not node.can_edit %} is-action-disabled{% endif %}"
-        data-add-tree-item
-        title="{% if node.can_edit %}Add subfolder{% else %}This folder cannot be changed.{% endif %}"
-        aria-label="Add subfolder"
-        {% if not node.can_edit %}disabled{% endif %}
-      >
-        +
-      </button>
+      {% if notebook_browser_manage %}
+        <button
+          type="button"
+          class="tree-add-button tree-add-button-inline{% if not node.can_edit %} is-action-disabled{% endif %}"
+          data-create-notebook
+          title="{% if node.can_edit %}Create notebook{% else %}This folder cannot receive new notebooks.{% endif %}"
+          aria-label="Create notebook"
+          {% if not node.can_edit %}disabled{% endif %}
+        >
+          <svg class="tree-action-glyph" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M4 2.2h5.2l2.8 2.8v8.8H4z"></path>
+            <path d="M9.2 2.2v2.7h2.8"></path>
+            <path d="M8 6.9v4.2M5.9 9h4.2"></path>
+          </svg>
+        </button>
+        <button
+          type="button"
+          class="tree-add-button tree-add-button-inline{% if not node.can_edit %} is-action-disabled{% endif %}"
+          data-rename-tree-folder
+          title="{% if node.can_edit %}Rename folder{% else %}This folder cannot be renamed.{% endif %}"
+          aria-label="Rename folder"
+          {% if not node.can_edit %}disabled{% endif %}
+        >
+          Edit
+        </button>
+        <button
+          type="button"
+          class="tree-add-button tree-add-button-inline tree-delete-button{% if not node.can_delete %} is-action-disabled{% endif %}"
+          data-delete-tree-folder
+          title="{% if node.can_delete %}Delete folder. Notebooks will be moved to the unassigned folder.{% else %}This folder cannot be deleted.{% endif %}"
+          aria-label="Delete folder"
+          {% if not node.can_delete %}disabled{% endif %}
+        >
+          Delete
+        </button>
+        <button
+          type="button"
+          class="tree-add-button tree-add-button-inline{% if not node.can_edit %} is-action-disabled{% endif %}"
+          data-add-tree-item
+          title="{% if node.can_edit %}Add subfolder{% else %}This folder cannot be changed.{% endif %}"
+          aria-label="Add subfolder"
+          {% if not node.can_edit %}disabled{% endif %}
+        >
+          +
+        </button>
+      {% endif %}
       <span class="tree-folder-count">{{ node.notebook_count }}</span>
     </span>
   </summary>
-  <div class="tree-children" data-tree-children>
+  <div class="tree-children" {% if notebook_browser_live %}data-tree-children{% endif %}>
     {% for child_folder in node.folders %}
       {% with node=child_folder %}
         {% include "partials/notebook_tree_node.html" %}
@@ -68,59 +77,63 @@
         data-notebook-id="{{ notebook.notebook_id }}"
         data-notebook-title="{{ notebook.title }}"
         data-notebook-summary="{{ notebook.summary }}"
-        data-created-at="{{ notebook.created_at }}"
-        data-default-notebook-title="{{ notebook.title }}"
-        data-default-notebook-summary="{{ notebook.summary }}"
-        data-default-notebook-cells='{{ notebook.cells_payload | tojson }}'
-        data-default-notebook-versions='{{ notebook.versions_payload | tojson }}'
-        data-notebook-data-sources="{{ notebook.data_sources | join('||') }}"
-        data-default-notebook-data-sources="{{ notebook.data_sources | join('||') }}"
-        data-default-notebook-tags="{{ notebook.tags | join('||') }}"
-        data-shared="{{ 'true' if notebook.shared else 'false' }}"
-        data-default-notebook-shared="{{ 'true' if notebook.shared else 'false' }}"
-        data-can-edit="{{ 'true' if notebook.can_edit else 'false' }}"
-        data-can-delete="{{ 'true' if notebook.can_delete else 'false' }}"
-        data-searchable-item="{{ notebook.title }} {{ notebook.summary }} {{ notebook.tags | join(' ') }}"
-        data-draggable-notebook
-        draggable="{{ 'true' if notebook.can_edit else 'false' }}"
-        hx-get="/notebooks/{{ notebook.notebook_id }}"
-        hx-target="#workspace-panel"
-        hx-swap="innerHTML"
+        {% if notebook_browser_live %}
+          data-created-at="{{ notebook.created_at }}"
+          data-default-notebook-title="{{ notebook.title }}"
+          data-default-notebook-summary="{{ notebook.summary }}"
+          data-default-notebook-cells='{{ notebook.cells_payload | tojson }}'
+          data-default-notebook-versions='{{ notebook.versions_payload | tojson }}'
+          data-notebook-data-sources="{{ notebook.data_sources | join('||') }}"
+          data-default-notebook-data-sources="{{ notebook.data_sources | join('||') }}"
+          data-default-notebook-tags="{{ notebook.tags | join('||') }}"
+          data-shared="{{ 'true' if notebook.shared else 'false' }}"
+          data-default-notebook-shared="{{ 'true' if notebook.shared else 'false' }}"
+          data-can-edit="{{ 'true' if notebook.can_edit else 'false' }}"
+          data-can-delete="{{ 'true' if notebook.can_delete else 'false' }}"
+          data-searchable-item="{{ notebook.title }} {{ notebook.summary }} {{ notebook.tags | join(' ') }}"
+          data-draggable-notebook
+          draggable="{{ 'true' if notebook.can_edit else 'false' }}"
+          hx-get="/notebooks/{{ notebook.notebook_id }}"
+          hx-target="#workspace-panel"
+          hx-swap="innerHTML"
+        {% endif %}
       >
         <span class="notebook-title-row">
           <span class="notebook-title">{{ notebook.title }}</span>
           {% if notebook.shared %}
             <small class="notebook-sharing-pill">Shared</small>
           {% endif %}
-          <span class="notebook-item-tools">
-            <button
-              type="button"
-              class="tree-add-button tree-add-button-inline notebook-action-pill{% if not notebook.can_edit %} is-action-disabled{% endif %}"
-              data-sidebar-rename-notebook
-              title="{% if notebook.can_edit %}Rename notebook{% else %}This notebook cannot be renamed.{% endif %}"
-              {% if not notebook.can_edit %}disabled{% endif %}
-            >
-              Rename
-            </button>
-            <button
-              type="button"
-              class="tree-add-button tree-add-button-inline notebook-action-pill{% if not notebook.can_edit %} is-action-disabled{% endif %}"
-              data-sidebar-edit-notebook
-              title="{% if notebook.can_edit %}Edit notebook metadata{% else %}This notebook cannot be edited.{% endif %}"
-              {% if not notebook.can_edit %}disabled{% endif %}
-            >
-              Edit
-            </button>
-            <button
-              type="button"
-              class="tree-add-button tree-add-button-inline notebook-action-pill tree-delete-button{% if not notebook.can_delete %} is-action-disabled{% endif %}"
-              data-sidebar-delete-notebook
-              title="{% if notebook.can_delete %}Delete notebook{% else %}This notebook cannot be deleted.{% endif %}"
-              {% if not notebook.can_delete %}disabled{% endif %}
-            >
-              Delete
-            </button>
-          </span>
+          {% if notebook_browser_manage %}
+            <span class="notebook-item-tools">
+              <button
+                type="button"
+                class="tree-add-button tree-add-button-inline notebook-action-pill{% if not notebook.can_edit %} is-action-disabled{% endif %}"
+                data-sidebar-rename-notebook
+                title="{% if notebook.can_edit %}Rename notebook{% else %}This notebook cannot be renamed.{% endif %}"
+                {% if not notebook.can_edit %}disabled{% endif %}
+              >
+                Rename
+              </button>
+              <button
+                type="button"
+                class="tree-add-button tree-add-button-inline notebook-action-pill{% if not notebook.can_edit %} is-action-disabled{% endif %}"
+                data-sidebar-edit-notebook
+                title="{% if notebook.can_edit %}Edit notebook metadata{% else %}This notebook cannot be edited.{% endif %}"
+                {% if not notebook.can_edit %}disabled{% endif %}
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                class="tree-add-button tree-add-button-inline notebook-action-pill tree-delete-button{% if not notebook.can_delete %} is-action-disabled{% endif %}"
+                data-sidebar-delete-notebook
+                title="{% if notebook.can_delete %}Delete notebook{% else %}This notebook cannot be deleted.{% endif %}"
+                {% if not notebook.can_delete %}disabled{% endif %}
+              >
+                Delete
+              </button>
+            </span>
+          {% endif %}
         </span>
         <span class="notebook-summary">{{ notebook.summary }}</span>
         {% if notebook.tags %}

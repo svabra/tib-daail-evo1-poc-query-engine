@@ -25,13 +25,30 @@
             class="workspace-action-menu-item"
             data-result-export-s3="parquet"
             data-result-job-id=""
-          >Save Results in Parquet Format on S3 ...</button>
+            title="Saves into the configured Shared Workspace MinIO / S3 bucket."
+          >Save Results in Parquet Format to Shared Workspace ...</button>
           <button
             type="button"
             class="workspace-action-menu-item"
             data-result-export-s3="json"
             data-result-job-id=""
-          >Save Results in JSON Format on S3 ...</button>
+            title="Saves into the configured Shared Workspace MinIO / S3 bucket."
+          >Save Results in JSON Format to Shared Workspace ...</button>
+          <div class="workspace-action-menu-separator" aria-hidden="true"></div>
+          <button
+            type="button"
+            class="workspace-action-menu-item"
+            data-result-export-local="parquet"
+            data-result-job-id=""
+            title="Saves in this browser's Local Workspace using IndexedDB."
+          >Save Results in Parquet Format to Local Workspace</button>
+          <button
+            type="button"
+            class="workspace-action-menu-item"
+            data-result-export-local="json"
+            data-result-job-id=""
+            title="Saves in this browser's Local Workspace using IndexedDB."
+          >Save Results in JSON Format to Local Workspace</button>
           <div class="workspace-action-menu-separator" aria-hidden="true"></div>
           <button
             type="button"

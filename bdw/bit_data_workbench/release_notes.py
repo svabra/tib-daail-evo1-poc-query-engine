@@ -1,9 +1,37 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.3.33. Keep entries concise and
+# Derived from git history through version 0.3.34. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.3.34",
+        "releasedAt": "2026-04-06T21:57:11+02:00",
+        "features": [
+            (
+                "The workbench now has a dedicated Data Source Workbench, "
+                "including topbar navigation, landing-page entry points, "
+                "and section-aware titles for home, query, ingestion, and "
+                "data-source views."
+            ),
+            (
+                "Shared Workspace and Local Workspace terminology now runs "
+                "consistently across source management, the sidebar, source "
+                "pickers, tooltips, and settings."
+            ),
+            (
+                "Local Workspace is now always visible at the top of the "
+                "data-source list and can store JSON and Parquet query "
+                "result exports directly in browser-local IndexedDB."
+            ),
+            (
+                "Saving to Local Workspace now opens a modal where users "
+                "can choose a file name and folder path, create folders, "
+                "and then see saved files back in the sidebar with "
+                "download, delete, and location details."
+            ),
+        ],
+    },
     {
         "version": "0.3.33",
         "releasedAt": "2026-04-06T18:07:12+02:00",

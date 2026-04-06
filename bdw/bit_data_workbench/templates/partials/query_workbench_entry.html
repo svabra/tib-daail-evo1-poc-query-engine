@@ -1,0 +1,112 @@
+<section class="query-entry-page" data-query-workbench-entry-page>
+  <div class="query-entry-hero home-hero">
+    <div class="home-hero-copy">
+      <span class="home-eyebrow">Query Workbench</span>
+      <h2>Open or create a new Query Notebook</h2>
+      <p>
+        Start a fresh notebook, share a notebook with colleages to collaborate, or browse the current notebook structure before entering the SQL workspace.
+      </p>
+    </div>
+    <div class="query-entry-action-grid">
+      <button type="button" class="home-workbench-card query-entry-action-card" data-create-notebook>
+        <span class="home-workbench-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M6 4.2h7.9l4.1 4.1v11.5H6z"></path>
+            <path d="M13.9 4.2v4.1H18"></path>
+            <path d="M12 10.2v6.2"></path>
+            <path d="M8.9 13.3h6.2"></path>
+          </svg>
+        </span>
+        <span class="home-workbench-title">Create New Workbench</span>
+        <span class="home-workbench-copy">
+          Create a notebook with an empty SQL cell so you can start exploring immediately.
+        </span>
+      </button>
+      <a
+        href="/query-workbench/data-sources"
+        class="home-workbench-card query-entry-action-card query-entry-action-card-secondary"
+        data-open-query-data-sources
+      >
+        <span class="home-workbench-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <ellipse cx="8.8" cy="7" rx="4.8" ry="1.9"></ellipse>
+            <path d="M4 7v6.8c0 1 2.1 1.9 4.8 1.9s4.8-.9 4.8-1.9V7"></path>
+            <path d="M4 10.4c0 1 2.1 1.9 4.8 1.9s4.8-.9 4.8-1.9"></path>
+            <path d="M14.7 5.1h4.2l1.7 1.7v7.7h-5.9z"></path>
+            <path d="M18.9 5.1v1.7h1.7"></path>
+            <path d="M15.7 11.2h4"></path>
+            <path d="M15.7 13.8h2.6"></path>
+          </svg>
+        </span>
+        <span class="home-workbench-title">Manage Data Sources</span>
+        <span class="home-workbench-copy">
+          Open the catalog navigator so you can inspect sources, buckets, and available relations before you query.
+        </span>
+      </a>
+    </div>
+  </div>
+
+  <div class="query-entry-grid">
+    <section class="home-section query-entry-section">
+      <div class="home-section-header">
+        <h3>Shared Notebooks</h3>
+        <p>Plain access to notebooks that have been shared with connected users.</p>
+      </div>
+      <div class="query-entry-shared-list">
+        {% if shared_notebooks %}
+          {% for notebook in shared_notebooks %}
+            <a
+              href="/notebooks/{{ notebook.notebook_id }}"
+              class="notebook-link query-entry-shared-item"
+              data-notebook-id="{{ notebook.notebook_id }}"
+              data-notebook-title="{{ notebook.title }}"
+              data-notebook-summary="{{ notebook.summary }}"
+            >
+              <span class="query-entry-shared-title-row">
+                <span class="query-entry-shared-title">{{ notebook.title }}</span>
+                <small class="notebook-sharing-pill">Shared</small>
+              </span>
+              <span class="query-entry-shared-summary">{{ notebook.summary or "No description saved." }}</span>
+            </a>
+          {% endfor %}
+        {% else %}
+          <p class="home-empty">No shared notebooks are available yet.</p>
+        {% endif %}
+      </div>
+    </section>
+
+    <section class="home-section query-entry-section">
+      <div class="home-section-header">
+        <h3>Notebook Browser</h3>
+        <p>Browse the current notebook structure and open any existing workbench directly.</p>
+      </div>
+      {% set notebook_browser_live = false %}
+      {% set notebook_browser_manage = false %}
+      {% include "partials/notebook_browser_tree.html" %}
+    </section>
+  </div>
+
+  <section class="home-section query-entry-section query-entry-data-source-overview">
+    <div class="home-section-header">
+      <h3>Available Data Sources</h3>
+      <p>Current catalogs detected by the workbench. Use the management tile above to open the full source navigator.</p>
+    </div>
+    <div class="query-entry-catalog-grid">
+      {% for catalog in catalogs %}
+        {% set schema_count = catalog.schemas | length %}
+        {% set counts = namespace(objects=0) %}
+        {% for schema in catalog.schemas %}
+          {% set counts.objects = counts.objects + (schema.objects | length) %}
+        {% endfor %}
+        <article class="query-entry-catalog-card">
+          <h4>{{ catalog.name }}</h4>
+          <p>
+            {{ schema_count }} schema{% if schema_count != 1 %}s{% endif %}
+            •
+            {{ counts.objects }} object{% if counts.objects != 1 %}s{% endif %}
+          </p>
+        </article>
+      {% endfor %}
+    </div>
+  </section>
+</section>

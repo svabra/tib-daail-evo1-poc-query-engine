@@ -42,6 +42,28 @@ def _find_relation_by_object_name(
     return None
 
 
+def _find_generated_s3_relation_by_object_name(
+    catalogs: Iterable[SourceCatalog],
+    *,
+    object_names: Iterable[str],
+) -> str | None:
+    preferred = {name.lower(): name for name in object_names}
+    fallback_relation: str | None = None
+    for catalog in catalogs:
+        if catalog.name != "workspace":
+            continue
+        for schema in catalog.schemas:
+            for source_object in schema.objects:
+                if source_object.name.lower() not in preferred:
+                    continue
+                if fallback_relation is None:
+                    fallback_relation = source_object.relation
+                normalized_key = str(source_object.s3_key or "").strip().lower()
+                if normalized_key.startswith("generated/"):
+                    return source_object.relation
+    return fallback_relation
+
+
 def _find_relations_by_object_names(
     catalogs: Iterable[SourceCatalog],
     *,
@@ -310,10 +332,8 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         "federal_tax_enforcements_mt",
         "federal_tax_appeals_mt",
     )
-    preferred_s3_relation = _find_relation_by_object_name(
+    preferred_s3_relation = _find_generated_s3_relation_by_object_name(
         catalogs,
-        catalog_name="workspace",
-        schema_name=None,
         object_names=("vat_smoke",),
     )
     preferred_postgres_relation = _find_relation_by_object_name(
@@ -958,12 +978,14 @@ def _source_option(
     label: str,
     classification: str = "Internal",
     computation_mode: str = "VMTP",
+    storage_tooltip: str = "",
 ) -> dict[str, str]:
     return {
         "source_id": source_id,
         "label": label,
         "classification": classification,
         "computation_mode": computation_mode,
+        "storage_tooltip": storage_tooltip,
     }
 
 
@@ -971,9 +993,34 @@ def build_source_options(catalogs: list[SourceCatalog]) -> list[dict[str, str]]:
     options: list[dict[str, str]] = []
 
     for catalog in catalogs:
+        if catalog.connection_source_id == "workspace.local":
+            options.append(
+                _source_option(
+                    "workspace.local",
+                    "Local Workspace",
+                    classification="Workspace Storage",
+                    computation_mode="Browser-managed",
+                    storage_tooltip=(
+                        "Stored in this browser profile under this app's "
+                        "origin using IndexedDB."
+                    ),
+                )
+            )
+            continue
+
         if catalog.name == "workspace":
             if catalog.schemas:
-                options.append(_source_option("workspace.s3", "MinIO / S3"))
+                options.append(
+                    _source_option(
+                        "workspace.s3",
+                        "Shared Workspace",
+                        classification="Workspace Storage",
+                        storage_tooltip=(
+                            "Stored in the configured MinIO / S3 bucket and "
+                            "available to the running workbench instance."
+                        ),
+                    )
+                )
             continue
 
         if catalog.name == "pg_oltp":

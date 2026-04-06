@@ -1,3 +1,25 @@
+{% macro home_data_source_icon(kind) -%}
+  {% if kind == "postgres" %}
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <ellipse cx="8.8" cy="7" rx="4.8" ry="1.9"></ellipse>
+      <path d="M4 7v6.8c0 1 2.1 1.9 4.8 1.9s4.8-.9 4.8-1.9V7"></path>
+      <path d="M4 10.4c0 1 2.1 1.9 4.8 1.9s4.8-.9 4.8-1.9"></path>
+      <path d="M14.7 5.1h4.2l1.7 1.7v7.7h-5.9z"></path>
+      <path d="M18.9 5.1v1.7h1.7"></path>
+      <path d="M15.7 11.2h4"></path>
+      <path d="M15.7 13.8h2.6"></path>
+    </svg>
+  {% else %}
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <ellipse cx="10" cy="7" rx="5.8" ry="2.2"></ellipse>
+      <path d="M4.2 7v6.4c0 1.2 2.6 2.2 5.8 2.2s5.8-1 5.8-2.2V7"></path>
+      <path d="M4.2 10.2c0 1.2 2.6 2.2 5.8 2.2s5.8-1 5.8-2.2"></path>
+      <path d="M15.5 4.6h4.1l1.7 1.7v5.8h-5.8z"></path>
+      <path d="M19.6 4.6v1.7h1.7"></path>
+    </svg>
+  {% endif %}
+{%- endmacro %}
+
 <section class="home-page" data-home-page>
   <div class="home-hero">
     <div class="home-hero-copy">
@@ -18,6 +40,21 @@
         </span>
         <span class="home-workbench-title">Query Workbench</span>
         <span class="home-workbench-copy">Open notebooks, run SQL, and compare execution behavior.</span>
+      </button>
+      <button type="button" class="home-workbench-card home-workbench-card-data-sources" data-open-query-data-sources>
+        <span class="home-workbench-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <ellipse cx="8.8" cy="7" rx="4.8" ry="1.9"></ellipse>
+            <path d="M4 7v6.8c0 1 2.1 1.9 4.8 1.9s4.8-.9 4.8-1.9V7"></path>
+            <path d="M4 10.4c0 1 2.1 1.9 4.8 1.9s4.8-.9 4.8-1.9"></path>
+            <path d="M14.7 5.1h4.2l1.7 1.7v7.7h-5.9z"></path>
+            <path d="M18.9 5.1v1.7h1.7"></path>
+            <path d="M15.7 11.2h4"></path>
+            <path d="M15.7 13.8h2.6"></path>
+          </svg>
+        </span>
+        <span class="home-workbench-title">Data Source Workbench</span>
+        <span class="home-workbench-copy">Manage available data sources for shared and local tinkering workflows.</span>
       </button>
       <button type="button" class="home-workbench-card" data-open-ingestion-workbench>
         <span class="home-workbench-icon" aria-hidden="true">
@@ -43,6 +80,33 @@
       </div>
       <div class="home-activity-list" data-home-recent-notebooks>
         <p class="home-empty">No recent notebook activity yet.</p>
+      </div>
+    </section>
+
+    <section class="home-section">
+      <div class="home-section-header">
+        <h3>Available Data Sources</h3>
+        <p>Shared and local sources currently surfaced in the Data Source Workbench.</p>
+      </div>
+      <div class="home-data-source-list" aria-label="Available data sources">
+        {% if home_data_sources %}
+          {% for source in home_data_sources %}
+            <span
+              class="home-data-source-item"
+              {% if source.storage_tooltip %}title="{{ source.storage_tooltip }}"{% endif %}
+            >
+              <span class="home-data-source-item-icon" aria-hidden="true">
+                {{ home_data_source_icon(source.kind) }}
+              </span>
+              <span class="home-data-source-item-copy">
+                <span class="home-data-source-item-name">{{ source.name }}</span>
+                <span class="home-data-source-item-label">{{ source.label }}</span>
+              </span>
+            </span>
+          {% endfor %}
+        {% else %}
+          <span class="home-data-source-empty">No data sources are available yet.</span>
+        {% endif %}
       </div>
     </section>
 

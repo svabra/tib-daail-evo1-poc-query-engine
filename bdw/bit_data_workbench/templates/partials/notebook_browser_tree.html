@@ -1,0 +1,10 @@
+{% set notebook_browser_live = notebook_browser_live | default(true) %}
+{% set notebook_browser_manage = notebook_browser_manage | default(true) %}
+<div
+  class="notebook-tree tree-children{% if not notebook_browser_live %} query-entry-browser{% endif %}"
+  {% if notebook_browser_live %}data-notebook-tree data-tree-children{% endif %}
+>
+  {% for node in notebook_tree %}
+    {% include "partials/notebook_tree_node.html" %}
+  {% endfor %}
+</div>
