@@ -1,9 +1,25 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.3.35. Keep entries concise and
+# Derived from git history through version 0.3.36. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.3.36",
+        "releasedAt": "2026-04-06T23:40:12+02:00",
+        "features": [
+            (
+                "RHOS ECS-backed S3 bucket cleanup now sends the required "
+                "Content-MD5 header for DeleteObjects requests, so contest "
+                "and loader jobs can recreate their S3 buckets reliably."
+            ),
+            (
+                "A focused S3 regression test now verifies the DeleteObjects "
+                "Content-MD5 handling and client hook registration used by "
+                "shared S3 storage operations."
+            ),
+        ],
+    },
     {
         "version": "0.3.35",
         "releasedAt": "2026-04-06T23:19:27+02:00",

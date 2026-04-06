@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 from collections.abc import Iterator, Sequence
 import hashlib
 import re
@@ -127,6 +128,36 @@ def s3_verify_value(
     return verification_enabled
 
 
+def _request_body_bytes(body: object) -> bytes:
+    if body is None:
+        return b""
+    if isinstance(body, bytes):
+        return body
+    if isinstance(body, bytearray):
+        return bytes(body)
+    if isinstance(body, str):
+        return body.encode("utf-8")
+    return str(body).encode("utf-8")
+
+
+def _content_md5_header_value(body: object) -> str:
+    digest = hashlib.md5(_request_body_bytes(body)).digest()
+    return base64.b64encode(digest).decode("ascii")
+
+
+def _inject_delete_objects_content_md5(request, **_kwargs) -> None:
+    if request is None:
+        return
+    request.headers["Content-MD5"] = _content_md5_header_value(request.body)
+
+
+def _register_delete_objects_md5_handler(client) -> None:
+    client.meta.events.register(
+        "before-sign.s3.DeleteObjects",
+        _inject_delete_objects_content_md5,
+    )
+
+
 def effective_s3_url_style(
     settings: Settings,
     *,
@@ -191,7 +222,7 @@ def s3_client(
         request_checksum_calculation="when_required",
         response_checksum_validation="when_required",
     )
-    return boto3.client(
+    client = boto3.client(
         "s3",
         endpoint_url=endpoint_url,
         aws_access_key_id=settings.current_s3_access_key_id(),
@@ -200,6 +231,8 @@ def s3_client(
         config=config,
         verify=s3_verify_value(settings, verify_ssl=verify_ssl),
     )
+    _register_delete_objects_md5_handler(client)
+    return client
 
 
 def iter_s3_keys(client, bucket: str, prefix: str = "") -> Iterator[str]:
