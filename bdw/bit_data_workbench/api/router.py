@@ -150,6 +150,26 @@ def create_s3_folder(
     return JSONResponse(jsonable_encoder(result))
 
 
+@router.get("/api/s3/object/download")
+def download_s3_object(
+    bucket: str = Query(""),
+    key: str = Query(""),
+    file_name: str = Query(default="", alias="filename"),
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> FileResponse:
+    try:
+        artifact = service.download_s3_object(bucket=bucket, key=key, file_name=file_name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return FileResponse(
+        path=artifact.local_path,
+        media_type=artifact.content_type,
+        filename=artifact.filename,
+        background=BackgroundTask(shutil.rmtree, artifact.cleanup_dir, True),
+    )
+
+
 @router.get("/api/data-source-events")
 def data_source_events_state(service: WorkbenchService = Depends(get_workbench_service)) -> JSONResponse:
     return JSONResponse(jsonable_encoder(service.data_source_events_state()))

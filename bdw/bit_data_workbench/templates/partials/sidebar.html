@@ -268,6 +268,11 @@
                       data-source-object-name="{{ source_object.name }}"
                       data-source-object-relation="{{ source_object.relation }}"
                       data-source-option-id="{{ source_option_id }}"
+                      data-s3-bucket="{{ source_object.s3_bucket }}"
+                      data-s3-key="{{ source_object.s3_key }}"
+                      data-s3-path="{{ source_object.s3_path }}"
+                      data-s3-file-format="{{ source_object.s3_file_format }}"
+                      data-s3-downloadable="{{ 'true' if source_object.s3_downloadable else 'false' }}"
                     >
                       <span class="source-node-label">
                         {% if source_object.kind in ("view", "materialized view") %}
@@ -304,6 +309,16 @@
                             <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
                           </summary>
                           <div class="workspace-action-menu-panel">
+                            {% if source_object.s3_downloadable %}
+                              <button
+                                type="button"
+                                class="workspace-action-menu-item"
+                                data-download-source-s3-object
+                                title="Download the underlying S3 object"
+                              >
+                                Download S3 object
+                              </button>
+                            {% endif %}
                             <button
                               type="button"
                               class="workspace-action-menu-item"

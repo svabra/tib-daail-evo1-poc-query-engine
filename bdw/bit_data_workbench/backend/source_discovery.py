@@ -411,6 +411,35 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
             connection_status=self._disconnected_status("MinIO / S3 live discovery is disconnected."),
         )
 
+    def spec_for_relation(self, relation_id: str) -> DiscoveredRelationSpec | None:
+        normalized_relation_id = str(relation_id or "").strip()
+        if not normalized_relation_id:
+            return None
+        with self._lock:
+            spec = self._current_specs.get(normalized_relation_id)
+            if spec is None:
+                return None
+            return DiscoveredRelationSpec(
+                schema_name=spec.schema_name,
+                relation_name=spec.relation_name,
+                query_sql=spec.query_sql,
+                object_path=spec.object_path,
+                object_format=spec.object_format,
+            )
+
+    def specs_snapshot(self) -> dict[str, DiscoveredRelationSpec]:
+        with self._lock:
+            return {
+                relation_id: DiscoveredRelationSpec(
+                    schema_name=spec.schema_name,
+                    relation_name=spec.relation_name,
+                    query_sql=spec.query_sql,
+                    object_path=spec.object_path,
+                    object_format=spec.object_format,
+                )
+                for relation_id, spec in self._current_specs.items()
+            }
+
     def sync(self, connection: duckdb.DuckDBPyConnection) -> DataSourceDiscoveryResult | None:
         with self._lock:
             enabled = self._enabled
@@ -885,6 +914,18 @@ class DataSourceDiscoveryManager:
         result = discoverer.disconnect()
         self._apply_result(result, emit_event=False)
         return self.state_payload()
+
+    def s3_relation_spec(self, relation_id: str) -> DiscoveredRelationSpec | None:
+        discoverer = self._discoverers_by_source_id.get("workspace.s3")
+        if not isinstance(discoverer, S3DataSourceDiscoverer):
+            return None
+        return discoverer.spec_for_relation(relation_id)
+
+    def s3_relation_specs(self) -> dict[str, DiscoveredRelationSpec]:
+        discoverer = self._discoverers_by_source_id.get("workspace.s3")
+        if not isinstance(discoverer, S3DataSourceDiscoverer):
+            return {}
+        return discoverer.specs_snapshot()
 
     def wait_for_state(self, last_version: int | None, timeout: float = 15.0) -> dict[str, Any]:
         with self._condition:

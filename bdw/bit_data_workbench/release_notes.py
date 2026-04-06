@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.3.31. Keep entries concise and
+# Derived from git history through version 0.3.32. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.3.32",
+        "releasedAt": "2026-04-06T12:20:00+02:00",
+        "features": [
+            "The navigation sidebar can now be resized at runtime, making it easier to inspect long notebook, table, and S3 object names without changing the default layout.",
+            "Concrete S3-backed source objects now expose a direct download action in the sidebar, so saved result files and other workspace objects can be retrieved without opening a notebook first.",
+        ],
+    },
     {
         "version": "0.3.31",
         "releasedAt": "2026-04-05T16:20:00+02:00",

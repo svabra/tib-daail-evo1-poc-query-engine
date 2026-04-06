@@ -47,6 +47,7 @@ from .shared_notebooks import SharedNotebookStore
 from .source_discovery import (
     DataSourceDiscoveryManager,
     S3DataSourceDiscoverer,
+    parse_s3_path,
     SqlDiscoveredRelation,
     SqlSourceDiscoverer,
 )
@@ -505,6 +506,9 @@ class WorkbenchService:
 
     def create_s3_folder(self, *, bucket: str, prefix: str = "", folder_name: str) -> dict[str, object]:
         return self._s3_explorer.create_folder(bucket=bucket, prefix=prefix, folder_name=folder_name).payload
+
+    def download_s3_object(self, *, bucket: str, key: str, file_name: str = ""):
+        return self._s3_explorer.download_object(bucket=bucket, key=key, file_name=file_name)
 
     def download_query_result_export(self, *, job_id: str, export_format: str):
         return self._query_result_exports.download(job_id=job_id, export_format=export_format)
@@ -1837,6 +1841,7 @@ class WorkbenchService:
     def _refresh_state(self) -> None:
         conn = self._require_connection()
         source_statuses = self._data_source_discovery.source_statuses()
+        workspace_s3_objects = self._workspace_s3_object_metadata()
         workspace_rows = conn.execute(
             """
             SELECT
@@ -1889,11 +1894,18 @@ class WorkbenchService:
         for catalog, schema, table_name, table_type in workspace_rows:
             if catalog in {"pg_oltp", "pg_olap"}:
                 continue
+            relation_id = f"{schema}.{table_name}"
+            s3_metadata = workspace_s3_objects.get(relation_id, {})
             grouped.setdefault("workspace", {}).setdefault(schema, []).append(
                 SourceObject(
                     name=table_name,
                     kind="view" if table_type.upper() == "VIEW" else "table",
-                    relation=f"{schema}.{table_name}",
+                    relation=relation_id,
+                    s3_bucket=str(s3_metadata.get("bucket") or ""),
+                    s3_key=str(s3_metadata.get("key") or ""),
+                    s3_path=str(s3_metadata.get("path") or ""),
+                    s3_file_format=str(s3_metadata.get("file_format") or ""),
+                    s3_downloadable=s3_metadata.get("downloadable") is True,
                 )
             )
 
@@ -1952,6 +1964,26 @@ class WorkbenchService:
         self._notebooks = self._combined_notebooks(catalogs)
         self._completion_schema = build_completion_schema(catalogs)
         self._source_options = build_source_options(catalogs)
+
+    def _workspace_s3_object_metadata(self) -> dict[str, dict[str, object]]:
+        metadata: dict[str, dict[str, object]] = {}
+        for relation_id, spec in self._data_source_discovery.s3_relation_specs().items():
+            object_path = str(spec.object_path or "").strip()
+            if not object_path:
+                continue
+            try:
+                bucket_name, object_key = parse_s3_path(object_path)
+            except ValueError:
+                continue
+            downloadable = not any(token in object_key for token in "*?[") and not object_key.endswith("/")
+            metadata[relation_id] = {
+                "bucket": bucket_name,
+                "key": object_key,
+                "path": object_path,
+                "file_format": str(spec.object_format or "").strip(),
+                "downloadable": downloadable,
+            }
+        return metadata
 
     def _drop_catalog_schema_objects(self, catalog_name: str, schema_name: str) -> int:
         target = "oltp" if catalog_name == "pg_oltp" else "olap"

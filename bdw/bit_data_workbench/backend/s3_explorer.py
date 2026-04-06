@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import mimetypes
 import re
+import shutil
+import tempfile
+from dataclasses import dataclass
+from pathlib import Path
 from pathlib import PurePosixPath
 
 from ..config import Settings
 from ..models import S3ExplorerBreadcrumb, S3ExplorerEntry, S3ExplorerSnapshot
-from .s3_storage import ensure_s3_bucket, list_s3_buckets_from_client, s3_client
+from .s3_storage import download_s3_file, ensure_s3_bucket, list_s3_buckets_from_client, s3_client
 
 
 BUCKET_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
@@ -37,6 +42,36 @@ def normalize_s3_bucket_name(bucket_name: str) -> str:
 def s3_path(bucket: str, prefix: str = "") -> str:
     normalized_prefix = normalize_s3_prefix(prefix)
     return f"s3://{bucket}/{normalized_prefix}" if normalized_prefix else f"s3://{bucket}/"
+
+
+def normalize_s3_object_key(key: str | None) -> str:
+    raw_value = str(key or "").strip().replace("\\", "/")
+    parts = [segment.strip() for segment in raw_value.split("/") if segment.strip()]
+    normalized = "/".join(parts)
+    if not normalized or normalized.endswith("/"):
+        raise ValueError("Choose a concrete S3 object before downloading.")
+    if any(token in normalized for token in "*?["):
+        raise ValueError("Only single S3 objects can be downloaded.")
+    return normalized
+
+
+def normalize_s3_object_filename(file_name: str | None, *, fallback_key: str) -> str:
+    candidate = str(file_name or "").strip()
+    if candidate:
+        candidate = PurePosixPath(candidate.replace("\\", "/")).name.strip()
+    if not candidate:
+        candidate = PurePosixPath(fallback_key).name.strip()
+    if not candidate:
+        raise ValueError("Could not determine a file name for the S3 object.")
+    return candidate
+
+
+@dataclass(slots=True)
+class S3ObjectDownloadArtifact:
+    local_path: Path
+    cleanup_dir: Path
+    filename: str
+    content_type: str
 
 
 class S3ExplorerManager:
@@ -192,6 +227,38 @@ class S3ExplorerManager:
             path=s3_path(normalized_bucket, child_prefix),
             has_children=True,
             selectable=True,
+        )
+
+    def download_object(
+        self,
+        *,
+        bucket: str,
+        key: str,
+        file_name: str = "",
+    ) -> S3ObjectDownloadArtifact:
+        self._ensure_configured()
+        normalized_bucket = normalize_s3_bucket_name(bucket)
+        normalized_key = normalize_s3_object_key(key)
+        filename = normalize_s3_object_filename(file_name, fallback_key=normalized_key)
+        temp_dir = Path(tempfile.mkdtemp(prefix="bdw-s3-object-download-"))
+        local_path = temp_dir / filename
+        try:
+            download_s3_file(
+                s3_client(self._settings),
+                bucket=normalized_bucket,
+                key=normalized_key,
+                local_path=local_path,
+            )
+        except Exception:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
+
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        return S3ObjectDownloadArtifact(
+            local_path=local_path,
+            cleanup_dir=temp_dir,
+            filename=filename,
+            content_type=content_type,
         )
 
     def _ensure_configured(self) -> None:

@@ -51,6 +51,15 @@ const resultExportDialogState = {
   fileName: "",
   saving: false,
 };
+const sidebarMinWidth = 360;
+const sidebarMaxWidth = 720;
+const sidebarResizeStep = 32;
+const sidebarResizeState = {
+  active: false,
+  pointerId: null,
+  startX: 0,
+  startWidth: 0,
+};
 
 const notebookTreeStorageKey = "bdw.notebookTree.v2";
 const notebookMetadataStorageKey = "bdw.notebookMeta.v1";
@@ -895,10 +904,170 @@ function applySidebarCollapsedState(collapsed) {
       label.textContent = labelText;
     }
   });
+
+  syncSidebarResizerAria();
 }
 
 function initializeSidebarToggle() {
   applySidebarCollapsedState(readSidebarCollapsed());
+}
+
+function sidebarRoot() {
+  return document.querySelector("[data-sidebar]");
+}
+
+function sidebarResizer() {
+  return document.querySelector("[data-sidebar-resizer]");
+}
+
+function clampSidebarWidth(width) {
+  return Math.min(sidebarMaxWidth, Math.max(sidebarMinWidth, Number(width) || sidebarMinWidth));
+}
+
+function currentSidebarWidth() {
+  return sidebarRoot()?.getBoundingClientRect().width ?? sidebarMinWidth;
+}
+
+function resolveSidebarWidthValue(width) {
+  if (Number.isFinite(width)) {
+    return clampSidebarWidth(width);
+  }
+
+  const numericWidth = Number(width);
+  if (Number.isFinite(numericWidth)) {
+    return clampSidebarWidth(numericWidth);
+  }
+
+  const inlineWidth = Number.parseFloat(
+    document.documentElement.style.getPropertyValue("--sidebar-width") || ""
+  );
+  if (Number.isFinite(inlineWidth)) {
+    return clampSidebarWidth(inlineWidth);
+  }
+
+  return clampSidebarWidth(currentSidebarWidth());
+}
+
+function syncSidebarResizerAria(width) {
+  const resizer = sidebarResizer();
+  if (!resizer) {
+    return;
+  }
+
+  const nextWidth = Math.round(resolveSidebarWidthValue(width));
+  resizer.setAttribute("aria-valuemin", String(sidebarMinWidth));
+  resizer.setAttribute("aria-valuemax", String(sidebarMaxWidth));
+  resizer.setAttribute("aria-valuenow", String(nextWidth));
+  resizer.setAttribute("aria-valuetext", `${nextWidth} pixels`);
+}
+
+function applySidebarWidth(width) {
+  const nextWidth = clampSidebarWidth(width);
+  document.documentElement.style.setProperty("--sidebar-width", `${nextWidth}px`);
+  syncSidebarResizerAria(nextWidth);
+  return nextWidth;
+}
+
+function finishSidebarResize() {
+  if (!sidebarResizeState.active) {
+    return;
+  }
+
+  sidebarResizeState.active = false;
+  sidebarResizeState.pointerId = null;
+  document.body.classList.remove("sidebar-resizing");
+  window.removeEventListener("pointermove", handleSidebarResizePointerMove);
+  window.removeEventListener("pointerup", handleSidebarResizePointerUp);
+  window.removeEventListener("pointercancel", handleSidebarResizePointerUp);
+  window.requestAnimationFrame(() => syncSidebarResizerAria());
+}
+
+function handleSidebarResizePointerMove(event) {
+  if (!sidebarResizeState.active) {
+    return;
+  }
+
+  applySidebarWidth(sidebarResizeState.startWidth + (event.clientX - sidebarResizeState.startX));
+}
+
+function handleSidebarResizePointerUp() {
+  finishSidebarResize();
+}
+
+function handleSidebarResizePointerDown(event) {
+  if (
+    event.button !== 0 ||
+    document.body.classList.contains("sidebar-collapsed") ||
+    window.matchMedia("(max-width: 1080px)").matches
+  ) {
+    return;
+  }
+
+  event.preventDefault();
+  sidebarResizeState.active = true;
+  sidebarResizeState.pointerId = event.pointerId;
+  sidebarResizeState.startX = event.clientX;
+  sidebarResizeState.startWidth = currentSidebarWidth();
+  document.body.classList.add("sidebar-resizing");
+  window.addEventListener("pointermove", handleSidebarResizePointerMove);
+  window.addEventListener("pointerup", handleSidebarResizePointerUp);
+  window.addEventListener("pointercancel", handleSidebarResizePointerUp);
+}
+
+function handleSidebarResizeKeyDown(event) {
+  if (
+    document.body.classList.contains("sidebar-collapsed") ||
+    window.matchMedia("(max-width: 1080px)").matches
+  ) {
+    return;
+  }
+
+  if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    applySidebarWidth(currentSidebarWidth() - sidebarResizeStep);
+    return;
+  }
+
+  if (event.key === "ArrowRight") {
+    event.preventDefault();
+    applySidebarWidth(currentSidebarWidth() + sidebarResizeStep);
+    return;
+  }
+
+  if (event.key === "Home") {
+    event.preventDefault();
+    applySidebarWidth(sidebarMinWidth);
+    return;
+  }
+
+  if (event.key === "End") {
+    event.preventDefault();
+    applySidebarWidth(sidebarMaxWidth);
+  }
+}
+
+function resetSidebarWidth() {
+  document.documentElement.style.removeProperty("--sidebar-width");
+  window.requestAnimationFrame(() => syncSidebarResizerAria());
+}
+
+function initializeSidebarResizer() {
+  const resizer = sidebarResizer();
+  if (!resizer) {
+    return;
+  }
+
+  if (resizer.dataset.bound !== "true") {
+    resizer.dataset.bound = "true";
+    resizer.addEventListener("pointerdown", handleSidebarResizePointerDown);
+    resizer.addEventListener("keydown", handleSidebarResizeKeyDown);
+    resizer.addEventListener("dblclick", () => {
+      resetSidebarWidth();
+    });
+    window.addEventListener("resize", () => syncSidebarResizerAria());
+  }
+
+  syncSidebarResizerAria();
 }
 
 function setNotebookTreeExpanded(expanded) {
@@ -3098,6 +3267,7 @@ async function refreshSidebar(mode = currentWorkspaceMode()) {
   initializeSidebarSearch();
   initializeNotebookTree();
   initializeSidebarToggle();
+  initializeSidebarResizer();
   applyNotebookMetadata();
   restoreSidebarState(sidebarState);
   syncSelectedIngestionRunbookState();
@@ -3682,6 +3852,49 @@ function sourceObjectDisplayName(sourceObjectRoot) {
     sourceObjectRoot?.dataset.sourceObjectRelation?.trim() ||
     "Selected source"
   );
+}
+
+function sourceObjectS3DownloadDescriptor(sourceObjectRoot) {
+  if (!(sourceObjectRoot instanceof Element)) {
+    return null;
+  }
+
+  const downloadable = String(sourceObjectRoot.dataset.s3Downloadable || "").trim().toLowerCase() === "true";
+  const bucket = String(sourceObjectRoot.dataset.s3Bucket || "").trim();
+  const key = String(sourceObjectRoot.dataset.s3Key || "").trim();
+  if (!downloadable || !bucket || !key) {
+    return null;
+  }
+
+  const path = String(sourceObjectRoot.dataset.s3Path || "").trim();
+  const keySegments = key.split("/").filter(Boolean);
+  return {
+    bucket,
+    key,
+    path,
+    fileName: keySegments[keySegments.length - 1] || sourceObjectDisplayName(sourceObjectRoot),
+  };
+}
+
+function downloadSourceS3Object(sourceObjectRoot) {
+  const descriptor = sourceObjectS3DownloadDescriptor(sourceObjectRoot);
+  if (!descriptor) {
+    return false;
+  }
+
+  const search = new URLSearchParams({
+    bucket: descriptor.bucket,
+    key: descriptor.key,
+    filename: descriptor.fileName,
+  });
+  const anchor = document.createElement("a");
+  anchor.href = `/api/s3/object/download?${search.toString()}`;
+  anchor.download = descriptor.fileName;
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  return true;
 }
 
 function sourceObjectDisplayKind(sourceObjectRoot) {
@@ -9502,6 +9715,21 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const downloadSourceS3ObjectButton = event.target.closest("[data-download-source-s3-object]");
+  if (downloadSourceS3ObjectButton) {
+    event.preventDefault();
+    closeSourceActionMenus();
+
+    const downloaded = downloadSourceS3Object(downloadSourceS3ObjectButton.closest("[data-source-object]"));
+    if (downloaded === false) {
+      await showMessageDialog({
+        title: "S3 download unavailable",
+        copy: "This source object does not point to a single downloadable S3 object.",
+      });
+    }
+    return;
+  }
+
   const viewSourceDataButton = event.target.closest("[data-view-source-data]");
   if (viewSourceDataButton) {
     event.preventDefault();
@@ -10205,6 +10433,7 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
   initializeSidebarSearch();
   initializeNotebookTree();
   initializeSidebarToggle();
+  initializeSidebarResizer();
   applyWorkbenchTitle(currentWorkspaceMode());
   applyNotebookMetadata();
   restoreSelectedSourceObject();
@@ -10245,6 +10474,7 @@ initializeEditors();
 initializeSidebarSearch();
 initializeNotebookTree();
 initializeSidebarToggle();
+initializeSidebarResizer();
 applyWorkbenchTitle(currentWorkspaceMode());
 applyNotebookMetadata();
 restoreSelectedSourceObject();

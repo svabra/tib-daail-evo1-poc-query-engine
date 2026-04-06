@@ -3,6 +3,17 @@
 {% block body %}
   <div class="shell">
     {% include "partials/sidebar.html" %}
+    <div
+      class="sidebar-resizer"
+      data-sidebar-resizer
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize navigation"
+      aria-valuemin="360"
+      aria-valuemax="720"
+      tabindex="0"
+      title="Drag to resize navigation"
+    ></div>
 
     <main class="workspace-shell">
       <header class="topbar">
