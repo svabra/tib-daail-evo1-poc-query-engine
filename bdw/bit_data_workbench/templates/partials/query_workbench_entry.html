@@ -49,6 +49,16 @@
   <div class="query-entry-grid">
     <section class="home-section query-entry-section">
       <div class="home-section-header">
+        <h3>Notebook Browser</h3>
+        <p>Browse the current notebook structure and open any existing workbench directly.</p>
+      </div>
+      {% set notebook_browser_live = false %}
+      {% set notebook_browser_manage = false %}
+      {% include "partials/notebook_browser_tree.html" %}
+    </section>
+
+    <section class="home-section query-entry-section">
+      <div class="home-section-header">
         <h3>Shared Notebooks</h3>
         <p>Plain access to notebooks that have been shared with connected users.</p>
       </div>
@@ -74,39 +84,5 @@
         {% endif %}
       </div>
     </section>
-
-    <section class="home-section query-entry-section">
-      <div class="home-section-header">
-        <h3>Notebook Browser</h3>
-        <p>Browse the current notebook structure and open any existing workbench directly.</p>
-      </div>
-      {% set notebook_browser_live = false %}
-      {% set notebook_browser_manage = false %}
-      {% include "partials/notebook_browser_tree.html" %}
-    </section>
   </div>
-
-  <section class="home-section query-entry-section query-entry-data-source-overview">
-    <div class="home-section-header">
-      <h3>Available Data Sources</h3>
-      <p>Current catalogs detected by the workbench. Use the management tile above to open the full source navigator.</p>
-    </div>
-    <div class="query-entry-catalog-grid">
-      {% for catalog in catalogs %}
-        {% set schema_count = catalog.schemas | length %}
-        {% set counts = namespace(objects=0) %}
-        {% for schema in catalog.schemas %}
-          {% set counts.objects = counts.objects + (schema.objects | length) %}
-        {% endfor %}
-        <article class="query-entry-catalog-card">
-          <h4>{{ catalog.name }}</h4>
-          <p>
-            {{ schema_count }} schema{% if schema_count != 1 %}s{% endif %}
-            •
-            {{ counts.objects }} object{% if counts.objects != 1 %}s{% endif %}
-          </p>
-        </article>
-      {% endfor %}
-    </div>
-  </section>
 </section>

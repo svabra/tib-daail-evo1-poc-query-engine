@@ -1,9 +1,37 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.3.36. Keep entries concise and
+# Derived from git history through version 0.4.0. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.4.0",
+        "releasedAt": "2026-04-07T00:38:59+02:00",
+        "features": [
+            (
+                "Query Workbench topbar navigation now reopens the notebook "
+                "sidebar immediately, and the entry page now prioritizes the "
+                "Notebook Browser over the shared-notebook overview."
+            ),
+            (
+                "Cell, result, source, and S3 action popups no longer "
+                "collapse while the pointer moves from the trigger into the "
+                "menu panel, and the query-cell ellipsis behavior is covered "
+                "by a Playwright smoke test."
+            ),
+            (
+                "Shared Workspace S3 bucket deletion now retries transient "
+                "bucket-not-empty states and keeps cleaning up visible bucket "
+                "contents even when version listing is denied by the object "
+                "store credentials."
+            ),
+            (
+                "S3 delete failures now explain when hidden object versions "
+                "or delete markers still block bucket removal, with focused "
+                "regression coverage for RHOS and ECS-style cleanup paths."
+            ),
+        ],
+    },
     {
         "version": "0.3.36",
         "releasedAt": "2026-04-06T23:40:12+02:00",

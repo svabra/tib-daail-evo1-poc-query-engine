@@ -301,6 +301,11 @@ def _version_listing_fallback_allowed(error: Exception) -> bool:
     }
 
 
+def _version_listing_access_denied(error: Exception) -> bool:
+    code = _s3_error_code(error)
+    return code in {"403", "AccessDenied"}
+
+
 def _raise_s3_operation_error(
     error: Exception,
     *,
@@ -317,6 +322,74 @@ def _raise_s3_operation_error(
     ) from error
 
 
+def _bucket_delete_retry_allowed(error: Exception) -> bool:
+    code = _s3_error_code(error)
+    return code in {
+        "409",
+        "BucketNotEmpty",
+        "Conflict",
+        "OperationAborted",
+    }
+
+
+def _object_delete_fallback_allowed(error: Exception) -> bool:
+    code = _s3_error_code(error)
+    return code in {
+        "403",
+        "405",
+        "501",
+        "AccessDenied",
+        "MethodNotAllowed",
+        "NotImplemented",
+        "XMinioNotImplemented",
+    }
+
+
+def _object_identifier(key: str, version_id: str | None = None) -> dict[str, str]:
+    identifier = {"Key": key}
+    if version_id:
+        identifier["VersionId"] = version_id
+    return identifier
+
+
+def _delete_identifier_label(identifier: dict[str, str]) -> str:
+    if identifier.get("VersionId"):
+        return (
+            f"object '{identifier['Key']}' "
+            f"(version '{identifier['VersionId']}')"
+        )
+    return f"object '{identifier['Key']}'"
+
+
+def delete_s3_object(client, bucket: str, identifier: dict[str, str]) -> None:
+    kwargs = {
+        "Bucket": bucket,
+        "Key": identifier["Key"],
+    }
+    if identifier.get("VersionId"):
+        kwargs["VersionId"] = identifier["VersionId"]
+    try:
+        client.delete_object(**kwargs)
+    except (ClientError, BotoCoreError) as exc:
+        _raise_s3_operation_error(
+            exc,
+            action=f"delete {_delete_identifier_label(identifier)}",
+            bucket=bucket,
+        )
+
+
+def delete_s3_objects_individually(
+    client,
+    bucket: str,
+    objects: list[dict[str, str]],
+) -> int:
+    deleted = 0
+    for identifier in objects:
+        delete_s3_object(client, bucket, identifier)
+        deleted += 1
+    return deleted
+
+
 def delete_s3_objects(client, bucket: str, objects: list[str | dict[str, str]]) -> int:
     if not objects:
         return 0
@@ -327,15 +400,14 @@ def delete_s3_objects(client, bucket: str, objects: list[str | dict[str, str]]) 
         identifiers = []
         for item in chunk:
             if isinstance(item, str):
-                identifiers.append({"Key": item})
+                identifiers.append(_object_identifier(item))
             else:
-                identifier = {"Key": item["Key"]}
-                if item.get("VersionId"):
-                    identifier["VersionId"] = item["VersionId"]
-                identifiers.append(identifier)
+                identifiers.append(
+                    _object_identifier(item["Key"], item.get("VersionId"))
+                )
 
         try:
-            client.delete_objects(
+            response = client.delete_objects(
                 Bucket=bucket,
                 Delete={
                     "Objects": identifiers,
@@ -343,12 +415,34 @@ def delete_s3_objects(client, bucket: str, objects: list[str | dict[str, str]]) 
                 },
             )
         except (ClientError, BotoCoreError) as exc:
+            if _object_delete_fallback_allowed(exc):
+                deleted += delete_s3_objects_individually(
+                    client,
+                    bucket,
+                    identifiers,
+                )
+                continue
             _raise_s3_operation_error(
                 exc,
                 action="delete objects",
                 bucket=bucket,
             )
-        deleted += len(chunk)
+
+        error_identifiers = [
+            _object_identifier(
+                str(item.get("Key") or "").strip(),
+                str(item.get("VersionId") or "").strip() or None,
+            )
+            for item in (response.get("Errors") or [])
+            if str(item.get("Key") or "").strip()
+        ]
+        deleted += len(identifiers) - len(error_identifiers)
+        if error_identifiers:
+            deleted += delete_s3_objects_individually(
+                client,
+                bucket,
+                error_identifiers,
+            )
     return deleted
 
 
@@ -411,6 +505,11 @@ def delete_s3_bucket(settings: Settings, bucket: str) -> int:
     except (ClientError, BotoCoreError) as exc:
         if _is_missing_bucket_error(exc):
             raise ValueError(f"The S3 bucket '{bucket}' does not exist.") from exc
+        if _version_listing_access_denied(exc):
+            keys = list(iter_s3_keys(client, bucket))
+            if not keys:
+                return 0
+            return delete_s3_keys(client, bucket, keys)
         if not _version_listing_fallback_allowed(exc):
             _raise_s3_operation_error(
                 exc,
@@ -521,6 +620,32 @@ def _is_missing_bucket_error(error: Exception) -> bool:
     return code in {"404", "NoSuchBucket", "NotFound"}
 
 
+def _raise_hidden_bucket_version_error(
+    client,
+    bucket: str,
+    delete_error: Exception,
+) -> None:
+    try:
+        response = client.list_object_versions(Bucket=bucket, MaxKeys=1)
+    except (ClientError, BotoCoreError) as exc:
+        if _version_listing_access_denied(exc):
+            raise ValueError(
+                f"Failed to delete S3 bucket '{bucket}': visible objects were removed, "
+                "but the bucket still could not be deleted. Technical detail: the "
+                "bucket likely still contains hidden object versions or delete markers, "
+                "and the current credentials cannot list them for recursive cleanup."
+            ) from delete_error
+        return
+
+    if response.get("Versions") or response.get("DeleteMarkers"):
+        raise ValueError(
+            f"Failed to delete S3 bucket '{bucket}': visible objects were removed, "
+            "but the bucket still contains object versions or delete markers. "
+            "Technical detail: complete recursive deletion requires deleting those "
+            "remaining versioned entries as well."
+        ) from delete_error
+
+
 def _bucket_is_accessible(client, bucket: str) -> bool:
     try:
         client.head_bucket(Bucket=bucket)
@@ -590,28 +715,64 @@ def _s3_error_message(error: Exception) -> str:
     return code or str(error)
 
 
-def remove_s3_bucket(settings: Settings, bucket: str) -> bool:
+def remove_s3_bucket(
+    settings: Settings,
+    bucket: str,
+    *,
+    max_attempts: int = 6,
+    base_delay_seconds: float = 0.2,
+) -> bool:
     client = s3_client(settings)
     if not _bucket_is_accessible(client, bucket):
         return False
-    try:
-        response = client.list_objects_v2(Bucket=bucket, MaxKeys=1)
-    except (ClientError, BotoCoreError) as exc:
-        if _is_missing_bucket_error(exc):
-            raise ValueError(f"The S3 bucket '{bucket}' does not exist.") from exc
-        _raise_s3_operation_error(
-            exc,
-            action="inspect bucket state",
-            bucket=bucket,
-        )
-    if response.get("KeyCount") or response.get("Contents"):
+
+    for attempt in range(max_attempts):
+        try:
+            response = client.list_objects_v2(Bucket=bucket, MaxKeys=1)
+        except (ClientError, BotoCoreError) as exc:
+            if _is_missing_bucket_error(exc):
+                raise ValueError(
+                    f"The S3 bucket '{bucket}' does not exist."
+                ) from exc
+            _raise_s3_operation_error(
+                exc,
+                action="inspect bucket state",
+                bucket=bucket,
+            )
+
+        if response.get("KeyCount") or response.get("Contents"):
+            if attempt + 1 < max_attempts:
+                time.sleep(base_delay_seconds * (attempt + 1))
+                continue
+            return False
+
+        try:
+            client.delete_bucket(Bucket=bucket)
+        except (ClientError, BotoCoreError) as exc:
+            if _is_missing_bucket_error(exc):
+                return True
+            if (
+                _bucket_delete_retry_allowed(exc)
+                and attempt + 1 >= max_attempts
+            ):
+                _raise_hidden_bucket_version_error(client, bucket, exc)
+            if (
+                _bucket_delete_retry_allowed(exc)
+                and attempt + 1 < max_attempts
+            ):
+                time.sleep(base_delay_seconds * (attempt + 1))
+                continue
+            _raise_s3_operation_error(
+                exc,
+                action="delete the bucket",
+                bucket=bucket,
+            )
+
+        if not _bucket_is_accessible(client, bucket):
+            return True
+        if attempt + 1 < max_attempts:
+            time.sleep(base_delay_seconds * (attempt + 1))
+            continue
         return False
-    try:
-        client.delete_bucket(Bucket=bucket)
-    except (ClientError, BotoCoreError) as exc:
-        _raise_s3_operation_error(
-            exc,
-            action="delete the bucket",
-            bucket=bucket,
-        )
-    return True
+
+    return False

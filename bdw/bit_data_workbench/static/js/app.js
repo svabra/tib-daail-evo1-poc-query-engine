@@ -713,6 +713,16 @@ function restoreSidebarVisibilityForWorkspace() {
   applySidebarCollapsedState(readSidebarCollapsed());
 }
 
+function openNotebookNavigation(notebookId = "") {
+  setShellSidebarHidden(false);
+  applySidebarCollapsedState(false);
+  writeSidebarCollapsed(false);
+  notebookSection()?.setAttribute("open", "");
+  if (notebookId) {
+    revealNotebookLink(notebookId);
+  }
+}
+
 function syncShellVisibility() {
   if (homePageRoot() || queryWorkbenchEntryPageRoot() || queryWorkbenchDataSourcesPageRoot()) {
     setShellSidebarHidden(true);
@@ -1327,13 +1337,13 @@ function closeSettingsMenus() {
   });
 }
 
-function menuContainsPointer(menu, event) {
+function menuContainsPointer(menu, event, panelSelector = ":scope > .topbar-notification-panel") {
   if (!(menu instanceof Element) || typeof event?.clientX !== "number" || typeof event?.clientY !== "number") {
     return false;
   }
 
   const summary = menu.querySelector(":scope > summary");
-  const panel = menu.querySelector(":scope > .topbar-notification-panel");
+  const panel = menu.querySelector(panelSelector);
   const rects = [summary, panel]
     .filter((node) => node instanceof Element)
     .map((node) => node.getBoundingClientRect())
@@ -1356,22 +1366,47 @@ function menuContainsPointer(menu, event) {
   );
 }
 
+function anyOpenMenuContainsPointer(selector, event, panelSelector = ":scope > .workspace-action-menu-panel") {
+  if (typeof event?.clientX !== "number" || typeof event?.clientY !== "number") {
+    return false;
+  }
+
+  return Array.from(document.querySelectorAll(`${selector}[open]`)).some((menu) => (
+    menuContainsPointer(menu, event, panelSelector)
+  ));
+}
+
 function closePopupMenusForTarget(target, event = null) {
   const activeTarget = target instanceof Element ? target : null;
 
-  if (!activeTarget?.closest("[data-workspace-action-menu]")) {
+  if (
+    !activeTarget?.closest("[data-workspace-action-menu]")
+    && !anyOpenMenuContainsPointer("[data-workspace-action-menu]", event)
+  ) {
     closeWorkspaceActionMenus();
   }
-  if (!activeTarget?.closest("[data-cell-action-menu]")) {
+  if (
+    !activeTarget?.closest("[data-cell-action-menu]")
+    && !anyOpenMenuContainsPointer("[data-cell-action-menu]", event)
+  ) {
     closeCellActionMenus();
   }
-  if (!activeTarget?.closest("[data-source-action-menu]")) {
+  if (
+    !activeTarget?.closest("[data-source-action-menu]")
+    && !anyOpenMenuContainsPointer("[data-source-action-menu]", event)
+  ) {
     closeSourceActionMenus();
   }
-  if (!activeTarget?.closest("[data-result-action-menu]")) {
+  if (
+    !activeTarget?.closest("[data-result-action-menu]")
+    && !anyOpenMenuContainsPointer("[data-result-action-menu]", event)
+  ) {
     closeResultActionMenus();
   }
-  if (!activeTarget?.closest("[data-s3-explorer-action-menu]")) {
+  if (
+    !activeTarget?.closest("[data-s3-explorer-action-menu]")
+    && !anyOpenMenuContainsPointer("[data-s3-explorer-action-menu]", event)
+  ) {
     closeS3ExplorerActionMenus();
   }
   const notifications = queryNotificationMenu();
@@ -9750,7 +9785,39 @@ async function openQueryWorkbench(notebookId = "") {
   }
 
   if (notebookId) {
+    openNotebookNavigation(notebookId);
     await loadNotebookWorkspace(notebookId);
+    return;
+  }
+
+  await loadQueryWorkbenchEntry();
+}
+
+async function openQueryWorkbenchNavigation() {
+  if (currentSidebarMode() !== "notebook") {
+    await refreshSidebar("notebook");
+  }
+
+  const preferredNotebookId = [
+    currentActiveNotebookId(),
+    readLastNotebookId(),
+    visibleNotebookLinks()[0]?.dataset.notebookId ?? "",
+  ].find((candidate) => candidate && !notebookMetadata(candidate).deleted);
+
+  if (preferredNotebookId) {
+    openNotebookNavigation(preferredNotebookId);
+    if (
+      currentWorkspaceMode() === "notebook" &&
+      currentActiveNotebookId() === preferredNotebookId &&
+      !homePageRoot() &&
+      !queryWorkbenchEntryPageRoot() &&
+      !queryWorkbenchDataSourcesPageRoot()
+    ) {
+      applyWorkbenchTitle("query");
+      return;
+    }
+
+    await loadNotebookWorkspace(preferredNotebookId);
     return;
   }
 
@@ -11594,7 +11661,11 @@ document.body.addEventListener("click", async (event) => {
     event.preventDefault();
     event.stopPropagation();
     queryNotificationMenu()?.removeAttribute("open");
-    await openQueryWorkbench(openQueryWorkbenchButton.dataset.openRecentNotebook || "");
+    if (openQueryWorkbenchButton.dataset.openQueryWorkbenchNavigation === "true") {
+      await openQueryWorkbenchNavigation();
+    } else {
+      await openQueryWorkbench(openQueryWorkbenchButton.dataset.openRecentNotebook || "");
+    }
     return;
   }
 

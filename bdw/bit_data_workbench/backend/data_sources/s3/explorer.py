@@ -317,7 +317,12 @@ class S3ExplorerManager:
             deleted_keys = delete_s3_bucket(self._settings, normalized_bucket)
             bucket_deleted = remove_s3_bucket(self._settings, normalized_bucket)
             if not bucket_deleted:
-                raise ValueError("The bucket could not be deleted after removing its objects.")
+                raise ValueError(
+                    f"Failed to delete S3 bucket '{normalized_bucket}'. "
+                    "Technical detail: object cleanup finished, but the "
+                    "object store still reported the bucket as not yet "
+                    "deletable."
+                )
             return S3ExplorerDeleteResult(
                 entry_kind="bucket",
                 bucket=normalized_bucket,
