@@ -348,6 +348,29 @@ class S3ExplorerSnapshot:
 
 
 @dataclass(slots=True)
+class S3ExplorerDeleteResult:
+    entry_kind: str
+    bucket: str
+    prefix: str = ""
+    path: str = ""
+    deleted_keys: int = 0
+    bucket_deleted: bool = False
+    message: str = ""
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {
+            "entryKind": self.entry_kind,
+            "bucket": self.bucket,
+            "prefix": self.prefix,
+            "path": self.path,
+            "deletedKeys": self.deleted_keys,
+            "bucketDeleted": self.bucket_deleted,
+            "message": self.message,
+        }
+
+
+@dataclass(slots=True)
 class QueryResult:
     sql: str
     columns: list[str] = field(default_factory=list)
@@ -434,8 +457,12 @@ class QueryJobDefinition:
     row_count: int = 0
     rows_shown: int = 0
     truncated: bool = False
+    first_row_ms: float | None = None
+    fetch_ms: float | None = None
     data_sources: list[str] = field(default_factory=list)
     source_types: list[str] = field(default_factory=list)
+    touched_relations: list[str] = field(default_factory=list)
+    touched_buckets: list[str] = field(default_factory=list)
     backend_name: str = "duckdb"
     can_cancel: bool = False
 
@@ -461,8 +488,12 @@ class QueryJobDefinition:
             "rowCount": self.row_count,
             "rowsShown": self.rows_shown,
             "truncated": self.truncated,
+            "firstRowMs": self.first_row_ms,
+            "fetchMs": self.fetch_ms,
             "dataSources": list(self.data_sources),
             "sourceTypes": list(self.source_types),
+            "touchedRelations": list(self.touched_relations),
+            "touchedBuckets": list(self.touched_buckets),
             "backendName": self.backend_name,
             "canCancel": self.can_cancel,
         }

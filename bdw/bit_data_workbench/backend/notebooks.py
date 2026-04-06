@@ -358,6 +358,18 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         schema_name="public",
         object_names=("pg_union_tax_reference",),
     )
+    union_oltp_s3_relation = _find_relation_by_object_name(
+        catalogs,
+        catalog_name="pg_oltp",
+        schema_name="public",
+        object_names=("pg_union_tax_reference_s3",),
+    )
+    union_s3_relation = _find_relation_by_object_name(
+        catalogs,
+        catalog_name="workspace",
+        schema_name=None,
+        object_names=("pg_union_tax_reference_s3",),
+    )
     contest_postgres_native_relation = _strip_catalog_prefix(contest_postgres_relation, "pg_oltp")
     multi_table_postgres_native_relations = {
         object_name: _strip_catalog_prefix(relation, "pg_oltp")
@@ -520,6 +532,9 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         else multi_table_status_sql
     )
     cross_database_union_sql = (
+        "-- Approximation: compare how the same tax-position reference shape behaves across OLTP and OLAP.\n"
+        "-- Logic: UNION identical columns from PostgreSQL OLTP and PostgreSQL OLAP, then roll them up by source and risk slice.\n"
+        "-- Result: highlight which database contributes the largest net tax totals per canton, status, and risk band.\n"
         "WITH combined_tax_positions AS (\n"
         "  SELECT\n"
         "    'OLTP' AS database_name,\n"
@@ -544,22 +559,129 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         "    risk_band,\n"
         "    updated_at\n"
         f"  FROM {union_olap_relation}\n"
+        "),\n"
+        "aggregated_positions AS (\n"
+        "  SELECT\n"
+        "    database_name,\n"
+        "    canton_code,\n"
+        "    processing_status,\n"
+        "    risk_band,\n"
+        "    COUNT(*) AS record_count,\n"
+        "    CAST(ROUND(SUM(net_tax_amount_chf), 2) AS DECIMAL(18,2)) AS net_tax_amount_total_chf,\n"
+        "    MIN(tax_period_end) AS earliest_tax_period_end,\n"
+        "    MAX(tax_period_end) AS latest_tax_period_end\n"
+        "  FROM combined_tax_positions\n"
+        "  GROUP BY database_name, canton_code, processing_status, risk_band\n"
+        "),\n"
+        "ranked_positions AS (\n"
+        "  SELECT\n"
+        "    database_name,\n"
+        "    canton_code,\n"
+        "    processing_status,\n"
+        "    risk_band,\n"
+        "    record_count,\n"
+        "    net_tax_amount_total_chf,\n"
+        "    earliest_tax_period_end,\n"
+        "    latest_tax_period_end,\n"
+        "    ROW_NUMBER() OVER (\n"
+        "      PARTITION BY database_name\n"
+        "      ORDER BY net_tax_amount_total_chf DESC, canton_code, processing_status, risk_band\n"
+        "    ) AS source_rank\n"
+        "  FROM aggregated_positions\n"
         ")\n"
         "SELECT\n"
         "  database_name,\n"
         "  canton_code,\n"
         "  processing_status,\n"
         "  risk_band,\n"
-        "  COUNT(*) AS record_count,\n"
-        "  CAST(ROUND(SUM(net_tax_amount_chf), 2) AS DECIMAL(18,2)) AS net_tax_amount_total_chf,\n"
-        "  MIN(tax_period_end) AS earliest_tax_period_end,\n"
-        "  MAX(tax_period_end) AS latest_tax_period_end\n"
-        "FROM combined_tax_positions\n"
-        "GROUP BY database_name, canton_code, processing_status, risk_band\n"
-        "ORDER BY database_name, net_tax_amount_total_chf DESC, canton_code, processing_status, risk_band\n"
-        "LIMIT 60;"
+        "  record_count,\n"
+        "  net_tax_amount_total_chf,\n"
+        "  earliest_tax_period_end,\n"
+        "  latest_tax_period_end\n"
+        "FROM ranked_positions\n"
+        "WHERE source_rank <= 30\n"
+        "ORDER BY database_name, source_rank, canton_code, processing_status, risk_band;"
         if union_oltp_relation and union_olap_relation
         else "SELECT 'Run the PostgreSQL OLTP + OLAP UNION Loader from the Ingestion Workbench first.' AS status;"
+    )
+    cross_source_union_sql = (
+        "-- Approximation: compare the same tax-position reference shape across OLTP and S3-backed object storage.\n"
+        "-- Logic: UNION matching OLTP rows with the mirrored S3 dataset through DuckDB, then roll them up by source and risk slice.\n"
+        "-- Result: show which source contributes the largest net tax totals per canton, status, and risk band.\n"
+        "WITH combined_tax_positions AS (\n"
+        "  SELECT\n"
+        "    'OLTP' AS source_name,\n"
+        "    record_id,\n"
+        "    taxpayer_uid,\n"
+        "    canton_code,\n"
+        "    tax_period_end,\n"
+        "    net_tax_amount_chf,\n"
+        "    processing_status,\n"
+        "    risk_band,\n"
+        "    updated_at\n"
+        f"  FROM {union_oltp_s3_relation}\n"
+        "  UNION\n"
+        "  SELECT\n"
+        "    'S3' AS source_name,\n"
+        "    record_id,\n"
+        "    taxpayer_uid,\n"
+        "    canton_code,\n"
+        "    tax_period_end,\n"
+        "    net_tax_amount_chf,\n"
+        "    processing_status,\n"
+        "    risk_band,\n"
+        "    updated_at\n"
+        f"  FROM {union_s3_relation}\n"
+        "),\n"
+        "aggregated_positions AS (\n"
+        "  SELECT\n"
+        "    source_name,\n"
+        "    canton_code,\n"
+        "    processing_status,\n"
+        "    risk_band,\n"
+        "    COUNT(*) AS record_count,\n"
+        "    CAST(ROUND(SUM(net_tax_amount_chf), 2) AS DECIMAL(18,2)) AS net_tax_amount_total_chf,\n"
+        "    MIN(tax_period_end) AS earliest_tax_period_end,\n"
+        "    MAX(tax_period_end) AS latest_tax_period_end,\n"
+        "    MIN(updated_at) AS first_update_at,\n"
+        "    MAX(updated_at) AS last_update_at\n"
+        "  FROM combined_tax_positions\n"
+        "  GROUP BY source_name, canton_code, processing_status, risk_band\n"
+        "),\n"
+        "ranked_positions AS (\n"
+        "  SELECT\n"
+        "    source_name,\n"
+        "    canton_code,\n"
+        "    processing_status,\n"
+        "    risk_band,\n"
+        "    record_count,\n"
+        "    net_tax_amount_total_chf,\n"
+        "    earliest_tax_period_end,\n"
+        "    latest_tax_period_end,\n"
+        "    first_update_at,\n"
+        "    last_update_at,\n"
+        "    ROW_NUMBER() OVER (\n"
+        "      PARTITION BY source_name\n"
+        "      ORDER BY net_tax_amount_total_chf DESC, canton_code, processing_status, risk_band\n"
+        "    ) AS source_rank\n"
+        "  FROM aggregated_positions\n"
+        ")\n"
+        "SELECT\n"
+        "  source_name,\n"
+        "  canton_code,\n"
+        "  processing_status,\n"
+        "  risk_band,\n"
+        "  record_count,\n"
+        "  net_tax_amount_total_chf,\n"
+        "  earliest_tax_period_end,\n"
+        "  latest_tax_period_end,\n"
+        "  first_update_at,\n"
+        "  last_update_at\n"
+        "FROM ranked_positions\n"
+        "WHERE source_rank <= 30\n"
+        "ORDER BY source_name, source_rank, canton_code, processing_status, risk_band;"
+        if union_oltp_s3_relation and union_s3_relation
+        else "SELECT 'Run the PostgreSQL OLTP + S3 UNION Loader from the Ingestion Workbench first.' AS status;"
     )
     oltp_write_test_table = "public.notebook_oltp_write_test"
     oltp_write_test_setup_sql = (
@@ -706,6 +828,23 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
             tags=["sql", "union", "postgres", "oltp", "olap"],
             tree_path=("PoC Tests", "SQL Functionalities"),
             linked_generator_id="pg_union_sql_functionality_loader",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="postgres-oltp-s3-union-test",
+            title="PostgreSQL OLTP + S3 UNION",
+            summary="Executes a UNION across PostgreSQL OLTP and mirrored S3-backed reference data through DuckDB using the same structure in both sources.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="postgres-oltp-s3-union-test-cell-1",
+                    data_sources=["pg_oltp", "workspace.s3"],
+                    sql=cross_source_union_sql,
+                )
+            ],
+            tags=["sql", "union", "postgres", "oltp", "s3"],
+            tree_path=("PoC Tests", "SQL Functionalities"),
+            linked_generator_id="pg_union_sql_functionality_s3_loader",
             can_edit=False,
             can_delete=False,
         ),

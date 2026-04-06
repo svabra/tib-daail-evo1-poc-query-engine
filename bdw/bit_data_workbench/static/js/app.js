@@ -40,6 +40,8 @@ let dataSourceSidebarRefreshQueued = false;
 const pendingSourceCatalogBlinks = new Set();
 const sourceConnectionRequests = new Set();
 const refreshedDataGenerationJobIds = new Set();
+let sidebarSourceOperationStatus = null;
+let sidebarSourceOperationStatusClearHandle = null;
 const sharedNotebookDrafts = new Map();
 const sharedNotebookSyncHandles = new Map();
 const s3ExplorerNodeRequests = new Map();
@@ -494,6 +496,10 @@ function notebookSection() {
   return document.querySelector("[data-notebook-section]");
 }
 
+function ingestionRunbookSection() {
+  return document.querySelector("[data-ingestion-runbook-section]");
+}
+
 function dataSourcesSection() {
   return document.querySelector("[data-data-sources-section]");
 }
@@ -504,6 +510,10 @@ function notebookTreeRoot() {
 
 function notebookFolders() {
   return Array.from(document.querySelectorAll("[data-tree-folder]"));
+}
+
+function runbookFolders() {
+  return Array.from(document.querySelectorAll("[data-runbook-folder]"));
 }
 
 function dataSourceNodes() {
@@ -1083,6 +1093,18 @@ function setNotebookTreeExpanded(expanded) {
   applySidebarSearchFilter();
 }
 
+function setRunbookTreeExpanded(expanded) {
+  if (expanded) {
+    ingestionRunbookSection()?.setAttribute("open", "");
+  }
+
+  runbookFolders().forEach((folder) => {
+    folder.open = expanded;
+  });
+
+  applySidebarSearchFilter();
+}
+
 function setDataSourceTreeExpanded(expanded) {
   if (expanded) {
     dataSourcesSection()?.setAttribute("open", "");
@@ -1109,6 +1131,63 @@ function closeSettingsMenus() {
   document.querySelectorAll("[data-settings-menu][open]").forEach((menu) => {
     menu.removeAttribute("open");
   });
+}
+
+function menuContainsPointer(menu, event) {
+  if (!(menu instanceof Element) || typeof event?.clientX !== "number" || typeof event?.clientY !== "number") {
+    return false;
+  }
+
+  const summary = menu.querySelector(":scope > summary");
+  const panel = menu.querySelector(":scope > .topbar-notification-panel");
+  const rects = [summary, panel]
+    .filter((node) => node instanceof Element)
+    .map((node) => node.getBoundingClientRect())
+    .filter((rect) => rect.width > 0 && rect.height > 0);
+
+  if (!rects.length) {
+    return false;
+  }
+
+  const left = Math.min(...rects.map((rect) => rect.left));
+  const right = Math.max(...rects.map((rect) => rect.right));
+  const top = Math.min(...rects.map((rect) => rect.top));
+  const bottom = Math.max(...rects.map((rect) => rect.bottom));
+
+  return (
+    event.clientX >= left
+    && event.clientX <= right
+    && event.clientY >= top
+    && event.clientY <= bottom
+  );
+}
+
+function closePopupMenusForTarget(target, event = null) {
+  const activeTarget = target instanceof Element ? target : null;
+
+  if (!activeTarget?.closest("[data-workspace-action-menu]")) {
+    closeWorkspaceActionMenus();
+  }
+  if (!activeTarget?.closest("[data-cell-action-menu]")) {
+    closeCellActionMenus();
+  }
+  if (!activeTarget?.closest("[data-source-action-menu]")) {
+    closeSourceActionMenus();
+  }
+  if (!activeTarget?.closest("[data-result-action-menu]")) {
+    closeResultActionMenus();
+  }
+  if (!activeTarget?.closest("[data-s3-explorer-action-menu]")) {
+    closeS3ExplorerActionMenus();
+  }
+  const notifications = queryNotificationMenu();
+  if (!activeTarget?.closest("[data-query-notifications]") && !menuContainsPointer(notifications, event)) {
+    queryNotificationMenu()?.removeAttribute("open");
+  }
+  const settings = settingsMenu();
+  if (!activeTarget?.closest("[data-settings-menu]") && !menuContainsPointer(settings, event)) {
+    closeSettingsMenus();
+  }
 }
 
 function showFolderNameDialog({ title, copy, submitLabel, initialValue = "" }) {
@@ -1160,7 +1239,7 @@ function showFolderNameDialog({ title, copy, submitLabel, initialValue = "" }) {
   });
 }
 
-function showConfirmDialog({ title, copy, confirmLabel, option = null }) {
+function showConfirmDialog({ title, copy, confirmLabel, option = null, confirmTone = "danger" }) {
   const dialog = ensureConfirmDialog();
 
   const titleNode = dialog.querySelector("[data-confirm-title]");
@@ -1174,6 +1253,7 @@ function showConfirmDialog({ title, copy, confirmLabel, option = null }) {
   titleNode.textContent = title;
   copyNode.textContent = copy;
   submit.textContent = confirmLabel;
+  submit.classList.toggle("modal-button-danger", confirmTone === "danger");
 
   if (optionContainer && optionInput && optionLabel) {
     optionInput.checked = false;
@@ -1281,6 +1361,77 @@ function showMessageDialog({ title, copy, actionLabel = "OK" }) {
     dialog.addEventListener("close", onClose, { once: true });
     dialog.showModal();
   });
+}
+
+function sourceOperationStatusRoot() {
+  return document.querySelector("[data-source-operation-status]");
+}
+
+function clearSidebarSourceOperationStatusTimer() {
+  if (sidebarSourceOperationStatusClearHandle !== null) {
+    window.clearTimeout(sidebarSourceOperationStatusClearHandle);
+    sidebarSourceOperationStatusClearHandle = null;
+  }
+}
+
+function renderSidebarSourceOperationStatus() {
+  const root = sourceOperationStatusRoot();
+  if (!(root instanceof HTMLElement)) {
+    return;
+  }
+
+  const titleNode = root.querySelector("[data-source-operation-status-title]");
+  const copyNode = root.querySelector("[data-source-operation-status-copy]");
+  const status = sidebarSourceOperationStatus;
+  if (!status?.title || !status?.copy) {
+    root.hidden = true;
+    root.classList.remove("is-success", "is-danger");
+    if (titleNode) {
+      titleNode.textContent = "";
+    }
+    if (copyNode) {
+      copyNode.textContent = "";
+    }
+    return;
+  }
+
+  root.hidden = false;
+  root.classList.toggle("is-success", status.tone === "success");
+  root.classList.toggle("is-danger", status.tone === "danger");
+  if (titleNode) {
+    titleNode.textContent = status.title;
+  }
+  if (copyNode) {
+    copyNode.textContent = status.copy;
+  }
+}
+
+function setSidebarSourceOperationStatus(status, { autoClearMs = 0 } = {}) {
+  clearSidebarSourceOperationStatusTimer();
+  if (!status || !status.title || !status.copy) {
+    sidebarSourceOperationStatus = null;
+    renderSidebarSourceOperationStatus();
+    return;
+  }
+
+  sidebarSourceOperationStatus = {
+    tone: status.tone === "success" || status.tone === "danger" ? status.tone : "info",
+    title: String(status.title || "").trim(),
+    copy: String(status.copy || "").trim(),
+  };
+  const sourcesRoot = dataSourcesSection();
+  if (sourcesRoot instanceof HTMLDetailsElement) {
+    sourcesRoot.open = true;
+  }
+  renderSidebarSourceOperationStatus();
+
+  if (autoClearMs > 0) {
+    sidebarSourceOperationStatusClearHandle = window.setTimeout(() => {
+      sidebarSourceOperationStatus = null;
+      sidebarSourceOperationStatusClearHandle = null;
+      renderSidebarSourceOperationStatus();
+    }, autoClearMs);
+  }
 }
 
 async function responseErrorMessage(response, fallback = "The request failed.") {
@@ -1793,12 +1944,23 @@ function normalizeQueryJob(job) {
     return null;
   }
 
+  const firstRowMs = Number(job.firstRowMs);
+  const fetchMs = Number(job.fetchMs);
+
   return {
     ...job,
     columns: Array.isArray(job.columns) ? job.columns : [],
     rows: Array.isArray(job.rows) ? job.rows : [],
     dataSources: Array.isArray(job.dataSources) ? job.dataSources : [],
     sourceTypes: Array.isArray(job.sourceTypes) ? job.sourceTypes : [],
+    touchedRelations: Array.isArray(job.touchedRelations)
+      ? job.touchedRelations.map((value) => String(value ?? "").trim()).filter(Boolean)
+      : [],
+    touchedBuckets: Array.isArray(job.touchedBuckets)
+      ? job.touchedBuckets.map((value) => String(value ?? "").trim()).filter(Boolean)
+      : [],
+    firstRowMs: Number.isFinite(firstRowMs) ? Math.max(0, firstRowMs) : null,
+    fetchMs: Number.isFinite(fetchMs) ? Math.max(0, fetchMs) : null,
   };
 }
 
@@ -1982,12 +2144,310 @@ function formatQueryDuration(durationMs) {
   return parts.join(" ");
 }
 
+function formatRelativePercent(percentValue) {
+  const absoluteValue = Math.abs(Number.isFinite(Number(percentValue)) ? Number(percentValue) : 0);
+  if (absoluteValue >= 10) {
+    return `${Math.round(absoluteValue)}%`;
+  }
+  if (absoluteValue >= 1) {
+    return `${absoluteValue.toFixed(1)}%`;
+  }
+  return `${absoluteValue.toFixed(2)}%`;
+}
+
+function compareQueryJobsByCompletedAt(left, right) {
+  const leftCompletedAt = Date.parse(left?.completedAt || left?.updatedAt || left?.startedAt || "");
+  const rightCompletedAt = Date.parse(right?.completedAt || right?.updatedAt || right?.startedAt || "");
+
+  if (!Number.isNaN(leftCompletedAt) || !Number.isNaN(rightCompletedAt)) {
+    const normalizedLeft = Number.isNaN(leftCompletedAt) ? 0 : leftCompletedAt;
+    const normalizedRight = Number.isNaN(rightCompletedAt) ? 0 : rightCompletedAt;
+    if (normalizedLeft !== normalizedRight) {
+      return normalizedLeft - normalizedRight;
+    }
+  }
+
+  return String(left?.jobId || "").localeCompare(String(right?.jobId || ""));
+}
+
+function medianDuration(values) {
+  const normalizedValues = (values ?? [])
+    .map((value) => Number(value))
+    .filter((value) => Number.isFinite(value))
+    .sort((left, right) => left - right);
+  if (!normalizedValues.length) {
+    return null;
+  }
+
+  const midpoint = Math.floor(normalizedValues.length / 2);
+  if (normalizedValues.length % 2 === 1) {
+    return normalizedValues[midpoint];
+  }
+  return (normalizedValues[midpoint - 1] + normalizedValues[midpoint]) / 2;
+}
+
+function queryJobComparisonKey(job) {
+  const sourceKey = normalizeDataSources(job?.dataSources ?? [])
+    .slice()
+    .sort()
+    .join("||");
+  return [
+    String(job?.notebookId || "").trim(),
+    String(job?.cellId || "").trim(),
+    String(job?.backendName || "").trim(),
+    sourceKey,
+  ].join("::");
+}
+
+function queryComparisonTone(deltaMs) {
+  const normalizedDelta = Number.isFinite(Number(deltaMs)) ? Number(deltaMs) : 0;
+  if (normalizedDelta <= -0.5) {
+    return "faster";
+  }
+  if (normalizedDelta >= 0.5) {
+    return "slower";
+  }
+  return "neutral";
+}
+
+function buildQueryComparisonInsight(label, baselineMs, deltaMs, tooltip) {
+  if (!Number.isFinite(Number(baselineMs)) || Number(baselineMs) <= 0 || !Number.isFinite(Number(deltaMs))) {
+    return null;
+  }
+
+  const tone = queryComparisonTone(deltaMs);
+  const normalizedDelta = Number(deltaMs);
+  const percentDelta = (normalizedDelta / Number(baselineMs)) * 100;
+  const value =
+    tone === "neutral"
+      ? "no material change"
+      : `${formatRelativePercent(percentDelta)} ${tone}`;
+
+  return {
+    label,
+    value,
+    tone,
+    title: tooltip,
+  };
+}
+
+function buildQueryJobComparisonMetrics(job, history) {
+  const durationMs = Number(job?.durationMs);
+  if (!Number.isFinite(durationMs) || durationMs <= 0) {
+    return null;
+  }
+
+  const previousJob = history.length ? history[history.length - 1] : null;
+  const previous =
+    previousJob && Number.isFinite(Number(previousJob.durationMs))
+      ? buildQueryComparisonInsight(
+          "vs previous",
+          Number(previousJob.durationMs),
+          durationMs - Number(previousJob.durationMs),
+          (() => {
+            const deltaMs = durationMs - Number(previousJob.durationMs);
+            const tone = queryComparisonTone(deltaMs);
+            if (tone === "neutral") {
+              return `Essentially unchanged versus the previous comparable run (${formatQueryDuration(previousJob.durationMs)}).`;
+            }
+            return `${formatQueryDuration(Math.abs(deltaMs))} ${tone} than the previous comparable run (${formatQueryDuration(
+              previousJob.durationMs
+            )}). Comparable means the same notebook cell, backend, and selected source set.`;
+          })()
+        )
+      : null;
+
+  const medianWindow = history
+    .slice(-5)
+    .map((entry) => Number(entry.durationMs))
+    .filter((value) => Number.isFinite(value) && value > 0);
+  const rollingMedianMs = medianWindow.length >= 2 ? medianDuration(medianWindow) : null;
+  const median =
+    Number.isFinite(rollingMedianMs)
+      ? buildQueryComparisonInsight(
+          "vs median",
+          rollingMedianMs,
+          durationMs - rollingMedianMs,
+          (() => {
+            const deltaMs = durationMs - rollingMedianMs;
+            const tone = queryComparisonTone(deltaMs);
+            if (tone === "neutral") {
+              return `Essentially unchanged versus the rolling median of the last ${medianWindow.length} comparable completed runs (${formatQueryDuration(
+                rollingMedianMs
+              )}).`;
+            }
+            return `${formatQueryDuration(Math.abs(deltaMs))} ${tone} than the rolling median of the last ${medianWindow.length} comparable completed runs (${formatQueryDuration(
+              rollingMedianMs
+            )}).`;
+          })()
+        )
+      : null;
+
+  if (!previous && !median) {
+    return null;
+  }
+
+  return { previous, median };
+}
+
+function buildQueryJobFootprint(job) {
+  const touchedRelations = [];
+  const seenRelations = new Set();
+  for (const value of job?.touchedRelations ?? []) {
+    const relationName = String(value ?? "").trim();
+    const relationKey = relationName.toLowerCase();
+    if (!relationName || seenRelations.has(relationKey)) {
+      continue;
+    }
+    seenRelations.add(relationKey);
+    touchedRelations.push(relationName);
+  }
+
+  const touchedBuckets = [];
+  const seenBuckets = new Set();
+  for (const value of job?.touchedBuckets ?? []) {
+    const bucketName = String(value ?? "").trim();
+    const bucketKey = bucketName.toLowerCase();
+    if (!bucketName || seenBuckets.has(bucketKey)) {
+      continue;
+    }
+    seenBuckets.add(bucketKey);
+    touchedBuckets.push(bucketName);
+  }
+
+  const selectedSources = normalizeDataSources(job?.dataSources ?? []);
+  const parts = [];
+  if (touchedRelations.length) {
+    parts.push(`${touchedRelations.length} relation${touchedRelations.length === 1 ? "" : "s"}`);
+  }
+  if (selectedSources.length) {
+    parts.push(`${selectedSources.length} source${selectedSources.length === 1 ? "" : "s"}`);
+  }
+  if (touchedBuckets.length) {
+    parts.push(`${touchedBuckets.length} bucket${touchedBuckets.length === 1 ? "" : "s"}`);
+  }
+
+  if (!parts.length) {
+    return null;
+  }
+
+  const tooltipSections = [];
+  if (touchedRelations.length) {
+    tooltipSections.push(`Touched relations: ${touchedRelations.join(", ")}`);
+  }
+  const sourceLabels = sourceLabelsForIds(selectedSources);
+  if (sourceLabels.length) {
+    tooltipSections.push(`Selected sources: ${sourceLabels.join(", ")}`);
+  }
+  if (touchedBuckets.length) {
+    tooltipSections.push(`S3 buckets: ${touchedBuckets.join(", ")}`);
+  }
+
+  return {
+    label: "touches",
+    value: parts.join(" | "),
+    tone: "neutral",
+    title: tooltipSections.join("\n"),
+  };
+}
+
+function buildQueryJobTimingInsight(job) {
+  const firstRowMs = Number(job?.firstRowMs);
+  if (!Number.isFinite(firstRowMs) || firstRowMs < 0) {
+    return null;
+  }
+
+  const fetchMs = Number(job?.fetchMs);
+  const valueParts = [`first row ${formatQueryDuration(firstRowMs)}`];
+  if (Number.isFinite(fetchMs) && fetchMs >= 0) {
+    valueParts.push(`fetch ${formatQueryDuration(fetchMs)}`);
+  }
+
+  return {
+    label: "split",
+    value: valueParts.join(" | "),
+    tone: "neutral",
+    title:
+      "Breaks the runtime into time until the first row was available and the remaining time spent fetching result rows for the UI.",
+  };
+}
+
+function decorateQueryJobsWithInsights(jobs) {
+  const historyByKey = new Map();
+  const comparisonById = new Map();
+  const completedJobs = jobs
+    .filter((job) => job?.status === "completed")
+    .slice()
+    .sort(compareQueryJobsByCompletedAt);
+
+  completedJobs.forEach((job) => {
+    const comparisonKey = queryJobComparisonKey(job);
+    const history = historyByKey.get(comparisonKey) ?? [];
+    comparisonById.set(job.jobId, buildQueryJobComparisonMetrics(job, history));
+    history.push(job);
+    if (history.length > 12) {
+      history.shift();
+    }
+    historyByKey.set(comparisonKey, history);
+  });
+
+  return jobs.map((job) => ({
+    ...job,
+    comparisonInsights: comparisonById.get(job.jobId) ?? null,
+    footprintInsights: buildQueryJobFootprint(job),
+    timingInsights: buildQueryJobTimingInsight(job),
+  }));
+}
+
+function queryInsightPillMarkup(insight, { compact = false } = {}) {
+  if (!insight?.value) {
+    return "";
+  }
+
+  const toneClass = insight.tone ? ` is-${escapeHtml(insight.tone)}` : "";
+  const compactClass = compact ? " query-insight-pill-compact" : "";
+  const titleAttribute = insight.title ? ` title="${escapeHtml(insight.title)}"` : "";
+  return `
+    <span class="query-insight-pill${toneClass}${compactClass}"${titleAttribute}>
+      <strong>${escapeHtml(insight.label || "")}</strong>
+      <span>${escapeHtml(insight.value)}</span>
+    </span>
+  `;
+}
+
 function formatQueryTimestamp(value) {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
     return "";
   }
   return parsed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function formatEventDateTime(value) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return "";
+  }
+
+  const baseDateTime = new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "medium",
+  }).format(parsed);
+
+  try {
+    const resolvedTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const timeZoneLabel = new Intl.DateTimeFormat("en-GB", {
+      timeZone: resolvedTimeZone,
+      timeZoneName: "short",
+    })
+      .formatToParts(parsed)
+      .find((part) => part.type === "timeZoneName")
+      ?.value;
+
+    return timeZoneLabel ? `${baseDateTime} ${timeZoneLabel}` : baseDateTime;
+  } catch (error) {
+    return baseDateTime;
+  }
 }
 
 function dataGenerationJobIsRunning(job) {
@@ -2061,6 +2521,30 @@ function dataGenerationJobCompletedCopy(job) {
 
 function dataGenerationJobTimingCopy(job) {
   return `Start: ${dataGenerationJobStartedCopy(job)} | End: ${dataGenerationJobCompletedCopy(job)}`;
+}
+
+function queryJobEventDateTimeCopy(job) {
+  const timestamp = queryJobIsRunning(job)
+    ? job?.startedAt || job?.updatedAt || ""
+    : job?.completedAt || job?.updatedAt || job?.startedAt || "";
+  const formatted = formatEventDateTime(timestamp);
+  if (!formatted) {
+    return "Event: Unavailable";
+  }
+
+  return `${queryJobIsRunning(job) ? "Started" : "Event"}: ${formatted}`;
+}
+
+function dataGenerationJobEventDateTimeCopy(job) {
+  const timestamp = dataGenerationJobIsRunning(job)
+    ? job?.startedAt || job?.updatedAt || ""
+    : job?.completedAt || job?.updatedAt || job?.startedAt || "";
+  const formatted = formatEventDateTime(timestamp);
+  if (!formatted) {
+    return "Event: Unavailable";
+  }
+
+  return `${dataGenerationJobIsRunning(job) ? "Started" : "Event"}: ${formatted}`;
 }
 
 function dataGenerationJobCopy(job) {
@@ -2392,6 +2876,53 @@ function resultExportMenuMarkup(showActions, jobId = "") {
   `;
 }
 
+function resultMetricStripMarkup(job) {
+  if (!job) {
+    return "";
+  }
+
+  const metricPills = [];
+  if (job.comparisonInsights?.previous) {
+    metricPills.push(queryInsightPillMarkup(job.comparisonInsights.previous));
+  }
+  if (job.comparisonInsights?.median) {
+    metricPills.push(queryInsightPillMarkup(job.comparisonInsights.median));
+  }
+  if (job.timingInsights) {
+    metricPills.push(queryInsightPillMarkup(job.timingInsights));
+  }
+  if (job.footprintInsights) {
+    metricPills.push(queryInsightPillMarkup(job.footprintInsights));
+  }
+
+  if (!metricPills.length) {
+    return "";
+  }
+
+  return `<div class="result-metric-strip">${metricPills.join("")}</div>`;
+}
+
+function queryMonitorInsightStripMarkup(job) {
+  if (!job) {
+    return "";
+  }
+
+  const metricPills = [];
+  const comparisonInsight = job.comparisonInsights?.previous || job.comparisonInsights?.median || null;
+  if (comparisonInsight) {
+    metricPills.push(queryInsightPillMarkup(comparisonInsight, { compact: true }));
+  }
+  if (job.footprintInsights) {
+    metricPills.push(queryInsightPillMarkup(job.footprintInsights, { compact: true }));
+  }
+
+  if (!metricPills.length) {
+    return "";
+  }
+
+  return `<div class="query-monitor-item-insights">${metricPills.join("")}</div>`;
+}
+
 function queryResultPanelMarkup(cellId, job = null) {
   if (!job) {
     return emptyQueryResultsMarkup(cellId);
@@ -2435,7 +2966,10 @@ function queryResultPanelMarkup(cellId, job = null) {
       <header class="result-header">
         <div class="result-header-copy">
           <h3>Result</h3>
-          <p class="result-meta" data-query-duration data-job-id="${escapeHtml(job.jobId || "")}">${escapeHtml(formatQueryDuration(queryJobElapsedMs(job)))}</p>
+          <div class="result-meta-row">
+            <p class="result-meta" data-query-duration data-job-id="${escapeHtml(job.jobId || "")}">${escapeHtml(formatQueryDuration(queryJobElapsedMs(job)))}</p>
+            ${resultMetricStripMarkup(job)}
+          </div>
         </div>
         <div class="result-header-actions">
           <span class="result-badge${queryJobIsRunning(job) ? " is-live" : ""}" ${showRowsBadge ? "" : "hidden"}>${escapeHtml(rowsBadge)}</span>
@@ -2657,6 +3191,7 @@ function queryMonitorItemMarkup(job) {
           <span data-query-monitor-duration data-job-id="${escapeHtml(job.jobId)}">${escapeHtml(formatQueryDuration(queryJobElapsedMs(job)))}</span>
           <span>${escapeHtml(rowsCopy)}</span>
         </div>
+        ${queryMonitorInsightStripMarkup(job)}
         <p class="query-monitor-sql">${escapeHtml(job.sql)}</p>
       </div>
       <div class="query-monitor-item-actions">
@@ -2680,6 +3215,7 @@ function queryNotificationItemMarkup(job) {
       <span class="topbar-notification-item-status${queryJobIsRunning(job) ? " is-live" : ""}">${escapeHtml(queryJobStatusCopy(job))}</span>
       <span class="topbar-notification-item-title">${escapeHtml(job.notebookTitle)}</span>
       <span class="topbar-notification-item-copy" data-query-notification-copy data-job-id="${escapeHtml(job.jobId)}" data-query-copy-suffix="${escapeHtml(rowsLabel)}">${escapeHtml(formatQueryDuration(queryJobElapsedMs(job)))} | ${escapeHtml(rowsLabel)}</span>
+      <span class="topbar-notification-item-copy topbar-notification-item-copy-secondary">${escapeHtml(queryJobEventDateTimeCopy(job))}</span>
     </button>
   `;
 }
@@ -2850,8 +3386,9 @@ function dataGenerationNotificationItemMarkup(job) {
       <span class="topbar-notification-item-copy" data-data-generation-notification-copy data-job-id="${escapeHtml(
         job.jobId
       )}">${escapeHtml(dataGenerationJobCopy(job))}</span>
+      <span class="topbar-notification-item-copy topbar-notification-item-copy-secondary">${escapeHtml(dataGenerationJobTimingCopy(job))}</span>
       <span class="topbar-notification-item-copy topbar-notification-item-copy-secondary">${escapeHtml(
-        dataGenerationJobTimingCopy(job)
+        dataGenerationJobEventDateTimeCopy(job)
       )}</span>
     </button>
   `;
@@ -3272,6 +3809,7 @@ async function refreshSidebar(mode = currentWorkspaceMode()) {
   restoreSidebarState(sidebarState);
   syncSelectedIngestionRunbookState();
   restoreSelectedSourceObject();
+  renderSidebarSourceOperationStatus();
   renderDataGenerationMonitor();
   renderQueryMonitor();
   renderQueryNotificationMenu();
@@ -3497,12 +4035,10 @@ function applyQueryJobsState(snapshot) {
   queryJobsStateVersion = snapshot?.version ?? null;
   queryJobsSummary = snapshot?.summary ?? { runningCount: 0, totalCount: 0 };
   queryPerformanceState = snapshot?.performance ?? { recent: [], stats: {} };
-  queryJobsSnapshot = Array.isArray(snapshot?.jobs)
-    ? snapshot.jobs
-        .map((job) => normalizeQueryJob(job))
-        .filter(Boolean)
-        .sort(compareQueryJobsByStartedAt)
+  const normalizedJobs = Array.isArray(snapshot?.jobs)
+    ? snapshot.jobs.map((job) => normalizeQueryJob(job)).filter(Boolean)
     : [];
+  queryJobsSnapshot = decorateQueryJobsWithInsights(normalizedJobs).sort(compareQueryJobsByStartedAt);
 
   pruneDismissedNotificationKeys();
   renderQueryMonitor();
@@ -3553,14 +4089,26 @@ function currentWorkspaceCanEdit() {
   return document.querySelector("[data-notebook-meta]")?.dataset.canEdit !== "false";
 }
 
+function escapeSelectorValue(value) {
+  return typeof window.CSS?.escape === "function" ? window.CSS.escape(String(value ?? "")) : String(value ?? "");
+}
+
 function sourceCatalogSelector(sourceId) {
-  const escaped =
-    typeof window.CSS?.escape === "function" ? window.CSS.escape(String(sourceId ?? "")) : String(sourceId ?? "");
-  return `[data-source-catalog-source-id="${escaped}"]`;
+  return `[data-source-catalog-source-id="${escapeSelectorValue(sourceId)}"]`;
 }
 
 function sourceCatalogNode(sourceId) {
   return document.querySelector(sourceCatalogSelector(sourceId));
+}
+
+function sourceSchemaBucketNode(bucketName) {
+  const normalizedBucketName = String(bucketName ?? "").trim();
+  if (!normalizedBucketName) {
+    return null;
+  }
+  return document.querySelector(
+    `[data-source-schema][data-source-bucket="${escapeSelectorValue(normalizedBucketName)}"]`
+  );
 }
 
 function syncSourceConnectionControls(catalogNode, status) {
@@ -3660,6 +4208,47 @@ function replayPendingSourceCatalogBlinks() {
   });
 }
 
+function blinkSourceSchemaBucket(bucketName) {
+  const summary = sourceSchemaBucketNode(bucketName)?.querySelector(":scope > summary");
+  if (!(summary instanceof Element)) {
+    return;
+  }
+
+  summary.classList.remove("is-source-updated");
+  void summary.offsetWidth;
+  summary.classList.add("is-source-updated");
+  window.setTimeout(() => {
+    summary.classList.remove("is-source-updated");
+  }, 2400);
+}
+
+async function revealSidebarS3Bucket(bucketName) {
+  const normalizedBucketName = String(bucketName ?? "").trim();
+  if (!normalizedBucketName) {
+    return;
+  }
+
+  const sourcesRoot = dataSourcesSection();
+  if (sourcesRoot instanceof HTMLDetailsElement) {
+    sourcesRoot.open = true;
+  }
+
+  const workspaceCatalog = sourceCatalogNode("workspace.s3");
+  if (workspaceCatalog instanceof HTMLDetailsElement) {
+    workspaceCatalog.open = true;
+  }
+
+  const schemaNode = sourceSchemaBucketNode(normalizedBucketName);
+  if (!(schemaNode instanceof HTMLDetailsElement)) {
+    return;
+  }
+
+  schemaNode.open = true;
+  blinkSourceCatalog("workspace.s3");
+  blinkSourceSchemaBucket(normalizedBucketName);
+  schemaNode.scrollIntoView({ block: "nearest" });
+}
+
 async function setDataSourceConnectionState(sourceId, action) {
   const normalizedSourceId = String(sourceId ?? "").trim();
   const normalizedAction = String(action ?? "").trim();
@@ -3744,6 +4333,7 @@ async function refreshDataSourcesSection(mode = currentWorkspaceMode()) {
   currentSection.outerHTML = nextSection.outerHTML;
   restoreSidebarState(sidebarState);
   restoreSelectedSourceObject();
+  renderSidebarSourceOperationStatus();
   replayPendingSourceCatalogBlinks();
 }
 
@@ -3873,6 +4463,42 @@ function sourceObjectS3DownloadDescriptor(sourceObjectRoot) {
     key,
     path,
     fileName: keySegments[keySegments.length - 1] || sourceObjectDisplayName(sourceObjectRoot),
+  };
+}
+
+function sourceObjectS3DeleteDescriptor(sourceObjectRoot) {
+  const descriptor = sourceObjectS3DownloadDescriptor(sourceObjectRoot);
+  if (!descriptor) {
+    return null;
+  }
+
+  return {
+    entryKind: "file",
+    name: descriptor.fileName,
+    bucket: descriptor.bucket,
+    prefix: descriptor.key,
+    path: descriptor.path || `s3://${descriptor.bucket}/${descriptor.key}`,
+    fileFormat: String(sourceObjectRoot?.dataset.s3FileFormat || "").trim(),
+  };
+}
+
+function sourceSchemaS3BucketDescriptor(sourceSchemaRoot) {
+  if (!(sourceSchemaRoot instanceof Element)) {
+    return null;
+  }
+
+  const bucket = String(sourceSchemaRoot.dataset.sourceBucket || "").trim();
+  if (!bucket) {
+    return null;
+  }
+
+  return {
+    entryKind: "bucket",
+    name: bucket,
+    bucket,
+    prefix: "",
+    path: `s3://${bucket}/`,
+    fileFormat: "",
   };
 }
 
@@ -4713,7 +5339,9 @@ function emptyQueryResultsMarkup(cellId) {
       <header class="result-header">
         <div class="result-header-copy">
           <h3>Result</h3>
-          <p class="result-meta">0 ms</p>
+          <div class="result-meta-row">
+            <p class="result-meta">0 ms</p>
+          </div>
         </div>
         <div class="result-header-actions">
           <span class="result-badge">Run this cell to inspect the selected data sources.</span>
@@ -6523,8 +7151,11 @@ function syncSourceActionMenu(menu) {
   });
 }
 
-function closeSourceActionMenus() {
+function closeSourceActionMenus(exceptMenu = null) {
   document.querySelectorAll("[data-source-action-menu][open]").forEach((menu) => {
+    if (menu === exceptMenu) {
+      return;
+    }
     menu.removeAttribute("open");
   });
 }
@@ -7259,6 +7890,10 @@ function migrateStoredNotebookTree(state) {
     },
     {
       notebookId: "postgres-oltp-olap-union-test",
+      folderPath: ["PoC Tests", "SQL Functionalities"],
+    },
+    {
+      notebookId: "postgres-oltp-s3-union-test",
       folderPath: ["PoC Tests", "SQL Functionalities"],
     },
     {
@@ -8732,6 +9367,316 @@ function resultExportSubmitButton() {
   return resultExportDialog()?.querySelector("[data-result-export-submit]") ?? null;
 }
 
+function closeS3ExplorerActionMenus(exceptMenu = null) {
+  document.querySelectorAll("[data-s3-explorer-action-menu][open]").forEach((menu) => {
+    if (menu === exceptMenu) {
+      return;
+    }
+    menu.removeAttribute("open");
+  });
+}
+
+function s3ExplorerEntryRoot(target) {
+  return target instanceof Element ? target.closest("[data-s3-explorer-entry]") : null;
+}
+
+function s3ExplorerEntryDescriptor(target) {
+  const entryRoot = s3ExplorerEntryRoot(target);
+  if (!(entryRoot instanceof Element)) {
+    return null;
+  }
+
+  return {
+    entryKind: String(entryRoot.dataset.s3ExplorerKind || "").trim(),
+    name: String(entryRoot.dataset.s3ExplorerName || "").trim(),
+    bucket: String(entryRoot.dataset.s3ExplorerBucket || "").trim(),
+    prefix: String(entryRoot.dataset.s3ExplorerPrefix || "").trim(),
+    path: String(entryRoot.dataset.s3ExplorerPath || "").trim(),
+    fileFormat: String(entryRoot.dataset.s3ExplorerFileFormat || "").trim(),
+  };
+}
+
+function s3ExplorerParentPrefix(prefix = "") {
+  const parts = String(prefix || "")
+    .split("/")
+    .map((segment) => String(segment || "").trim())
+    .filter(Boolean);
+  if (!parts.length) {
+    return "";
+  }
+
+  parts.pop();
+  return parts.length ? `${parts.join("/")}/` : "";
+}
+
+function downloadS3ExplorerObject(target) {
+  const descriptor = s3ExplorerEntryDescriptor(target);
+  if (!descriptor || descriptor.entryKind !== "file" || !descriptor.bucket || !descriptor.prefix) {
+    return false;
+  }
+
+  const search = new URLSearchParams({
+    bucket: descriptor.bucket,
+    key: descriptor.prefix,
+    filename: descriptor.name || descriptor.prefix.split("/").filter(Boolean).at(-1) || "download",
+  });
+  const anchor = document.createElement("a");
+  anchor.href = `/api/s3/object/download?${search.toString()}`;
+  anchor.download =
+    descriptor.name || descriptor.prefix.split("/").filter(Boolean).at(-1) || "download";
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  return true;
+}
+
+function s3ExplorerDeleteDialogOptions(descriptor) {
+  if (!descriptor) {
+    return null;
+  }
+
+  if (descriptor.entryKind === "bucket") {
+    return {
+      title: "Delete bucket",
+      copy: `Delete bucket "${descriptor.bucket}" and all contained objects and versions from S3?`,
+      confirmLabel: "Delete bucket",
+      option: {
+        label: "Delete this bucket recursively, including every object version and delete marker stored below it.",
+        checkedCopy: `Delete bucket "${descriptor.bucket}" recursively? All contained objects, object versions, and delete markers will be removed before the bucket itself is deleted.`,
+        checkedConfirmLabel: "Delete bucket recursively",
+        required: true,
+      },
+    };
+  }
+
+  if (descriptor.entryKind === "folder") {
+    return {
+      title: "Delete folder",
+      copy: `Delete folder ${descriptor.path || s3ExplorerPath(descriptor.bucket, descriptor.prefix)} and all contained objects, including all object versions?`,
+      confirmLabel: "Delete folder",
+    };
+  }
+
+  if (descriptor.entryKind === "file") {
+    return {
+      title: "Delete object",
+      copy: `Delete object ${descriptor.path || `s3://${descriptor.bucket}/${descriptor.prefix}`} from S3, including all versions if this bucket is versioned?`,
+      confirmLabel: "Delete object",
+    };
+  }
+
+  return null;
+}
+
+function s3ExplorerPreferredLocationAfterDelete(descriptor) {
+  const selectedBucket = String(resultExportDialogState.selectedBucket || "").trim();
+  const selectedPrefix = String(resultExportDialogState.selectedPrefix || "").trim();
+  if (!descriptor) {
+    return {
+      preferredBucket: selectedBucket,
+      preferredPrefix: selectedPrefix,
+    };
+  }
+
+  if (descriptor.entryKind === "bucket") {
+    if (selectedBucket && selectedBucket !== descriptor.bucket) {
+      return {
+        preferredBucket: selectedBucket,
+        preferredPrefix: selectedPrefix,
+      };
+    }
+    return {
+      preferredBucket: "",
+      preferredPrefix: "",
+    };
+  }
+
+  if (selectedBucket && selectedBucket !== descriptor.bucket) {
+    return {
+      preferredBucket: selectedBucket,
+      preferredPrefix: selectedPrefix,
+    };
+  }
+
+  const parentPrefix = s3ExplorerParentPrefix(descriptor.prefix);
+  if (descriptor.entryKind === "folder") {
+    const deletedBranchWasSelected =
+      selectedBucket === descriptor.bucket && selectedPrefix.startsWith(descriptor.prefix);
+    return {
+      preferredBucket: descriptor.bucket,
+      preferredPrefix: deletedBranchWasSelected ? parentPrefix : selectedPrefix || parentPrefix,
+    };
+  }
+
+  return {
+    preferredBucket: descriptor.bucket,
+    preferredPrefix: selectedPrefix || parentPrefix,
+  };
+}
+
+async function deleteS3ExplorerEntry(target) {
+  const descriptor = s3ExplorerEntryDescriptor(target);
+  if (!descriptor) {
+    return false;
+  }
+
+  return deleteS3EntryDescriptor(descriptor, {
+    refreshSidebarAfter: true,
+    refreshExplorerAfter: true,
+  });
+}
+
+async function deleteS3EntryDescriptor(
+  descriptor,
+  { refreshSidebarAfter = false, refreshExplorerAfter = false, showSidebarStatus = false } = {}
+) {
+  const dialogOptions = s3ExplorerDeleteDialogOptions(descriptor);
+  if (!descriptor || !dialogOptions) {
+    return false;
+  }
+
+  const confirmation = await showConfirmDialog(dialogOptions);
+  if (!confirmation.confirmed) {
+    return null;
+  }
+
+  if (showSidebarStatus) {
+    const deleteTitle =
+      descriptor.entryKind === "bucket"
+        ? "Deleting bucket"
+        : descriptor.entryKind === "folder"
+          ? "Deleting folder"
+          : "Deleting object";
+    const deleteCopy =
+      descriptor.entryKind === "bucket"
+        ? `Deleting bucket "${descriptor.bucket}" from S3...`
+        : descriptor.entryKind === "folder"
+          ? `Deleting folder ${descriptor.path || s3ExplorerPath(descriptor.bucket, descriptor.prefix)} from S3...`
+          : `Deleting object ${descriptor.path || `s3://${descriptor.bucket}/${descriptor.prefix}`} from S3...`;
+    setSidebarSourceOperationStatus({
+      tone: "info",
+      title: deleteTitle,
+      copy: deleteCopy,
+    });
+  }
+
+  try {
+    const result = await fetchJsonOrThrow("/api/s3/explorer/entries", {
+      method: "DELETE",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        entryKind: descriptor.entryKind,
+        bucket: descriptor.bucket,
+        prefix: descriptor.prefix,
+      }),
+    });
+
+    if (refreshExplorerAfter) {
+      const preferredLocation = s3ExplorerPreferredLocationAfterDelete(descriptor);
+      await loadS3ExplorerRoot(preferredLocation);
+    }
+    if (refreshSidebarAfter) {
+      await refreshSidebar(currentWorkspaceMode());
+      if (descriptor.entryKind === "bucket") {
+        blinkSourceCatalog("workspace.s3");
+      }
+    }
+    if (showSidebarStatus) {
+      setSidebarSourceOperationStatus(
+        {
+          tone: "success",
+          title:
+            descriptor.entryKind === "bucket"
+              ? "Bucket deleted"
+              : descriptor.entryKind === "folder"
+                ? "Folder deleted"
+                : "Object deleted",
+          copy: String(result?.message || "").trim() || "The selected S3 entry was deleted.",
+        },
+        { autoClearMs: 6000 }
+      );
+    }
+    return result;
+  } catch (error) {
+    if (showSidebarStatus) {
+      setSidebarSourceOperationStatus(
+        {
+          tone: "danger",
+          title:
+            descriptor.entryKind === "bucket"
+              ? "Bucket delete failed"
+              : descriptor.entryKind === "folder"
+                ? "Folder delete failed"
+                : "Object delete failed",
+          copy:
+            error instanceof Error
+              ? error.message
+              : "The selected S3 entry could not be deleted.",
+        },
+        { autoClearMs: 8000 }
+      );
+    }
+    throw error;
+  }
+}
+
+async function createSidebarS3Bucket() {
+  const bucketName = await showFolderNameDialog({
+    title: "New bucket",
+    copy: "Enter the bucket name to create in S3.",
+    submitLabel: "Create bucket",
+  });
+  if (!bucketName) {
+    return null;
+  }
+
+  const normalizedBucketName = String(bucketName).trim().toLowerCase();
+  const confirmation = await showConfirmDialog({
+    title: "Create bucket",
+    copy: `Create bucket "${normalizedBucketName}" in S3?`,
+    confirmLabel: "Create bucket",
+    confirmTone: "primary",
+  });
+  if (!confirmation.confirmed) {
+    return null;
+  }
+
+  setSidebarSourceOperationStatus({
+    tone: "info",
+    title: "Creating bucket",
+    copy: `Creating bucket "${normalizedBucketName}" in S3...`,
+  });
+
+  try {
+    const created = await createS3BucketRecord(normalizedBucketName);
+    await refreshSidebar(currentWorkspaceMode());
+    await revealSidebarS3Bucket(String(created.bucket || normalizedBucketName).trim());
+    setSidebarSourceOperationStatus(
+      {
+        tone: "success",
+        title: "Bucket created",
+        copy: `Created bucket "${String(created.bucket || normalizedBucketName).trim()}".`,
+      },
+      { autoClearMs: 6000 }
+    );
+    return created;
+  } catch (error) {
+    setSidebarSourceOperationStatus(
+      {
+        tone: "danger",
+        title: "Bucket creation failed",
+        copy: error instanceof Error ? error.message : "The S3 bucket could not be created.",
+      },
+      { autoClearMs: 8000 }
+    );
+    throw error;
+  }
+}
+
 function buildS3ExplorerBreadcrumbs(bucket, prefix = "") {
   const breadcrumbs = [{ label: "Buckets", bucket: "", prefix: "", path: "" }];
   const normalizedBucket = String(bucket || "").trim();
@@ -8790,19 +9735,72 @@ function s3ExplorerNodeKey(kind, bucket, prefix = "") {
   return `${String(kind || "").trim()}:${String(bucket || "").trim()}:${String(prefix || "").trim()}`;
 }
 
+function s3ExplorerActionMenuMarkup(entry) {
+  const deleteLabel =
+    entry.entryKind === "bucket"
+      ? "Delete bucket"
+      : entry.entryKind === "folder"
+        ? "Delete folder"
+        : "Delete object";
+  const downloadAction =
+    entry.entryKind === "file"
+      ? `
+        <button
+          type="button"
+          class="workspace-action-menu-item"
+          data-s3-explorer-entry-download
+          title="Download this S3 object"
+        >
+          Download object
+        </button>
+        <div class="workspace-action-menu-separator" aria-hidden="true"></div>
+      `
+      : "";
+
+  return `
+    <details class="workspace-action-menu s3-explorer-entry-action-menu" data-workspace-action-menu data-s3-explorer-action-menu>
+      <summary
+        class="workspace-action-menu-toggle"
+        data-s3-explorer-action-menu-toggle
+        aria-label="S3 entry actions"
+        title="S3 entry actions"
+      >
+        <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
+      </summary>
+      <div class="workspace-action-menu-panel">
+        ${downloadAction}
+        <button
+          type="button"
+          class="workspace-action-menu-item workspace-action-menu-item-danger"
+          data-s3-explorer-entry-delete
+          title="${escapeHtml(deleteLabel)}"
+        >
+          ${escapeHtml(deleteLabel)}
+        </button>
+      </div>
+    </details>
+  `;
+}
+
 function s3ExplorerEntryMarkup(entry) {
   if (entry.entryKind === "file") {
     return `
       <div
         class="s3-explorer-file"
+        data-s3-explorer-entry
         data-s3-explorer-file
         data-s3-explorer-kind="${escapeHtml(entry.entryKind)}"
+        data-s3-explorer-name="${escapeHtml(entry.name)}"
         data-s3-explorer-bucket="${escapeHtml(entry.bucket)}"
         data-s3-explorer-prefix="${escapeHtml(entry.prefix)}"
         data-s3-explorer-path="${escapeHtml(entry.path)}"
+        data-s3-explorer-file-format="${escapeHtml(entry.fileFormat)}"
       >
         <span class="s3-explorer-file-name">${escapeHtml(entry.name)}</span>
-        <span class="s3-explorer-file-meta">${escapeHtml((entry.fileFormat || "file").toUpperCase())}</span>
+        <span class="s3-explorer-entry-tools">
+          <span class="s3-explorer-file-meta">${escapeHtml((entry.fileFormat || "file").toUpperCase())}</span>
+          ${s3ExplorerActionMenuMarkup(entry)}
+        </span>
       </div>
     `;
   }
@@ -8811,8 +9809,10 @@ function s3ExplorerEntryMarkup(entry) {
   return `
     <details
       class="tree-folder s3-explorer-node"
+      data-s3-explorer-entry
       data-s3-explorer-node
       data-s3-explorer-kind="${escapeHtml(entry.entryKind)}"
+      data-s3-explorer-name="${escapeHtml(entry.name)}"
       data-s3-explorer-bucket="${escapeHtml(entry.bucket)}"
       data-s3-explorer-prefix="${escapeHtml(entry.prefix)}"
       data-s3-explorer-path="${escapeHtml(entry.path)}"
@@ -8820,8 +9820,9 @@ function s3ExplorerEntryMarkup(entry) {
     >
       <summary class="tree-folder-summary s3-explorer-node-summary" data-searchable-item="${escapeHtml(entry.name)}">
         <span class="tree-folder-label">${escapeHtml(entry.name)}</span>
-        <div class="tree-folder-tools">
+        <div class="tree-folder-tools s3-explorer-entry-tools">
           <span class="tree-folder-count">${escapeHtml(entryLabel)}</span>
+          ${s3ExplorerActionMenuMarkup(entry)}
         </div>
       </summary>
       <div class="tree-children s3-explorer-children" data-s3-explorer-children></div>
@@ -8999,6 +10000,17 @@ async function loadS3ExplorerRoot({ preferredBucket = "", preferredPrefix = "" }
   return snapshot;
 }
 
+async function createS3BucketRecord(bucketName) {
+  return fetchJsonOrThrow("/api/s3/explorer/buckets", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ bucketName }),
+  });
+}
+
 async function revealS3ExplorerLocation(bucket, prefix = "") {
   const normalizedBucket = String(bucket || "").trim();
   const normalizedPrefix = String(prefix || "").trim();
@@ -9056,15 +10068,20 @@ async function createS3ExplorerBucket() {
     return;
   }
 
-  const created = await fetchJsonOrThrow("/api/s3/explorer/buckets", {
-    method: "POST",
-    headers: {
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ bucketName }),
+  const normalizedBucketName = String(bucketName).trim().toLowerCase();
+  const confirmation = await showConfirmDialog({
+    title: "Create bucket",
+    copy: `Create bucket "${normalizedBucketName}" in S3?`,
+    confirmLabel: "Create bucket",
+    confirmTone: "primary",
   });
+  if (!confirmation.confirmed) {
+    return;
+  }
+
+  const created = await createS3BucketRecord(normalizedBucketName);
   await loadS3ExplorerRoot({ preferredBucket: String(created.bucket || "").trim(), preferredPrefix: "" });
+  await refreshSidebar(currentWorkspaceMode());
 }
 
 async function createS3ExplorerFolder() {
@@ -9325,25 +10342,7 @@ document.body.addEventListener(
 
 document.body.addEventListener("click", async (event) => {
   setActiveCell(event.target.closest("[data-query-cell]"));
-
-  if (!event.target.closest("[data-workspace-action-menu]")) {
-    closeWorkspaceActionMenus();
-  }
-  if (!event.target.closest("[data-cell-action-menu]")) {
-    closeCellActionMenus();
-  }
-  if (!event.target.closest("[data-source-action-menu]")) {
-    closeSourceActionMenus();
-  }
-  if (!event.target.closest("[data-result-action-menu]")) {
-    closeResultActionMenus();
-  }
-  if (!event.target.closest("[data-query-notifications]")) {
-    queryNotificationMenu()?.removeAttribute("open");
-  }
-  if (!event.target.closest("[data-settings-menu]")) {
-    closeSettingsMenus();
-  }
+  closePopupMenusForTarget(event.target);
 
   const modalCancelButton = event.target.closest("[data-modal-cancel]");
   if (modalCancelButton) {
@@ -9355,6 +10354,20 @@ document.body.addEventListener("click", async (event) => {
   const sourceActionMenu = event.target.closest("[data-source-action-menu]");
   if (sourceActionMenu) {
     syncSourceActionMenu(sourceActionMenu);
+  }
+
+  const sourceActionMenuToggle = event.target.closest("[data-source-action-menu-toggle]");
+  if (sourceActionMenuToggle) {
+    event.preventDefault();
+    event.stopPropagation();
+    const menu = sourceActionMenuToggle.closest("[data-source-action-menu]");
+    if (menu instanceof HTMLDetailsElement) {
+      const nextOpen = !menu.open;
+      closeSourceActionMenus(nextOpen ? menu : null);
+      menu.open = nextOpen;
+      syncSourceActionMenu(menu);
+    }
+    return;
   }
 
   const runCellButton = event.target.closest("[data-run-cell]");
@@ -9461,6 +10474,23 @@ document.body.addEventListener("click", async (event) => {
 
     const target = resolveNotebookCreateTarget(createNotebookButton);
     createNotebook(target);
+    return;
+  }
+
+  const createSourceBucketButton = event.target.closest("[data-create-source-bucket]");
+  if (createSourceBucketButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeSourceActionMenus();
+    try {
+      await createSidebarS3Bucket();
+    } catch (error) {
+      console.error("Failed to create the sidebar S3 bucket.", error);
+      await showMessageDialog({
+        title: "S3 bucket creation failed",
+        copy: error instanceof Error ? error.message : "The S3 bucket could not be created.",
+      });
+    }
     return;
   }
 
@@ -9605,6 +10635,51 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const s3ExplorerActionMenuToggle = event.target.closest("[data-s3-explorer-action-menu-toggle]");
+  if (s3ExplorerActionMenuToggle) {
+    event.preventDefault();
+    event.stopPropagation();
+    const menu = s3ExplorerActionMenuToggle.closest("[data-s3-explorer-action-menu]");
+    if (menu instanceof HTMLDetailsElement) {
+      const nextOpen = !menu.open;
+      closeS3ExplorerActionMenus(nextOpen ? menu : null);
+      menu.open = nextOpen;
+    }
+    return;
+  }
+
+  const s3ExplorerEntryDownloadButton = event.target.closest("[data-s3-explorer-entry-download]");
+  if (s3ExplorerEntryDownloadButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeS3ExplorerActionMenus();
+    const downloaded = downloadS3ExplorerObject(s3ExplorerEntryDownloadButton);
+    if (downloaded === false) {
+      await showMessageDialog({
+        title: "S3 download unavailable",
+        copy: "This S3 entry does not point to a single downloadable object.",
+      });
+    }
+    return;
+  }
+
+  const s3ExplorerEntryDeleteButton = event.target.closest("[data-s3-explorer-entry-delete]");
+  if (s3ExplorerEntryDeleteButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeS3ExplorerActionMenus();
+    try {
+      await deleteS3ExplorerEntry(s3ExplorerEntryDeleteButton);
+    } catch (error) {
+      console.error("Failed to delete the S3 explorer entry.", error);
+      await showMessageDialog({
+        title: "S3 delete failed",
+        copy: error instanceof Error ? error.message : "The selected S3 entry could not be deleted.",
+      });
+    }
+    return;
+  }
+
   const s3ExplorerBreadcrumbButton = event.target.closest("[data-s3-explorer-breadcrumb]");
   if (s3ExplorerBreadcrumbButton) {
     event.preventDefault();
@@ -9652,11 +10727,27 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const collapseRunbooksButton = event.target.closest("[data-collapse-runbooks]");
+  if (collapseRunbooksButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    setRunbookTreeExpanded(false);
+    return;
+  }
+
   const expandTreeButton = event.target.closest("[data-expand-tree]");
   if (expandTreeButton) {
     event.preventDefault();
     event.stopPropagation();
     setNotebookTreeExpanded(true);
+    return;
+  }
+
+  const expandRunbooksButton = event.target.closest("[data-expand-runbooks]");
+  if (expandRunbooksButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    setRunbookTreeExpanded(true);
     return;
   }
 
@@ -9725,6 +10816,64 @@ document.body.addEventListener("click", async (event) => {
       await showMessageDialog({
         title: "S3 download unavailable",
         copy: "This source object does not point to a single downloadable S3 object.",
+      });
+    }
+    return;
+  }
+
+  const deleteSourceS3ObjectButton = event.target.closest("[data-delete-source-s3-object]");
+  if (deleteSourceS3ObjectButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeSourceActionMenus();
+
+    const descriptor = sourceObjectS3DeleteDescriptor(
+      deleteSourceS3ObjectButton.closest("[data-source-object]")
+    );
+    if (!descriptor) {
+      await showMessageDialog({
+        title: "S3 delete unavailable",
+        copy: "This source object does not point to a single deletable S3 object.",
+      });
+      return;
+    }
+
+    try {
+      await deleteS3EntryDescriptor(descriptor, { refreshSidebarAfter: true, showSidebarStatus: true });
+    } catch (error) {
+      console.error("Failed to delete the sidebar S3 object.", error);
+      await showMessageDialog({
+        title: "S3 delete failed",
+        copy: error instanceof Error ? error.message : "The selected S3 object could not be deleted.",
+      });
+    }
+    return;
+  }
+
+  const deleteSourceS3BucketButton = event.target.closest("[data-delete-source-s3-bucket]");
+  if (deleteSourceS3BucketButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeSourceActionMenus();
+
+    const descriptor = sourceSchemaS3BucketDescriptor(
+      deleteSourceS3BucketButton.closest("[data-source-schema]")
+    );
+    if (!descriptor) {
+      await showMessageDialog({
+        title: "Bucket delete unavailable",
+        copy: "This source entry does not point to a deletable S3 bucket.",
+      });
+      return;
+    }
+
+    try {
+      await deleteS3EntryDescriptor(descriptor, { refreshSidebarAfter: true, showSidebarStatus: true });
+    } catch (error) {
+      console.error("Failed to delete the sidebar S3 bucket.", error);
+      await showMessageDialog({
+        title: "Bucket delete failed",
+        copy: error instanceof Error ? error.message : "The selected bucket could not be deleted.",
       });
     }
     return;
@@ -10254,6 +11403,22 @@ document.body.addEventListener("click", (event) => {
     });
     return;
   }
+});
+
+document.body.addEventListener("pointerover", (event) => {
+  if (event.pointerType === "touch") {
+    return;
+  }
+
+  closePopupMenusForTarget(event.target, event);
+});
+
+document.addEventListener("mouseout", (event) => {
+  if (event.relatedTarget !== null) {
+    return;
+  }
+
+  closePopupMenusForTarget(null);
 });
 
 document.body.addEventListener("change", (event) => {

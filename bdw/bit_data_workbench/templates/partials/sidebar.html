@@ -37,6 +37,37 @@
         <summary class="section-heading section-summary">
           <h2>Ingestion Runbooks</h2>
           <div class="section-tools">
+            <button
+              type="button"
+              class="tree-add-button"
+              data-collapse-runbooks
+              title="Collapse runbook structure"
+              aria-label="Collapse runbook structure"
+            >
+              <svg class="tree-action-glyph tree-action-glyph-structure" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M2.5 3.5h3.4"></path>
+                <path d="M2.5 8h6.5"></path>
+                <path d="M2.5 12.5h3.4"></path>
+                <path d="M11.4 3.5v9"></path>
+                <path d="M9.3 8h4.2"></path>
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="tree-add-button"
+              data-expand-runbooks
+              title="Expand runbook structure"
+              aria-label="Expand runbook structure"
+            >
+              <svg class="tree-action-glyph tree-action-glyph-structure" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M2.5 3.5h3.4"></path>
+                <path d="M2.5 8h6.5"></path>
+                <path d="M2.5 12.5h3.4"></path>
+                <path d="M11.4 3.5v9"></path>
+                <path d="M9.3 8h4.2"></path>
+                <path d="M11.4 5.9v4.2"></path>
+              </svg>
+            </button>
             <span class="section-count">{{ data_generators | length }}</span>
           </div>
         </summary>
@@ -162,6 +193,10 @@
           <span class="section-count">{{ catalogs | length }}</span>
         </div>
       </summary>
+      <div class="sidebar-source-operation-status" data-source-operation-status hidden>
+        <strong class="sidebar-source-operation-status-title" data-source-operation-status-title></strong>
+        <span class="sidebar-source-operation-status-copy" data-source-operation-status-copy></span>
+      </div>
       <div class="source-tree">
         {% for catalog in catalogs %}
           <details
@@ -179,7 +214,7 @@
                 </svg>
                 <span>{{ catalog.name }}</span>
               </span>
-              {% if catalog.connection_label or catalog.connection_controls_enabled %}
+              {% if catalog.connection_label or catalog.connection_controls_enabled or catalog.name == "workspace" %}
                 <span
                   class="source-catalog-meta"
                   data-source-catalog-meta
@@ -201,6 +236,17 @@
                   {% endif %}
                   {% if catalog.connection_controls_enabled %}
                     <span class="source-connection-actions" data-source-connection-actions>
+                      {% if catalog.name == "workspace" %}
+                        <button
+                          type="button"
+                          class="source-control-button source-control-button-create"
+                          data-create-source-bucket
+                          title="Create S3 bucket"
+                          aria-label="Create S3 bucket"
+                        >
+                          +
+                        </button>
+                      {% endif %}
                       <button
                         type="button"
                         class="source-control-button source-control-button-connect"
@@ -240,6 +286,7 @@
                 class="source-schema"
                 data-source-schema
                 data-source-schema-key="{{ catalog.name }}::{{ schema.name }}"
+                {% if catalog.name == "workspace" %}data-source-bucket="{{ schema.label or schema.name }}"{% endif %}
               >
                 <summary data-searchable-item="{{ schema.label or schema.name }}">
                   <span class="source-node-label">
@@ -252,6 +299,30 @@
                     </svg>
                     <span>{{ schema.label or schema.name }}</span>
                   </span>
+                  {% if catalog.name == "workspace" %}
+                    <span class="source-schema-meta">
+                      <details class="workspace-action-menu source-action-menu" data-source-action-menu>
+                        <summary
+                          class="workspace-action-menu-toggle"
+                          data-source-action-menu-toggle
+                          aria-label="Bucket actions"
+                          title="Bucket actions"
+                        >
+                          <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
+                        </summary>
+                        <div class="workspace-action-menu-panel">
+                          <button
+                            type="button"
+                            class="workspace-action-menu-item workspace-action-menu-item-danger"
+                            data-delete-source-s3-bucket
+                            title="Delete bucket"
+                          >
+                            Delete bucket
+                          </button>
+                        </div>
+                      </details>
+                    </span>
+                  {% endif %}
                 </summary>
                 <ul class="source-object-list">
                   {% for source_object in schema.objects %}
@@ -303,6 +374,7 @@
                         <details class="workspace-action-menu source-action-menu" data-source-action-menu>
                           <summary
                             class="workspace-action-menu-toggle"
+                            data-source-action-menu-toggle
                             aria-label="Source actions"
                             title="Source actions"
                           >
@@ -343,6 +415,17 @@
                             >
                               Query in new notebook
                             </button>
+                            {% if source_object.s3_downloadable %}
+                              <div class="workspace-action-menu-separator" aria-hidden="true"></div>
+                              <button
+                                type="button"
+                                class="workspace-action-menu-item workspace-action-menu-item-danger"
+                                data-delete-source-s3-object
+                                title="Delete the underlying S3 object"
+                              >
+                                Delete S3 object
+                              </button>
+                            {% endif %}
                           </div>
                         </details>
                       </span>
@@ -354,16 +437,17 @@
           </details>
         {% endfor %}
       </div>
+
+      <section class="sidebar-source-inspector" data-source-inspector hidden>
+        <div class="sidebar-divider sidebar-source-inspector-divider" aria-hidden="true"></div>
+        <div class="sidebar-source-inspector-panel" data-source-inspector-panel aria-live="polite"></div>
+      </section>
     </details>
   </div>
 
-  <section class="sidebar-source-inspector" data-source-inspector hidden>
-    <div class="sidebar-divider sidebar-source-inspector-divider" aria-hidden="true"></div>
-    <div class="sidebar-source-inspector-panel" data-source-inspector-panel aria-live="polite"></div>
-  </section>
+  <div class="sidebar-divider" aria-hidden="true"></div>
 
   {% if workspace_mode == 'ingestion' %}
-    <div class="sidebar-divider" aria-hidden="true"></div>
 
     <details class="sidebar-section sidebar-query-monitor" data-generation-monitor-section>
       <summary class="section-heading section-summary">

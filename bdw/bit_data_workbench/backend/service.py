@@ -37,12 +37,15 @@ from .s3_storage import (
     s3_verify_value,
     upload_s3_file,
 )
+from .data_sources import DataSourceCreateRequest, DataSourceDeleteRequest, DataSourcePlugin
+from .data_sources.postgres import PostgresDataSourcePlugin
+from .data_sources.s3 import S3DataSourcePlugin
 from .data_generation_jobs import DataGenerationJobManager
+from .query_analysis import analyze_query_touches, build_relation_index
 from .query_jobs import QueryJobManager
 from .query_result_exports import QueryResultExportManager
 from .notebooks import build_completion_schema, build_notebook_tree, build_notebooks, build_source_options
 from .runbooks import build_runbook_tree
-from .s3_explorer import S3ExplorerManager
 from .shared_notebooks import SharedNotebookStore
 from .source_discovery import (
     DataSourceDiscoveryManager,
@@ -89,6 +92,13 @@ def qualified_name(*parts: str) -> str:
 def normalize_port(value: str, variable_name: str) -> str:
     if not value.isdigit():
         raise ValueError(f"{variable_name} must be numeric, got: {value}")
+    return value
+
+
+def normalize_postgres_host(value: str | None) -> str | None:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"localhost", "::1"}:
+        return "127.0.0.1"
     return value
 
 
@@ -150,7 +160,6 @@ class WorkbenchService:
         self._notebook_events_version = 0
         self._completion_schema: dict[str, object] = {}
         self._source_options: list[dict[str, str]] = []
-        self._postgres_health_connections: dict[str, object] = {}
         self._startup_threads: list[Thread] = []
         self._query_jobs = QueryJobManager(
             max_result_rows=settings.max_result_rows,
@@ -159,7 +168,26 @@ class WorkbenchService:
             notebook_title_resolver=self._resolve_notebook_title,
             metadata_refresher=self.refresh_metadata_state,
         )
-        self._s3_explorer = S3ExplorerManager(settings)
+        self._s3_plugin = S3DataSourcePlugin(settings)
+        self._pg_oltp_plugin = PostgresDataSourcePlugin(
+            settings,
+            source_id="pg_oltp",
+            source_label="PostgreSQL OLTP",
+            target="oltp",
+            connection_factory=self._open_postgres_connection,
+        )
+        self._pg_olap_plugin = PostgresDataSourcePlugin(
+            settings,
+            source_id="pg_olap",
+            source_label="PostgreSQL OLAP",
+            target="olap",
+            connection_factory=self._open_postgres_connection,
+        )
+        self._data_source_plugins: dict[str, DataSourcePlugin] = {
+            self._s3_plugin.source_id: self._s3_plugin,
+            self._pg_oltp_plugin.source_id: self._pg_oltp_plugin,
+            self._pg_olap_plugin.source_id: self._pg_olap_plugin,
+        }
         self._query_result_exports = QueryResultExportManager(
             settings=settings,
             connection_factory=self._create_worker_connection,
@@ -180,22 +208,14 @@ class WorkbenchService:
                 SqlSourceDiscoverer(
                     source_id="pg_oltp",
                     source_label="PostgreSQL OLTP",
-                    snapshot_provider=lambda: self._postgres_source_snapshot(
-                        target="oltp",
-                        source_id="pg_oltp",
-                        source_label="PostgreSQL OLTP",
-                    ),
-                    disconnect_handler=lambda: self._close_persistent_postgres_connection("pg_oltp"),
+                    snapshot_provider=self._pg_oltp_plugin.source_snapshot,
+                    disconnect_handler=self._pg_oltp_plugin.disconnect,
                 ),
                 SqlSourceDiscoverer(
                     source_id="pg_olap",
                     source_label="PostgreSQL OLAP",
-                    snapshot_provider=lambda: self._postgres_source_snapshot(
-                        target="olap",
-                        source_id="pg_olap",
-                        source_label="PostgreSQL OLAP",
-                    ),
-                    disconnect_handler=lambda: self._close_persistent_postgres_connection("pg_olap"),
+                    snapshot_provider=self._pg_olap_plugin.source_snapshot,
+                    disconnect_handler=self._pg_olap_plugin.disconnect,
                 ),
                 S3DataSourceDiscoverer(settings),
             ],
@@ -251,6 +271,7 @@ class WorkbenchService:
         self._log_startup_section("Schedule background S3 startup diagnostics")
         self._start_background_s3_startup_diagnostics()
         self._log_startup("Workbench startup completed in %.2fs", time.perf_counter() - started)
+        self._log_startup(STARTUP_DIVIDER)
 
     def stop(self) -> None:
         self._log_startup_section("Shutdown workbench service")
@@ -485,12 +506,15 @@ class WorkbenchService:
         cell_id: str,
         data_sources: list[str] | None = None,
     ) -> dict[str, object]:
+        query_analysis = self._analyze_query(sql)
         snapshot = self._query_jobs.start_job(
             sql=sql,
             notebook_id=notebook_id,
             notebook_title=notebook_title,
             cell_id=cell_id,
             data_sources=data_sources,
+            touched_relations=query_analysis.touched_relations,
+            touched_buckets=query_analysis.touched_buckets,
         )
         return snapshot.payload
 
@@ -499,16 +523,38 @@ class WorkbenchService:
         return snapshot.payload
 
     def s3_explorer_snapshot(self, *, bucket: str = "", prefix: str = "") -> dict[str, object]:
-        return self._s3_explorer.snapshot(bucket=bucket, prefix=prefix).payload
+        return self._s3_plugin.snapshot(bucket=bucket, prefix=prefix).payload
 
     def create_s3_bucket(self, bucket_name: str) -> dict[str, object]:
-        return self._s3_explorer.create_bucket(bucket_name).payload
+        result = self._s3_plugin.create(
+            DataSourceCreateRequest(kind="bucket", name=bucket_name)
+        )
+        self._data_source_discovery.sync_source("workspace.s3", emit_event=True)
+        return result.payload
 
     def create_s3_folder(self, *, bucket: str, prefix: str = "", folder_name: str) -> dict[str, object]:
-        return self._s3_explorer.create_folder(bucket=bucket, prefix=prefix, folder_name=folder_name).payload
+        return self._s3_plugin.create(
+            DataSourceCreateRequest(
+                kind="folder",
+                container=bucket,
+                path=prefix,
+                name=folder_name,
+            )
+        ).payload
+
+    def delete_s3_explorer_entry(self, *, entry_kind: str, bucket: str, prefix: str = "") -> dict[str, object]:
+        result = self._s3_plugin.delete(
+            DataSourceDeleteRequest(
+                kind=entry_kind,
+                container=bucket,
+                path=prefix,
+            )
+        )
+        self._data_source_discovery.sync_source("workspace.s3", emit_event=True)
+        return result.payload
 
     def download_s3_object(self, *, bucket: str, key: str, file_name: str = ""):
-        return self._s3_explorer.download_object(bucket=bucket, key=key, file_name=file_name)
+        return self._s3_plugin.download_object(bucket=bucket, key=key, file_name=file_name)
 
     def download_query_result_export(self, *, job_id: str, export_format: str):
         return self._query_result_exports.download(job_id=job_id, export_format=export_format)
@@ -559,43 +605,8 @@ class WorkbenchService:
 
         parts = [part.strip() for part in normalized_relation.split(".") if part.strip()]
         if len(parts) == 3 and parts[0] in {"pg_oltp", "pg_olap"}:
-            catalog_name = parts[0]
-            schema_name = parts[1]
-            object_name = parts[2]
-            target = "oltp" if catalog_name == "pg_oltp" else "olap"
-            status, _relations = self._postgres_source_snapshot(
-                target=target,
-                source_id=catalog_name,
-                source_label="PostgreSQL OLTP" if target == "oltp" else "PostgreSQL OLAP",
-            )
-            if status.state != "connected":
-                raise KeyError(f"Source object is unavailable because {catalog_name} is disconnected.")
-            connection = None
-            with self._lock:
-                connection = self._postgres_health_connections.get(catalog_name)
-            if connection is None:
-                raise KeyError(f"Source object is unavailable because {catalog_name} is disconnected.")
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT
-                        attribute.attname AS column_name,
-                        UPPER(format_type(attribute.atttypid, attribute.atttypmod)) AS data_type
-                    FROM pg_class AS relation
-                    JOIN pg_namespace AS namespace
-                      ON namespace.oid = relation.relnamespace
-                    JOIN pg_attribute AS attribute
-                      ON attribute.attrelid = relation.oid
-                    WHERE namespace.nspname = %s
-                      AND relation.relname = %s
-                      AND relation.relkind IN ('r', 'v', 'm')
-                      AND attribute.attnum > 0
-                      AND NOT attribute.attisdropped
-                    ORDER BY attribute.attnum
-                    """,
-                    [schema_name, object_name],
-                )
-                rows = cursor.fetchall()
+            plugin = self._postgres_plugin_by_source_id(parts[0])
+            return plugin.relation_fields(normalized_relation)
         elif len(parts) == 2:
             schema_name = parts[0]
             object_name = parts[1]
@@ -615,9 +626,6 @@ class WorkbenchService:
                 rows = conn.execute(query, parameters).fetchall()
         else:
             raise KeyError(f"Unsupported source object relation: {relation}")
-
-        if not rows:
-            raise KeyError(f"Unknown source object: {relation}")
 
         return [SourceField(name=column_name, data_type=data_type) for column_name, data_type in rows]
 
@@ -719,8 +727,9 @@ class WorkbenchService:
                 "and the target database to be configured."
             )
 
+        host = normalize_postgres_host(self.settings.pg_host)
         return psycopg.connect(
-            host=self.settings.pg_host,
+            host=host,
             port=int(self.settings.pg_port),
             user=self.settings.pg_user,
             password=self.settings.pg_password,
@@ -738,28 +747,11 @@ class WorkbenchService:
         raise ValueError(f"Unsupported PostgreSQL target: {target}")
 
     def _close_persistent_postgres_connections(self) -> None:
-        with self._lock:
-            connections = list(self._postgres_health_connections.values())
-            self._postgres_health_connections.clear()
-
-        for connection in connections:
-            try:
-                connection.close()
-            except Exception:
-                pass
+        self._pg_oltp_plugin.close()
+        self._pg_olap_plugin.close()
 
     def _close_persistent_postgres_connection(self, source_id: str) -> None:
-        connection = None
-        with self._lock:
-            connection = self._postgres_health_connections.pop(source_id, None)
-
-        if connection is None:
-            return
-
-        try:
-            connection.close()
-        except Exception:
-            pass
+        self._postgres_plugin_by_source_id(source_id).disconnect()
 
     def _postgres_source_snapshot(
         self,
@@ -768,120 +760,11 @@ class WorkbenchService:
         source_id: str,
         source_label: str,
     ) -> tuple[SourceConnectionStatus, list[SqlDiscoveredRelation]]:
-        database = self._postgres_target_database(target)
-        if not database:
-            return (
-                SourceConnectionStatus(
-                    source_id=source_id,
-                    state="disconnected",
-                    label="Disconnected",
-                    detail=f"{source_label} is not configured.",
-                ),
-                [],
-            )
-
-        connection = None
-        with self._lock:
-            connection = self._postgres_health_connections.get(source_id)
-
-        if connection is not None:
-            try:
-                relations = self._fetch_postgres_relations(connection)
-                return (
-                    SourceConnectionStatus(
-                        source_id=source_id,
-                        state="connected",
-                        label="Connected",
-                        detail=f"{source_label} is connected.",
-                    ),
-                    relations,
-                )
-            except Exception:
-                self._close_persistent_postgres_connection(source_id)
-
-        try:
-            connection = self._open_postgres_connection(database)
-            relations = self._fetch_postgres_relations(connection)
-            with self._lock:
-                self._postgres_health_connections[source_id] = connection
-            return (
-                SourceConnectionStatus(
-                    source_id=source_id,
-                    state="connected",
-                    label="Connected",
-                    detail=f"{source_label} is connected.",
-                ),
-                relations,
-            )
-        except Exception as exc:
-            try:
-                if connection is not None:
-                    connection.close()
-            except Exception:
-                pass
-            self._close_persistent_postgres_connection(source_id)
-            return (
-                SourceConnectionStatus(
-                    source_id=source_id,
-                    state="disconnected",
-                    label="Disconnected",
-                    detail=f"{source_label} connection failed: {exc}",
-                ),
-                [],
-            )
-
-    def _fetch_postgres_relations(self, connection) -> list[SqlDiscoveredRelation]:
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT
-                    namespace.nspname AS schema_name,
-                    relation.relname AS relation_name,
-                    CASE relation.relkind
-                        WHEN 'r' THEN 'table'
-                        WHEN 'v' THEN 'view'
-                        WHEN 'm' THEN 'materialized view'
-                        ELSE 'table'
-                    END AS relation_kind
-                FROM pg_class AS relation
-                JOIN pg_namespace AS namespace
-                  ON namespace.oid = relation.relnamespace
-                WHERE relation.relkind IN ('r', 'v', 'm')
-                  AND namespace.nspname NOT IN ('pg_catalog', 'information_schema')
-                  AND namespace.nspname NOT LIKE 'pg_toast%'
-                ORDER BY namespace.nspname, relation.relname
-                """
-            )
-            rows = cursor.fetchall()
-
-        return [
-            SqlDiscoveredRelation(
-                schema_name=str(schema_name),
-                relation_name=str(relation_name),
-                relation_kind=str(relation_kind),
-            )
-            for schema_name, relation_name, relation_kind in rows
-        ]
+        plugin = self._postgres_plugin_by_source_id(source_id)
+        return plugin.source_snapshot()
 
     def _postgres_catalog_objects(self, target: str) -> dict[str, list[SourceObject]]:
-        source_id = "pg_oltp" if target == "oltp" else "pg_olap"
-        _status, relations = self._postgres_source_snapshot(
-            target=target,
-            source_id=source_id,
-            source_label="PostgreSQL OLTP" if target == "oltp" else "PostgreSQL OLAP",
-        )
-        grouped: dict[str, list[SourceObject]] = {}
-        for relation in relations:
-            grouped.setdefault(relation.schema_name, []).append(
-                SourceObject(
-                    name=relation.relation_name,
-                    kind=relation.relation_kind,
-                    relation=f"{source_id}.{relation.schema_name}.{relation.relation_name}",
-                )
-            )
-        for objects in grouped.values():
-            objects.sort(key=lambda item: item.name.lower())
-        return grouped
+        return self._postgres_plugin(target).catalog_objects()
 
     def _resolve_notebook_title(self, notebook_id: str) -> str | None:
         with self._lock:
@@ -889,6 +772,11 @@ class WorkbenchService:
                 if notebook.notebook_id == notebook_id:
                     return notebook.title
         return None
+
+    def _analyze_query(self, sql: str):
+        with self._lock:
+            relation_index = build_relation_index(self._catalogs)
+        return analyze_query_touches(sql, relation_index=relation_index)
 
     def _log_startup(
         self,
@@ -1751,6 +1639,7 @@ class WorkbenchService:
             return
 
         port = normalize_port(self.settings.pg_port, "PG_PORT")
+        host = normalize_postgres_host(self.settings.pg_host)
 
         if self.settings.pg_oltp_database:
             if startup_context:
@@ -1758,13 +1647,14 @@ class WorkbenchService:
                 self._log_startup(
                     "PostgreSQL bootstrap step: attaching OLTP catalog %s on %s:%s",
                     self.settings.pg_oltp_database,
-                    self.settings.pg_host,
+                    host,
                     port,
                 )
             self._create_postgres_secret(
                 conn,
                 secret_name="bdw_pg_oltp",
                 database=self.settings.pg_oltp_database,
+                host=host,
                 port=port,
             )
             self._attach_postgres(
@@ -1782,13 +1672,14 @@ class WorkbenchService:
                 self._log_startup(
                     "PostgreSQL bootstrap step: attaching OLAP catalog %s on %s:%s",
                     self.settings.pg_olap_database,
-                    self.settings.pg_host,
+                    host,
                     port,
                 )
             self._create_postgres_secret(
                 conn,
                 secret_name="bdw_pg_olap",
                 database=self.settings.pg_olap_database,
+                host=host,
                 port=port,
             )
             self._attach_postgres(
@@ -1806,6 +1697,7 @@ class WorkbenchService:
         *,
         secret_name: str,
         database: str,
+        host: str | None,
         port: str,
     ) -> None:
         conn.execute(
@@ -1813,7 +1705,7 @@ class WorkbenchService:
             f"{sql_identifier(secret_name)} "
             "("
             "TYPE postgres, "
-            f"HOST {sql_literal(self.settings.pg_host)}, "
+            f"HOST {sql_literal(host or self.settings.pg_host or '')}, "
             f"PORT {port}, "
             f"DATABASE {sql_literal(database)}, "
             f"USER {sql_literal(self.settings.pg_user)}, "
@@ -1986,28 +1878,23 @@ class WorkbenchService:
         return metadata
 
     def _drop_catalog_schema_objects(self, catalog_name: str, schema_name: str) -> int:
-        target = "oltp" if catalog_name == "pg_oltp" else "olap"
-        status, relations = self._postgres_source_snapshot(
-            target=target,
-            source_id=catalog_name,
-            source_label="PostgreSQL OLTP" if target == "oltp" else "PostgreSQL OLAP",
-        )
-        if status.state != "connected":
-            raise ValueError(f"{catalog_name} is disconnected; cleanup cannot proceed.")
+        return self._postgres_plugin_by_source_id(catalog_name).drop_schema_objects(schema_name)
 
-        with self._lock:
-            connection = self._postgres_health_connections.get(catalog_name)
-        if connection is None:
-            raise ValueError(f"{catalog_name} is disconnected; cleanup cannot proceed.")
+    def _postgres_plugin(self, target: str) -> PostgresDataSourcePlugin:
+        normalized_target = str(target).strip().lower()
+        if normalized_target == "oltp":
+            return self._pg_oltp_plugin
+        if normalized_target == "olap":
+            return self._pg_olap_plugin
+        raise ValueError(f"Unsupported PostgreSQL target: {target}")
 
-        scoped_relations = [relation for relation in relations if relation.schema_name == schema_name]
-        for relation in scoped_relations:
-            drop_kind = "MATERIALIZED VIEW" if relation.relation_kind == "materialized view" else relation.relation_kind.upper()
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    f"DROP {drop_kind} IF EXISTS {sql_identifier(schema_name)}.{sql_identifier(relation.relation_name)} CASCADE"
-                )
-        return len(scoped_relations)
+    def _postgres_plugin_by_source_id(self, source_id: str) -> PostgresDataSourcePlugin:
+        normalized_source_id = str(source_id).strip().lower()
+        if normalized_source_id == "pg_oltp":
+            return self._pg_oltp_plugin
+        if normalized_source_id == "pg_olap":
+            return self._pg_olap_plugin
+        raise ValueError(f"Unsupported PostgreSQL source: {source_id}")
 
     def _drop_workspace_schema_objects(self, schema_name: str) -> int:
         with self._lock:

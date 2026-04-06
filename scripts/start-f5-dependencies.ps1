@@ -53,6 +53,89 @@ function Start-DockerDesktopIfNeeded {
     Wait-DockerEngine
 }
 
+function Get-ComposeContainerId {
+    param(
+        [string]$Service
+    )
+
+    $containerId = docker compose ps -a -q $Service 2>$null
+    if (-not $containerId) {
+        return ""
+    }
+
+    return ($containerId | Select-Object -First 1).Trim()
+}
+
+function Get-ComposeContainerState {
+    param(
+        [string]$ContainerId
+    )
+
+    if (-not $ContainerId) {
+        return ""
+    }
+
+    $state = docker inspect --format "{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}" $ContainerId 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $state) {
+        return ""
+    }
+
+    return ($state | Select-Object -First 1).Trim().ToLowerInvariant()
+}
+
+function Get-ComposeContainerExitCode {
+    param(
+        [string]$ContainerId
+    )
+
+    if (-not $ContainerId) {
+        return ""
+    }
+
+    $exitCode = docker inspect --format "{{.State.ExitCode}}" $ContainerId 2>$null
+    if ($LASTEXITCODE -ne 0 -or -not $exitCode) {
+        return ""
+    }
+
+    return ($exitCode | Select-Object -First 1).Trim()
+}
+
+function Wait-ComposeServiceState {
+    param(
+        [string]$Service,
+        [string[]]$DesiredStates,
+        [int]$TimeoutSeconds = 90,
+        [switch]$RequireZeroExitCode
+    )
+
+    $normalizedDesiredStates = @($DesiredStates | ForEach-Object { $_.Trim().ToLowerInvariant() })
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $lastObservedState = "missing"
+
+    while ((Get-Date) -lt $deadline) {
+        $containerId = Get-ComposeContainerId -Service $Service
+        if ($containerId) {
+            $lastObservedState = Get-ComposeContainerState -ContainerId $containerId
+            if ($normalizedDesiredStates -contains $lastObservedState) {
+                if (-not $RequireZeroExitCode -or $lastObservedState -ne "exited") {
+                    return
+                }
+
+                $exitCode = Get-ComposeContainerExitCode -ContainerId $containerId
+                if ($exitCode -eq "0") {
+                    return
+                }
+
+                throw "Compose service '$Service' exited with code $exitCode before F5 startup completed."
+            }
+        }
+
+        Start-Sleep -Seconds 2
+    }
+
+    throw "Compose service '$Service' did not reach state '$($normalizedDesiredStates -join ", ")' before timeout. Last observed state: $lastObservedState."
+}
+
 function Stop-ComposeAppContainer {
     Write-Host "Stopping the Docker app container so F5 can own http://127.0.0.1:8000 ..."
     cmd /c "docker compose stop bit-data-workbench >nul 2>&1"
@@ -124,4 +207,12 @@ Stop-StaleWorkbenchProcesses
 Stop-LocalWorkbenchListener
 
 Write-Host "Starting local dependency services for F5 ..."
-docker compose up -d minio minio-init minio-seed postgres pgadmin
+Push-Location $repoRoot
+try {
+    docker compose up -d minio minio-init minio-seed postgres pgadmin
+    Wait-ComposeServiceState -Service "minio" -DesiredStates @("healthy")
+    Wait-ComposeServiceState -Service "postgres" -DesiredStates @("healthy")
+    Wait-ComposeServiceState -Service "minio-init" -DesiredStates @("exited") -RequireZeroExitCode
+} finally {
+    Pop-Location
+}

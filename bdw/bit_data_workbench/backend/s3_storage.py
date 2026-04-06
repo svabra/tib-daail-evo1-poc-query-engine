@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 import boto3
 from botocore.config import Config
-from botocore.exceptions import ClientError
+from botocore.exceptions import BotoCoreError, ClientError
 
 from ..config import Settings
 
@@ -28,6 +28,19 @@ def _is_likely_local_s3_host(hostname: str | None) -> bool:
     return normalized.endswith(".local")
 
 
+def _canonicalize_local_s3_endpoint(
+    endpoint: str,
+    hostname: str | None,
+    port: int | None,
+) -> str:
+    normalized_host = (hostname or "").strip().lower()
+    if normalized_host not in {"localhost", "::1"}:
+        return endpoint
+    if port is None:
+        return "127.0.0.1"
+    return f"127.0.0.1:{port}"
+
+
 def normalize_s3_endpoint(
     raw_endpoint: str,
     *,
@@ -40,27 +53,40 @@ def normalize_s3_endpoint(
             raise ValueError(f"Unsupported S3 endpoint scheme: {parsed.scheme}")
         if not parsed.netloc:
             raise ValueError(f"Invalid S3 endpoint: {raw_endpoint}")
-        return parsed.netloc, parsed.scheme == "https", None
+        return (
+            _canonicalize_local_s3_endpoint(
+                parsed.netloc,
+                parsed.hostname,
+                parsed.port,
+            ),
+            parsed.scheme == "https",
+            None,
+        )
 
     hostname, port = _parsed_endpoint_host_port(raw_endpoint)
+    normalized_endpoint = _canonicalize_local_s3_endpoint(
+        raw_endpoint,
+        hostname,
+        port,
+    )
     if use_ssl:
-        return raw_endpoint, True, None
+        return normalized_endpoint, True, None
 
     if not _is_likely_local_s3_host(hostname) and verify_ssl:
         return (
-            raw_endpoint,
+            normalized_endpoint,
             True,
             "forcing HTTPS because the endpoint has no scheme, is not local, and SSL verification is enabled",
         )
 
     if not _is_likely_local_s3_host(hostname) and port == 9021:
         return (
-            raw_endpoint,
+            normalized_endpoint,
             True,
             "forcing HTTPS because the endpoint has no scheme, is not local, and port 9021 is expected to be TLS",
         )
 
-    return raw_endpoint, False, None
+    return normalized_endpoint, False, None
 
 
 def s3_endpoint_url(
@@ -198,6 +224,174 @@ def iter_s3_keys(client, bucket: str, prefix: str = "") -> Iterator[str]:
         continuation_token = response.get("NextContinuationToken")
 
 
+def iter_s3_object_versions(client, bucket: str, prefix: str = "") -> Iterator[dict[str, str]]:
+    key_marker = None
+    version_id_marker = None
+
+    while True:
+        kwargs = {
+            "Bucket": bucket,
+            "Prefix": prefix,
+            "MaxKeys": 1000,
+        }
+        if key_marker is not None:
+            kwargs["KeyMarker"] = key_marker
+        if version_id_marker is not None:
+            kwargs["VersionIdMarker"] = version_id_marker
+
+        response = client.list_object_versions(**kwargs)
+        for item in response.get("Versions") or []:
+            key = item.get("Key")
+            version_id = item.get("VersionId")
+            if key and version_id:
+                yield {"Key": key, "VersionId": version_id}
+
+        for item in response.get("DeleteMarkers") or []:
+            key = item.get("Key")
+            version_id = item.get("VersionId")
+            if key and version_id:
+                yield {"Key": key, "VersionId": version_id}
+
+        if not response.get("IsTruncated"):
+            break
+        key_marker = response.get("NextKeyMarker")
+        version_id_marker = response.get("NextVersionIdMarker")
+
+
+def _version_listing_fallback_allowed(error: Exception) -> bool:
+    code = _s3_error_code(error)
+    return code in {
+        "501",
+        "MethodNotAllowed",
+        "NotImplemented",
+        "XMinioNotImplemented",
+    }
+
+
+def _raise_s3_operation_error(
+    error: Exception,
+    *,
+    action: str,
+    bucket: str,
+) -> None:
+    if _is_missing_bucket_error(error):
+        raise ValueError(
+            f"The S3 bucket '{bucket}' does not exist."
+        ) from error
+
+    raise ValueError(
+        f"Failed to {action} in S3 bucket '{bucket}': {_s3_error_message(error)}"
+    ) from error
+
+
+def delete_s3_objects(client, bucket: str, objects: list[str | dict[str, str]]) -> int:
+    if not objects:
+        return 0
+
+    deleted = 0
+    for index in range(0, len(objects), 1000):
+        chunk = objects[index:index + 1000]
+        identifiers = []
+        for item in chunk:
+            if isinstance(item, str):
+                identifiers.append({"Key": item})
+            else:
+                identifier = {"Key": item["Key"]}
+                if item.get("VersionId"):
+                    identifier["VersionId"] = item["VersionId"]
+                identifiers.append(identifier)
+
+        try:
+            client.delete_objects(
+                Bucket=bucket,
+                Delete={
+                    "Objects": identifiers,
+                    "Quiet": True,
+                },
+            )
+        except (ClientError, BotoCoreError) as exc:
+            _raise_s3_operation_error(
+                exc,
+                action="delete objects",
+                bucket=bucket,
+            )
+        deleted += len(chunk)
+    return deleted
+
+
+def delete_s3_keys(client, bucket: str, keys: list[str]) -> int:
+    return delete_s3_objects(client, bucket, keys)
+
+
+def delete_s3_object_versions(client, bucket: str, key: str) -> int:
+    try:
+        versions = [
+            item
+            for item in iter_s3_object_versions(client, bucket, prefix=key)
+            if item["Key"] == key
+        ]
+    except (ClientError, BotoCoreError) as exc:
+        if _is_missing_bucket_error(exc):
+            raise ValueError(f"The S3 bucket '{bucket}' does not exist.") from exc
+        if not _version_listing_fallback_allowed(exc):
+            _raise_s3_operation_error(
+                exc,
+                action=f"list object versions for '{key}'",
+                bucket=bucket,
+            )
+        return delete_s3_keys(client, bucket, [key])
+
+    if versions:
+        return delete_s3_objects(client, bucket, versions)
+    return delete_s3_keys(client, bucket, [key])
+
+
+def delete_s3_prefix(settings: Settings, bucket: str, prefix: str) -> int:
+    client = s3_client(settings)
+    if not _bucket_is_accessible(client, bucket):
+        return 0
+    try:
+        versions = list(iter_s3_object_versions(client, bucket, prefix))
+    except (ClientError, BotoCoreError) as exc:
+        if _is_missing_bucket_error(exc):
+            raise ValueError(f"The S3 bucket '{bucket}' does not exist.") from exc
+        if not _version_listing_fallback_allowed(exc):
+            _raise_s3_operation_error(
+                exc,
+                action=f"list object versions under prefix '{prefix}'",
+                bucket=bucket,
+            )
+        keys = list(iter_s3_keys(client, bucket, prefix))
+        return delete_s3_keys(client, bucket, keys)
+    if versions:
+        return delete_s3_objects(client, bucket, versions)
+    keys = list(iter_s3_keys(client, bucket, prefix))
+    return delete_s3_keys(client, bucket, keys)
+
+
+def delete_s3_bucket(settings: Settings, bucket: str) -> int:
+    client = s3_client(settings)
+    if not _bucket_is_accessible(client, bucket):
+        return 0
+    try:
+        versions = list(iter_s3_object_versions(client, bucket))
+    except (ClientError, BotoCoreError) as exc:
+        if _is_missing_bucket_error(exc):
+            raise ValueError(f"The S3 bucket '{bucket}' does not exist.") from exc
+        if not _version_listing_fallback_allowed(exc):
+            _raise_s3_operation_error(
+                exc,
+                action="list object versions",
+                bucket=bucket,
+            )
+        keys = list(iter_s3_keys(client, bucket))
+        return delete_s3_keys(client, bucket, keys)
+    if versions:
+        return delete_s3_objects(client, bucket, versions)
+    keys = list(iter_s3_keys(client, bucket))
+    return delete_s3_keys(client, bucket, keys)
+
+
 def list_s3_buckets(settings: Settings) -> list[str]:
     client = s3_client(settings)
     return list_s3_buckets_from_client(client)
@@ -299,13 +493,17 @@ def _bucket_is_accessible(client, bucket: str) -> bool:
         client.head_bucket(Bucket=bucket)
         return True
     except Exception as head_error:
+        if _is_missing_bucket_error(head_error):
+            return False
         try:
             client.list_objects_v2(Bucket=bucket, MaxKeys=1)
             return True
         except Exception as list_error:
-            if _is_missing_bucket_error(head_error) or _is_missing_bucket_error(list_error):
+            if _is_missing_bucket_error(list_error):
                 return False
-            raise list_error from head_error
+            raise ValueError(
+                f"Unable to access S3 bucket '{bucket}': {_s3_error_message(list_error)}"
+            ) from list_error
 
 
 def ensure_s3_bucket(
@@ -346,46 +544,41 @@ def ensure_s3_bucket(
     return created
 
 
-def delete_s3_keys(client, bucket: str, keys: list[str]) -> int:
-    if not keys:
-        return 0
-
-    deleted = 0
-    for index in range(0, len(keys), 1000):
-        chunk = keys[index : index + 1000]
-        client.delete_objects(
-            Bucket=bucket,
-            Delete={
-                "Objects": [{"Key": key} for key in chunk],
-                "Quiet": True,
-            },
-        )
-        deleted += len(chunk)
-    return deleted
-
-
-def delete_s3_prefix(settings: Settings, bucket: str, prefix: str) -> int:
-    client = s3_client(settings)
-    if not _bucket_is_accessible(client, bucket):
-        return 0
-    keys = list(iter_s3_keys(client, bucket, prefix))
-    return delete_s3_keys(client, bucket, keys)
-
-
-def delete_s3_bucket(settings: Settings, bucket: str) -> int:
-    client = s3_client(settings)
-    if not _bucket_is_accessible(client, bucket):
-        return 0
-    keys = list(iter_s3_keys(client, bucket))
-    return delete_s3_keys(client, bucket, keys)
+def _s3_error_message(error: Exception) -> str:
+    if not isinstance(error, ClientError):
+        return str(error)
+    error_info = error.response.get("Error", {})
+    code = str(error_info.get("Code") or "").strip()
+    message = str(error_info.get("Message") or "").strip()
+    if code and message:
+        return f"{code}: {message}"
+    if message:
+        return message
+    return code or str(error)
 
 
 def remove_s3_bucket(settings: Settings, bucket: str) -> bool:
     client = s3_client(settings)
     if not _bucket_is_accessible(client, bucket):
         return False
-    response = client.list_objects_v2(Bucket=bucket, MaxKeys=1)
+    try:
+        response = client.list_objects_v2(Bucket=bucket, MaxKeys=1)
+    except (ClientError, BotoCoreError) as exc:
+        if _is_missing_bucket_error(exc):
+            raise ValueError(f"The S3 bucket '{bucket}' does not exist.") from exc
+        _raise_s3_operation_error(
+            exc,
+            action="inspect bucket state",
+            bucket=bucket,
+        )
     if response.get("KeyCount") or response.get("Contents"):
         return False
-    client.delete_bucket(Bucket=bucket)
+    try:
+        client.delete_bucket(Bucket=bucket)
+    except (ClientError, BotoCoreError) as exc:
+        _raise_s3_operation_error(
+            exc,
+            action="delete the bucket",
+            bucket=bucket,
+        )
     return True

@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
         - name: duckdb
-          image: docker-hub.nexus.bit.admin.ch/svabra/tib-daail-evo1-poc-query-engine:0.3.32
+          image: docker-hub.nexus.bit.admin.ch/svabra/tib-daail-evo1-poc-query-engine:0.3.33
           imagePullPolicy: Always
           ports:
             - name: http

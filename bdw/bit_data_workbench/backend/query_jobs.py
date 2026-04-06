@@ -143,6 +143,8 @@ class QueryJobManager:
         notebook_title: str,
         cell_id: str,
         data_sources: list[str] | None = None,
+        touched_relations: list[str] | None = None,
+        touched_buckets: list[str] | None = None,
     ) -> QueryJobDefinition:
         normalized_sql = sql.strip()
         if not normalized_sql:
@@ -167,6 +169,8 @@ class QueryJobManager:
             message="Waiting to start.",
             data_sources=source_ids,
             source_types=source_types,
+            touched_relations=[str(value).strip() for value in (touched_relations or []) if str(value).strip()],
+            touched_buckets=[str(value).strip() for value in (touched_buckets or []) if str(value).strip()],
             backend_name=reporter.backend_name,
             can_cancel=True,
         )
@@ -270,6 +274,7 @@ class QueryJobManager:
                 source_id.strip().lower() == "pg_oltp_native"
                 for source_id in record.snapshot.data_sources
             )
+            first_row_ms: float | None = None
             connection = (
                 self._postgres_connection_factory("oltp")
                 if use_postgres_native
@@ -282,7 +287,7 @@ class QueryJobManager:
                 record.connection = connection
 
             def execute_query() -> None:
-                nonlocal execution_result, execution_error
+                nonlocal execution_result, execution_error, first_row_ms
                 try:
                     if use_postgres_native:
                         with connection.cursor() as cursor:
@@ -306,6 +311,9 @@ class QueryJobManager:
                                     batch = cursor.fetchmany(batch_size)
                                     if not batch:
                                         break
+                                    if first_row_ms is None:
+                                        first_row_ms = (time.perf_counter() - started) * 1000
+                                        self._patch_job(job_id, first_row_ms=first_row_ms)
                                     rows_buffer.extend(tuple(item) for item in batch)
                                     truncated = len(rows_buffer) > self._max_result_rows
                                     visible_rows = rows_buffer[: self._max_result_rows]
@@ -356,6 +364,9 @@ class QueryJobManager:
                                 batch = connection.fetchmany(batch_size)
                                 if not batch:
                                     break
+                                if first_row_ms is None:
+                                    first_row_ms = (time.perf_counter() - started) * 1000
+                                    self._patch_job(job_id, first_row_ms=first_row_ms)
                                 rows_buffer.extend(tuple(item) for item in batch)
                                 truncated = len(rows_buffer) > self._max_result_rows
                                 visible_rows = rows_buffer[: self._max_result_rows]
@@ -462,6 +473,8 @@ class QueryJobManager:
                 row_count=execution_result.row_count,
                 rows_shown=execution_result.row_count,
                 truncated=execution_result.truncated,
+                first_row_ms=first_row_ms,
+                fetch_ms=max(0.0, duration_ms - first_row_ms) if first_row_ms is not None else None,
             )
         except Exception as exc:
             self._finalize_job(

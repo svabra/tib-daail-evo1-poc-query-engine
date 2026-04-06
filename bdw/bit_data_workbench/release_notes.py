@@ -1,86 +1,177 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.3.32. Keep entries concise and
+# Derived from git history through version 0.3.33. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.3.33",
+        "releasedAt": "2026-04-06T18:07:12+02:00",
+        "features": [
+            (
+                "Workspace S3 buckets can now be created and deleted directly "
+                "from the sidebar, including recursive cleanup of versioned "
+                "buckets and object delete markers."
+            ),
+            (
+                "The S3 explorer delete flow now exposes clearer success and "
+                "failure feedback, and the sidebar bucket create/delete path "
+                "is covered by a Playwright smoke test."
+            ),
+            (
+                "Settings and notification popups no longer collapse while "
+                "moving the pointer from the topbar button into the popup "
+                "panel."
+            ),
+            (
+                "Local F5 startup now waits for MinIO and PostgreSQL "
+                "readiness and normalizes localhost S3 and PostgreSQL "
+                "endpoints more reliably for local runs."
+            ),
+        ],
+    },
     {
         "version": "0.3.32",
         "releasedAt": "2026-04-06T12:20:00+02:00",
         "features": [
-            "The navigation sidebar can now be resized at runtime, making it easier to inspect long notebook, table, and S3 object names without changing the default layout.",
-            "Concrete S3-backed source objects now expose a direct download action in the sidebar, so saved result files and other workspace objects can be retrieved without opening a notebook first.",
+            (
+                "The navigation sidebar can now be resized at runtime, making "
+                "it easier to inspect long notebook, table, and S3 object "
+                "names without changing the default layout."
+            ),
+            (
+                "Concrete S3-backed source objects now expose a direct "
+                "download action in the sidebar, so saved result files and "
+                "other workspace objects can be retrieved without opening a "
+                "notebook first."
+            ),
         ],
     },
     {
         "version": "0.3.31",
         "releasedAt": "2026-04-05T16:20:00+02:00",
         "features": [
-            "Performance Evaluation benchmarks are now split into Single-Table Test and Multi-Table Test folders, with a new multi-table federal-tax benchmark spanning DuckDB on S3, DuckDB on PostgreSQL, and PostgreSQL native execution.",
-            "Benchmark notebooks now explain the business semantics of the query, so users can see what each single-table and multi-table test is approximating.",
-            "Query results now use a single Export / Save menu for JSON, CSV, and Parquet downloads, and can be saved directly to S3 through a reusable explorer with bucket and folder creation.",
-            "Result export handling was hardened so downloads and S3 saves work reliably for completed query jobs, including DuckDB plus PostgreSQL benchmark runs.",
+            (
+                "Performance Evaluation benchmarks are now split into "
+                "Single-Table Test and Multi-Table Test folders, with a new "
+                "multi-table federal-tax benchmark spanning DuckDB on S3, "
+                "DuckDB on PostgreSQL, and PostgreSQL native execution."
+            ),
+            (
+                "Benchmark notebooks now explain the business semantics of "
+                "the query, so users can see what each single-table and "
+                "multi-table test is approximating."
+            ),
+            (
+                "Query results now use a single Export / Save menu for JSON, "
+                "CSV, and Parquet downloads, and can be saved directly to S3 "
+                "through a reusable explorer with bucket and folder creation."
+            ),
+            (
+                "Result export handling was hardened so downloads and S3 "
+                "saves work reliably for completed query jobs, including "
+                "DuckDB plus PostgreSQL benchmark runs."
+            ),
         ],
     },
     {
         "version": "0.3.30",
         "releasedAt": "2026-04-02T22:25:28+02:00",
         "features": [
-            "Running queries now show clearer progress feedback, including a percentage when the backend can provide one.",
-            "Queued or indeterminate queries now explain what the backend is doing instead of only showing a spinner.",
+            (
+                "Running queries now show clearer progress feedback, "
+                "including a percentage when the backend can provide one."
+            ),
+            (
+                "Queued or indeterminate queries now explain what the "
+                "backend is doing instead of only showing a spinner."
+            ),
         ],
     },
     {
         "version": "0.3.29",
         "releasedAt": "2026-04-02T22:01:16+02:00",
         "features": [
-            "Pinned DuckDB to 1.4.4 for a more stable and predictable runtime.",
-            "Aligned S3 integration with the pinned DuckDB version to reduce storage compatibility issues.",
+            (
+                "Pinned DuckDB to 1.4.4 for a more stable and predictable "
+                "runtime."
+            ),
+            (
+                "Aligned S3 integration with the pinned DuckDB version to "
+                "reduce storage compatibility issues."
+            ),
         ],
     },
     {
         "version": "0.3.28",
         "releasedAt": "2026-04-02T17:52:27+02:00",
         "features": [
-            "Adjusted S3 checksum handling to avoid compatibility failures on stricter object-storage endpoints.",
+            (
+                "Adjusted S3 checksum handling to avoid compatibility "
+                "failures on stricter object-storage endpoints."
+            ),
         ],
     },
     {
         "version": "0.3.27",
         "releasedAt": "2026-04-02T17:26:38+02:00",
         "features": [
-            "S3 loaders now upload through boto3, improving reliability when generated files are written to object storage.",
-            "Loader write and cleanup flow was hardened for S3-backed test data.",
+            (
+                "S3 loaders now upload through boto3, improving reliability "
+                "when generated files are written to object storage."
+            ),
+            (
+                "Loader write and cleanup flow was hardened for S3-backed "
+                "test data."
+            ),
         ],
     },
     {
         "version": "0.3.26",
         "releasedAt": "2026-04-02T17:02:20+02:00",
         "features": [
-            "Fixed cluster S3 URL-style handling to restore loader compatibility in RHOS/OpenShift environments.",
+            (
+                "Fixed cluster S3 URL-style handling to restore loader "
+                "compatibility in RHOS/OpenShift environments."
+            ),
         ],
     },
     {
         "version": "0.3.25",
         "releasedAt": "2026-04-02T16:42:25+02:00",
         "features": [
-            "Sidebar controls and navigation interactions were polished for quicker notebook browsing.",
+            (
+                "Sidebar controls and navigation interactions were polished "
+                "for quicker notebook browsing."
+            ),
         ],
     },
     {
         "version": "0.3.24",
         "releasedAt": "2026-04-02T16:31:26+02:00",
         "features": [
-            "Notebooks can be shared with all connected users and stay synchronized through server-side events.",
-            "Shared notebooks are marked in the sidebar and can be switched back to local mode.",
+            (
+                "Notebooks can be shared with all connected users and stay "
+                "synchronized through server-side events."
+            ),
+            (
+                "Shared notebooks are marked in the sidebar and can be "
+                "switched back to local mode."
+            ),
         ],
     },
     {
         "version": "0.3.23",
         "releasedAt": "2026-04-02T15:21:56+02:00",
         "features": [
-            "Startup diagnostics now print environment, config mounts, and certificate mapping more clearly.",
-            "Deployment issues around S3 certificates and mounted config are easier to troubleshoot.",
+            (
+                "Startup diagnostics now print environment, config mounts, "
+                "and certificate mapping more clearly."
+            ),
+            (
+                "Deployment issues around S3 certificates and mounted config "
+                "are easier to troubleshoot."
+            ),
         ],
     },
     {
@@ -88,15 +179,24 @@ RELEASE_NOTES: list[dict[str, object]] = [
         "releasedAt": "2026-04-02T15:17:53+02:00",
         "features": [
             "Empty S3 startup storage is seeded automatically when needed.",
-            "S3 Smoke and PG vs S3 Contest loaders now use separate buckets, so cleanup stays isolated.",
+            (
+                "S3 Smoke and PG vs S3 Contest loaders now use separate "
+                "buckets, so cleanup stays isolated."
+            ),
         ],
     },
     {
         "version": "0.3.21",
         "releasedAt": "2026-04-02T14:35:10+02:00",
         "features": [
-            "Improved RHOS/OpenShift S3 connectivity with mounted trust-store support and secret-backed credentials.",
-            "Safer HTTPS and transport defaults reduce cluster S3 setup issues.",
+            (
+                "Improved RHOS/OpenShift S3 connectivity with mounted "
+                "trust-store support and secret-backed credentials."
+            ),
+            (
+                "Safer HTTPS and transport defaults reduce cluster S3 setup "
+                "issues."
+            ),
         ],
     },
 ]

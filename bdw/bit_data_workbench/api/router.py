@@ -9,7 +9,9 @@ from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Requ
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
+from botocore.exceptions import BotoCoreError
 from pydantic import BaseModel, Field
+from botocore.exceptions import ClientError
 from starlette.background import BackgroundTask
 
 from ..backend.service import WorkbenchService
@@ -55,6 +57,12 @@ class S3FolderCreatePayload(BaseModel):
     bucket: str = ""
     prefix: str = ""
     folder_name: str = Field(alias="folderName")
+
+
+class S3ExplorerDeletePayload(BaseModel):
+    entry_kind: str = Field(alias="entryKind")
+    bucket: str = ""
+    prefix: str = ""
 
 
 class QueryResultS3ExportPayload(BaseModel):
@@ -145,6 +153,23 @@ def create_s3_folder(
             folder_name=payload.folder_name,
         )
     except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(result))
+
+
+@router.delete("/api/s3/explorer/entries")
+def delete_s3_explorer_entry(
+    payload: S3ExplorerDeletePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        result = service.delete_s3_explorer_entry(
+            entry_kind=payload.entry_kind,
+            bucket=payload.bucket,
+            prefix=payload.prefix,
+        )
+    except (ValueError, ClientError, BotoCoreError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return JSONResponse(jsonable_encoder(result))

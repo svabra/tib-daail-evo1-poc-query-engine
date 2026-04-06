@@ -359,6 +359,9 @@ def cross_database_union_dataset_select(start_row: int, end_row: int, profile: s
     elif normalized_profile == "olap":
         seed = 47
         channel_shift = 2
+    elif normalized_profile == "s3":
+        seed = 83
+        channel_shift = 1
     else:
         raise ValueError(f"Unsupported cross-database union profile: {profile}")
 

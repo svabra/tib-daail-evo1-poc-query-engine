@@ -915,6 +915,13 @@ class DataSourceDiscoveryManager:
         self._apply_result(result, emit_event=False)
         return self.state_payload()
 
+    def sync_source(self, source_id: str, *, emit_event: bool = True) -> dict[str, Any]:
+        discoverer = self._discoverers_by_source_id.get(source_id)
+        if discoverer is None:
+            raise KeyError(f"Unknown data source: {source_id}")
+        self._sync_discoverer(discoverer, emit_event=emit_event)
+        return self.state_payload()
+
     def s3_relation_spec(self, relation_id: str) -> DiscoveredRelationSpec | None:
         discoverer = self._discoverers_by_source_id.get("workspace.s3")
         if not isinstance(discoverer, S3DataSourceDiscoverer):

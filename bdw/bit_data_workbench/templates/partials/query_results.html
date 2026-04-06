@@ -3,7 +3,9 @@
   <header class="result-header">
     <div class="result-header-copy">
       <h3>Result</h3>
-      <p class="result-meta">{{ "%.1f"|format(query_result.duration_ms) }} ms</p>
+      <div class="result-meta-row">
+        <p class="result-meta">{{ "%.1f"|format(query_result.duration_ms) }} ms</p>
+      </div>
     </div>
     <div class="result-header-actions">
       {% if query_result.message %}
