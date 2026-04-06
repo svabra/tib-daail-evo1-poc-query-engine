@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 WORKBENCH_ENVIRONMENT_VARIABLES = (
+    "BDW_ENABLE_FILE_LOGGING",
     "IMAGE_VERSION",
     "PORT",
     "DUCKDB_DATABASE",

@@ -1401,6 +1401,14 @@ details:not([open]) > .source-schema > summary::before {
   flex: 0 0 auto;
 }
 
+.source-catalog-meta .source-connection-actions {
+  order: 1;
+}
+
+.source-catalog-meta .source-connection-status {
+  order: 2;
+}
+
 .source-schema-meta {
   display: inline-flex;
   align-items: center;

@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 
 ARG DUCKDB_VERSION=1.4.4
-ARG IMAGE_VERSION=0.3.32
+ARG IMAGE_VERSION=0.3.35
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -42,7 +42,10 @@ PY
 
 COPY bdw /app
 
+RUN chgrp -R 0 /app /opt/duckdb \
+    && chmod -R g=u /app /opt/duckdb
+
 EXPOSE 8000
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["uvicorn", "bit_data_workbench.main:app", "--host", "0.0.0.0", "--port", "8000", "--log-config", "logging.json"]
+CMD ["python", "-m", "bit_data_workbench.launcher"]

@@ -1,9 +1,35 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.3.34. Keep entries concise and
+# Derived from git history through version 0.3.35. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.3.35",
+        "releasedAt": "2026-04-06T23:19:27+02:00",
+        "features": [
+            (
+                "Production container runs now default to console logging, "
+                "so Kubernetes or OpenShift can collect stdout and stderr "
+                "without requiring writable in-container log files."
+            ),
+            (
+                "Local development can still opt into file logging through "
+                "an explicit launcher setting, preserving the existing "
+                "logs/bdw/server.log workflow for developers."
+            ),
+            (
+                "A launcher test suite now verifies that file logging stays "
+                "disabled by default and is only enabled when explicitly "
+                "requested."
+            ),
+            (
+                "Sidebar source status icons now stay vertically aligned on "
+                "the far right even when only some data sources expose "
+                "persistent action buttons."
+            ),
+        ],
+    },
     {
         "version": "0.3.34",
         "releasedAt": "2026-04-06T21:57:11+02:00",

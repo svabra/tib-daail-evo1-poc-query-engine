@@ -70,6 +70,7 @@ Optional custom port:
 
 This starts `uvicorn --reload`, so Python, template, CSS and JS changes are picked up without a manual restart. The script uses port `8000` by default and frees that port first by stopping the local `bit-data-workbench` Docker container or any remaining listener process on the same port.
 Runtime logs now live under `logs/<context>/`. The BDW app writes to `logs/bdw/server.log`, and `.\scripts\cleanup-logs.ps1` migrates older scattered `.log` files into the matching context folders.
+File logging is intended for local development only. In containerized production runs, the BDW image defaults to console logging so Kubernetes or OpenShift can collect stdout and stderr directly.
 
 If you want to launch the app directly from VS Code with `F5`, use the checked-in `DAAIFL Workbench` launch configuration. It uses the workspace venv, brings up only the local dependency stack, stops the Docker app container if it is holding port `8000`, opens the browser automatically, and runs on `http://127.0.0.1:8000` with a dedicated local DuckDB file (`workspace/bit-data-workbench.f5.duckdb`).
 
@@ -142,6 +143,7 @@ The left navigation shows the currently available sources:
 The same environment variable names are used locally and in Kubernetes/OpenShift:
 
 ```text
+BDW_ENABLE_FILE_LOGGING
 DUCKDB_DATABASE
 DUCKDB_EXTENSION_DIRECTORY
 MAX_RESULT_ROWS
@@ -227,7 +229,7 @@ The practical rule is simple: the app does not detect "where it is" by hostname.
 Build locally:
 
 ```bash
-docker build -f bdw/Dockerfile -t bit-data-workbench:0.3.33 .
+docker build -f bdw/Dockerfile -t bit-data-workbench:0.3.35 .
 ```
 
 Run directly without Compose-managed service wiring:
@@ -238,7 +240,7 @@ docker run --rm -d ^
   -p 8000:8000 ^
   -v "%cd%\\logs:/app/logs" ^
   -v "%cd%\\workspace:/workspace" ^
-  -e IMAGE_VERSION=0.3.33 ^
+  -e IMAGE_VERSION=0.3.35 ^
   -e DUCKDB_DATABASE=/workspace/bit-data-workbench.duckdb ^
   -e DUCKDB_EXTENSION_DIRECTORY=/opt/duckdb/extensions ^
   -e S3_ENDPOINT=minio:9000 ^
@@ -256,7 +258,7 @@ docker run --rm -d ^
   -e PG_PASSWORD=evo1 ^
   -e PG_OLTP_DATABASE=evo1_oltp ^
   -e PG_OLAP_DATABASE=evo1_olap ^
-  bit-data-workbench:0.3.33
+  bit-data-workbench:0.3.35
 ```
 
 ### TODO
@@ -283,7 +285,7 @@ The route is an OpenShift `edge` route and exposes the HTTP service externally t
 Current image:
 
 ```text
-docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.33
+docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.3.35
 ```
 
 ### RHOS S3 Authentication
