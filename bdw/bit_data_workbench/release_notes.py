@@ -1,9 +1,21 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.4.0. Keep entries concise and
+# Derived from git history through version 0.4.1. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.4.1",
+        "releasedAt": "2026-04-07T01:14:29+02:00",
+        "features": [
+            (
+                "Opening the Ingestion Workbench now immediately reopens "
+                "the ingestion navigation, uncollapses the sidebar, and "
+                "expands the selected runbook path when a generator is in "
+                "focus."
+            ),
+        ],
+    },
     {
         "version": "0.4.0",
         "releasedAt": "2026-04-07T00:38:59+02:00",

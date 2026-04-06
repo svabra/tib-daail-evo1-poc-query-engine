@@ -723,6 +723,23 @@ function openNotebookNavigation(notebookId = "") {
   }
 }
 
+function openIngestionNavigation(generatorId = "") {
+  setShellSidebarHidden(false);
+  applySidebarCollapsedState(false);
+  writeSidebarCollapsed(false);
+  ingestionRunbookSection()?.setAttribute("open", "");
+
+  if (!generatorId) {
+    return;
+  }
+
+  const activeRunbookLink = Array.from(document.querySelectorAll("[data-open-ingestion-runbook]"))
+    .find((button) => (button.dataset.openIngestionRunbook || "") === generatorId);
+  if (activeRunbookLink) {
+    openRunbookAncestors(activeRunbookLink);
+  }
+}
+
 function syncShellVisibility() {
   if (homePageRoot() || queryWorkbenchEntryPageRoot() || queryWorkbenchDataSourcesPageRoot()) {
     setShellSidebarHidden(true);
@@ -9994,6 +10011,8 @@ async function openIngestionWorkbench({ focusJobId = "", focusGeneratorId = "" }
     return;
   }
 
+  openIngestionNavigation();
+
   const response = await window.fetch("/ingestion-workbench", {
     headers: { "HX-Request": "true" },
   });
@@ -10019,6 +10038,7 @@ async function openIngestionWorkbench({ focusJobId = "", focusGeneratorId = "" }
     syncSelectedIngestionRunbookState();
     renderDataGenerationMonitor();
   }
+  openIngestionNavigation(selectedGeneratorId || focusGeneratorId);
   renderQueryNotificationMenu();
 
   if (focusJobId) {
