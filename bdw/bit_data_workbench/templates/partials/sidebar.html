@@ -215,7 +215,7 @@
                 </svg>
                 <span>{{ catalog_display_name }}</span>
               </span>
-              {% if catalog.connection_label or catalog.connection_controls_enabled or catalog.name == "workspace" %}
+              {% if catalog.connection_label or catalog.connection_controls_enabled or catalog.name == "workspace" or catalog_source_id == "workspace.local" %}
                 <span
                   class="source-catalog-meta"
                   data-source-catalog-meta
@@ -235,7 +235,7 @@
                       </svg>
                     </span>
                   {% endif %}
-                  {% if catalog.connection_controls_enabled %}
+                  {% if catalog.connection_controls_enabled or catalog.name == "workspace" or catalog_source_id == "workspace.local" %}
                     <span class="source-connection-actions" data-source-connection-actions>
                       {% if catalog.name == "workspace" %}
                         <button
@@ -248,35 +248,48 @@
                           +
                         </button>
                       {% endif %}
-                      <button
-                        type="button"
-                        class="source-control-button source-control-button-connect"
-                        data-source-connect="{{ catalog_source_id }}"
-                        title="Connect {{ catalog_display_name }}"
-                        aria-label="Connect {{ catalog_display_name }}"
-                      >
-                        <svg class="source-control-icon" viewBox="0 0 16 16" aria-hidden="true">
-                          <path d="M6.5 3.5v3"></path>
-                          <path d="M9.5 3.5v3"></path>
-                          <path d="M5 6.5h6v2a3 3 0 0 1-6 0z"></path>
-                          <path d="M8 11.5v1.8"></path>
-                        </svg>
-                      </button>
-                      <button
-                        type="button"
-                        class="source-control-button source-control-button-disconnect"
-                        data-source-disconnect="{{ catalog_source_id }}"
-                        title="Disconnect {{ catalog_display_name }}"
-                        aria-label="Disconnect {{ catalog_display_name }}"
-                      >
-                        <svg class="source-control-icon" viewBox="0 0 16 16" aria-hidden="true">
-                          <path d="M6.5 3.5v3"></path>
-                          <path d="M9.5 3.5v3"></path>
-                          <path d="M5 6.5h6v2a3 3 0 0 1-6 0z"></path>
-                          <path d="M8 11.5v1.8"></path>
-                          <path d="M3.2 12.8L12.8 3.2"></path>
-                        </svg>
-                      </button>
+                      {% if catalog_source_id == "workspace.local" %}
+                        <button
+                          type="button"
+                          class="source-control-button source-control-button-create"
+                          data-create-local-workspace-root-folder
+                          title="Create Local Workspace folder"
+                          aria-label="Create Local Workspace folder"
+                        >
+                          +
+                        </button>
+                      {% endif %}
+                      {% if catalog.connection_controls_enabled %}
+                        <button
+                          type="button"
+                          class="source-control-button source-control-button-connect"
+                          data-source-connect="{{ catalog_source_id }}"
+                          title="Connect {{ catalog_display_name }}"
+                          aria-label="Connect {{ catalog_display_name }}"
+                        >
+                          <svg class="source-control-icon" viewBox="0 0 16 16" aria-hidden="true">
+                            <path d="M6.5 3.5v3"></path>
+                            <path d="M9.5 3.5v3"></path>
+                            <path d="M5 6.5h6v2a3 3 0 0 1-6 0z"></path>
+                            <path d="M8 11.5v1.8"></path>
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          class="source-control-button source-control-button-disconnect"
+                          data-source-disconnect="{{ catalog_source_id }}"
+                          title="Disconnect {{ catalog_display_name }}"
+                          aria-label="Disconnect {{ catalog_display_name }}"
+                        >
+                          <svg class="source-control-icon" viewBox="0 0 16 16" aria-hidden="true">
+                            <path d="M6.5 3.5v3"></path>
+                            <path d="M9.5 3.5v3"></path>
+                            <path d="M5 6.5h6v2a3 3 0 0 1-6 0z"></path>
+                            <path d="M8 11.5v1.8"></path>
+                            <path d="M3.2 12.8L12.8 3.2"></path>
+                          </svg>
+                        </button>
+                      {% endif %}
                     </span>
                   {% endif %}
                 </span>

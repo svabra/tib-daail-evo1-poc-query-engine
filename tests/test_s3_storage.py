@@ -29,7 +29,7 @@ def build_settings():
     return settings_type(
         service_name="bit-data-workbench",
         ui_title="DAAIFL Workbench",
-        image_version="0.4.2",
+        image_version="0.4.3",
         port=8000,
         duckdb_database=Path("/tmp/workspace/workspace.duckdb"),
         duckdb_extension_directory=Path("/opt/duckdb/extensions"),

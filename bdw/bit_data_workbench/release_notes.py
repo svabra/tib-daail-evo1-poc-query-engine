@@ -1,9 +1,30 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.4.2. Keep entries concise and
+# Derived from git history through version 0.4.3. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.4.3",
+        "releasedAt": "2026-04-09T22:03:37.7329770+02:00",
+        "features": [
+            (
+                "Local Workspace saved results now render as a folder tree "
+                "in the sidebar, with persistent browser-local folders kept "
+                "across reloads in IndexedDB-backed UI state."
+            ),
+            (
+                "Users can now create and delete Local Workspace folders "
+                "directly from the sidebar, including nested folders and "
+                "branch cleanup for browser-local saved files."
+            ),
+            (
+                "Saved Local Workspace files can now be moved or renamed "
+                "from the sidebar, and the new folder-management flows are "
+                "covered by focused Playwright smoke scripts."
+            ),
+        ],
+    },
     {
         "version": "0.4.2",
         "releasedAt": "2026-04-09T13:04:44+02:00",

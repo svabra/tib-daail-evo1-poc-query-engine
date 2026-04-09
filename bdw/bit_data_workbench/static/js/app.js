@@ -58,6 +58,13 @@ const localWorkspaceSaveDialogState = {
   saving: false,
   createdFolderPaths: [],
 };
+const localWorkspaceMoveDialogState = {
+  entryId: "",
+  fileName: "",
+  folderPath: "",
+  moving: false,
+  createdFolderPaths: [],
+};
 const sidebarMinWidth = 360;
 const sidebarMaxWidth = 720;
 const sidebarResizeStep = 32;
@@ -79,6 +86,7 @@ const cacheResetStorageKey = "bdw.cacheReset.v1";
 const localWorkspaceDatabaseName = "bdw.localWorkspace.v1";
 const localWorkspaceDatabaseVersion = 1;
 const localWorkspaceExportStoreName = "exports";
+const localWorkspaceFolderStorageKey = "bdw.localWorkspaceFolders.v1";
 const localWorkspaceCatalogSourceId = "workspace.local";
 const localWorkspaceSchemaKey = "workspace_local::saved-results";
 const localWorkspaceRelationPrefix = "workspace.local.saved_results.";
@@ -244,6 +252,10 @@ function resultExportDialog() {
 
 function localWorkspaceSaveDialog() {
   return document.querySelector("[data-local-workspace-save-dialog]");
+}
+
+function localWorkspaceMoveDialog() {
+  return document.querySelector("[data-local-workspace-move-dialog]");
 }
 
 function appendModalDialog(markup) {
@@ -538,6 +550,90 @@ function ensureLocalWorkspaceSaveDialog() {
   `);
 
   dialog = localWorkspaceSaveDialog();
+  return dialog;
+}
+
+function ensureLocalWorkspaceMoveDialog() {
+  let dialog = localWorkspaceMoveDialog();
+  if (dialog) {
+    return dialog;
+  }
+
+  appendModalDialog(`
+    <dialog class="modal-dialog modal-dialog-wide" data-local-workspace-move-dialog>
+      <form method="dialog" class="modal-card modal-card-wide result-export-dialog-card" data-local-workspace-move-form>
+        <div class="result-export-dialog-header">
+          <div class="result-export-dialog-copy">
+            <h2 class="modal-title" data-local-workspace-move-title>Move Local Workspace file</h2>
+            <p class="modal-copy" data-local-workspace-move-copy>
+              Choose the destination folder in this browser and optionally rename the file.
+            </p>
+          </div>
+          <div class="result-export-dialog-toolbar">
+            <button type="button" class="modal-button modal-button-secondary" data-local-workspace-move-create-folder>
+              New folder
+            </button>
+          </div>
+        </div>
+        <div class="result-export-dialog-body">
+          <section class="result-export-explorer-panel">
+            <div class="result-export-explorer-header">
+              <span
+                class="workspace-tags-label"
+                title="Local Workspace data is stored in this browser profile using IndexedDB."
+              >Local Workspace Folders</span>
+              <div class="result-export-breadcrumbs" data-local-workspace-move-breadcrumbs></div>
+            </div>
+            <div class="result-export-explorer-shell">
+              <div class="local-workspace-folder-list" data-local-workspace-move-folder-list></div>
+            </div>
+          </section>
+          <aside class="result-export-target-panel">
+            <div class="result-export-target-card">
+              <span class="workspace-tags-label">Destination</span>
+              <p class="result-export-target-path" data-local-workspace-move-selected-path>
+                Local Workspace /
+              </p>
+            </div>
+            <label class="result-export-field">
+              <span class="result-export-field-label">Folder path</span>
+              <input
+                class="modal-input"
+                type="text"
+                data-local-workspace-move-folder-path
+                autocomplete="off"
+                placeholder="optional/subfolder"
+              >
+            </label>
+            <label class="result-export-field">
+              <span class="result-export-field-label">File name</span>
+              <input
+                class="modal-input"
+                type="text"
+                data-local-workspace-move-file-name
+                autocomplete="off"
+                placeholder="query-result.parquet"
+              >
+            </label>
+            <div class="result-export-target-card">
+              <span class="workspace-tags-label">Action</span>
+              <p class="result-export-target-path">Move the stored file within this browser's Local Workspace.</p>
+            </div>
+          </aside>
+        </div>
+        <menu class="modal-actions">
+          <button class="modal-button modal-button-secondary" type="button" data-modal-cancel>
+            Cancel
+          </button>
+          <button class="modal-button" type="submit" value="confirm" data-local-workspace-move-submit disabled>
+            Move file
+          </button>
+        </menu>
+      </form>
+    </dialog>
+  `);
+
+  dialog = localWorkspaceMoveDialog();
   return dialog;
 }
 
@@ -1817,6 +1913,105 @@ function localWorkspaceFolderDepth(folderPath = "") {
   return normalizedFolderPath ? normalizedFolderPath.split("/").length : 0;
 }
 
+function readLocalWorkspaceStoredFolderPaths() {
+  try {
+    const rawValue = window.localStorage.getItem(localWorkspaceFolderStorageKey);
+    if (!rawValue) {
+      return [];
+    }
+
+    const parsed = JSON.parse(rawValue);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function writeLocalWorkspaceStoredFolderPaths(folderPaths = []) {
+  try {
+    const normalizedPaths = localWorkspaceFolderPaths(folderPaths).filter(Boolean);
+    if (!normalizedPaths.length) {
+      window.localStorage.removeItem(localWorkspaceFolderStorageKey);
+      return;
+    }
+
+    window.localStorage.setItem(localWorkspaceFolderStorageKey, JSON.stringify(normalizedPaths));
+  } catch (_error) {
+    // Ignore persistence failures and keep the browser-local workspace usable.
+  }
+}
+
+function localWorkspaceStoredFolderPaths() {
+  return localWorkspaceFolderPaths(readLocalWorkspaceStoredFolderPaths()).filter(Boolean);
+}
+
+function allLocalWorkspaceFolderPaths(paths = []) {
+  return localWorkspaceFolderPaths([...paths, ...localWorkspaceStoredFolderPaths()]);
+}
+
+function localWorkspaceParentFolderPath(folderPath = "") {
+  const segments = normalizeLocalWorkspaceFolderPath(folderPath)
+    .split("/")
+    .filter(Boolean);
+  if (!segments.length) {
+    return "";
+  }
+
+  segments.pop();
+  return segments.join("/");
+}
+
+function localWorkspaceFolderContainsPath(folderPath = "", candidatePath = "") {
+  const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(folderPath);
+  const normalizedCandidatePath = normalizeLocalWorkspaceFolderPath(candidatePath);
+  if (!normalizedFolderPath) {
+    return !normalizedCandidatePath;
+  }
+  return (
+    normalizedCandidatePath === normalizedFolderPath ||
+    normalizedCandidatePath.startsWith(`${normalizedFolderPath}/`)
+  );
+}
+
+function ensureLocalWorkspaceFolderPath(folderPath = "") {
+  const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(folderPath);
+  if (!normalizedFolderPath) {
+    return localWorkspaceStoredFolderPaths();
+  }
+
+  const nextPaths = localWorkspaceFolderPaths([
+    ...localWorkspaceStoredFolderPaths(),
+    normalizedFolderPath,
+  ]).filter(Boolean);
+  writeLocalWorkspaceStoredFolderPaths(nextPaths);
+  return nextPaths;
+}
+
+function removeLocalWorkspaceFolderBranch(folderPath = "") {
+  const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(folderPath);
+  if (!normalizedFolderPath) {
+    writeLocalWorkspaceStoredFolderPaths([]);
+    return [];
+  }
+
+  const nextPaths = localWorkspaceStoredFolderPaths().filter(
+    (path) => !localWorkspaceFolderContainsPath(normalizedFolderPath, path)
+  );
+  writeLocalWorkspaceStoredFolderPaths(nextPaths);
+  return nextPaths;
+}
+
+function closestExistingLocalWorkspaceFolderPath(folderPath = "", availablePaths = []) {
+  const normalizedAvailablePaths = new Set(allLocalWorkspaceFolderPaths(availablePaths));
+  let currentPath = normalizeLocalWorkspaceFolderPath(folderPath);
+
+  while (currentPath && !normalizedAvailablePaths.has(currentPath)) {
+    currentPath = localWorkspaceParentFolderPath(currentPath);
+  }
+
+  return normalizedAvailablePaths.has(currentPath) ? currentPath : "";
+}
+
 function localWorkspaceRelation(entryId) {
   return `${localWorkspaceRelationPrefix}${String(entryId || "").trim()}`;
 }
@@ -2105,7 +2300,7 @@ async function renderLocalWorkspaceSaveFolderList() {
   }
 
   const entries = await listLocalWorkspaceExports();
-  const folderPaths = localWorkspaceFolderPaths([
+  const folderPaths = allLocalWorkspaceFolderPaths([
     ...entries.map((entry) => entry.folderPath),
     ...localWorkspaceSaveDialogState.createdFolderPaths,
   ]);
@@ -2114,28 +2309,15 @@ async function renderLocalWorkspaceSaveFolderList() {
 }
 
 async function createLocalWorkspaceFolderFromDialog() {
-  const parentPath = localWorkspaceSaveDialogState.folderPath;
-  const folderName = await showFolderNameDialog({
-    title: "New Local Workspace folder",
-    copy: `Create a folder under ${localWorkspaceDisplayPath(parentPath)}.`,
-    submitLabel: "Create folder",
+  const createdPath = await createLocalWorkspaceFolder(localWorkspaceSaveDialogState.folderPath, {
+    confirmCreation: false,
+    showSidebarStatus: false,
+    revealSidebar: false,
   });
-  if (!folderName) {
-    return;
+  if (createdPath) {
+    localWorkspaceSaveDialogState.folderPath = createdPath;
+    await renderLocalWorkspaceSaveFolderList();
   }
-
-  const nextPath = normalizeLocalWorkspaceFolderPath(
-    parentPath ? `${parentPath}/${folderName}` : folderName
-  );
-  if (!nextPath) {
-    return;
-  }
-
-  if (!localWorkspaceSaveDialogState.createdFolderPaths.includes(nextPath)) {
-    localWorkspaceSaveDialogState.createdFolderPaths.push(nextPath);
-  }
-  localWorkspaceSaveDialogState.folderPath = nextPath;
-  await renderLocalWorkspaceSaveFolderList();
 }
 
 async function openLocalWorkspaceSaveDialog(job, exportFormat) {
@@ -2167,6 +2349,221 @@ async function openLocalWorkspaceSaveDialog(job, exportFormat) {
   syncLocalWorkspaceSaveDialogState();
   dialog.showModal();
   await renderLocalWorkspaceSaveFolderList();
+}
+
+function localWorkspaceMoveFolderListRoot() {
+  return localWorkspaceMoveDialog()?.querySelector("[data-local-workspace-move-folder-list]") ?? null;
+}
+
+function localWorkspaceMoveBreadcrumbRoot() {
+  return localWorkspaceMoveDialog()?.querySelector("[data-local-workspace-move-breadcrumbs]") ?? null;
+}
+
+function localWorkspaceMoveSelectedPathNode() {
+  return localWorkspaceMoveDialog()?.querySelector("[data-local-workspace-move-selected-path]") ?? null;
+}
+
+function localWorkspaceMoveFolderPathInput() {
+  return localWorkspaceMoveDialog()?.querySelector("[data-local-workspace-move-folder-path]") ?? null;
+}
+
+function localWorkspaceMoveFileNameInput() {
+  return localWorkspaceMoveDialog()?.querySelector("[data-local-workspace-move-file-name]") ?? null;
+}
+
+function localWorkspaceMoveSubmitButton() {
+  return localWorkspaceMoveDialog()?.querySelector("[data-local-workspace-move-submit]") ?? null;
+}
+
+function localWorkspaceMoveFolderOptionMarkup(folderPath) {
+  const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(folderPath);
+  const depth = localWorkspaceFolderDepth(normalizedFolderPath);
+  const selected = normalizedFolderPath === localWorkspaceMoveDialogState.folderPath;
+  const locationCopy = localWorkspaceDisplayPath(normalizedFolderPath);
+
+  return `
+    <button
+      type="button"
+      class="local-workspace-folder-option${selected ? " is-selected" : ""}"
+      data-local-workspace-move-folder-option
+      data-local-workspace-folder-path="${escapeHtml(normalizedFolderPath)}"
+      style="--local-workspace-folder-depth: ${escapeHtml(String(depth))}"
+      title="${escapeHtml(locationCopy)}"
+    >
+      <span class="local-workspace-folder-option-name">${escapeHtml(localWorkspaceFolderName(normalizedFolderPath))}</span>
+      <span class="local-workspace-folder-option-path">${escapeHtml(locationCopy)}</span>
+    </button>
+  `;
+}
+
+function localWorkspaceMoveFolderListMarkup(folderPaths) {
+  if (!folderPaths.length) {
+    return '<p class="local-workspace-folder-empty">No Local Workspace folders exist yet. Move into Root or create a new folder.</p>';
+  }
+
+  return folderPaths.map((folderPath) => localWorkspaceMoveFolderOptionMarkup(folderPath)).join("");
+}
+
+function renderLocalWorkspaceMoveBreadcrumbs(folderPath = "") {
+  const root = localWorkspaceMoveBreadcrumbRoot();
+  if (!(root instanceof Element)) {
+    return;
+  }
+
+  const segments = normalizeLocalWorkspaceFolderPath(folderPath)
+    .split("/")
+    .filter(Boolean);
+  const crumbs = [
+    { label: "Local Workspace", path: "" },
+    ...segments.map((segment, index) => ({
+      label: segment,
+      path: segments.slice(0, index + 1).join("/"),
+    })),
+  ];
+
+  root.innerHTML = crumbs
+    .map((crumb, index) => {
+      const current = index === crumbs.length - 1;
+      return `
+        <button
+          type="button"
+          class="result-export-breadcrumb${current ? " is-current" : ""}"
+          data-local-workspace-move-breadcrumb
+          data-local-workspace-folder-path="${escapeHtml(crumb.path)}"
+          ${current ? "aria-current=\"true\"" : ""}
+        >${escapeHtml(crumb.label)}</button>
+        ${current ? "" : '<span class="result-export-breadcrumb-separator" aria-hidden="true">/</span>'}
+      `;
+    })
+    .join("");
+}
+
+function syncLocalWorkspaceMoveDialogState() {
+  const dialog = localWorkspaceMoveDialog();
+  if (!dialog) {
+    return;
+  }
+
+  localWorkspaceMoveDialogState.folderPath = normalizeLocalWorkspaceFolderPath(
+    localWorkspaceMoveDialogState.folderPath
+  );
+  renderLocalWorkspaceMoveBreadcrumbs(localWorkspaceMoveDialogState.folderPath);
+
+  const selectedPathNode = localWorkspaceMoveSelectedPathNode();
+  if (selectedPathNode) {
+    selectedPathNode.textContent = localWorkspaceDisplayPath(
+      localWorkspaceMoveDialogState.folderPath,
+      localWorkspaceMoveDialogState.fileName
+    );
+  }
+
+  const folderPathInput = localWorkspaceMoveFolderPathInput();
+  if (folderPathInput && folderPathInput.value !== localWorkspaceMoveDialogState.folderPath) {
+    folderPathInput.value = localWorkspaceMoveDialogState.folderPath;
+  }
+
+  const fileNameInput = localWorkspaceMoveFileNameInput();
+  if (fileNameInput && fileNameInput.value !== localWorkspaceMoveDialogState.fileName) {
+    fileNameInput.value = localWorkspaceMoveDialogState.fileName;
+  }
+
+  const submitButton = localWorkspaceMoveSubmitButton();
+  if (submitButton) {
+    submitButton.disabled =
+      localWorkspaceMoveDialogState.moving ||
+      !String(localWorkspaceMoveDialogState.fileName || "").trim();
+    submitButton.textContent = localWorkspaceMoveDialogState.moving ? "Moving..." : "Move file";
+  }
+
+  dialog.querySelectorAll("[data-local-workspace-move-folder-option]").forEach((node) => {
+    const selected =
+      normalizeLocalWorkspaceFolderPath(node.dataset.localWorkspaceFolderPath || "") ===
+      localWorkspaceMoveDialogState.folderPath;
+    node.classList.toggle("is-selected", selected);
+  });
+}
+
+function setLocalWorkspaceMoveDialogBusy(busy) {
+  localWorkspaceMoveDialogState.moving = busy;
+  const dialog = localWorkspaceMoveDialog();
+  if (dialog) {
+    const createFolderButton = dialog.querySelector("[data-local-workspace-move-create-folder]");
+    if (createFolderButton instanceof HTMLButtonElement) {
+      createFolderButton.disabled = busy;
+    }
+
+    const folderPathInput = localWorkspaceMoveFolderPathInput();
+    if (folderPathInput instanceof HTMLInputElement) {
+      folderPathInput.disabled = busy;
+    }
+
+    const fileNameInput = localWorkspaceMoveFileNameInput();
+    if (fileNameInput instanceof HTMLInputElement) {
+      fileNameInput.disabled = busy;
+    }
+  }
+
+  syncLocalWorkspaceMoveDialogState();
+}
+
+async function renderLocalWorkspaceMoveFolderList() {
+  const root = localWorkspaceMoveFolderListRoot();
+  if (!(root instanceof Element)) {
+    return;
+  }
+
+  const entries = await listLocalWorkspaceExports();
+  const folderPaths = allLocalWorkspaceFolderPaths([
+    ...entries.map((entry) => entry.folderPath),
+    ...localWorkspaceMoveDialogState.createdFolderPaths,
+  ]);
+  root.innerHTML = localWorkspaceMoveFolderListMarkup(folderPaths);
+  syncLocalWorkspaceMoveDialogState();
+}
+
+async function createLocalWorkspaceFolderFromMoveDialog() {
+  const createdPath = await createLocalWorkspaceFolder(localWorkspaceMoveDialogState.folderPath, {
+    confirmCreation: false,
+    showSidebarStatus: false,
+    revealSidebar: false,
+  });
+  if (createdPath) {
+    localWorkspaceMoveDialogState.folderPath = createdPath;
+    await renderLocalWorkspaceMoveFolderList();
+  }
+}
+
+async function openLocalWorkspaceMoveDialog(sourceObjectRoot) {
+  const entryId = localWorkspaceEntryIdFromSourceObject(sourceObjectRoot);
+  if (!entryId) {
+    return false;
+  }
+
+  const entry = await getLocalWorkspaceExport(entryId);
+  if (!entry) {
+    return false;
+  }
+
+  const dialog = ensureLocalWorkspaceMoveDialog();
+  localWorkspaceMoveDialogState.entryId = entry.id;
+  localWorkspaceMoveDialogState.fileName = entry.fileName;
+  localWorkspaceMoveDialogState.folderPath = normalizeLocalWorkspaceFolderPath(entry.folderPath);
+  localWorkspaceMoveDialogState.moving = false;
+  localWorkspaceMoveDialogState.createdFolderPaths = [];
+
+  const titleNode = dialog.querySelector("[data-local-workspace-move-title]");
+  const copyNode = dialog.querySelector("[data-local-workspace-move-copy]");
+  if (titleNode) {
+    titleNode.textContent = "Move Local Workspace file";
+  }
+  if (copyNode) {
+    copyNode.textContent = `Move ${entry.fileName} to another Local Workspace folder in this browser and optionally rename it.`;
+  }
+
+  syncLocalWorkspaceMoveDialogState();
+  dialog.showModal();
+  await renderLocalWorkspaceMoveFolderList();
+  return true;
 }
 
 function normalizeTags(tags) {
@@ -4872,6 +5269,17 @@ function localWorkspaceSchemaNode() {
   );
 }
 
+function localWorkspaceFolderNode(folderPath = "") {
+  const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(folderPath);
+  if (!normalizedFolderPath) {
+    return null;
+  }
+
+  return document.querySelector(
+    `[data-local-workspace-folder-node][data-local-workspace-folder-path="${escapeSelectorValue(normalizedFolderPath)}"]`
+  );
+}
+
 function localWorkspaceEntryNode(entryId) {
   const normalizedEntryId = String(entryId || "").trim();
   if (!normalizedEntryId) {
@@ -4910,80 +5318,240 @@ function ensureLocalWorkspaceCatalogOrder() {
   }
 }
 
-function localWorkspaceSchemaMarkup(entries, open = false) {
-  const entriesMarkup = entries
-    .map((entry) => {
-      const relation = localWorkspaceRelation(entry.id);
-      const formatLabel = String(entry.exportFormat || "file").toUpperCase();
-      const displayPath = localWorkspaceDisplayPath(entry.folderPath, entry.fileName);
-      return `
-        <li
-          class="source-object source-object-file"
-          data-searchable-item="${escapeHtml(entry.fileName)} ${escapeHtml(displayPath)} ${escapeHtml(formatLabel)}"
-          data-source-object
-          data-source-object-kind="file"
-          data-source-object-name="${escapeHtml(entry.fileName)}"
-          data-source-object-relation="${escapeHtml(relation)}"
-          data-source-option-id="${escapeHtml(localWorkspaceCatalogSourceId)}"
-          data-local-workspace-entry-id="${escapeHtml(entry.id)}"
-          data-local-workspace-folder-path="${escapeHtml(entry.folderPath)}"
-          data-local-workspace-export-format="${escapeHtml(entry.exportFormat)}"
-          data-local-workspace-size-bytes="${escapeHtml(entry.sizeBytes)}"
-          data-local-workspace-created-at="${escapeHtml(entry.createdAt)}"
-          data-local-workspace-column-count="${escapeHtml(entry.columnCount)}"
-          data-local-workspace-row-count="${escapeHtml(entry.rowCount)}"
-          data-local-workspace-mime-type="${escapeHtml(entry.mimeType)}"
+function localWorkspaceFolderNodes() {
+  return Array.from(document.querySelectorAll("[data-local-workspace-folder-node]"));
+}
+
+function localWorkspaceOpenFolderPaths() {
+  return new Set(
+    localWorkspaceFolderNodes()
+      .filter((node) => node instanceof HTMLDetailsElement && node.open)
+      .map((node) => normalizeLocalWorkspaceFolderPath(node.dataset.localWorkspaceFolderPath || ""))
+      .filter(Boolean)
+  );
+}
+
+function createLocalWorkspaceTreeNode(path = "") {
+  return {
+    path,
+    name: localWorkspaceFolderName(path),
+    folders: new Map(),
+    entries: [],
+  };
+}
+
+function buildLocalWorkspaceTree(entries, folderPaths = []) {
+  const root = createLocalWorkspaceTreeNode("");
+
+  const ensureBranch = (folderPath) => {
+    let currentNode = root;
+    let currentPath = "";
+    normalizeLocalWorkspaceFolderPath(folderPath)
+      .split("/")
+      .filter(Boolean)
+      .forEach((segment) => {
+        currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+        if (!currentNode.folders.has(segment)) {
+          currentNode.folders.set(segment, createLocalWorkspaceTreeNode(currentPath));
+        }
+        currentNode = currentNode.folders.get(segment);
+      });
+    return currentNode;
+  };
+
+  allLocalWorkspaceFolderPaths(folderPaths).forEach((folderPath) => {
+    if (folderPath) {
+      ensureBranch(folderPath);
+    }
+  });
+
+  entries.forEach((entry) => {
+    ensureBranch(entry.folderPath).entries.push(entry);
+  });
+
+  return root;
+}
+
+function localWorkspaceEntryMarkup(entry) {
+  const relation = localWorkspaceRelation(entry.id);
+  const formatLabel = String(entry.exportFormat || "file").toUpperCase();
+  const displayPath = localWorkspaceDisplayPath(entry.folderPath, entry.fileName);
+  const sizeLabel = formatByteCount(entry.sizeBytes);
+
+  return `
+    <li
+      class="source-object source-object-file"
+      data-searchable-item="${escapeHtml(entry.fileName)} ${escapeHtml(displayPath)} ${escapeHtml(formatLabel)}"
+      data-source-object
+      data-source-object-kind="file"
+      data-source-object-name="${escapeHtml(entry.fileName)}"
+      data-source-object-relation="${escapeHtml(relation)}"
+      data-source-option-id="${escapeHtml(localWorkspaceCatalogSourceId)}"
+      data-local-workspace-entry-id="${escapeHtml(entry.id)}"
+      data-local-workspace-folder-path="${escapeHtml(entry.folderPath)}"
+      data-local-workspace-export-format="${escapeHtml(entry.exportFormat)}"
+      data-local-workspace-size-bytes="${escapeHtml(entry.sizeBytes)}"
+      data-local-workspace-created-at="${escapeHtml(entry.createdAt)}"
+      data-local-workspace-column-count="${escapeHtml(entry.columnCount)}"
+      data-local-workspace-row-count="${escapeHtml(entry.rowCount)}"
+      data-local-workspace-mime-type="${escapeHtml(entry.mimeType)}"
+    >
+      <span class="source-node-label">
+        <svg
+          class="source-icon source-icon-object source-icon-object-view"
+          viewBox="0 0 16 16"
+          aria-hidden="true"
         >
-          <span class="source-node-label">
-            <svg
-              class="source-icon source-icon-object source-icon-object-view"
-              viewBox="0 0 16 16"
-              aria-hidden="true"
+          <rect x="2.4" y="3" width="11.2" height="9.6" rx="1.1"></rect>
+          <path d="M4.2 5.2h7.6M4.2 7.7h7.6"></path>
+          <path d="M3.2 10.7c1.5-1.7 3.1-2.6 4.8-2.6s3.3.9 4.8 2.6"></path>
+          <circle cx="8" cy="10.2" r="1"></circle>
+        </svg>
+        <span>${escapeHtml(entry.fileName)}</span>
+      </span>
+      <span class="source-object-meta">
+        <small>${escapeHtml(formatLabel)}</small>
+        <small title="${escapeHtml(displayPath)}">${escapeHtml(sizeLabel)}</small>
+        <details class="workspace-action-menu source-action-menu" data-source-action-menu>
+          <summary
+            class="workspace-action-menu-toggle"
+            data-source-action-menu-toggle
+            aria-label="Source actions"
+            title="Source actions"
+          >
+            <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
+          </summary>
+          <div class="workspace-action-menu-panel">
+            <button
+              type="button"
+              class="workspace-action-menu-item"
+              data-move-local-workspace-object
+              title="Move the Local Workspace file"
             >
-              <rect x="2.4" y="3" width="11.2" height="9.6" rx="1.1"></rect>
-              <path d="M4.2 5.2h7.6M4.2 7.7h7.6"></path>
-              <path d="M3.2 10.7c1.5-1.7 3.1-2.6 4.8-2.6s3.3.9 4.8 2.6"></path>
-              <circle cx="8" cy="10.2" r="1"></circle>
-            </svg>
-            <span>${escapeHtml(entry.fileName)}</span>
-          </span>
-          <span class="source-object-meta">
-            <small>${escapeHtml(formatLabel)}</small>
-            <small title="${escapeHtml(displayPath)}">${escapeHtml(entry.folderPath || "Root")}</small>
-            <details class="workspace-action-menu source-action-menu" data-source-action-menu>
-              <summary
-                class="workspace-action-menu-toggle"
-                data-source-action-menu-toggle
-                aria-label="Source actions"
-                title="Source actions"
-              >
-                <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
-              </summary>
-              <div class="workspace-action-menu-panel">
-                <button
-                  type="button"
-                  class="workspace-action-menu-item"
-                  data-download-local-workspace-object
-                  title="Download the Local Workspace file"
-                >
-                  Download local file
-                </button>
-                <div class="workspace-action-menu-separator" aria-hidden="true"></div>
-                <button
-                  type="button"
-                  class="workspace-action-menu-item workspace-action-menu-item-danger"
-                  data-delete-local-workspace-object
-                  title="Delete the Local Workspace file"
-                >
-                  Delete local file
-                </button>
-              </div>
-            </details>
-          </span>
-        </li>
-      `;
-    })
+              Move local file
+            </button>
+            <button
+              type="button"
+              class="workspace-action-menu-item"
+              data-download-local-workspace-object
+              title="Download the Local Workspace file"
+            >
+              Download local file
+            </button>
+            <div class="workspace-action-menu-separator" aria-hidden="true"></div>
+            <button
+              type="button"
+              class="workspace-action-menu-item workspace-action-menu-item-danger"
+              data-delete-local-workspace-object
+              title="Delete the Local Workspace file"
+            >
+              Delete local file
+            </button>
+          </div>
+        </details>
+      </span>
+    </li>
+  `;
+}
+
+function localWorkspaceFolderSummaryLabel(node) {
+  const folderCount = node.folders.size;
+  const fileCount = node.entries.length;
+  const segments = [];
+  if (folderCount) {
+    segments.push(`${folderCount} folder${folderCount === 1 ? "" : "s"}`);
+  }
+  if (fileCount || !segments.length) {
+    segments.push(`${fileCount} file${fileCount === 1 ? "" : "s"}`);
+  }
+  return segments.join(" | ");
+}
+
+function localWorkspaceFolderMarkup(node, openPaths = new Set()) {
+  const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(node.path);
+  const childFolderMarkup = Array.from(node.folders.values())
+    .sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }))
+    .map((childNode) => localWorkspaceFolderMarkup(childNode, openPaths))
     .join("");
+  const fileMarkup = node.entries
+    .slice()
+    .sort((left, right) => left.fileName.localeCompare(right.fileName, undefined, { sensitivity: "base" }))
+    .map((entry) => localWorkspaceEntryMarkup(entry))
+    .join("");
+  const shouldOpen = openPaths.size
+    ? openPaths.has(normalizedFolderPath)
+    : localWorkspaceFolderDepth(normalizedFolderPath) <= 1;
+
+  return `
+    <details
+      class="source-schema local-workspace-folder-node"
+      data-local-workspace-folder-node
+      data-local-workspace-folder-path="${escapeHtml(normalizedFolderPath)}"
+      ${shouldOpen ? "open" : ""}
+    >
+      <summary
+        class="local-workspace-folder-summary"
+        data-searchable-item="${escapeHtml(node.name)} ${escapeHtml(localWorkspaceDisplayPath(normalizedFolderPath))}"
+      >
+        <span class="source-node-label">
+          <svg class="source-icon source-icon-schema" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M2.2 4.1a1.1 1.1 0 0 1 1.1-1.1h3l1.2 1.5h5.2a1.1 1.1 0 0 1 1.1 1.1v5.9a1.1 1.1 0 0 1-1.1 1.1H3.3a1.1 1.1 0 0 1-1.1-1.1z"></path>
+          </svg>
+          <span>${escapeHtml(node.name)}</span>
+        </span>
+        <span class="source-schema-meta">
+          <small>${escapeHtml(localWorkspaceFolderSummaryLabel(node))}</small>
+          <details class="workspace-action-menu source-action-menu" data-source-action-menu>
+            <summary
+              class="workspace-action-menu-toggle"
+              data-source-action-menu-toggle
+              aria-label="Folder actions"
+              title="Folder actions"
+            >
+              <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
+            </summary>
+            <div class="workspace-action-menu-panel">
+              <button
+                type="button"
+                class="workspace-action-menu-item"
+                data-create-local-workspace-folder-path="${escapeHtml(normalizedFolderPath)}"
+                title="Create a subfolder"
+              >
+                New subfolder
+              </button>
+              <div class="workspace-action-menu-separator" aria-hidden="true"></div>
+              <button
+                type="button"
+                class="workspace-action-menu-item workspace-action-menu-item-danger"
+                data-delete-local-workspace-folder-path="${escapeHtml(normalizedFolderPath)}"
+                title="Delete this folder and its saved files"
+              >
+                Delete folder
+              </button>
+            </div>
+          </details>
+        </span>
+      </summary>
+      <div class="local-workspace-folder-branch">
+        ${childFolderMarkup}
+        ${fileMarkup ? `<ul class="source-object-list">${fileMarkup}</ul>` : ""}
+      </div>
+    </details>
+  `;
+}
+
+function localWorkspaceSchemaMarkup(entries, folderPaths, open = false, openPaths = new Set()) {
+  const tree = buildLocalWorkspaceTree(entries, folderPaths);
+  const folderMarkup = Array.from(tree.folders.values())
+    .sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }))
+    .map((node) => localWorkspaceFolderMarkup(node, openPaths))
+    .join("");
+  const rootFileMarkup = tree.entries
+    .slice()
+    .sort((left, right) => left.fileName.localeCompare(right.fileName, undefined, { sensitivity: "base" }))
+    .map((entry) => localWorkspaceEntryMarkup(entry))
+    .join("");
+  const folderCount = allLocalWorkspaceFolderPaths(folderPaths).filter(Boolean).length;
 
   return `
     <details
@@ -5004,12 +5572,14 @@ function localWorkspaceSchemaMarkup(entries, open = false) {
           <span>Saved Results</span>
         </span>
         <span class="source-schema-meta">
+          <small>${escapeHtml(String(folderCount))} folder${folderCount === 1 ? "" : "s"}</small>
           <small>${escapeHtml(String(entries.length))} file${entries.length === 1 ? "" : "s"}</small>
         </span>
       </summary>
-      <ul class="source-object-list">
-        ${entriesMarkup}
-      </ul>
+      <div class="local-workspace-folder-branch local-workspace-root-branch">
+        ${folderMarkup}
+        ${rootFileMarkup ? `<ul class="source-object-list">${rootFileMarkup}</ul>` : ""}
+      </div>
     </details>
   `;
 }
@@ -5025,22 +5595,28 @@ async function renderLocalWorkspaceSidebarEntries() {
   const entries = await listLocalWorkspaceExports();
   const existingSchema = localWorkspaceSchemaNode();
   const schemaOpen = existingSchema instanceof HTMLDetailsElement ? existingSchema.open : true;
+  const openFolderPaths = localWorkspaceOpenFolderPaths();
+  const folderPaths = allLocalWorkspaceFolderPaths(entries.map((entry) => entry.folderPath));
 
-  if (!entries.length) {
+  if (!entries.length && !folderPaths.filter(Boolean).length) {
     existingSchema?.remove();
     if (activeSourceObjectRelation?.startsWith(localWorkspaceRelationPrefix)) {
       setSelectedSourceObjectState(null);
       renderSourceInspectorMarkup("", true);
     }
+    await syncOpenLocalWorkspaceSaveDialog();
+    await syncOpenLocalWorkspaceMoveDialog();
     return;
   }
 
-  const markup = localWorkspaceSchemaMarkup(entries, schemaOpen);
+  const markup = localWorkspaceSchemaMarkup(entries, folderPaths, schemaOpen, openFolderPaths);
   if (existingSchema instanceof Element) {
     existingSchema.outerHTML = markup;
   } else {
     localWorkspaceCatalog.insertAdjacentHTML("beforeend", markup);
   }
+  await syncOpenLocalWorkspaceSaveDialog();
+  await syncOpenLocalWorkspaceMoveDialog();
 }
 
 function syncSourceConnectionControls(catalogNode, status) {
@@ -10454,6 +11030,247 @@ function localWorkspaceInspectorMarkup(sourceObjectRoot) {
   `;
 }
 
+async function syncOpenLocalWorkspaceSaveDialog() {
+  const dialog = localWorkspaceSaveDialog();
+  if (!(dialog instanceof HTMLDialogElement) || !dialog.open) {
+    return;
+  }
+
+  const entries = await listLocalWorkspaceExports();
+  const folderPaths = allLocalWorkspaceFolderPaths(entries.map((entry) => entry.folderPath));
+  localWorkspaceSaveDialogState.folderPath = closestExistingLocalWorkspaceFolderPath(
+    localWorkspaceSaveDialogState.folderPath,
+    folderPaths
+  );
+  localWorkspaceSaveDialogState.createdFolderPaths = [];
+  await renderLocalWorkspaceSaveFolderList();
+}
+
+async function syncOpenLocalWorkspaceMoveDialog() {
+  const dialog = localWorkspaceMoveDialog();
+  if (!(dialog instanceof HTMLDialogElement) || !dialog.open) {
+    return;
+  }
+
+  const entries = await listLocalWorkspaceExports();
+  const folderPaths = allLocalWorkspaceFolderPaths(entries.map((entry) => entry.folderPath));
+  localWorkspaceMoveDialogState.folderPath = closestExistingLocalWorkspaceFolderPath(
+    localWorkspaceMoveDialogState.folderPath,
+    folderPaths
+  );
+  localWorkspaceMoveDialogState.createdFolderPaths = [];
+  await renderLocalWorkspaceMoveFolderList();
+}
+
+function blinkLocalWorkspaceFolder(folderPath = "") {
+  const summary = localWorkspaceFolderNode(folderPath)?.querySelector(":scope > summary");
+  if (!(summary instanceof Element)) {
+    return;
+  }
+
+  summary.classList.remove("is-source-updated");
+  void summary.offsetWidth;
+  summary.classList.add("is-source-updated");
+  window.setTimeout(() => {
+    summary.classList.remove("is-source-updated");
+  }, 2400);
+}
+
+async function revealLocalWorkspaceFolderPath(folderPath = "") {
+  const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(folderPath);
+  const sourcesRoot = dataSourcesSection();
+  if (sourcesRoot instanceof HTMLDetailsElement) {
+    sourcesRoot.open = true;
+  }
+
+  const localWorkspaceCatalog = sourceCatalogNode(localWorkspaceCatalogSourceId);
+  if (localWorkspaceCatalog instanceof HTMLDetailsElement) {
+    localWorkspaceCatalog.open = true;
+  }
+
+  const schemaNode = localWorkspaceSchemaNode();
+  if (schemaNode instanceof HTMLDetailsElement) {
+    schemaNode.open = true;
+  }
+
+  if (!normalizedFolderPath) {
+    blinkSourceCatalog(localWorkspaceCatalogSourceId);
+    schemaNode?.scrollIntoView({ block: "nearest" });
+    return;
+  }
+
+  const folderAncestors = localWorkspaceFolderPaths([normalizedFolderPath]).filter(Boolean);
+  folderAncestors.forEach((path) => {
+    const folderNode = localWorkspaceFolderNode(path);
+    if (folderNode instanceof HTMLDetailsElement) {
+      folderNode.open = true;
+    }
+  });
+
+  blinkSourceCatalog(localWorkspaceCatalogSourceId);
+  blinkLocalWorkspaceFolder(normalizedFolderPath);
+  localWorkspaceFolderNode(normalizedFolderPath)?.scrollIntoView({ block: "nearest" });
+}
+
+async function createLocalWorkspaceFolder(
+  parentPath = "",
+  { confirmCreation = false, showSidebarStatus = false, revealSidebar = false } = {}
+) {
+  const normalizedParentPath = normalizeLocalWorkspaceFolderPath(parentPath);
+  const folderName = await showFolderNameDialog({
+    title: "New Local Workspace folder",
+    copy: `Create a folder under ${localWorkspaceDisplayPath(normalizedParentPath)}.`,
+    submitLabel: "Create folder",
+  });
+  if (!folderName) {
+    return null;
+  }
+
+  const nextPath = normalizeLocalWorkspaceFolderPath(
+    normalizedParentPath ? `${normalizedParentPath}/${folderName}` : folderName
+  );
+  if (!nextPath) {
+    return null;
+  }
+
+  const entries = await listLocalWorkspaceExports();
+  const knownPaths = allLocalWorkspaceFolderPaths(entries.map((entry) => entry.folderPath));
+  if (knownPaths.includes(nextPath)) {
+    throw new Error(`The Local Workspace folder "${nextPath}" already exists.`);
+  }
+
+  if (confirmCreation) {
+    const { confirmed } = await showConfirmDialog({
+      title: "Create Local Workspace folder",
+      copy: `Create folder ${localWorkspaceDisplayPath(nextPath)} in this browser's Local Workspace?`,
+      confirmLabel: "Create folder",
+      confirmTone: "primary",
+    });
+    if (!confirmed) {
+      return null;
+    }
+  }
+
+  if (showSidebarStatus) {
+    setSidebarSourceOperationStatus({
+      tone: "info",
+      title: "Creating folder",
+      copy: `Creating ${localWorkspaceDisplayPath(nextPath)} in this browser...`,
+    });
+  }
+
+  try {
+    ensureLocalWorkspaceFolderPath(nextPath);
+    await renderLocalWorkspaceSidebarEntries();
+    await syncOpenLocalWorkspaceSaveDialog();
+    if (revealSidebar) {
+      await revealLocalWorkspaceFolderPath(nextPath);
+    }
+    if (showSidebarStatus) {
+      setSidebarSourceOperationStatus(
+        {
+          tone: "success",
+          title: "Folder created",
+          copy: `Created ${localWorkspaceDisplayPath(nextPath)} in this browser.`,
+        },
+        { autoClearMs: 6000 }
+      );
+    }
+    return nextPath;
+  } catch (error) {
+    if (showSidebarStatus) {
+      setSidebarSourceOperationStatus(
+        {
+          tone: "danger",
+          title: "Folder creation failed",
+          copy:
+            error instanceof Error
+              ? error.message
+              : "The Local Workspace folder could not be created.",
+        },
+        { autoClearMs: 8000 }
+      );
+    }
+    throw error;
+  }
+}
+
+async function deleteLocalWorkspaceFolder(folderPath = "") {
+  const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(folderPath);
+  if (!normalizedFolderPath) {
+    return false;
+  }
+
+  const entries = await listLocalWorkspaceExports();
+  const descendantEntries = entries.filter((entry) =>
+    localWorkspaceFolderContainsPath(normalizedFolderPath, entry.folderPath)
+  );
+  const descendantFolders = localWorkspaceStoredFolderPaths().filter(
+    (path) =>
+      path !== normalizedFolderPath && localWorkspaceFolderContainsPath(normalizedFolderPath, path)
+  );
+  const objectSummary = [];
+  if (descendantFolders.length) {
+    objectSummary.push(`${descendantFolders.length} nested folder${descendantFolders.length === 1 ? "" : "s"}`);
+  }
+  if (descendantEntries.length) {
+    objectSummary.push(`${descendantEntries.length} saved file${descendantEntries.length === 1 ? "" : "s"}`);
+  }
+  const summaryCopy = objectSummary.length ? ` This also removes ${objectSummary.join(" and ")}.` : "";
+
+  const { confirmed } = await showConfirmDialog({
+    title: "Delete Local Workspace folder",
+    copy: `Delete ${localWorkspaceDisplayPath(normalizedFolderPath)} from this browser's Local Workspace?${summaryCopy}`,
+    confirmLabel: "Delete folder",
+  });
+  if (!confirmed) {
+    return null;
+  }
+
+  setSidebarSourceOperationStatus({
+    tone: "info",
+    title: "Deleting folder",
+    copy: `Deleting ${localWorkspaceDisplayPath(normalizedFolderPath)} from this browser...`,
+  });
+
+  try {
+    await Promise.all(descendantEntries.map((entry) => deleteLocalWorkspaceExport(entry.id)));
+    removeLocalWorkspaceFolderBranch(normalizedFolderPath);
+
+    const deletedRelations = new Set(descendantEntries.map((entry) => localWorkspaceRelation(entry.id)));
+    if (activeSourceObjectRelation && deletedRelations.has(activeSourceObjectRelation)) {
+      setSelectedSourceObjectState(null);
+      renderSourceInspectorMarkup("", true);
+    }
+
+    await renderLocalWorkspaceSidebarEntries();
+    await syncOpenLocalWorkspaceSaveDialog();
+    await revealLocalWorkspaceFolderPath(localWorkspaceParentFolderPath(normalizedFolderPath));
+    setSidebarSourceOperationStatus(
+      {
+        tone: "success",
+        title: "Folder deleted",
+        copy: `Deleted ${localWorkspaceDisplayPath(normalizedFolderPath)} from this browser.`,
+      },
+      { autoClearMs: 6000 }
+    );
+    return true;
+  } catch (error) {
+    setSidebarSourceOperationStatus(
+      {
+        tone: "danger",
+        title: "Folder delete failed",
+        copy:
+          error instanceof Error
+            ? error.message
+            : "The Local Workspace folder could not be deleted.",
+      },
+      { autoClearMs: 8000 }
+    );
+    throw error;
+  }
+}
+
 async function saveQueryResultExportToLocalWorkspace(job, exportFormat, options = {}) {
   if (!job?.jobId || !job?.columns?.length) {
     return;
@@ -10463,6 +11280,7 @@ async function saveQueryResultExportToLocalWorkspace(job, exportFormat, options 
   const timestamp = new Date().toISOString();
   const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(options.folderPath);
   const fileName = String(options.fileName || exported.fileName || "").trim() || exported.fileName;
+  ensureLocalWorkspaceFolderPath(normalizedFolderPath);
   const storedEntry = await saveLocalWorkspaceExport({
     id: `local-workspace-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     fileName,
@@ -10494,6 +11312,9 @@ async function saveQueryResultExportToLocalWorkspace(job, exportFormat, options 
     schemaNode.open = true;
   }
   blinkSourceCatalog(localWorkspaceCatalogSourceId);
+  if (normalizedFolderPath) {
+    await revealLocalWorkspaceFolderPath(normalizedFolderPath);
+  }
 
   const sourceObjectRoot = localWorkspaceEntryNode(storedEntry.id);
   if (sourceObjectRoot instanceof Element) {
@@ -10521,6 +11342,62 @@ async function downloadLocalWorkspaceExportFromSource(sourceObjectRoot) {
 
   downloadBlobFile(entry.fileName, entry.blob);
   return true;
+}
+
+async function moveLocalWorkspaceExport(entryId, options = {}) {
+  const normalizedEntryId = String(entryId || "").trim();
+  if (!normalizedEntryId) {
+    return null;
+  }
+
+  const entry = await getLocalWorkspaceExport(normalizedEntryId);
+  if (!entry) {
+    return null;
+  }
+
+  const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(options.folderPath);
+  const normalizedFileName = String(options.fileName || "").trim();
+  if (!normalizedFileName) {
+    throw new Error("Provide a file name before moving the Local Workspace file.");
+  }
+
+  const allEntries = await listLocalWorkspaceExports();
+  const duplicateEntry = allEntries.find(
+    (candidate) =>
+      candidate.id !== normalizedEntryId &&
+      normalizeLocalWorkspaceFolderPath(candidate.folderPath) === normalizedFolderPath &&
+      String(candidate.fileName || "").trim().localeCompare(normalizedFileName, undefined, {
+        sensitivity: "base",
+      }) === 0
+  );
+  if (duplicateEntry) {
+    throw new Error(
+      `A Local Workspace file named "${normalizedFileName}" already exists in ${localWorkspaceDisplayPath(normalizedFolderPath)}.`
+    );
+  }
+
+  ensureLocalWorkspaceFolderPath(normalizedFolderPath);
+  const timestamp = new Date().toISOString();
+  const updatedEntry = await saveLocalWorkspaceExport({
+    ...entry,
+    fileName: normalizedFileName,
+    folderPath: normalizedFolderPath,
+    updatedAt: timestamp,
+  });
+
+  await renderLocalWorkspaceSidebarEntries();
+  await revealLocalWorkspaceFolderPath(normalizedFolderPath);
+
+  const movedNode = localWorkspaceEntryNode(updatedEntry.id);
+  if (movedNode instanceof Element) {
+    if (activeSourceObjectRelation === localWorkspaceRelation(updatedEntry.id)) {
+      setSelectedSourceObjectState(movedNode);
+      renderSourceInspectorMarkup(localWorkspaceInspectorMarkup(movedNode));
+    }
+    movedNode.scrollIntoView({ block: "nearest" });
+  }
+
+  return updatedEntry;
 }
 
 async function deleteLocalWorkspaceExportFromSource(sourceObjectRoot) {
@@ -11613,6 +12490,45 @@ document.body.addEventListener(
       return;
     }
 
+    const localWorkspaceMoveForm = event.target.closest("[data-local-workspace-move-form]");
+    if (localWorkspaceMoveForm) {
+      event.preventDefault();
+      if (!localWorkspaceMoveDialogState.entryId) {
+        await showMessageDialog({
+          title: "Local Workspace move unavailable",
+          copy: "Reopen the move dialog so the Local Workspace file can be moved.",
+        });
+        return;
+      }
+
+      try {
+        setLocalWorkspaceMoveDialogBusy(true);
+        const movedEntry = await moveLocalWorkspaceExport(localWorkspaceMoveDialogState.entryId, {
+          fileName: localWorkspaceMoveDialogState.fileName,
+          folderPath: localWorkspaceMoveDialogState.folderPath,
+        });
+        closeDialog(localWorkspaceMoveDialog(), "confirm");
+        if (movedEntry) {
+          await showMessageDialog({
+            title: "Local Workspace file moved",
+            copy: `${movedEntry.fileName} was moved to ${localWorkspaceDisplayPath(movedEntry.folderPath)} in this browser.`,
+          });
+        }
+      } catch (error) {
+        console.error("Failed to move the Local Workspace file.", error);
+        await showMessageDialog({
+          title: "Local Workspace move failed",
+          copy:
+            error instanceof Error
+              ? error.message
+              : "The Local Workspace file could not be moved.",
+        });
+      } finally {
+        setLocalWorkspaceMoveDialogBusy(false);
+      }
+      return;
+    }
+
     const form = event.target.closest("[data-query-form]");
     if (!form) {
       return;
@@ -11809,6 +12725,32 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const createLocalWorkspaceRootFolderButton = event.target.closest(
+    "[data-create-local-workspace-root-folder]"
+  );
+  if (createLocalWorkspaceRootFolderButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeSourceActionMenus();
+    try {
+      await createLocalWorkspaceFolder("", {
+        confirmCreation: true,
+        showSidebarStatus: true,
+        revealSidebar: true,
+      });
+    } catch (error) {
+      console.error("Failed to create the Local Workspace folder.", error);
+      await showMessageDialog({
+        title: "Local Workspace folder creation failed",
+        copy:
+          error instanceof Error
+            ? error.message
+            : "The Local Workspace folder could not be created.",
+      });
+    }
+    return;
+  }
+
   const cancelQueryButton = event.target.closest("[data-cancel-query]");
   if (cancelQueryButton) {
     event.preventDefault();
@@ -11964,6 +12906,26 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const createLocalWorkspaceMoveFolderButton = event.target.closest(
+    "[data-local-workspace-move-create-folder]"
+  );
+  if (createLocalWorkspaceMoveFolderButton) {
+    event.preventDefault();
+    try {
+      await createLocalWorkspaceFolderFromMoveDialog();
+    } catch (error) {
+      console.error("Failed to create a Local Workspace move target folder.", error);
+      await showMessageDialog({
+        title: "Local Workspace folder error",
+        copy:
+          error instanceof Error
+            ? error.message
+            : "The Local Workspace folder could not be created.",
+      });
+    }
+    return;
+  }
+
   const localWorkspaceFolderOptionButton = event.target.closest(
     "[data-local-workspace-folder-option]"
   );
@@ -11976,6 +12938,18 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const localWorkspaceMoveFolderOptionButton = event.target.closest(
+    "[data-local-workspace-move-folder-option]"
+  );
+  if (localWorkspaceMoveFolderOptionButton) {
+    event.preventDefault();
+    localWorkspaceMoveDialogState.folderPath = normalizeLocalWorkspaceFolderPath(
+      localWorkspaceMoveFolderOptionButton.dataset.localWorkspaceFolderPath || ""
+    );
+    syncLocalWorkspaceMoveDialogState();
+    return;
+  }
+
   const localWorkspaceBreadcrumbButton = event.target.closest(
     "[data-local-workspace-breadcrumb]"
   );
@@ -11985,6 +12959,18 @@ document.body.addEventListener("click", async (event) => {
       localWorkspaceBreadcrumbButton.dataset.localWorkspaceFolderPath || ""
     );
     syncLocalWorkspaceSaveDialogState();
+    return;
+  }
+
+  const localWorkspaceMoveBreadcrumbButton = event.target.closest(
+    "[data-local-workspace-move-breadcrumb]"
+  );
+  if (localWorkspaceMoveBreadcrumbButton) {
+    event.preventDefault();
+    localWorkspaceMoveDialogState.folderPath = normalizeLocalWorkspaceFolderPath(
+      localWorkspaceMoveBreadcrumbButton.dataset.localWorkspaceFolderPath || ""
+    );
+    syncLocalWorkspaceMoveDialogState();
     return;
   }
 
@@ -12223,6 +13209,25 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const moveLocalWorkspaceObjectButton = event.target.closest(
+    "[data-move-local-workspace-object]"
+  );
+  if (moveLocalWorkspaceObjectButton) {
+    event.preventDefault();
+    closeSourceActionMenus();
+
+    const opened = await openLocalWorkspaceMoveDialog(
+      moveLocalWorkspaceObjectButton.closest("[data-source-object]")
+    );
+    if (opened === false) {
+      await showMessageDialog({
+        title: "Local Workspace move unavailable",
+        copy: "This Local Workspace file could not be loaded for moving.",
+      });
+    }
+    return;
+  }
+
   const deleteSourceS3ObjectButton = event.target.closest("[data-delete-source-s3-object]");
   if (deleteSourceS3ObjectButton) {
     event.preventDefault();
@@ -12267,6 +13272,61 @@ document.body.addEventListener("click", async (event) => {
       await showMessageDialog({
         title: "Local Workspace delete unavailable",
         copy: "This Local Workspace file could not be deleted from browser storage.",
+      });
+    }
+    return;
+  }
+
+  const createLocalWorkspaceSidebarFolderButton = event.target.closest(
+    "[data-create-local-workspace-folder-path]"
+  );
+  if (createLocalWorkspaceSidebarFolderButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeSourceActionMenus();
+
+    try {
+      await createLocalWorkspaceFolder(
+        createLocalWorkspaceSidebarFolderButton.dataset.createLocalWorkspaceFolderPath || "",
+        {
+          confirmCreation: true,
+          showSidebarStatus: true,
+          revealSidebar: true,
+        }
+      );
+    } catch (error) {
+      console.error("Failed to create the Local Workspace sidebar folder.", error);
+      await showMessageDialog({
+        title: "Local Workspace folder creation failed",
+        copy:
+          error instanceof Error
+            ? error.message
+            : "The Local Workspace folder could not be created.",
+      });
+    }
+    return;
+  }
+
+  const deleteLocalWorkspaceFolderButton = event.target.closest(
+    "[data-delete-local-workspace-folder-path]"
+  );
+  if (deleteLocalWorkspaceFolderButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    closeSourceActionMenus();
+
+    try {
+      await deleteLocalWorkspaceFolder(
+        deleteLocalWorkspaceFolderButton.dataset.deleteLocalWorkspaceFolderPath || ""
+      );
+    } catch (error) {
+      console.error("Failed to delete the Local Workspace sidebar folder.", error);
+      await showMessageDialog({
+        title: "Local Workspace folder delete failed",
+        copy:
+          error instanceof Error
+            ? error.message
+            : "The Local Workspace folder could not be deleted.",
       });
     }
     return;
@@ -12798,6 +13858,26 @@ document.body.addEventListener("input", (event) => {
   if (localWorkspaceFileNameInput) {
     localWorkspaceSaveDialogState.fileName = localWorkspaceFileNameInput.value;
     syncLocalWorkspaceSaveDialogState();
+    return;
+  }
+
+  const localWorkspaceMoveFolderPathInput = event.target.closest(
+    "[data-local-workspace-move-folder-path]"
+  );
+  if (localWorkspaceMoveFolderPathInput) {
+    localWorkspaceMoveDialogState.folderPath = normalizeLocalWorkspaceFolderPath(
+      localWorkspaceMoveFolderPathInput.value
+    );
+    syncLocalWorkspaceMoveDialogState();
+    return;
+  }
+
+  const localWorkspaceMoveFileNameInput = event.target.closest(
+    "[data-local-workspace-move-file-name]"
+  );
+  if (localWorkspaceMoveFileNameInput) {
+    localWorkspaceMoveDialogState.fileName = localWorkspaceMoveFileNameInput.value;
+    syncLocalWorkspaceMoveDialogState();
     return;
   }
 
