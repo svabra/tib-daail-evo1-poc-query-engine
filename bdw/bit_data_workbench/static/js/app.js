@@ -14,14 +14,13 @@ let queryJobsStateVersion = null;
 let queryJobsSnapshot = [];
 let queryJobsSummary = { runningCount: 0, totalCount: 0 };
 let queryPerformanceState = { recent: [], stats: {} };
-let queryJobsEventSource = null;
+let realtimeEventsEventSource = null;
 let queryJobsClockHandle = null;
 let queryJobsLoaded = false;
 let dataGeneratorsCatalog = [];
 let dataGenerationJobsStateVersion = null;
 let dataGenerationJobsSnapshot = [];
 let dataGenerationJobsSummary = { runningCount: 0, totalCount: 0 };
-let dataGenerationEventSource = null;
 let dataGenerationClockHandle = null;
 let dataGenerationJobsLoaded = false;
 let selectedIngestionRunbookId = "";
@@ -29,9 +28,7 @@ let spotlightIngestionRunbookId = "";
 let ingestionRunbookSpotlightHandle = null;
 let dataSourceEventsStateVersion = null;
 let dataSourceEventsLatestEventId = null;
-let dataSourceEventsEventSource = null;
 let notebookEventsStateVersion = null;
-let notebookEventsEventSource = null;
 let notebookEventsLoaded = false;
 const processedNotebookEventIds = new Set();
 let pendingDataSourceSidebarRefreshHandle = null;
@@ -9723,6 +9720,38 @@ async function loadDataSourceEventsState() {
   applyDataSourceEventsState(await response.json());
 }
 
+async function loadNotebookEventsState() {
+  const response = await window.fetch("/api/notebooks/state", {
+    headers: {
+      Accept: "application/json",
+    },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load notebook events: ${response.status}`);
+  }
+
+  applyNotebookEventsState(await response.json());
+}
+
+function applyRealtimeTopicSnapshot(topic, snapshot) {
+  switch (topic) {
+    case "query-jobs":
+      applyQueryJobsState(snapshot);
+      break;
+    case "data-generation-jobs":
+      applyDataGenerationJobsState(snapshot);
+      break;
+    case "data-source-events":
+      applyDataSourceEventsState(snapshot);
+      break;
+    case "notebook-events":
+      applyNotebookEventsState(snapshot);
+      break;
+    default:
+      break;
+  }
+}
+
 async function applyNotebookEvent(eventPayload) {
   if (!eventPayload || typeof eventPayload !== "object") {
     return;
@@ -9916,93 +9945,73 @@ async function openQueryWorkbenchDataSources() {
   await loadQueryWorkbenchDataSources();
 }
 
-function ensureDataGenerationEventSource() {
-  if (dataGenerationEventSource || typeof window.EventSource !== "function") {
+function ensureRealtimeEventsEventSource() {
+  if (realtimeEventsEventSource || typeof window.EventSource !== "function") {
     return;
   }
 
-  const eventSource = new window.EventSource("/api/data-generation-jobs/stream");
-  eventSource.addEventListener("jobs", (event) => {
-    try {
-      applyDataGenerationJobsState(JSON.parse(event.data));
-    } catch (error) {
-      console.error("Failed to parse data generation event.", error);
-    }
-  });
-  eventSource.onerror = () => {
-    if (dataGenerationJobsStateVersion !== null) {
-      loadDataGenerationJobsState().catch(() => {
-        // Ignore transient reconnect issues.
-      });
-    }
-  };
-  dataGenerationEventSource = eventSource;
-}
-
-function ensureDataSourceEventsEventSource() {
-  if (dataSourceEventsEventSource || typeof window.EventSource !== "function") {
-    return;
+  const params = new URLSearchParams();
+  if (queryJobsStateVersion !== null) {
+    params.set("queryJobsVersion", String(queryJobsStateVersion));
+  }
+  if (dataGenerationJobsStateVersion !== null) {
+    params.set("dataGenerationJobsVersion", String(dataGenerationJobsStateVersion));
+  }
+  if (dataSourceEventsStateVersion !== null) {
+    params.set("dataSourceEventsVersion", String(dataSourceEventsStateVersion));
+  }
+  if (notebookEventsStateVersion !== null) {
+    params.set("notebookEventsVersion", String(notebookEventsStateVersion));
   }
 
-  const eventSource = new window.EventSource("/api/data-source-events/stream");
-  eventSource.addEventListener("sources", (event) => {
-    try {
-      applyDataSourceEventsState(JSON.parse(event.data));
-    } catch (error) {
-      console.error("Failed to parse data source event.", error);
-    }
+  const streamUrl = params.size
+    ? `/api/events/stream?${params.toString()}`
+    : "/api/events/stream";
+  const eventSource = new window.EventSource(streamUrl);
+  ["query-jobs", "data-generation-jobs", "data-source-events", "notebook-events"].forEach((topic) => {
+    eventSource.addEventListener(topic, (event) => {
+      try {
+        applyRealtimeTopicSnapshot(topic, JSON.parse(event.data));
+      } catch (error) {
+        console.error(`Failed to parse realtime event for ${topic}.`, error);
+      }
+    });
   });
   eventSource.onerror = () => {
-    if (dataSourceEventsStateVersion !== null) {
-      loadDataSourceEventsState().catch(() => {
-        // Ignore transient reconnect issues.
-      });
-    }
-  };
-  dataSourceEventsEventSource = eventSource;
-}
-
-function ensureQueryJobsEventSource() {
-  if (queryJobsEventSource || typeof window.EventSource !== "function") {
-    return;
-  }
-
-  const eventSource = new window.EventSource("/api/query-jobs/stream");
-  eventSource.addEventListener("jobs", (event) => {
-    try {
-      applyQueryJobsState(JSON.parse(event.data));
-    } catch (error) {
-      console.error("Failed to parse query job event.", error);
-    }
-  });
-  eventSource.onerror = () => {
-    // Keep the browser-managed reconnect loop, but refresh once to reduce stale UI if needed.
+    const refreshTasks = [];
     if (queryJobsStateVersion !== null) {
-      loadQueryJobsState().catch(() => {
-        // Ignore transient reconnect issues.
-      });
+      refreshTasks.push(
+        loadQueryJobsState().catch(() => {
+          // Ignore transient reconnect issues.
+        })
+      );
+    }
+    if (dataGenerationJobsStateVersion !== null) {
+      refreshTasks.push(
+        loadDataGenerationJobsState().catch(() => {
+          // Ignore transient reconnect issues.
+        })
+      );
+    }
+    if (dataSourceEventsStateVersion !== null) {
+      refreshTasks.push(
+        loadDataSourceEventsState().catch(() => {
+          // Ignore transient reconnect issues.
+        })
+      );
+    }
+    if (notebookEventsStateVersion !== null) {
+      refreshTasks.push(
+        loadNotebookEventsState().catch(() => {
+          // Ignore transient reconnect issues.
+        })
+      );
+    }
+    if (refreshTasks.length) {
+      Promise.allSettled(refreshTasks);
     }
   };
-  queryJobsEventSource = eventSource;
-}
-
-function ensureNotebookEventsEventSource() {
-  if (notebookEventsEventSource || typeof window.EventSource !== "function") {
-    return;
-  }
-
-  const eventSource = new window.EventSource("/api/notebooks/stream");
-  eventSource.addEventListener("notebooks", (event) => {
-    try {
-      applyNotebookEventsState(JSON.parse(event.data));
-    } catch (error) {
-      console.error("Failed to parse notebook event.", error);
-    }
-  });
-  eventSource.onerror = () => {
-    // Let the browser reconnect automatically.
-  };
-  notebookEventsEventSource = eventSource;
+  realtimeEventsEventSource = eventSource;
 }
 
 async function openIngestionWorkbench({ focusJobId = "", focusGeneratorId = "" } = {}) {
@@ -13116,10 +13125,6 @@ syncShellVisibility();
 applyWorkbenchTitle();
 applyNotebookMetadata();
 restoreSelectedSourceObject();
-ensureDataGenerationEventSource();
-ensureDataSourceEventsEventSource();
-ensureQueryJobsEventSource();
-ensureNotebookEventsEventSource();
 const initialWorkspaceMode = currentWorkspaceMode();
 const initialLoadTasks = [
   loadQueryJobsState().catch((error) => {
@@ -13127,6 +13132,12 @@ const initialLoadTasks = [
   }),
   loadDataGenerationJobsState().catch((error) => {
     console.error("Failed to load data generation jobs.", error);
+  }),
+  loadDataSourceEventsState().catch((error) => {
+    console.error("Failed to load data source events.", error);
+  }),
+  loadNotebookEventsState().catch((error) => {
+    console.error("Failed to load notebook events.", error);
   }),
 ];
 
@@ -13140,6 +13151,7 @@ if (initialWorkspaceMode === "ingestion") {
 
 Promise.allSettled(initialLoadTasks)
   .finally(() => {
+    ensureRealtimeEventsEventSource();
     refreshSidebar(initialWorkspaceMode).catch((error) => {
       console.error("Failed to refresh the sidebar during startup.", error);
     });

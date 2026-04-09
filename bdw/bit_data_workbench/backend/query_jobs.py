@@ -3,7 +3,7 @@ from __future__ import annotations
 import threading
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, Callable, Protocol
 
@@ -122,12 +122,14 @@ class QueryJobManager:
         postgres_connection_factory: Callable[[str], Any],
         notebook_title_resolver: Callable[[str], str | None],
         metadata_refresher: Callable[[], None],
+        state_change_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._max_result_rows = max(1, max_result_rows)
         self._connection_factory = connection_factory
         self._postgres_connection_factory = postgres_connection_factory
         self._notebook_title_resolver = notebook_title_resolver
         self._metadata_refresher = metadata_refresher
+        self._state_change_callback = state_change_callback
         self._reporters = QueryProgressReporterRegistry()
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
@@ -242,14 +244,6 @@ class QueryJobManager:
 
     def state_payload(self) -> dict[str, Any]:
         with self._condition:
-            return self._state_payload_locked()
-
-    def wait_for_state(self, last_version: int | None, timeout: float = 15.0) -> dict[str, Any]:
-        with self._condition:
-            if last_version is None or last_version != self._state_version:
-                return self._state_payload_locked()
-
-            self._condition.wait_for(lambda: self._state_version != last_version, timeout=timeout)
             return self._state_payload_locked()
 
     def _run_job(self, job_id: str) -> None:
@@ -591,7 +585,10 @@ class QueryJobManager:
 
     def _touch_locked(self) -> None:
         self._state_version += 1
+        payload = self._state_payload_locked()
         self._condition.notify_all()
+        if self._state_change_callback is not None:
+            self._state_change_callback(payload)
 
     def _prune_history_locked(self) -> None:
         terminal_jobs = [

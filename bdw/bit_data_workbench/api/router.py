@@ -283,74 +283,6 @@ def cleanup_data_generation_job(
     return JSONResponse(jsonable_encoder(snapshot))
 
 
-@router.get("/api/data-generation-jobs/stream")
-async def stream_data_generation_jobs(
-    request: Request,
-    service: WorkbenchService = Depends(get_workbench_service),
-) -> StreamingResponse:
-    async def event_stream():
-        last_version: int | None = None
-        while True:
-            if await request.is_disconnected():
-                break
-
-            snapshot = await asyncio.to_thread(
-                service.wait_for_data_generation_jobs_state,
-                last_version,
-                15.0,
-            )
-            version = int(snapshot.get("version", 0))
-            if last_version is None or version != last_version:
-                last_version = version
-                yield f"event: jobs\ndata: {json.dumps(jsonable_encoder(snapshot))}\n\n"
-            else:
-                yield "event: ping\ndata: {}\n\n"
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
-@router.get("/api/data-source-events/stream")
-async def stream_data_source_events(
-    request: Request,
-    service: WorkbenchService = Depends(get_workbench_service),
-) -> StreamingResponse:
-    async def event_stream():
-        last_version: int | None = None
-        while True:
-            if await request.is_disconnected():
-                break
-
-            snapshot = await asyncio.to_thread(
-                service.wait_for_data_source_events_state,
-                last_version,
-                15.0,
-            )
-            version = int(snapshot.get("version", 0))
-            if last_version is None or version != last_version:
-                last_version = version
-                yield f"event: sources\ndata: {json.dumps(jsonable_encoder(snapshot))}\n\n"
-            else:
-                yield "event: ping\ndata: {}\n\n"
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
 @router.get("/api/query-jobs")
 def query_jobs_state(service: WorkbenchService = Depends(get_workbench_service)) -> JSONResponse:
     return JSONResponse(jsonable_encoder(service.query_jobs_state()))
@@ -435,40 +367,6 @@ def save_query_job_export_to_s3(
     return JSONResponse(jsonable_encoder(result))
 
 
-@router.get("/api/query-jobs/stream")
-async def stream_query_jobs(
-    request: Request,
-    service: WorkbenchService = Depends(get_workbench_service),
-) -> StreamingResponse:
-    async def event_stream():
-        last_version: int | None = None
-        while True:
-            if await request.is_disconnected():
-                break
-
-            snapshot = await asyncio.to_thread(
-                service.wait_for_query_jobs_state,
-                last_version,
-                15.0,
-            )
-            version = int(snapshot.get("version", 0))
-            if last_version is None or version != last_version:
-                last_version = version
-                yield f"event: jobs\ndata: {json.dumps(jsonable_encoder(snapshot))}\n\n"
-            else:
-                yield "event: ping\ndata: {}\n\n"
-
-    return StreamingResponse(
-        event_stream(),
-        media_type="text/event-stream",
-        headers={
-            "Cache-Control": "no-cache",
-            "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        },
-    )
-
-
 @router.post("/api/notebooks/shared")
 def upsert_shared_notebook(
     payload: SharedNotebookUpsertPayload,
@@ -511,28 +409,65 @@ def delete_shared_notebook(
     return JSONResponse(jsonable_encoder(result))
 
 
-@router.get("/api/notebooks/stream")
-async def stream_notebooks(
+@router.get("/api/notebooks/state")
+def notebook_events_state(
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return JSONResponse(jsonable_encoder(service.notebook_events_state()))
+
+
+@router.get("/api/events/stream")
+async def stream_realtime_events(
     request: Request,
     service: WorkbenchService = Depends(get_workbench_service),
+    query_jobs_version: int | None = Query(default=None, alias="queryJobsVersion"),
+    data_generation_jobs_version: int | None = Query(
+        default=None,
+        alias="dataGenerationJobsVersion",
+    ),
+    data_source_events_version: int | None = Query(
+        default=None,
+        alias="dataSourceEventsVersion",
+    ),
+    notebook_events_version: int | None = Query(
+        default=None,
+        alias="notebookEventsVersion",
+    ),
 ) -> StreamingResponse:
     async def event_stream():
-        last_version: int | None = None
+        last_versions = {
+            "query-jobs": query_jobs_version,
+            "data-generation-jobs": data_generation_jobs_version,
+            "data-source-events": data_source_events_version,
+            "notebook-events": notebook_events_version,
+        }
+        yield "event: ready\ndata: {}\n\n"
+
         while True:
             if await request.is_disconnected():
                 break
 
-            snapshot = await asyncio.to_thread(
-                service.wait_for_notebook_events_state,
-                last_version,
+            updates = await asyncio.to_thread(
+                service.wait_for_realtime_updates,
+                last_versions,
                 15.0,
             )
-            version = int(snapshot.get("version", 0))
-            if last_version is None or version != last_version:
-                last_version = version
-                yield f"event: notebooks\ndata: {json.dumps(jsonable_encoder(snapshot))}\n\n"
-            else:
+            if not updates:
                 yield "event: ping\ndata: {}\n\n"
+                continue
+
+            for update in updates:
+                topic = str(update.get("topic") or "").strip()
+                snapshot = update.get("snapshot") or {}
+                if not topic:
+                    continue
+                last_versions[topic] = int(
+                    snapshot.get("version", last_versions.get(topic, 0))
+                )
+                yield (
+                    f"event: {topic}\n"
+                    f"data: {json.dumps(jsonable_encoder(snapshot))}\n\n"
+                )
 
     return StreamingResponse(
         event_stream(),

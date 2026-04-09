@@ -39,11 +39,13 @@ class DataGenerationJobManager:
         registry: DataGeneratorRegistry,
         connection_factory: Callable[[], object],
         metadata_refresher: Callable[[], None],
+        state_change_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._settings = settings
         self._registry = registry
         self._connection_factory = connection_factory
         self._metadata_refresher = metadata_refresher
+        self._state_change_callback = state_change_callback
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
         self._jobs: dict[str, DataGenerationJobRecord] = {}
@@ -178,14 +180,6 @@ class DataGenerationJobManager:
 
     def state_payload(self) -> dict[str, Any]:
         with self._condition:
-            return self._state_payload_locked()
-
-    def wait_for_state(self, last_version: int | None, timeout: float = 15.0) -> dict[str, Any]:
-        with self._condition:
-            if last_version is None or last_version != self._state_version:
-                return self._state_payload_locked()
-
-            self._condition.wait_for(lambda: self._state_version != last_version, timeout=timeout)
             return self._state_payload_locked()
 
     def _run_job(self, job_id: str) -> None:
@@ -330,7 +324,10 @@ class DataGenerationJobManager:
 
     def _touch_locked(self) -> None:
         self._state_version += 1
+        payload = self._state_payload_locked()
         self._condition.notify_all()
+        if self._state_change_callback is not None:
+            self._state_change_callback(payload)
 
     def _prune_history_locked(self) -> None:
         terminal_jobs = [

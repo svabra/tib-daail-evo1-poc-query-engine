@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import RLock, Thread
+from typing import Any
 
 import duckdb
 
@@ -61,6 +62,12 @@ logger = logging.getLogger(__name__)
 STARTUP_DIVIDER = "-------------------------------"
 S3_BOOTSTRAP_SAMPLE_KEY = "startup/vat_context_bootstrap.csv"
 MAX_NOTEBOOK_EVENT_HISTORY = 40
+REALTIME_TOPIC_ORDER = (
+    "query-jobs",
+    "data-generation-jobs",
+    "data-source-events",
+    "notebook-events",
+)
 S3_BOOTSTRAP_SAMPLE_CSV = """company_uid,company_name,canton_code,tax_period_end,transaction_id,declared_turnover_chf,net_vat_due_chf,refund_claim_chf,filing_status,category
 CHE-100.000.001,Alpine Foods AG,ZH,2025-03-31,TX-10001,124000.00,9300.00,0.00,filed,standard
 CHE-100.000.002,Bern Logistics GmbH,BE,2025-03-31,TX-10002,88000.00,4200.00,0.00,filed,reduced
@@ -155,9 +162,16 @@ class WorkbenchService:
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._catalogs: list[SourceCatalog] = []
         self._notebooks: list[NotebookDefinition] = []
-        self._shared_notebook_store = SharedNotebookStore(self._shared_notebook_store_path())
+        self._shared_notebook_store = SharedNotebookStore(
+            self._shared_notebook_store_path()
+        )
         self._notebook_events: list[NotebookEventDefinition] = []
         self._notebook_events_version = 0
+        self._realtime_signal_version = 0
+        self._realtime_topic_versions: dict[str, int] = {
+            topic: 0 for topic in REALTIME_TOPIC_ORDER
+        }
+        self._realtime_snapshots: dict[str, dict[str, Any]] = {}
         self._completion_schema: dict[str, object] = {}
         self._source_options: list[dict[str, str]] = []
         self._startup_threads: list[Thread] = []
@@ -167,6 +181,10 @@ class WorkbenchService:
             postgres_connection_factory=self._create_postgres_native_connection,
             notebook_title_resolver=self._resolve_notebook_title,
             metadata_refresher=self.refresh_metadata_state,
+            state_change_callback=lambda snapshot: self._publish_realtime_snapshot(
+                "query-jobs",
+                snapshot,
+            ),
         )
         self._s3_plugin = S3DataSourcePlugin(settings)
         self._pg_oltp_plugin = PostgresDataSourcePlugin(
@@ -200,10 +218,18 @@ class WorkbenchService:
             registry=self._data_generators,
             connection_factory=self._create_worker_connection,
             metadata_refresher=self.refresh_metadata_state,
+            state_change_callback=lambda snapshot: self._publish_realtime_snapshot(
+                "data-generation-jobs",
+                snapshot,
+            ),
         )
         self._data_source_discovery = DataSourceDiscoveryManager(
             connection_factory=self._create_worker_connection,
             metadata_refresher=self.refresh_metadata_state,
+            state_change_callback=lambda snapshot: self._publish_realtime_snapshot(
+                "data-source-events",
+                snapshot,
+            ),
             discoverers=[
                 SqlSourceDiscoverer(
                     source_id="pg_oltp",
@@ -220,6 +246,30 @@ class WorkbenchService:
                 S3DataSourceDiscoverer(settings),
             ],
         )
+        self._initialize_realtime_snapshots()
+
+    def _initialize_realtime_snapshots(self) -> None:
+        self._set_realtime_snapshot(
+            "query-jobs",
+            self._query_jobs.state_payload(),
+            notify=False,
+        )
+        self._set_realtime_snapshot(
+            "data-generation-jobs",
+            self._data_generation_jobs.state_payload(),
+            notify=False,
+        )
+        self._set_realtime_snapshot(
+            "data-source-events",
+            self._data_source_discovery.state_payload(),
+            notify=False,
+        )
+        with self._condition:
+            self._set_realtime_snapshot_locked(
+                "notebook-events",
+                self._notebook_events_state_locked(),
+                notify=False,
+            )
 
     def start(self) -> None:
         started = time.perf_counter()
@@ -322,17 +372,24 @@ class WorkbenchService:
         with self._condition:
             return self._notebook_events_state_locked()
 
-    def wait_for_notebook_events_state(
+    def wait_for_realtime_updates(
         self,
-        last_version: int | None,
+        last_versions: dict[str, int] | None,
         timeout: float = 15.0,
-    ) -> dict[str, object]:
+    ) -> list[dict[str, Any]]:
+        normalized_versions = {
+            topic: int((last_versions or {}).get(topic, -1))
+            for topic in REALTIME_TOPIC_ORDER
+        }
         with self._condition:
-            if last_version is None or last_version != self._notebook_events_version:
-                return self._notebook_events_state_locked()
+            if self._has_realtime_updates_locked(normalized_versions):
+                return self._realtime_updates_locked(normalized_versions)
 
-            self._condition.wait_for(lambda: self._notebook_events_version != last_version, timeout=timeout)
-            return self._notebook_events_state_locked()
+            self._condition.wait_for(
+                lambda: self._has_realtime_updates_locked(normalized_versions),
+                timeout=timeout,
+            )
+            return self._realtime_updates_locked(normalized_versions)
 
     def upsert_shared_notebook(
         self,
@@ -475,27 +532,6 @@ class WorkbenchService:
 
     def disconnect_data_source(self, source_id: str) -> dict[str, object]:
         return self._data_source_discovery.disconnect_source(source_id)
-
-    def wait_for_query_jobs_state(
-        self,
-        last_version: int | None,
-        timeout: float = 15.0,
-    ) -> dict[str, object]:
-        return self._query_jobs.wait_for_state(last_version, timeout=timeout)
-
-    def wait_for_data_generation_jobs_state(
-        self,
-        last_version: int | None,
-        timeout: float = 15.0,
-    ) -> dict[str, object]:
-        return self._data_generation_jobs.wait_for_state(last_version, timeout=timeout)
-
-    def wait_for_data_source_events_state(
-        self,
-        last_version: int | None,
-        timeout: float = 15.0,
-    ) -> dict[str, object]:
-        return self._data_source_discovery.wait_for_state(last_version, timeout=timeout)
 
     def start_query_job(
         self,
@@ -826,7 +862,48 @@ class WorkbenchService:
         if len(self._notebook_events) > MAX_NOTEBOOK_EVENT_HISTORY:
             self._notebook_events = self._notebook_events[-MAX_NOTEBOOK_EVENT_HISTORY:]
         self._notebook_events_version += 1
+        self._set_realtime_snapshot_locked(
+            "notebook-events",
+            self._notebook_events_state_locked(),
+            notify=False,
+        )
+        self._realtime_signal_version += 1
         self._condition.notify_all()
+
+    def _set_realtime_snapshot(self, topic: str, snapshot: dict[str, Any], *, notify: bool) -> None:
+        with self._condition:
+            self._set_realtime_snapshot_locked(topic, snapshot, notify=notify)
+
+    def _set_realtime_snapshot_locked(self, topic: str, snapshot: dict[str, Any], *, notify: bool) -> None:
+        self._realtime_snapshots[topic] = snapshot
+        self._realtime_topic_versions[topic] = int(snapshot.get("version", 0))
+        if notify:
+            self._realtime_signal_version += 1
+            self._condition.notify_all()
+
+    def _publish_realtime_snapshot(self, topic: str, snapshot: dict[str, Any]) -> None:
+        with self._condition:
+            self._set_realtime_snapshot_locked(topic, snapshot, notify=True)
+
+    def _has_realtime_updates_locked(self, last_versions: dict[str, int]) -> bool:
+        return any(
+            self._realtime_topic_versions.get(topic, 0) != last_versions.get(topic, -1)
+            for topic in REALTIME_TOPIC_ORDER
+        )
+
+    def _realtime_updates_locked(self, last_versions: dict[str, int]) -> list[dict[str, Any]]:
+        updates: list[dict[str, Any]] = []
+        for topic in REALTIME_TOPIC_ORDER:
+            version = self._realtime_topic_versions.get(topic, 0)
+            if version == last_versions.get(topic, -1):
+                continue
+            updates.append(
+                {
+                    "topic": topic,
+                    "snapshot": self._realtime_snapshots.get(topic, {"version": version}),
+                }
+            )
+        return updates
 
     def _set_minimal_state(self) -> None:
         catalogs: list[SourceCatalog] = []

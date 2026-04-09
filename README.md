@@ -1,5 +1,18 @@
 # tib-daail-evo1-poc-query-engine
 
+## TODO
+
+1. [AM-1] Formalize the audience model before introducing real multi-user isolation. See [AM-1] Audience Model below.
+
+### [AM-1] Audience Model
+
+The current workbench keeps its existing single-user behavior.
+
+- Local Workspace notebooks, saved results, drafts, and browser UI state stay local to one browser profile through IndexedDB.
+- Shared Workspace content and shared notebooks remain shared through the backend runtime and configured S3-backed storage.
+- Realtime events now travel over one SSE connection, but that transport consolidation does not create per-user isolation by itself.
+- Until authentication and session-aware partitioning exist, backend-managed query jobs, ingestion jobs, source discovery state, and shared notebook events still follow the current single-runtime visibility model.
+
 This repository now contains the `DAAIFL Data Workbench` web UI and the supporting local integration stack.
 
 `DAAIFL Workbench` is a small FastAPI application that:
@@ -40,6 +53,38 @@ The application is intentionally split into:
 - `bdw/bit_data_workbench/backend`: DuckDB bootstrap, query execution and metadata
 
 This keeps the FastAPI interface separate from the backend data-processing layer from the start.
+
+## Realtime Event Flow
+
+The browser now uses one multiplexed SSE connection instead of opening separate streams per feature area.
+
+```text
+           commands
+          HTMX / fetch / POST requests
+
+  +---------+ ----------------------------------------------> +----------------------+
+  | Browser |                                                 | FastAPI web + api    |
+  |         | <---------------------------------------------- | /api/events/stream   |
+  +---------+              1 x SSE connection                 +----------+-----------+
+                    |
+                    | topic snapshots
+                    v
+                    +-----------------------------+
+                    | WorkbenchService realtime    |
+                    | broker                       |
+                    | - query-jobs                 |
+                    | - data-generation-jobs       |
+                    | - data-source-events         |
+                    | - notebook-events            |
+                    +------+------------+----------+
+                      |            |
+                state callbacks |            | notebook events
+                      v            v
+                +----------------+  +----------------+
+                | Query / ingest |  | Source / note- |
+                | managers       |  | book state     |
+                +----------------+  +----------------+
+```
 
 ## Local Development
 
@@ -229,7 +274,7 @@ The practical rule is simple: the app does not detect "where it is" by hostname.
 Build locally:
 
 ```bash
-docker build -f bdw/Dockerfile -t bit-data-workbench:0.4.1 .
+docker build -f bdw/Dockerfile -t bit-data-workbench:0.4.2 .
 ```
 
 Run directly without Compose-managed service wiring:
@@ -240,7 +285,7 @@ docker run --rm -d ^
   -p 8000:8000 ^
   -v "%cd%\\logs:/app/logs" ^
   -v "%cd%\\workspace:/workspace" ^
-  -e IMAGE_VERSION=0.4.1 ^
+  -e IMAGE_VERSION=0.4.2 ^
   -e DUCKDB_DATABASE=/workspace/bit-data-workbench.duckdb ^
   -e DUCKDB_EXTENSION_DIRECTORY=/opt/duckdb/extensions ^
   -e S3_ENDPOINT=minio:9000 ^
@@ -258,7 +303,7 @@ docker run --rm -d ^
   -e PG_PASSWORD=evo1 ^
   -e PG_OLTP_DATABASE=evo1_oltp ^
   -e PG_OLAP_DATABASE=evo1_olap ^
-  bit-data-workbench:0.4.1
+  bit-data-workbench:0.4.2
 ```
 
 ### TODO
@@ -285,7 +330,7 @@ The route is an OpenShift `edge` route and exposes the HTTP service externally t
 Current image:
 
 ```text
-docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.4.1
+docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.4.2
 ```
 
 ### RHOS S3 Authentication

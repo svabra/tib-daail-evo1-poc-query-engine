@@ -1,9 +1,30 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.4.1. Keep entries concise and
+# Derived from git history through version 0.4.2. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.4.2",
+        "releasedAt": "2026-04-09T13:04:44+02:00",
+        "features": [
+            (
+                "The browser now uses one multiplexed realtime SSE stream "
+                "instead of opening separate query, ingestion, source, and "
+                "notebook event streams per page."
+            ),
+            (
+                "Workbench pages no longer stall during local F5 runs when "
+                "background discovery publishes realtime updates while the "
+                "page shell is building its template context."
+            ),
+            (
+                "The main frontend bundle now gets a cache-busting URL on "
+                "page loads, so a normal refresh picks up the current "
+                "realtime client after backend changes."
+            ),
+        ],
+    },
     {
         "version": "0.4.1",
         "releasedAt": "2026-04-07T01:14:29+02:00",

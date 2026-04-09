@@ -831,10 +831,12 @@ class DataSourceDiscoveryManager:
         connection_factory: Callable[[], duckdb.DuckDBPyConnection],
         metadata_refresher: Callable[[], None],
         discoverers: list[DataSourceDiscoverer],
+        state_change_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._connection_factory = connection_factory
         self._metadata_refresher = metadata_refresher
         self._discoverers = list(discoverers)
+        self._state_change_callback = state_change_callback
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
         self._events: list[DataSourceDiscoveryEventDefinition] = []
@@ -934,14 +936,6 @@ class DataSourceDiscoveryManager:
             return {}
         return discoverer.specs_snapshot()
 
-    def wait_for_state(self, last_version: int | None, timeout: float = 15.0) -> dict[str, Any]:
-        with self._condition:
-            if last_version is None or last_version != self._state_version:
-                return self._state_payload_locked()
-
-            self._condition.wait_for(lambda: self._state_version != last_version, timeout=timeout)
-            return self._state_payload_locked()
-
     def _run_discoverer(self, discoverer: DataSourceDiscoverer) -> None:
         while not self._stop_event.is_set():
             self._sync_discoverer(discoverer, emit_event=True)
@@ -1004,9 +998,10 @@ class DataSourceDiscoveryManager:
             return
 
         if status_changed:
+            payload: dict[str, Any] | None = None
             with self._condition:
-                self._state_version += 1
-                self._condition.notify_all()
+                payload = self._notify_state_change_locked()
+            self._publish_state_change(payload)
 
     def _update_source_status(self, status: SourceConnectionStatus) -> bool:
         with self._condition:
@@ -1034,11 +1029,24 @@ class DataSourceDiscoveryManager:
             removed_relations=list(result.removed_relations),
             updated_relations=list(result.updated_relations),
         )
+        payload: dict[str, Any] | None = None
         with self._condition:
             self._events.insert(0, event)
             del self._events[MAX_SOURCE_EVENT_HISTORY:]
-            self._state_version += 1
-            self._condition.notify_all()
+            payload = self._notify_state_change_locked()
+        self._publish_state_change(payload)
+
+    def _notify_state_change_locked(self) -> dict[str, Any]:
+        self._state_version += 1
+        payload = self._state_payload_locked()
+        self._condition.notify_all()
+        return payload
+
+    def _publish_state_change(self, payload: dict[str, Any] | None) -> None:
+        if payload is None:
+            return
+        if self._state_change_callback is not None:
+            self._state_change_callback(payload)
 
     def _state_payload_locked(self) -> dict[str, Any]:
         last_detected_at = self._events[0].detected_at if self._events else None
