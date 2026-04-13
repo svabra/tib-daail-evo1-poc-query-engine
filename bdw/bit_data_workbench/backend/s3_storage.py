@@ -276,14 +276,14 @@ def iter_s3_object_versions(client, bucket: str, prefix: str = "") -> Iterator[d
         for item in response.get("Versions") or []:
             key = item.get("Key")
             version_id = item.get("VersionId")
-            if key and version_id:
-                yield {"Key": key, "VersionId": version_id}
+            if key:
+                yield _object_identifier(key, version_id)
 
         for item in response.get("DeleteMarkers") or []:
             key = item.get("Key")
             version_id = item.get("VersionId")
             if key and version_id:
-                yield {"Key": key, "VersionId": version_id}
+                yield _object_identifier(key, version_id)
 
         if not response.get("IsTruncated"):
             break
@@ -345,15 +345,23 @@ def _object_delete_fallback_allowed(error: Exception) -> bool:
     }
 
 
+def _normalized_version_id(version_id: object) -> str | None:
+    normalized = str(version_id or "").strip()
+    if not normalized or normalized.lower() == "null":
+        return None
+    return normalized
+
+
 def _object_identifier(key: str, version_id: str | None = None) -> dict[str, str]:
     identifier = {"Key": key}
-    if version_id:
-        identifier["VersionId"] = version_id
+    normalized_version_id = _normalized_version_id(version_id)
+    if normalized_version_id:
+        identifier["VersionId"] = normalized_version_id
     return identifier
 
 
 def _delete_identifier_label(identifier: dict[str, str]) -> str:
-    if identifier.get("VersionId") and not _is_null_version_id(identifier.get("VersionId")):
+    if _normalized_version_id(identifier.get("VersionId")):
         return (
             f"object '{identifier['Key']}' "
             f"(version '{identifier['VersionId']}')"
@@ -362,7 +370,7 @@ def _delete_identifier_label(identifier: dict[str, str]) -> str:
 
 
 def _is_null_version_id(version_id: object) -> bool:
-    return str(version_id or "").strip().lower() == "null"
+    return _normalized_version_id(version_id) is None and str(version_id or "").strip().lower() == "null"
 
 
 def delete_s3_object(client, bucket: str, identifier: dict[str, str]) -> None:
@@ -370,7 +378,7 @@ def delete_s3_object(client, bucket: str, identifier: dict[str, str]) -> None:
         "Bucket": bucket,
         "Key": identifier["Key"],
     }
-    version_id = identifier.get("VersionId")
+    version_id = _normalized_version_id(identifier.get("VersionId"))
     if version_id:
         kwargs["VersionId"] = version_id
     try:

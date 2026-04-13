@@ -23,14 +23,18 @@ templates = Jinja2Templates(directory=str(Path(__file__).resolve().parents[1] / 
 
 
 class NotebookCellPayload(BaseModel):
-    cell_id: str = Field(alias="cellId")
+    cell_id: str = Field(validation_alias="cellId", serialization_alias="cellId")
     sql: str = ""
-    data_sources: list[str] = Field(default_factory=list, alias="dataSources")
+    data_sources: list[str] = Field(
+        default_factory=list,
+        validation_alias="dataSources",
+        serialization_alias="dataSources",
+    )
 
 
 class NotebookVersionPayload(BaseModel):
-    version_id: str = Field(alias="versionId")
-    created_at: str = Field(alias="createdAt")
+    version_id: str = Field(validation_alias="versionId", serialization_alias="versionId")
+    created_at: str = Field(validation_alias="createdAt", serialization_alias="createdAt")
     title: str = ""
     summary: str = ""
     tags: list[str] = Field(default_factory=list)
@@ -38,38 +42,42 @@ class NotebookVersionPayload(BaseModel):
 
 
 class SharedNotebookUpsertPayload(BaseModel):
-    notebook_id: str | None = Field(default=None, alias="notebookId")
+    notebook_id: str | None = Field(default=None, validation_alias="notebookId", serialization_alias="notebookId")
     title: str = ""
     summary: str = ""
     tags: list[str] = Field(default_factory=list)
-    tree_path: list[str] = Field(default_factory=list, alias="treePath")
-    linked_generator_id: str = Field(default="", alias="linkedGeneratorId")
-    created_at: str | None = Field(default=None, alias="createdAt")
+    tree_path: list[str] = Field(default_factory=list, validation_alias="treePath", serialization_alias="treePath")
+    linked_generator_id: str = Field(
+        default="",
+        validation_alias="linkedGeneratorId",
+        serialization_alias="linkedGeneratorId",
+    )
+    created_at: str | None = Field(default=None, validation_alias="createdAt", serialization_alias="createdAt")
     cells: list[NotebookCellPayload] = Field(default_factory=list)
     versions: list[NotebookVersionPayload] = Field(default_factory=list)
 
 
 class S3BucketCreatePayload(BaseModel):
-    bucket_name: str = Field(alias="bucketName")
+    bucket_name: str = Field(validation_alias="bucketName", serialization_alias="bucketName")
 
 
 class S3FolderCreatePayload(BaseModel):
     bucket: str = ""
     prefix: str = ""
-    folder_name: str = Field(alias="folderName")
+    folder_name: str = Field(validation_alias="folderName", serialization_alias="folderName")
 
 
 class S3ExplorerDeletePayload(BaseModel):
-    entry_kind: str = Field(alias="entryKind")
+    entry_kind: str = Field(validation_alias="entryKind", serialization_alias="entryKind")
     bucket: str = ""
     prefix: str = ""
 
 
 class QueryResultS3ExportPayload(BaseModel):
-    export_format: str = Field(alias="format")
+    export_format: str = Field(validation_alias="format", serialization_alias="format")
     bucket: str = ""
     prefix: str = ""
-    file_name: str = Field(default="", alias="fileName")
+    file_name: str = Field(default="", validation_alias="fileName", serialization_alias="fileName")
 
 
 @router.get("/info")

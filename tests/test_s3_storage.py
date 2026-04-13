@@ -29,7 +29,7 @@ def build_settings():
     return settings_type(
         service_name="bit-data-workbench",
         ui_title="DAAIFL Workbench",
-        image_version="0.4.4",
+        image_version="0.4.5",
         port=8000,
         duckdb_database=Path("/tmp/workspace/workspace.duckdb"),
         duckdb_extension_directory=Path("/opt/duckdb/extensions"),
@@ -399,22 +399,11 @@ class S3StorageTests(unittest.TestCase):
             ],
         )
 
-    def test_delete_s3_object_retries_plain_delete_for_null_version_access_denied(
+    def test_delete_s3_object_ignores_null_version_id(
         self,
     ) -> None:
         s3_storage = import_s3_storage()
-        access_denied_error = s3_storage.ClientError(
-            {
-                "Error": {
-                    "Code": "AccessDenied",
-                    "Message": "Access Denied",
-                }
-            },
-            "DeleteObject",
-        )
-        fake_client = _DeleteTrackingClient(
-            delete_object_side_effects=[access_denied_error]
-        )
+        fake_client = _DeleteTrackingClient()
 
         s3_storage.delete_s3_object(
             fake_client,
@@ -425,12 +414,36 @@ class S3StorageTests(unittest.TestCase):
         self.assertEqual(
             fake_client.delete_object_calls,
             [
-                {
-                    "Key": "generated/part-00001.parquet",
-                    "VersionId": "null",
-                },
                 {"Key": "generated/part-00001.parquet"},
             ],
+        )
+
+    def test_delete_s3_bucket_strips_null_version_id_from_bulk_delete(
+        self,
+    ) -> None:
+        s3_storage = import_s3_storage()
+        settings = build_settings()
+        fake_client = _DeleteTrackingClient()
+
+        with patch.object(
+            s3_storage,
+            "s3_client",
+            return_value=fake_client,
+        ), patch.object(
+            s3_storage,
+            "iter_s3_object_versions",
+            return_value=[{"Key": "foo.parquet", "VersionId": "null"}],
+        ), patch.object(
+            s3_storage,
+            "_bucket_is_accessible",
+            return_value=True,
+        ):
+            deleted = s3_storage.delete_s3_bucket(settings, "vat-smoke-test")
+
+        self.assertEqual(deleted, 1)
+        self.assertEqual(
+            fake_client.delete_objects_calls,
+            [[{"Key": "foo.parquet"}]],
         )
 
     def test_remove_s3_bucket_reports_hidden_versions(self) -> None:
