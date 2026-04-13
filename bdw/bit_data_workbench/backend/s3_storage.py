@@ -353,7 +353,7 @@ def _object_identifier(key: str, version_id: str | None = None) -> dict[str, str
 
 
 def _delete_identifier_label(identifier: dict[str, str]) -> str:
-    if identifier.get("VersionId"):
+    if identifier.get("VersionId") and not _is_null_version_id(identifier.get("VersionId")):
         return (
             f"object '{identifier['Key']}' "
             f"(version '{identifier['VersionId']}')"
@@ -361,16 +361,38 @@ def _delete_identifier_label(identifier: dict[str, str]) -> str:
     return f"object '{identifier['Key']}'"
 
 
+def _is_null_version_id(version_id: object) -> bool:
+    return str(version_id or "").strip().lower() == "null"
+
+
 def delete_s3_object(client, bucket: str, identifier: dict[str, str]) -> None:
     kwargs = {
         "Bucket": bucket,
         "Key": identifier["Key"],
     }
-    if identifier.get("VersionId"):
-        kwargs["VersionId"] = identifier["VersionId"]
+    version_id = identifier.get("VersionId")
+    if version_id:
+        kwargs["VersionId"] = version_id
     try:
         client.delete_object(**kwargs)
     except (ClientError, BotoCoreError) as exc:
+        if (
+            version_id
+            and _is_null_version_id(version_id)
+            and _object_delete_fallback_allowed(exc)
+        ):
+            try:
+                client.delete_object(
+                    Bucket=bucket,
+                    Key=identifier["Key"],
+                )
+                return
+            except (ClientError, BotoCoreError) as retry_exc:
+                _raise_s3_operation_error(
+                    retry_exc,
+                    action=f"delete {_delete_identifier_label(identifier)}",
+                    bucket=bucket,
+                )
         _raise_s3_operation_error(
             exc,
             action=f"delete {_delete_identifier_label(identifier)}",

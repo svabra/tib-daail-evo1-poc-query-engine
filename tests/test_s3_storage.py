@@ -29,7 +29,7 @@ def build_settings():
     return settings_type(
         service_name="bit-data-workbench",
         ui_title="DAAIFL Workbench",
-        image_version="0.4.3",
+        image_version="0.4.4",
         port=8000,
         duckdb_database=Path("/tmp/workspace/workspace.duckdb"),
         duckdb_extension_directory=Path("/opt/duckdb/extensions"),
@@ -128,6 +128,7 @@ class _DeleteTrackingClient:
         delete_bucket_side_effects=None,
         delete_objects_side_effects=None,
         delete_objects_responses=None,
+        delete_object_side_effects=None,
     ) -> None:
         self.meta = _FakeMeta()
         self._list_responses = list(list_responses or [])
@@ -144,6 +145,7 @@ class _DeleteTrackingClient:
             delete_objects_side_effects or []
         )
         self._delete_objects_responses = list(delete_objects_responses or [])
+        self._delete_object_side_effects = list(delete_object_side_effects or [])
         self.delete_objects_calls: list[list[dict[str, str]]] = []
         self.delete_object_calls: list[dict[str, str]] = []
 
@@ -179,6 +181,10 @@ class _DeleteTrackingClient:
         if kwargs.get("VersionId"):
             identifier["VersionId"] = kwargs["VersionId"]
         self.delete_object_calls.append(identifier)
+        if self._delete_object_side_effects:
+            effect = self._delete_object_side_effects.pop(0)
+            if isinstance(effect, Exception):
+                raise effect
         return None
 
     def delete_bucket(self, **_kwargs) -> None:
@@ -390,6 +396,40 @@ class S3StorageTests(unittest.TestCase):
             [
                 {"Key": "alpha.parquet"},
                 {"Key": "beta.parquet"},
+            ],
+        )
+
+    def test_delete_s3_object_retries_plain_delete_for_null_version_access_denied(
+        self,
+    ) -> None:
+        s3_storage = import_s3_storage()
+        access_denied_error = s3_storage.ClientError(
+            {
+                "Error": {
+                    "Code": "AccessDenied",
+                    "Message": "Access Denied",
+                }
+            },
+            "DeleteObject",
+        )
+        fake_client = _DeleteTrackingClient(
+            delete_object_side_effects=[access_denied_error]
+        )
+
+        s3_storage.delete_s3_object(
+            fake_client,
+            "vat-smoke-test",
+            {"Key": "generated/part-00001.parquet", "VersionId": "null"},
+        )
+
+        self.assertEqual(
+            fake_client.delete_object_calls,
+            [
+                {
+                    "Key": "generated/part-00001.parquet",
+                    "VersionId": "null",
+                },
+                {"Key": "generated/part-00001.parquet"},
             ],
         )
 
