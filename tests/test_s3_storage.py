@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from tempfile import TemporaryDirectory
 from pathlib import Path
 import sys
 import unittest
@@ -29,7 +30,7 @@ def build_settings():
     return settings_type(
         service_name="bit-data-workbench",
         ui_title="DAAIFL Workbench",
-        image_version="0.4.5",
+        image_version="0.4.6",
         port=8000,
         duckdb_database=Path("/tmp/workspace/workspace.duckdb"),
         duckdb_extension_directory=Path("/opt/duckdb/extensions"),
@@ -195,6 +196,96 @@ class _DeleteTrackingClient:
         return None
 
 
+class _BootstrapFlowClient:
+    def __init__(self, s3_storage) -> None:
+        self.meta = _FakeMeta()
+        self._s3_storage = s3_storage
+        self._buckets: set[str] = set()
+        self._objects: dict[str, set[str]] = {}
+        self.create_bucket_calls: list[str] = []
+        self.upload_calls: list[dict[str, str]] = []
+        self.delete_bucket_calls: list[str] = []
+
+    def head_bucket(self, **kwargs) -> None:
+        bucket = kwargs["Bucket"]
+        if bucket not in self._buckets:
+            raise self._s3_storage.ClientError(
+                {"Error": {"Code": "404", "Message": "Not Found"}},
+                "HeadBucket",
+            )
+
+    def list_objects_v2(self, **kwargs):
+        bucket = kwargs["Bucket"]
+        if bucket not in self._buckets:
+            raise self._s3_storage.ClientError(
+                {"Error": {"Code": "404", "Message": "Not Found"}},
+                "ListObjectsV2",
+            )
+        prefix = str(kwargs.get("Prefix") or "")
+        contents = [
+            {"Key": key}
+            for key in sorted(self._objects.get(bucket, set()))
+            if not prefix or key.startswith(prefix)
+        ]
+        max_keys = int(kwargs.get("MaxKeys") or len(contents) or 1000)
+        limited = contents[:max_keys]
+        return {
+            "KeyCount": len(limited),
+            "Contents": limited,
+            "IsTruncated": False,
+        }
+
+    def list_object_versions(self, **kwargs):
+        bucket = kwargs["Bucket"]
+        if bucket not in self._buckets:
+            raise self._s3_storage.ClientError(
+                {"Error": {"Code": "404", "Message": "Not Found"}},
+                "ListObjectVersions",
+            )
+        return {"Versions": [], "DeleteMarkers": [], "IsTruncated": False}
+
+    def create_bucket(self, **kwargs) -> None:
+        bucket = kwargs["Bucket"]
+        self.create_bucket_calls.append(bucket)
+        self._buckets.add(bucket)
+        self._objects.setdefault(bucket, set())
+
+    def upload_file(self, filename: str, bucket: str, key: str) -> None:
+        if bucket not in self._buckets:
+            raise self._s3_storage.ClientError(
+                {"Error": {"Code": "404", "Message": "Not Found"}},
+                "PutObject",
+            )
+        self.upload_calls.append({"Bucket": bucket, "Key": key, "Filename": filename})
+        self._objects.setdefault(bucket, set()).add(key)
+
+    def delete_objects(self, **kwargs):
+        bucket = kwargs["Bucket"]
+        for item in kwargs["Delete"]["Objects"]:
+            self._objects.setdefault(bucket, set()).discard(item["Key"])
+        return {}
+
+    def delete_object(self, **kwargs) -> None:
+        bucket = kwargs["Bucket"]
+        self._objects.setdefault(bucket, set()).discard(kwargs["Key"])
+
+    def delete_bucket(self, **kwargs) -> None:
+        bucket = kwargs["Bucket"]
+        self.delete_bucket_calls.append(bucket)
+        if self._objects.get(bucket):
+            raise self._s3_storage.ClientError(
+                {
+                    "Error": {
+                        "Code": "BucketNotEmpty",
+                        "Message": "The bucket you tried to delete is not empty.",
+                    }
+                },
+                "DeleteBucket",
+            )
+        self._buckets.discard(bucket)
+        self._objects.pop(bucket, None)
+
+
 class S3StorageTests(unittest.TestCase):
     def test_content_md5_header_value_matches_expected_fixture(self) -> None:
         s3_storage = import_s3_storage()
@@ -290,6 +381,39 @@ class S3StorageTests(unittest.TestCase):
 
         self.assertTrue(deleted)
         self.assertEqual(fake_client.delete_calls, 2)
+
+    def test_remove_s3_bucket_logs_delete_bucket_access_denied(self) -> None:
+        s3_storage = import_s3_storage()
+        settings = build_settings()
+        access_denied_error = s3_storage.ClientError(
+            {
+                "Error": {
+                    "Code": "AccessDenied",
+                    "Message": "Access Denied",
+                }
+            },
+            "DeleteBucket",
+        )
+        fake_client = _RetryingBucketClient(
+            list_responses=[{"KeyCount": 0, "Contents": []}],
+            delete_bucket_side_effects=[access_denied_error],
+        )
+
+        with patch.object(
+            s3_storage,
+            "s3_client",
+            return_value=fake_client,
+        ), patch.object(
+            s3_storage,
+            "_bucket_is_accessible",
+            return_value=True,
+        ), self.assertLogs("bit_data_workbench.backend.s3_storage", level="WARNING") as logs:
+            with self.assertRaisesRegex(ValueError, "AccessDenied: Access Denied"):
+                s3_storage.remove_s3_bucket(settings, "vat-smoke-test", max_attempts=1)
+
+        self.assertTrue(
+            any("operation=DeleteBucket" in message for message in logs.output)
+        )
 
     def test_delete_s3_bucket_allows_empty_bucket_when_versions_denied(
         self,
@@ -484,6 +608,46 @@ class S3StorageTests(unittest.TestCase):
                     "vat-smoke-test",
                     max_attempts=1,
                 )
+
+    def test_s3_bootstrap_create_upload_and_delete_bucket(self) -> None:
+        s3_storage = import_s3_storage()
+        settings = build_settings()
+        fake_client = _BootstrapFlowClient(s3_storage)
+
+        with TemporaryDirectory() as temp_dir:
+            local_path = Path(temp_dir) / "bootstrap.csv"
+            local_path.write_text("value\n1\n", encoding="utf-8")
+
+            with patch.object(
+                s3_storage,
+                "s3_client",
+                return_value=fake_client,
+            ), patch.object(s3_storage.time, "sleep"):
+                created = s3_storage.ensure_s3_bucket(settings, "bootstrap-bucket")
+                s3_storage.upload_s3_file(
+                    fake_client,
+                    local_path=local_path,
+                    bucket="bootstrap-bucket",
+                    key="bootstrap/data.csv",
+                )
+                deleted_keys = s3_storage.delete_s3_bucket(settings, "bootstrap-bucket")
+                bucket_deleted = s3_storage.remove_s3_bucket(settings, "bootstrap-bucket")
+
+        self.assertTrue(created)
+        self.assertEqual(fake_client.create_bucket_calls, ["bootstrap-bucket"])
+        self.assertEqual(
+            fake_client.upload_calls,
+            [
+                {
+                    "Bucket": "bootstrap-bucket",
+                    "Key": "bootstrap/data.csv",
+                    "Filename": str(local_path),
+                }
+            ],
+        )
+        self.assertEqual(deleted_keys, 1)
+        self.assertTrue(bucket_deleted)
+        self.assertEqual(fake_client.delete_bucket_calls, ["bootstrap-bucket"])
 
 
 if __name__ == "__main__":

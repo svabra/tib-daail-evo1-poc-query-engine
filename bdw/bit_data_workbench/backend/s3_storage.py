@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 from collections.abc import Iterator, Sequence
 import hashlib
+import logging
 import re
 import time
 from pathlib import Path
@@ -13,6 +14,9 @@ from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
 
 from ..config import Settings
+
+
+logger = logging.getLogger(__name__)
 
 
 def _parsed_endpoint_host_port(raw_endpoint: str) -> tuple[str | None, int | None]:
@@ -384,6 +388,13 @@ def delete_s3_object(client, bucket: str, identifier: dict[str, str]) -> None:
     try:
         client.delete_object(**kwargs)
     except (ClientError, BotoCoreError) as exc:
+        _log_s3_delete_failure(
+            "DeleteObject",
+            bucket=bucket,
+            key=identifier["Key"],
+            version_id=version_id,
+            error=exc,
+        )
         if (
             version_id
             and _is_null_version_id(version_id)
@@ -396,6 +407,12 @@ def delete_s3_object(client, bucket: str, identifier: dict[str, str]) -> None:
                 )
                 return
             except (ClientError, BotoCoreError) as retry_exc:
+                _log_s3_delete_failure(
+                    "DeleteObject[fallback]",
+                    bucket=bucket,
+                    key=identifier["Key"],
+                    error=retry_exc,
+                )
                 _raise_s3_operation_error(
                     retry_exc,
                     action=f"delete {_delete_identifier_label(identifier)}",
@@ -445,6 +462,12 @@ def delete_s3_objects(client, bucket: str, objects: list[str | dict[str, str]]) 
                 },
             )
         except (ClientError, BotoCoreError) as exc:
+            _log_s3_delete_failure(
+                "DeleteObjects",
+                bucket=bucket,
+                prefix=None,
+                error=exc,
+            )
             if _object_delete_fallback_allowed(exc):
                 deleted += delete_s3_objects_individually(
                     client,
@@ -488,6 +511,12 @@ def delete_s3_object_versions(client, bucket: str, key: str) -> int:
             if item["Key"] == key
         ]
     except (ClientError, BotoCoreError) as exc:
+        _log_s3_delete_failure(
+            "ListObjectVersions",
+            bucket=bucket,
+            key=key,
+            error=exc,
+        )
         if _is_missing_bucket_error(exc):
             raise ValueError(f"The S3 bucket '{bucket}' does not exist.") from exc
         if not _version_listing_fallback_allowed(exc):
@@ -510,6 +539,12 @@ def delete_s3_prefix(settings: Settings, bucket: str, prefix: str) -> int:
     try:
         versions = list(iter_s3_object_versions(client, bucket, prefix))
     except (ClientError, BotoCoreError) as exc:
+        _log_s3_delete_failure(
+            "ListObjectVersions",
+            bucket=bucket,
+            prefix=prefix,
+            error=exc,
+        )
         if _is_missing_bucket_error(exc):
             raise ValueError(f"The S3 bucket '{bucket}' does not exist.") from exc
         if not _version_listing_fallback_allowed(exc):
@@ -533,6 +568,11 @@ def delete_s3_bucket(settings: Settings, bucket: str) -> int:
     try:
         versions = list(iter_s3_object_versions(client, bucket))
     except (ClientError, BotoCoreError) as exc:
+        _log_s3_delete_failure(
+            "ListObjectVersions",
+            bucket=bucket,
+            error=exc,
+        )
         if _is_missing_bucket_error(exc):
             raise ValueError(f"The S3 bucket '{bucket}' does not exist.") from exc
         if _version_listing_access_denied(exc):
@@ -745,6 +785,27 @@ def _s3_error_message(error: Exception) -> str:
     return code or str(error)
 
 
+def _log_s3_delete_failure(
+    operation: str,
+    *,
+    bucket: str,
+    key: str | None = None,
+    prefix: str | None = None,
+    version_id: str | None = None,
+    error: Exception,
+) -> None:
+    logger.warning(
+        "S3 delete failure: operation=%s bucket=%r key=%r prefix=%r version_id=%r code=%r detail=%s",
+        operation,
+        bucket,
+        key,
+        prefix,
+        version_id,
+        _s3_error_code(error),
+        _s3_error_message(error),
+    )
+
+
 def remove_s3_bucket(
     settings: Settings,
     bucket: str,
@@ -760,6 +821,11 @@ def remove_s3_bucket(
         try:
             response = client.list_objects_v2(Bucket=bucket, MaxKeys=1)
         except (ClientError, BotoCoreError) as exc:
+            _log_s3_delete_failure(
+                "ListObjectsV2",
+                bucket=bucket,
+                error=exc,
+            )
             if _is_missing_bucket_error(exc):
                 raise ValueError(
                     f"The S3 bucket '{bucket}' does not exist."
@@ -779,6 +845,11 @@ def remove_s3_bucket(
         try:
             client.delete_bucket(Bucket=bucket)
         except (ClientError, BotoCoreError) as exc:
+            _log_s3_delete_failure(
+                "DeleteBucket",
+                bucket=bucket,
+                error=exc,
+            )
             if _is_missing_bucket_error(exc):
                 return True
             if (

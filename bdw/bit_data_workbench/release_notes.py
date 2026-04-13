@@ -1,9 +1,25 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.4.5. Keep entries concise and
+# Derived from git history through version 0.4.6. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.4.6",
+        "releasedAt": "2026-04-13T20:53:03.2246641+02:00",
+        "features": [
+            (
+                "S3 explorer delete failures now log the exact failing S3 "
+                "operation, bucket, key or prefix, version id, and backend "
+                "error details so RHOS permission denials are visible in pod logs."
+            ),
+            (
+                "A focused S3 bootstrap lifecycle regression now covers "
+                "create bucket, upload object, recursive object cleanup, and "
+                "final bucket deletion in one storage-level test."
+            ),
+        ],
+    },
     {
         "version": "0.4.5",
         "releasedAt": "2026-04-13T20:27:59.5688530+02:00",
