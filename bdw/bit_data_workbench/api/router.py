@@ -441,41 +441,50 @@ async def stream_realtime_events(
         default=None,
         alias="notebookEventsVersion",
     ),
+    client_connections_version: int | None = Query(
+        default=None,
+        alias="clientConnectionsVersion",
+    ),
 ) -> StreamingResponse:
     async def event_stream():
+        service.register_realtime_client()
         last_versions = {
             "query-jobs": query_jobs_version,
             "data-generation-jobs": data_generation_jobs_version,
             "data-source-events": data_source_events_version,
             "notebook-events": notebook_events_version,
+            "client-connections": client_connections_version,
         }
-        yield "event: ready\ndata: {}\n\n"
+        try:
+            yield "event: ready\ndata: {}\n\n"
 
-        while True:
-            if await request.is_disconnected():
-                break
+            while True:
+                if await request.is_disconnected():
+                    break
 
-            updates = await asyncio.to_thread(
-                service.wait_for_realtime_updates,
-                last_versions,
-                15.0,
-            )
-            if not updates:
-                yield "event: ping\ndata: {}\n\n"
-                continue
-
-            for update in updates:
-                topic = str(update.get("topic") or "").strip()
-                snapshot = update.get("snapshot") or {}
-                if not topic:
+                updates = await asyncio.to_thread(
+                    service.wait_for_realtime_updates,
+                    last_versions,
+                    15.0,
+                )
+                if not updates:
+                    yield "event: ping\ndata: {}\n\n"
                     continue
-                last_versions[topic] = int(
-                    snapshot.get("version", last_versions.get(topic, 0))
-                )
-                yield (
-                    f"event: {topic}\n"
-                    f"data: {json.dumps(jsonable_encoder(snapshot))}\n\n"
-                )
+
+                for update in updates:
+                    topic = str(update.get("topic") or "").strip()
+                    snapshot = update.get("snapshot") or {}
+                    if not topic:
+                        continue
+                    last_versions[topic] = int(
+                        snapshot.get("version", last_versions.get(topic, 0))
+                    )
+                    yield (
+                        f"event: {topic}\n"
+                        f"data: {json.dumps(jsonable_encoder(snapshot))}\n\n"
+                    )
+        finally:
+            service.unregister_realtime_client()
 
     return StreamingResponse(
         event_stream(),

@@ -232,6 +232,19 @@ class NotebookDefinition:
 
 
 @dataclass(slots=True)
+class LinkedNotebookReference:
+    notebook_id: str
+    title: str
+
+    @property
+    def payload(self) -> dict[str, str]:
+        return {
+            "notebookId": self.notebook_id,
+            "title": self.title,
+        }
+
+
+@dataclass(slots=True)
 class NotebookEventDefinition:
     event_id: str
     event_type: str
@@ -515,6 +528,7 @@ class DataGeneratorDefinition:
     supports_cancel: bool = True
     supports_cleanup: bool = True
     tags: list[str] = field(default_factory=list)
+    linked_notebooks: list[LinkedNotebookReference] = field(default_factory=list)
 
     @property
     def payload(self) -> dict[str, Any]:
@@ -533,7 +547,67 @@ class DataGeneratorDefinition:
             "supportsCancel": self.supports_cancel,
             "supportsCleanup": self.supports_cleanup,
             "tags": list(self.tags),
+            "linkedNotebooks": [notebook.payload for notebook in self.linked_notebooks],
         }
+
+
+@dataclass(slots=True)
+class DataGenerationTargetDefinition:
+    target_kind: str
+    label: str
+    location: str
+    status: str = "pending"
+
+    @property
+    def payload(self) -> dict[str, str]:
+        return {
+            "targetKind": self.target_kind,
+            "label": self.label,
+            "location": self.location,
+            "status": self.status,
+        }
+
+
+def normalize_data_generation_targets(targets: Any) -> list["DataGenerationTargetDefinition"]:
+    if not isinstance(targets, list):
+        return []
+
+    normalized: list[DataGenerationTargetDefinition] = []
+    seen: set[tuple[str, str]] = set()
+
+    for item in targets:
+        if isinstance(item, DataGenerationTargetDefinition):
+            target = item
+        elif isinstance(item, dict):
+            target_kind = str(item.get("targetKind") or item.get("target_kind") or "").strip() or "target"
+            label = str(item.get("label") or "").strip()
+            location = str(item.get("location") or "").strip()
+            status = str(item.get("status") or "").strip() or "pending"
+            if not location:
+                continue
+            target = DataGenerationTargetDefinition(
+                target_kind=target_kind,
+                label=label or location,
+                location=location,
+                status=status,
+            )
+        else:
+            continue
+
+        key = (target.target_kind.strip() or "target", target.location.strip())
+        if not key[1] or key in seen:
+            continue
+        seen.add(key)
+        normalized.append(
+            DataGenerationTargetDefinition(
+                target_kind=key[0],
+                label=target.label.strip() or key[1],
+                location=key[1],
+                status=target.status.strip() or "pending",
+            )
+        )
+
+    return normalized
 
 
 @dataclass(slots=True)
@@ -556,6 +630,7 @@ class DataGenerationJobDefinition:
     target_name: str = ""
     target_relation: str = ""
     target_path: str = ""
+    written_targets: list[DataGenerationTargetDefinition] = field(default_factory=list)
     generated_rows: int = 0
     generated_size_gb: float = 0.0
     backend_name: str = "Python module"
@@ -583,6 +658,7 @@ class DataGenerationJobDefinition:
             "targetName": self.target_name,
             "targetRelation": self.target_relation,
             "targetPath": self.target_path,
+            "writtenTargets": [target.payload for target in self.written_targets],
             "generatedRows": self.generated_rows,
             "generatedSizeGb": self.generated_size_gb,
             "backendName": self.backend_name,

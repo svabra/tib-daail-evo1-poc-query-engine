@@ -15,6 +15,8 @@ let queryJobsSnapshot = [];
 let queryJobsSummary = { runningCount: 0, totalCount: 0 };
 let queryPerformanceState = { recent: [], stats: {} };
 let realtimeEventsEventSource = null;
+let clientConnectionsStateVersion = 0;
+let clientConnectionsCount = 0;
 let queryJobsClockHandle = null;
 let queryJobsLoaded = false;
 let dataGeneratorsCatalog = [];
@@ -95,6 +97,7 @@ const localNotebookPrefix = "local-notebook-";
 const sharedNotebookPrefix = "shared-notebook-";
 const localCellPrefix = "local-cell-";
 const initialSqlEditorRows = 5;
+const populatedSqlEditorRows = 10;
 const defaultSqlEditorAutoRows = 10;
 const queryJobTerminalStatuses = new Set(["completed", "failed", "cancelled"]);
 const queryJobRunningStatuses = new Set(["queued", "running"]);
@@ -3105,6 +3108,27 @@ function normalizeDataGenerator(generator) {
     return null;
   }
 
+  const linkedNotebooks = Array.isArray(generator.linkedNotebooks)
+    ? generator.linkedNotebooks
+        .map((notebook) => {
+          if (!notebook || typeof notebook !== "object") {
+            return null;
+          }
+
+          const notebookId = String(notebook.notebookId ?? "").trim();
+          const notebookTitle = String(notebook.title ?? "").trim();
+          if (!notebookId || !notebookTitle) {
+            return null;
+          }
+
+          return {
+            notebookId,
+            title: notebookTitle,
+          };
+        })
+        .filter(Boolean)
+    : [];
+
   return {
     ...generator,
     generatorId,
@@ -3121,6 +3145,7 @@ function normalizeDataGenerator(generator) {
     maxSizeGb: Number.isFinite(Number(generator.maxSizeGb)) ? Number(generator.maxSizeGb) : 512,
     supportsCleanup: Boolean(generator.supportsCleanup),
     tags: Array.isArray(generator.tags) ? generator.tags : [],
+    linkedNotebooks,
   };
 }
 
@@ -3128,6 +3153,31 @@ function normalizeDataGenerationJob(job) {
   if (!job || typeof job !== "object") {
     return null;
   }
+
+  const writtenTargets = Array.isArray(job.writtenTargets)
+    ? job.writtenTargets
+        .map((target) => {
+          if (!target || typeof target !== "object") {
+            return null;
+          }
+
+          const targetKind = String(target.targetKind ?? target.target_kind ?? "").trim() || "target";
+          const label = String(target.label ?? "").trim();
+          const location = String(target.location ?? "").trim();
+          const status = String(target.status ?? "").trim() || "pending";
+          if (!location) {
+            return null;
+          }
+
+          return {
+            targetKind,
+            label: label || location,
+            location,
+            status,
+          };
+        })
+        .filter(Boolean)
+    : [];
 
   return {
     ...job,
@@ -3138,6 +3188,7 @@ function normalizeDataGenerationJob(job) {
     targetName: String(job.targetName ?? "").trim(),
     targetRelation: String(job.targetRelation ?? "").trim(),
     targetPath: String(job.targetPath ?? "").trim(),
+    writtenTargets,
     canCleanup: Boolean(job.canCleanup),
   };
 }
@@ -4377,6 +4428,30 @@ function dataGeneratorCardMarkup(generator) {
   const tagsMarkup = (generator.tags || [])
     .map((tag) => `<span class="ingestion-generator-tag">${escapeHtml(tag)}</span>`)
     .join("");
+  const linkedNotebooks = Array.isArray(generator.linkedNotebooks) ? generator.linkedNotebooks : [];
+  const linkedNotebookMarkup = linkedNotebooks.length
+    ? `
+      <div class="ingestion-linked-notebooks">
+        <span class="ingestion-linked-notebooks-label">${
+          linkedNotebooks.length === 1 ? "Linked notebook" : "Linked notebooks"
+        }</span>
+        <div class="ingestion-linked-notebooks-list">
+          ${linkedNotebooks
+            .map(
+              (notebook) => `
+                <a
+                  href="${escapeHtml(notebookUrl(notebook.notebookId) || "#")}"
+                  class="ingestion-linked-notebook"
+                  data-open-query-notebook="${escapeHtml(notebook.notebookId)}"
+                  title="Open ${escapeHtml(notebook.title)}"
+                >${escapeHtml(notebook.title)}</a>
+              `
+            )
+            .join("")}
+        </div>
+      </div>
+    `
+    : "";
 
   return `
     <article class="ingestion-generator-card${isSelected ? " is-selected" : ""}${isSpotlighted ? " is-spotlighted" : ""}" data-generator-card data-generator-id="${escapeHtml(generator.generatorId)}">
@@ -4418,6 +4493,7 @@ function dataGeneratorCardMarkup(generator) {
           Default target: <strong>${escapeHtml(generator.defaultTargetName || generator.generatorId)}</strong><br>
           Module: <code>${escapeHtml(generator.moduleName || generator.generatorId)}</code>
         </p>
+        ${linkedNotebookMarkup}
       </div>
     </article>
   `;
@@ -4477,6 +4553,70 @@ function dataGenerationJobProgressMarkup(job) {
   `;
 }
 
+function dataGenerationTargetStatusCopy(status) {
+  const normalizedStatus = String(status ?? "").trim().toLowerCase();
+  if (normalizedStatus === "written") {
+    return "Written";
+  }
+  if (normalizedStatus === "writing") {
+    return "Writing";
+  }
+  if (normalizedStatus === "cleaned") {
+    return "Cleaned";
+  }
+  return "Pending";
+}
+
+function dataGenerationTargetSummary(job) {
+  const targets = Array.isArray(job.writtenTargets) ? job.writtenTargets : [];
+  if (!targets.length) {
+    return "";
+  }
+
+  const finalizedCount = targets.filter((target) =>
+    ["written", "cleaned"].includes(String(target.status ?? "").trim().toLowerCase())
+  ).length;
+  const pendingCount = targets.length - finalizedCount;
+  if (pendingCount > 0) {
+    return `${finalizedCount}/${targets.length} targets materialized`;
+  }
+  return `${targets.length} targets materialized`;
+}
+
+function dataGenerationJobTargetDetailsMarkup(job) {
+  const targets = Array.isArray(job.writtenTargets) ? job.writtenTargets : [];
+  if (!targets.length) {
+    return "";
+  }
+
+  const summary = dataGenerationTargetSummary(job);
+  return `
+    <details class="ingestion-job-target-details" data-ingestion-job-target-details>
+      <summary class="ingestion-job-target-details-summary">
+        <span class="ingestion-job-target-details-title">Write targets</span>
+        <span class="ingestion-job-target-details-count">${escapeHtml(summary)}</span>
+      </summary>
+      <div class="ingestion-job-target-details-list">
+        ${targets
+          .map(
+            (target) => `
+              <div class="ingestion-job-target-detail">
+                <div class="ingestion-job-target-detail-header">
+                  <span class="ingestion-job-target-detail-label">${escapeHtml(target.label || target.location)}</span>
+                  <span class="ingestion-job-target-detail-status ingestion-job-target-detail-status-${escapeHtml(
+                    String(target.status ?? "pending").trim().toLowerCase() || "pending"
+                  )}">${escapeHtml(dataGenerationTargetStatusCopy(target.status))}</span>
+                </div>
+                <code class="ingestion-job-target-detail-location">${escapeHtml(target.location)}</code>
+              </div>
+            `
+          )
+          .join("")}
+      </div>
+    </details>
+  `;
+}
+
 function dataGenerationJobCardMarkup(job) {
   return `
     <article class="ingestion-job-card" data-data-generation-job-card data-job-id="${escapeHtml(job.jobId)}">
@@ -4515,6 +4655,7 @@ function dataGenerationJobCardMarkup(job) {
             : ""
         }
       </div>
+      ${dataGenerationJobTargetDetailsMarkup(job)}
       <p class="ingestion-job-message">${escapeHtml(job.message || "")}</p>
       ${job.error ? `<pre class="ingestion-job-error">${escapeHtml(job.error)}</pre>` : ""}
     </article>
@@ -4661,7 +4802,92 @@ function clearVisibleNotifications() {
   renderQueryNotificationMenu();
 }
 
-function renderIngestionWorkbench() {
+function captureIngestionWorkbenchRenderState(generatorList, jobList) {
+  const generatorSizes = new Map();
+  if (generatorList instanceof Element) {
+    generatorList.querySelectorAll("[data-generator-card]").forEach((card) => {
+      const generatorId = String(card.dataset.generatorId || "").trim();
+      const sizeInput = card.querySelector("[data-ingestion-size-input]");
+      if (!generatorId || !(sizeInput instanceof HTMLInputElement)) {
+        return;
+      }
+      generatorSizes.set(generatorId, sizeInput.value);
+    });
+  }
+
+  let focusedGeneratorId = "";
+  const activeElement = document.activeElement;
+  if (
+    generatorList instanceof Element &&
+    activeElement instanceof HTMLInputElement &&
+    activeElement.matches("[data-ingestion-size-input]")
+  ) {
+    const generatorCard = activeElement.closest("[data-generator-card]");
+    if (generatorCard instanceof Element && generatorList.contains(generatorCard)) {
+      focusedGeneratorId = String(generatorCard.dataset.generatorId || "").trim();
+    }
+  }
+
+  const openJobTargetDetails = new Set();
+  if (jobList instanceof Element) {
+    jobList.querySelectorAll("[data-ingestion-job-target-details][open]").forEach((detailsRoot) => {
+      const jobId = String(
+        detailsRoot.closest("[data-data-generation-job-card]")?.dataset.jobId || ""
+      ).trim();
+      if (jobId) {
+        openJobTargetDetails.add(jobId);
+      }
+    });
+  }
+
+  return {
+    generatorSizes,
+    focusedGeneratorId,
+    openJobTargetDetails,
+  };
+}
+
+function restoreIngestionWorkbenchRenderState(
+  state,
+  generatorList,
+  jobList,
+  { refreshGeneratorCards = true } = {}
+) {
+  if (!state) {
+    return;
+  }
+
+  if (refreshGeneratorCards && generatorList instanceof Element) {
+    state.generatorSizes.forEach((value, generatorId) => {
+      const input = generatorList.querySelector(
+        `[data-generator-card][data-generator-id="${CSS.escape(generatorId)}"] [data-ingestion-size-input]`
+      );
+      if (input instanceof HTMLInputElement) {
+        input.value = value;
+      }
+    });
+
+    if (state.focusedGeneratorId) {
+      const focusedInput = generatorList.querySelector(
+        `[data-generator-card][data-generator-id="${CSS.escape(state.focusedGeneratorId)}"] [data-ingestion-size-input]`
+      );
+      if (focusedInput instanceof HTMLInputElement) {
+        focusedInput.focus({ preventScroll: true });
+      }
+    }
+  }
+
+  if (jobList instanceof Element) {
+    jobList.querySelectorAll("[data-ingestion-job-target-details]").forEach((detailsRoot) => {
+      const jobId = String(
+        detailsRoot.closest("[data-data-generation-job-card]")?.dataset.jobId || ""
+      ).trim();
+      detailsRoot.open = Boolean(jobId && state.openJobTargetDetails.has(jobId));
+    });
+  }
+}
+
+function renderIngestionWorkbench({ refreshGeneratorCards = true } = {}) {
   const generatorList = ingestionGeneratorList();
   const jobList = ingestionJobList();
   const generatorSectionTitle = ingestionGeneratorSectionTitle();
@@ -4672,6 +4898,7 @@ function renderIngestionWorkbench() {
   const selectedGenerator = ingestionGeneratorById(selectedGeneratorId);
   const visibleGenerators = filteredIngestionGenerators();
   const visibleJobs = filteredDataGenerationJobs();
+  const renderState = captureIngestionWorkbenchRenderState(generatorList, jobList);
 
   if (generatorSectionTitle) {
     generatorSectionTitle.textContent = selectedGenerator ? selectedGenerator.title : "Selected Runbook";
@@ -4695,7 +4922,7 @@ function renderIngestionWorkbench() {
       : "Select a runbook from the left navigation to inspect its executions.";
   }
 
-  if (generatorList) {
+  if (generatorList && refreshGeneratorCards) {
     if (!visibleGenerators.length) {
       generatorList.innerHTML = '<p class="ingestion-empty">No data generators discovered.</p>';
     } else {
@@ -4713,6 +4940,10 @@ function renderIngestionWorkbench() {
       jobList.innerHTML = visibleJobs.map((job) => dataGenerationJobCardMarkup(job)).join("");
     }
   }
+
+  restoreIngestionWorkbenchRenderState(renderState, generatorList, jobList, {
+    refreshGeneratorCards,
+  });
 }
 
 function recordNotebookActivity(notebookId, reason = "edited") {
@@ -5212,7 +5443,9 @@ function applyDataGenerationJobsState(snapshot) {
     : [];
 
   pruneDismissedNotificationKeys();
-  renderIngestionWorkbench();
+  renderIngestionWorkbench({
+    refreshGeneratorCards: currentWorkspaceMode() !== "ingestion",
+  });
   renderDataGenerationMonitor();
   renderQueryNotificationMenu();
   syncDataGenerationClockLoop();
@@ -6988,7 +7221,7 @@ function buildCellMarkup(notebookId, cell, index, canEdit, totalCells) {
           </div>
         </div>
         <div class="editor-frame" data-editor-root data-editor-name="sql-${escapeHtml(cell.cellId)}">
-          <textarea name="sql" data-editor-source data-default-sql="${escapeHtml(cell.sql)}" rows="${initialSqlEditorRows}" spellcheck="false">${escapeHtml(cell.sql)}</textarea>
+          <textarea name="sql" data-editor-source data-default-sql="${escapeHtml(cell.sql)}" rows="${preferredSqlEditorRows(cell.sql)}" spellcheck="false">${escapeHtml(cell.sql)}</textarea>
         </div>
       </form>
       ${emptyQueryResultsMarkup(cell.cellId)}
@@ -8026,10 +8259,29 @@ function defaultEditorSql(textarea) {
   return textarea.defaultValue ?? textarea.dataset.defaultSql ?? "";
 }
 
+function preferredSqlEditorRows(sql) {
+  return String(sql ?? "").trim() ? populatedSqlEditorRows : initialSqlEditorRows;
+}
+
+function currentEditorSql(root) {
+  if (!(root instanceof Element)) {
+    return "";
+  }
+
+  const editor = editorRegistry.get(root);
+  if (editor) {
+    return editor.state.doc.toString();
+  }
+
+  const textarea = root.querySelector("[data-editor-source]");
+  return textarea?.value ?? defaultEditorSql(textarea);
+}
+
 function editorHeightMetrics(root) {
   const textarea = root.querySelector("[data-editor-source]");
   const editor = editorRegistry.get(root);
   const sizingState = editorSizingState(root);
+  const baseRows = preferredSqlEditorRows(currentEditorSql(root));
   if (editor) {
     const editorStyles = window.getComputedStyle(editor.dom);
     const scroller = editor.dom.querySelector(".cm-scroller");
@@ -8045,10 +8297,10 @@ function editorHeightMetrics(root) {
     const scrollerPadding =
       numericCssValue(scrollerStyles, "paddingTop") +
       numericCssValue(scrollerStyles, "paddingBottom");
-    const minHeight = Math.ceil(lineHeight * initialSqlEditorRows + scrollerPadding + borderHeight);
+    const minHeight = Math.ceil(lineHeight * baseRows + scrollerPadding + borderHeight);
     const contentHeight = Math.ceil((scroller?.scrollHeight ?? editor.dom.scrollHeight) + borderHeight);
     const maxAutoHeight = Math.ceil(
-      lineHeight * (sizingState.interacted ? defaultSqlEditorAutoRows : initialSqlEditorRows) +
+      lineHeight * (sizingState.interacted ? defaultSqlEditorAutoRows : baseRows) +
       scrollerPadding +
       borderHeight
     );
@@ -8069,14 +8321,14 @@ function editorHeightMetrics(root) {
     numericCssValue(styles, "paddingBottom") +
     numericCssValue(styles, "borderTopWidth") +
     numericCssValue(styles, "borderBottomWidth");
-  const minHeight = Math.ceil(lineHeight * initialSqlEditorRows + chromeHeight);
+  const minHeight = Math.ceil(lineHeight * baseRows + chromeHeight);
 
   const previousHeight = textarea.style.height;
   textarea.style.height = "auto";
   const contentHeight = Math.ceil(textarea.scrollHeight);
   textarea.style.height = previousHeight;
   const maxAutoHeight = Math.ceil(
-    lineHeight * (sizingState.interacted ? defaultSqlEditorAutoRows : initialSqlEditorRows) + chromeHeight
+    lineHeight * (sizingState.interacted ? defaultSqlEditorAutoRows : baseRows) + chromeHeight
   );
 
   return {
@@ -10238,6 +10490,19 @@ function processHtmx(root) {
   window.htmx.process(root);
 }
 
+function clientConnectionsCountRoot() {
+  return document.querySelector("[data-client-connections-count]");
+}
+
+function applyClientConnectionsState(snapshot) {
+  clientConnectionsStateVersion = Number(snapshot?.version ?? 0);
+  clientConnectionsCount = Math.max(0, Number(snapshot?.count ?? 0) || 0);
+  const countRoot = clientConnectionsCountRoot();
+  if (countRoot) {
+    countRoot.textContent = String(clientConnectionsCount);
+  }
+}
+
 async function loadDataGeneratorCatalog() {
   const response = await window.fetch("/api/data-generators", {
     headers: {
@@ -10322,6 +10587,9 @@ function applyRealtimeTopicSnapshot(topic, snapshot) {
       break;
     case "notebook-events":
       applyNotebookEventsState(snapshot);
+      break;
+    case "client-connections":
+      applyClientConnectionsState(snapshot);
       break;
     default:
       break;
@@ -10539,12 +10807,15 @@ function ensureRealtimeEventsEventSource() {
   if (notebookEventsStateVersion !== null) {
     params.set("notebookEventsVersion", String(notebookEventsStateVersion));
   }
+  if (clientConnectionsStateVersion !== null) {
+    params.set("clientConnectionsVersion", String(clientConnectionsStateVersion));
+  }
 
   const streamUrl = params.size
     ? `/api/events/stream?${params.toString()}`
     : "/api/events/stream";
   const eventSource = new window.EventSource(streamUrl);
-  ["query-jobs", "data-generation-jobs", "data-source-events", "notebook-events"].forEach((topic) => {
+  ["query-jobs", "data-generation-jobs", "data-source-events", "notebook-events", "client-connections"].forEach((topic) => {
     eventSource.addEventListener(topic, (event) => {
       try {
         applyRealtimeTopicSnapshot(topic, JSON.parse(event.data));

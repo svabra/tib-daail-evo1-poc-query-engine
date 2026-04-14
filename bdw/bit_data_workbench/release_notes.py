@@ -1,9 +1,34 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.4.6. Keep entries concise and
+# Derived from git history through version 0.4.7. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.4.7",
+        "releasedAt": "2026-04-14T10:09:33.5282495+02:00",
+        "features": [
+            (
+                "Query cells now persist a per-cell S3 query mode toggle, "
+                "so notebooks can explicitly switch between direct S3 reads "
+                "and supercharged local-cache reads across reloads and shared copies."
+            ),
+            (
+                "Supercharged notebook execution now rewrites both quoted "
+                "and unquoted relation references correctly, and the sidebar "
+                "no longer reloads from no-op realtime source churn."
+            ),
+            (
+                "Ingestion runbooks now show linked notebooks and concrete "
+                "write targets, while running loaders preserve open target "
+                "sections and Generate size input focus."
+            ),
+            (
+                "The fixed runtime overlay now shows the current workbench "
+                "version together with the live count of SSE-connected clients."
+            ),
+        ],
+    },
     {
         "version": "0.4.6",
         "releasedAt": "2026-04-13T20:53:03.2246641+02:00",

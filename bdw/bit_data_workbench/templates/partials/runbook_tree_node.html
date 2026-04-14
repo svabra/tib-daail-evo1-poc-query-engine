@@ -22,7 +22,7 @@
         class="runbook-link"
         data-open-ingestion-runbook="{{ generator.generatorId }}"
         data-generator-id="{{ generator.generatorId }}"
-        data-searchable-item="{{ generator.title }} {{ generator.description }} {{ generator.targetKind }} {{ generator.tags | join(' ') }}"
+        data-searchable-item="{{ generator.title }} {{ generator.description }} {{ generator.targetKind }} {{ generator.tags | join(' ') }} {{ generator.linkedNotebooks | map(attribute='title') | join(' ') }}"
       >
         <div class="runbook-title-row">
           <span class="runbook-title">{{ generator.title }}</span>

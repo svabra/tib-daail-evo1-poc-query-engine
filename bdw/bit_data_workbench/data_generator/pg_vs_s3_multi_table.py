@@ -20,7 +20,9 @@ from .base import (
     DataGeneratorContext,
     DataGeneratorResult,
     estimated_rows_for_size,
+    generation_target,
     generated_name,
+    update_generation_target_status,
 )
 from .helpers import approximate_size_gb, qualified_name, sql_literal
 
@@ -598,6 +600,22 @@ class PgVsS3MultiTableDataGenerator(DataGenerator):
         object_prefix = f"s3://{bucket_name}"
         connection = context.connect()
         s3_upload_client = s3_client(settings)
+        written_targets = []
+        for table_name in (str(spec["name"]) for spec in table_specs):
+            written_targets.append(
+                generation_target(
+                    target_kind="postgres_table",
+                    label="PostgreSQL OLTP table",
+                    location=f"pg_oltp.public.{table_name}",
+                )
+            )
+            written_targets.append(
+                generation_target(
+                    target_kind="s3_prefix",
+                    label="Dedicated S3 Parquet path",
+                    location=f"{object_prefix}/{table_name}",
+                )
+            )
 
         try:
             context.report(
@@ -610,6 +628,7 @@ class PgVsS3MultiTableDataGenerator(DataGenerator):
                 target_name=target_name,
                 target_relation=primary_relation_name,
                 target_path=object_prefix,
+                written_targets=written_targets,
             )
             connection.execute(f"CREATE SCHEMA IF NOT EXISTS {qualified_name(s3_schema)}")
             self._drop_postgres_tables(connection)
@@ -630,6 +649,7 @@ class PgVsS3MultiTableDataGenerator(DataGenerator):
                     batch_count = max(1, (row_count + batch_rows - 1) // batch_rows)
 
                     connection.execute(f"CREATE TABLE {postgres_relation} ({', '.join(columns)})")
+                    table_relation_name = f"pg_oltp.public.{table_name}"
 
                     for batch_index, start_row in enumerate(range(0, row_count, batch_rows), start=1):
                         context.raise_if_cancelled()
@@ -656,6 +676,12 @@ class PgVsS3MultiTableDataGenerator(DataGenerator):
                         local_parquet_path.unlink(missing_ok=True)
 
                         processed_rows += end_row - start_row
+                        written_targets = update_generation_target_status(
+                            written_targets,
+                            table_relation_name,
+                            table_object_prefix,
+                            status="written",
+                        )
                         context.report(
                             progress=processed_rows / total_generated_rows,
                             progress_label=f"Writing {table_name} batch {batch_index} / {batch_count}",
@@ -666,6 +692,7 @@ class PgVsS3MultiTableDataGenerator(DataGenerator):
                             target_name=target_name,
                             target_relation=primary_relation_name,
                             target_path=object_prefix,
+                            written_targets=written_targets,
                             generated_rows=processed_rows,
                             generated_size_gb=approximate_size_gb(processed_rows, self.approximate_row_bytes),
                         )
@@ -677,6 +704,7 @@ class PgVsS3MultiTableDataGenerator(DataGenerator):
                 target_name=target_name,
                 target_relation=primary_relation_name,
                 target_path=object_prefix,
+                written_targets=written_targets,
                 generated_rows=processed_rows,
                 generated_size_gb=approximate_size_gb(processed_rows, self.approximate_row_bytes),
                 message=(
@@ -695,6 +723,7 @@ class PgVsS3MultiTableDataGenerator(DataGenerator):
                 message="Cancellation requested. Partial PostgreSQL tables, S3 views, and bucket objects were removed.",
                 target_relation="",
                 target_path="",
+                written_targets=[],
                 generated_rows=0,
                 generated_size_gb=0.0,
             )

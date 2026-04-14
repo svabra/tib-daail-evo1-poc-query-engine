@@ -45,7 +45,13 @@ from .data_generation_jobs import DataGenerationJobManager
 from .query_analysis import analyze_query_touches, build_relation_index
 from .query_jobs import QueryJobManager
 from .query_result_exports import QueryResultExportManager
-from .notebooks import build_completion_schema, build_notebook_tree, build_notebooks, build_source_options
+from .notebooks import (
+    build_completion_schema,
+    build_generator_notebook_links,
+    build_notebook_tree,
+    build_notebooks,
+    build_source_options,
+)
 from .runbooks import build_runbook_tree
 from .shared_notebooks import SharedNotebookStore
 from .source_discovery import (
@@ -67,6 +73,7 @@ REALTIME_TOPIC_ORDER = (
     "data-generation-jobs",
     "data-source-events",
     "notebook-events",
+    "client-connections",
 )
 S3_BOOTSTRAP_SAMPLE_CSV = """company_uid,company_name,canton_code,tax_period_end,transaction_id,declared_turnover_chf,net_vat_due_chf,refund_claim_chf,filing_status,category
 CHE-100.000.001,Alpine Foods AG,ZH,2025-03-31,TX-10001,124000.00,9300.00,0.00,filed,standard
@@ -167,6 +174,8 @@ class WorkbenchService:
         )
         self._notebook_events: list[NotebookEventDefinition] = []
         self._notebook_events_version = 0
+        self._client_connections_version = 0
+        self._active_realtime_clients = 0
         self._realtime_signal_version = 0
         self._realtime_topic_versions: dict[str, int] = {
             topic: 0 for topic in REALTIME_TOPIC_ORDER
@@ -270,6 +279,11 @@ class WorkbenchService:
                 self._notebook_events_state_locked(),
                 notify=False,
             )
+            self._set_realtime_snapshot_locked(
+                "client-connections",
+                self._client_connections_state_locked(),
+                notify=False,
+            )
 
     def start(self) -> None:
         started = time.perf_counter()
@@ -371,6 +385,37 @@ class WorkbenchService:
     def notebook_events_state(self) -> dict[str, object]:
         with self._condition:
             return self._notebook_events_state_locked()
+
+    def client_connections_state(self) -> dict[str, object]:
+        with self._condition:
+            return self._client_connections_state_locked()
+
+    def register_realtime_client(self) -> dict[str, object]:
+        with self._condition:
+            self._active_realtime_clients += 1
+            self._client_connections_version += 1
+            snapshot = self._client_connections_state_locked()
+            self._set_realtime_snapshot_locked(
+                "client-connections",
+                snapshot,
+                notify=True,
+            )
+            return snapshot
+
+    def unregister_realtime_client(self) -> dict[str, object]:
+        with self._condition:
+            self._active_realtime_clients = max(
+                0,
+                self._active_realtime_clients - 1,
+            )
+            self._client_connections_version += 1
+            snapshot = self._client_connections_state_locked()
+            self._set_realtime_snapshot_locked(
+                "client-connections",
+                snapshot,
+                notify=True,
+            )
+            return snapshot
 
     def wait_for_realtime_updates(
         self,
@@ -516,7 +561,17 @@ class WorkbenchService:
         return self._query_jobs.state_payload()
 
     def data_generators(self) -> list[dict[str, object]]:
-        return self._data_generation_jobs.generators_payload()
+        with self._lock:
+            generators = [dict(generator) for generator in self._data_generation_jobs.generators_payload()]
+            linked_notebooks = build_generator_notebook_links(self._notebooks)
+
+        for generator in generators:
+            generator_id = str(generator.get("generatorId") or "").strip()
+            generator["linkedNotebooks"] = [
+                notebook.payload for notebook in linked_notebooks.get(generator_id, [])
+            ]
+
+        return generators
 
     def runbook_tree(self):
         return build_runbook_tree(self.data_generators())
@@ -873,6 +928,12 @@ class WorkbenchService:
     def _set_realtime_snapshot(self, topic: str, snapshot: dict[str, Any], *, notify: bool) -> None:
         with self._condition:
             self._set_realtime_snapshot_locked(topic, snapshot, notify=notify)
+
+    def _client_connections_state_locked(self) -> dict[str, object]:
+        return {
+            "version": self._client_connections_version,
+            "count": self._active_realtime_clients,
+        }
 
     def _set_realtime_snapshot_locked(self, topic: str, snapshot: dict[str, Any], *, notify: bool) -> None:
         self._realtime_snapshots[topic] = snapshot

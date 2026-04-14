@@ -1,6 +1,15 @@
 from __future__ import annotations
 
-from .base import DataGenerationCancelled, DataGenerator, DataGeneratorContext, DataGeneratorResult, estimated_rows_for_size, generated_name
+from .base import (
+    DataGenerationCancelled,
+    DataGenerator,
+    DataGeneratorContext,
+    DataGeneratorResult,
+    estimated_rows_for_size,
+    generation_target,
+    generated_name,
+    update_generation_target_status,
+)
 from .helpers import VAT_SMOKE_DATASET_COLUMNS, approximate_size_gb, qualified_name, vat_smoke_dataset_select
 
 
@@ -27,6 +36,14 @@ class PostgresOltpSmokeDataGenerator(DataGenerator):
         batch_count = max(1, (total_rows + batch_rows - 1) // batch_rows)
         table_name = generated_name(self.default_target_name, context.job_id)
         relation = qualified_name("pg_oltp", "public", table_name)
+        relation_name = f"pg_oltp.public.{table_name}"
+        written_targets = [
+            generation_target(
+                target_kind="postgres_table",
+                label="PostgreSQL OLTP table",
+                location=relation_name,
+            )
+        ]
         connection = context.connect()
 
         try:
@@ -35,7 +52,8 @@ class PostgresOltpSmokeDataGenerator(DataGenerator):
                 progress_label="Preparing target...",
                 message=f"Creating PostgreSQL target table {table_name}.",
                 target_name=table_name,
-                target_relation=f"pg_oltp.public.{table_name}",
+                target_relation=relation_name,
+                written_targets=written_targets,
             )
             connection.execute(f"DROP TABLE IF EXISTS {relation}")
             connection.execute(f"CREATE TABLE {relation} ({', '.join(VAT_SMOKE_DATASET_COLUMNS)})")
@@ -46,28 +64,36 @@ class PostgresOltpSmokeDataGenerator(DataGenerator):
                 end_row = min(total_rows, start_row + batch_rows)
                 connection.execute(f"INSERT INTO {relation} {vat_smoke_dataset_select(start_row, end_row)}")
                 inserted_rows = end_row
+                written_targets = update_generation_target_status(
+                    written_targets,
+                    relation_name,
+                    status="written",
+                )
                 context.report(
                     progress=inserted_rows / total_rows,
                     progress_label=f"Writing batch {batch_index} / {batch_count}",
-                    message=f"Inserted {inserted_rows:,} rows into pg_oltp.public.{table_name}.",
+                    message=f"Inserted {inserted_rows:,} rows into {relation_name}.",
                     target_name=table_name,
-                    target_relation=f"pg_oltp.public.{table_name}",
+                    target_relation=relation_name,
+                    written_targets=written_targets,
                     generated_rows=inserted_rows,
                     generated_size_gb=approximate_size_gb(inserted_rows, self.approximate_row_bytes),
                 )
 
             return DataGeneratorResult(
                 target_name=table_name,
-                target_relation=f"pg_oltp.public.{table_name}",
+                target_relation=relation_name,
+                written_targets=written_targets,
                 generated_rows=inserted_rows,
                 generated_size_gb=approximate_size_gb(inserted_rows, self.approximate_row_bytes),
-                message=f"Generated {inserted_rows:,} rows in pg_oltp.public.{table_name}.",
+                message=f"Generated {inserted_rows:,} rows in {relation_name}.",
             )
         except DataGenerationCancelled:
             connection.execute(f"DROP TABLE IF EXISTS {relation}")
             context.report(
                 message="Cancellation requested. Partial PostgreSQL output was removed.",
                 target_relation="",
+                written_targets=[],
                 generated_rows=0,
                 generated_size_gb=0.0,
             )

@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from ..models import NotebookCellDefinition, NotebookDefinition, NotebookFolder, SourceCatalog
+from ..models import (
+    LinkedNotebookReference,
+    NotebookCellDefinition,
+    NotebookDefinition,
+    NotebookFolder,
+    SourceCatalog,
+)
 
 
 def _find_relation(
@@ -320,6 +326,33 @@ def _build_multi_table_performance_sql(
         "ORDER BY open_tax_exposure_total_chf DESC, avg_audit_risk_score DESC, gross_assessed_total_chf DESC\n"
         "LIMIT 40;"
     )
+
+
+def build_generator_notebook_links(
+    notebooks: Iterable[NotebookDefinition],
+) -> dict[str, list[LinkedNotebookReference]]:
+    linked_notebooks: dict[str, list[LinkedNotebookReference]] = {}
+    seen_notebook_ids: dict[str, set[str]] = {}
+
+    for notebook in notebooks:
+        generator_id = str(notebook.linked_generator_id or "").strip()
+        notebook_id = str(notebook.notebook_id or "").strip()
+        if not generator_id or not notebook_id:
+            continue
+
+        generator_seen = seen_notebook_ids.setdefault(generator_id, set())
+        if notebook_id in generator_seen:
+            continue
+
+        generator_seen.add(notebook_id)
+        linked_notebooks.setdefault(generator_id, []).append(
+            LinkedNotebookReference(
+                notebook_id=notebook_id,
+                title=notebook.title,
+            )
+        )
+
+    return linked_notebooks
 
 
 def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:

@@ -6,7 +6,9 @@ from .base import (
     DataGeneratorContext,
     DataGeneratorResult,
     estimated_rows_for_size,
+    generation_target,
     generated_name,
+    update_generation_target_status,
 )
 from .helpers import (
     CROSS_DATABASE_UNION_DATASET_COLUMNS,
@@ -50,6 +52,18 @@ class PgUnionSqlFunctionalityDataGenerator(DataGenerator):
         olap_relation_name = f"pg_olap.public.{table_name}"
         oltp_relation = qualified_name("pg_oltp", "public", table_name)
         olap_relation = qualified_name("pg_olap", "public", table_name)
+        written_targets = [
+            generation_target(
+                target_kind="postgres_table",
+                label="PostgreSQL OLTP table",
+                location=oltp_relation_name,
+            ),
+            generation_target(
+                target_kind="postgres_table",
+                label="PostgreSQL OLAP table",
+                location=olap_relation_name,
+            ),
+        ]
         connection = context.connect()
 
         try:
@@ -61,6 +75,7 @@ class PgUnionSqlFunctionalityDataGenerator(DataGenerator):
                 ),
                 target_name=table_name,
                 target_relation=f"{oltp_relation_name} + {olap_relation_name}",
+                written_targets=written_targets,
             )
             connection.execute(f"DROP TABLE IF EXISTS {oltp_relation}")
             connection.execute(f"DROP TABLE IF EXISTS {olap_relation}")
@@ -75,6 +90,11 @@ class PgUnionSqlFunctionalityDataGenerator(DataGenerator):
                     f"INSERT INTO {oltp_relation} {cross_database_union_dataset_select(start_row, end_row, 'oltp')}"
                 )
                 written_rows += end_row - start_row
+                written_targets = update_generation_target_status(
+                    written_targets,
+                    oltp_relation_name,
+                    status="written",
+                )
                 context.report(
                     progress=written_rows / total_rows,
                     progress_label=f"Writing OLTP batch {batch_index} / {oltp_batch_count}",
@@ -84,6 +104,7 @@ class PgUnionSqlFunctionalityDataGenerator(DataGenerator):
                     ),
                     target_name=table_name,
                     target_relation=f"{oltp_relation_name} + {olap_relation_name}",
+                    written_targets=written_targets,
                     generated_rows=written_rows,
                     generated_size_gb=approximate_size_gb(written_rows, self.approximate_row_bytes),
                 )
@@ -95,6 +116,11 @@ class PgUnionSqlFunctionalityDataGenerator(DataGenerator):
                     f"INSERT INTO {olap_relation} {cross_database_union_dataset_select(start_row, end_row, 'olap')}"
                 )
                 written_rows += end_row - start_row
+                written_targets = update_generation_target_status(
+                    written_targets,
+                    olap_relation_name,
+                    status="written",
+                )
                 context.report(
                     progress=written_rows / total_rows,
                     progress_label=f"Writing OLAP batch {batch_index} / {olap_batch_count}",
@@ -104,6 +130,7 @@ class PgUnionSqlFunctionalityDataGenerator(DataGenerator):
                     ),
                     target_name=table_name,
                     target_relation=f"{oltp_relation_name} + {olap_relation_name}",
+                    written_targets=written_targets,
                     generated_rows=written_rows,
                     generated_size_gb=approximate_size_gb(written_rows, self.approximate_row_bytes),
                 )
@@ -111,6 +138,7 @@ class PgUnionSqlFunctionalityDataGenerator(DataGenerator):
             return DataGeneratorResult(
                 target_name=table_name,
                 target_relation=f"{oltp_relation_name} + {olap_relation_name}",
+                written_targets=written_targets,
                 generated_rows=written_rows,
                 generated_size_gb=approximate_size_gb(written_rows, self.approximate_row_bytes),
                 message=(
@@ -123,6 +151,7 @@ class PgUnionSqlFunctionalityDataGenerator(DataGenerator):
             context.report(
                 message="Cancellation requested. Partial OLTP and OLAP output were removed.",
                 target_relation="",
+                written_targets=[],
                 generated_rows=0,
                 generated_size_gb=0.0,
             )

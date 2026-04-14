@@ -20,7 +20,9 @@ from .base import (
     DataGeneratorContext,
     DataGeneratorResult,
     estimated_rows_for_size,
+    generation_target,
     generated_name,
+    update_generation_target_status,
 )
 from .helpers import (
     TAX_ASSESSMENT_DATASET_COLUMNS,
@@ -71,6 +73,18 @@ class PgVsS3ContestDataGenerator(DataGenerator):
         object_key_prefix = f"generated/{target_name}"
         connection = context.connect()
         s3_upload_client = s3_client(settings)
+        written_targets = [
+            generation_target(
+                target_kind="postgres_table",
+                label="PostgreSQL OLTP table",
+                location=postgres_relation_name,
+            ),
+            generation_target(
+                target_kind="s3_prefix",
+                label="Dedicated S3 Parquet path",
+                location=object_prefix,
+            ),
+        ]
 
         try:
             context.report(
@@ -83,6 +97,7 @@ class PgVsS3ContestDataGenerator(DataGenerator):
                 target_name=target_name,
                 target_relation=postgres_relation_name,
                 target_path=object_prefix,
+                written_targets=written_targets,
             )
             ensure_s3_bucket(settings, bucket_name)
             connection.execute(f"CREATE SCHEMA IF NOT EXISTS {qualified_name(s3_schema)}")
@@ -116,6 +131,12 @@ class PgVsS3ContestDataGenerator(DataGenerator):
                     local_parquet_path.unlink(missing_ok=True)
 
                     written_rows = end_row
+                    written_targets = update_generation_target_status(
+                        written_targets,
+                        postgres_relation_name,
+                        object_prefix,
+                        status="written",
+                    )
                     context.report(
                         progress=written_rows / total_rows,
                         progress_label=f"Writing identical batch {batch_index} / {batch_count}",
@@ -126,6 +147,7 @@ class PgVsS3ContestDataGenerator(DataGenerator):
                         target_name=target_name,
                         target_relation=postgres_relation_name,
                         target_path=object_prefix,
+                        written_targets=written_targets,
                         generated_rows=written_rows,
                         generated_size_gb=approximate_size_gb(written_rows, self.approximate_row_bytes),
                     )
@@ -137,6 +159,7 @@ class PgVsS3ContestDataGenerator(DataGenerator):
                 target_name=target_name,
                 target_relation=postgres_relation_name,
                 target_path=object_prefix,
+                written_targets=written_targets,
                 generated_rows=written_rows,
                 generated_size_gb=approximate_size_gb(written_rows, self.approximate_row_bytes),
                 message=(
@@ -156,6 +179,7 @@ class PgVsS3ContestDataGenerator(DataGenerator):
                 message="Cancellation requested. Partial PostgreSQL and S3 output were removed.",
                 target_relation="",
                 target_path="",
+                written_targets=[],
                 generated_rows=0,
                 generated_size_gb=0.0,
             )

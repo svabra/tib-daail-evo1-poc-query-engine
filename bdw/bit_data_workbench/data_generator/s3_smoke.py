@@ -14,7 +14,16 @@ from ..backend.s3_storage import (
     s3_bucket_schema_name,
     upload_s3_file,
 )
-from .base import DataGenerationCancelled, DataGenerator, DataGeneratorContext, DataGeneratorResult, estimated_rows_for_size, generated_name
+from .base import (
+    DataGenerationCancelled,
+    DataGenerator,
+    DataGeneratorContext,
+    DataGeneratorResult,
+    estimated_rows_for_size,
+    generation_target,
+    generated_name,
+    update_generation_target_status,
+)
 from .helpers import approximate_size_gb, qualified_name, sql_literal, vat_smoke_dataset_select
 
 class S3SmokeDataGenerator(DataGenerator):
@@ -53,6 +62,13 @@ class S3SmokeDataGenerator(DataGenerator):
         object_key_prefix = f"generated/{view_name}"
         connection = context.connect()
         s3_upload_client = s3_client(settings)
+        written_targets = [
+            generation_target(
+                target_kind="s3_prefix",
+                label="Dedicated S3 Parquet path",
+                location=object_prefix,
+            )
+        ]
 
         try:
             context.report(
@@ -62,6 +78,7 @@ class S3SmokeDataGenerator(DataGenerator):
                 target_name=view_name,
                 target_relation=f"{schema_name}.{view_name}",
                 target_path=object_prefix,
+                written_targets=written_targets,
             )
             ensure_s3_bucket(settings, bucket_name)
             connection.execute(f"CREATE SCHEMA IF NOT EXISTS {qualified_name(schema_name)}")
@@ -89,6 +106,11 @@ class S3SmokeDataGenerator(DataGenerator):
                     )
                     local_parquet_path.unlink(missing_ok=True)
                     written_rows = end_row
+                    written_targets = update_generation_target_status(
+                        written_targets,
+                        object_prefix,
+                        status="written",
+                    )
                     context.report(
                         progress=written_rows / total_rows,
                         progress_label=f"Writing batch {batch_index} / {batch_count}",
@@ -96,6 +118,7 @@ class S3SmokeDataGenerator(DataGenerator):
                         target_name=view_name,
                         target_relation=f"{schema_name}.{view_name}",
                         target_path=object_prefix,
+                        written_targets=written_targets,
                         generated_rows=written_rows,
                         generated_size_gb=approximate_size_gb(written_rows, self.approximate_row_bytes),
                     )
@@ -107,6 +130,7 @@ class S3SmokeDataGenerator(DataGenerator):
                 target_name=view_name,
                 target_relation=f"{schema_name}.{view_name}",
                 target_path=object_prefix,
+                written_targets=written_targets,
                 generated_rows=written_rows,
                 generated_size_gb=approximate_size_gb(written_rows, self.approximate_row_bytes),
                 message=f"Generated {written_rows:,} rows in {schema_name}.{view_name}.",
@@ -117,6 +141,7 @@ class S3SmokeDataGenerator(DataGenerator):
                 message="Cancellation requested. Partial S3 output and the dedicated loader bucket were removed.",
                 target_relation="",
                 target_path="",
+                written_targets=[],
                 generated_rows=0,
                 generated_size_gb=0.0,
             )

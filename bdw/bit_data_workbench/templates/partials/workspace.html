@@ -415,7 +415,7 @@
               name="sql"
               data-editor-source
               data-default-sql="{{ cell.sql }}"
-              rows="5"
+              rows="{{ 10 if cell.sql | trim else 5 }}"
               spellcheck="false"
             >{{ cell.sql }}</textarea>
           </div>

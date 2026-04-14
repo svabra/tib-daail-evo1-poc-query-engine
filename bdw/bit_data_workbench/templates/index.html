@@ -168,6 +168,16 @@
       </section>
     </main>
   </div>
+  <aside class="app-version-overlay" aria-label="Runtime status">
+    <div class="app-version-overlay-row">
+      <span class="app-version-overlay-label">Connections</span>
+      <span class="app-version-overlay-value" data-client-connections-count>0</span>
+    </div>
+    <div class="app-version-overlay-row">
+      <span class="app-version-overlay-label">DAAIFL Workbench</span>
+      <span class="app-version-overlay-value">V{{ runtime.image_version }}</span>
+    </div>
+  </aside>
   <script id="source-options" type="application/json">{{ source_options_json | safe }}</script>
   <script id="feature-release-notes" type="application/json">{{ release_notes_json | safe }}</script>
 {% endblock %}

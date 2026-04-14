@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 import duckdb
 
 from ..config import Settings
-from ..models import DataGenerationJobDefinition, DataGeneratorDefinition
+from ..models import (
+    DataGenerationJobDefinition,
+    DataGenerationTargetDefinition,
+    DataGeneratorDefinition,
+)
 
 
 BYTES_PER_GB = 1024**3
@@ -22,6 +26,7 @@ class DataGeneratorResult:
     target_name: str
     target_relation: str = ""
     target_path: str = ""
+    written_targets: list[DataGenerationTargetDefinition] = field(default_factory=list)
     generated_rows: int = 0
     generated_size_gb: float = 0.0
     message: str = "Data generation completed."
@@ -73,6 +78,47 @@ def estimated_rows_for_size(size_gb: float, approximate_row_bytes: int) -> int:
 
 def generated_name(prefix: str, job_id: str) -> str:
     return prefix
+
+
+def generation_target(
+    *,
+    target_kind: str,
+    label: str,
+    location: str,
+    status: str = "pending",
+) -> DataGenerationTargetDefinition:
+    return DataGenerationTargetDefinition(
+        target_kind=str(target_kind or "").strip() or "target",
+        label=str(label or "").strip() or str(location or "").strip(),
+        location=str(location or "").strip(),
+        status=str(status or "").strip() or "pending",
+    )
+
+
+def update_generation_target_status(
+    targets: list[DataGenerationTargetDefinition],
+    *locations: str,
+    status: str,
+) -> list[DataGenerationTargetDefinition]:
+    normalized_locations = {
+        str(location or "").strip()
+        for location in locations
+        if str(location or "").strip()
+    }
+    next_status = str(status or "").strip() or "pending"
+    updated: list[DataGenerationTargetDefinition] = []
+
+    for target in targets:
+        updated.append(
+            DataGenerationTargetDefinition(
+                target_kind=target.target_kind,
+                label=target.label,
+                location=target.location,
+                status=next_status if target.location in normalized_locations else target.status,
+            )
+        )
+
+    return updated
 
 
 class DataGenerator(ABC):

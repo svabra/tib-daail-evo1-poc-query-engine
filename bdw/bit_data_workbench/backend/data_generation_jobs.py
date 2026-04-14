@@ -10,7 +10,7 @@ from typing import Any, Callable
 from ..config import Settings
 from ..data_generator.base import DataGenerationCancelled, DataGeneratorContext, DataGeneratorResult
 from ..data_generator.registry import DataGeneratorRegistry
-from ..models import DataGenerationJobDefinition
+from ..models import DataGenerationJobDefinition, normalize_data_generation_targets
 
 
 RUNNING_GENERATION_STATUSES = {"queued", "running"}
@@ -74,6 +74,7 @@ class DataGenerationJobManager:
             progress=0.0,
             progress_label="Queued...",
             message="Waiting to start.",
+            written_targets=[],
             backend_name="Python module",
             can_cancel=generator.supports_cancel,
         )
@@ -169,6 +170,8 @@ class DataGenerationJobManager:
             record.snapshot.generated_size_gb = result.generated_size_gb
             record.snapshot.target_relation = result.target_relation
             record.snapshot.target_path = result.target_path
+            if result.written_targets:
+                record.snapshot.written_targets = normalize_data_generation_targets(result.written_targets)
             if result.target_name:
                 record.snapshot.target_name = result.target_name
             record.snapshot.message = result.message
@@ -258,6 +261,7 @@ class DataGenerationJobManager:
                 target_name=execution_result.target_name,
                 target_relation=execution_result.target_relation,
                 target_path=execution_result.target_path,
+                written_targets=execution_result.written_targets,
                 generated_rows=execution_result.generated_rows,
                 generated_size_gb=execution_result.generated_size_gb,
                 can_cleanup=can_cleanup,
@@ -282,6 +286,10 @@ class DataGenerationJobManager:
             if record is None:
                 return
             for key, value in changes.items():
+                if key == "written_targets":
+                    if value is not None:
+                        record.snapshot.written_targets = normalize_data_generation_targets(value)
+                    continue
                 if value is not None:
                     setattr(record.snapshot, key, value)
             record.snapshot.updated_at = utc_now_iso()
@@ -302,6 +310,10 @@ class DataGenerationJobManager:
             if status != "completed":
                 record.snapshot.progress = None
             for key, value in changes.items():
+                if key == "written_targets":
+                    if value:
+                        record.snapshot.written_targets = normalize_data_generation_targets(value)
+                    continue
                 setattr(record.snapshot, key, value)
             self._prune_history_locked()
             self._touch_locked()

@@ -21,7 +21,9 @@ from .base import (
     DataGeneratorContext,
     DataGeneratorResult,
     estimated_rows_for_size,
+    generation_target,
     generated_name,
+    update_generation_target_status,
 )
 from .helpers import (
     CROSS_DATABASE_UNION_DATASET_COLUMNS,
@@ -77,6 +79,18 @@ class PgUnionSqlFunctionalityS3DataGenerator(DataGenerator):
         object_key_prefix = f"generated/{target_name}"
         connection = context.connect()
         s3_upload_client = s3_client(settings)
+        written_targets = [
+            generation_target(
+                target_kind="postgres_table",
+                label="PostgreSQL OLTP table",
+                location=postgres_relation_name,
+            ),
+            generation_target(
+                target_kind="s3_prefix",
+                label="Dedicated S3 Parquet path",
+                location=object_prefix,
+            ),
+        ]
 
         try:
             context.report(
@@ -89,6 +103,7 @@ class PgUnionSqlFunctionalityS3DataGenerator(DataGenerator):
                 target_name=target_name,
                 target_relation=postgres_relation_name,
                 target_path=object_prefix,
+                written_targets=written_targets,
             )
             ensure_s3_bucket(settings, bucket_name)
             connection.execute(f"CREATE SCHEMA IF NOT EXISTS {qualified_name(s3_schema)}")
@@ -110,6 +125,11 @@ class PgUnionSqlFunctionalityS3DataGenerator(DataGenerator):
                         f"{cross_database_union_dataset_select(start_row, end_row, 'oltp')}"
                     )
                     written_rows += end_row - start_row
+                    written_targets = update_generation_target_status(
+                        written_targets,
+                        postgres_relation_name,
+                        status="written",
+                    )
                     context.report(
                         progress=written_rows / total_rows,
                         progress_label=f"Writing OLTP batch {batch_index} / {oltp_batch_count}",
@@ -120,6 +140,7 @@ class PgUnionSqlFunctionalityS3DataGenerator(DataGenerator):
                         target_name=target_name,
                         target_relation=postgres_relation_name,
                         target_path=object_prefix,
+                        written_targets=written_targets,
                         generated_rows=written_rows,
                         generated_size_gb=approximate_size_gb(written_rows, self.approximate_row_bytes),
                     )
@@ -148,6 +169,11 @@ class PgUnionSqlFunctionalityS3DataGenerator(DataGenerator):
                     )
                     local_parquet_path.unlink(missing_ok=True)
                     written_rows += end_row - start_row
+                    written_targets = update_generation_target_status(
+                        written_targets,
+                        object_prefix,
+                        status="written",
+                    )
                     context.report(
                         progress=written_rows / total_rows,
                         progress_label=f"Writing S3 batch {batch_index} / {s3_batch_count}",
@@ -158,6 +184,7 @@ class PgUnionSqlFunctionalityS3DataGenerator(DataGenerator):
                         target_name=target_name,
                         target_relation=postgres_relation_name,
                         target_path=object_prefix,
+                        written_targets=written_targets,
                         generated_rows=written_rows,
                         generated_size_gb=approximate_size_gb(written_rows, self.approximate_row_bytes),
                     )
@@ -175,6 +202,7 @@ class PgUnionSqlFunctionalityS3DataGenerator(DataGenerator):
                 target_name=target_name,
                 target_relation=postgres_relation_name,
                 target_path=object_prefix,
+                written_targets=written_targets,
                 generated_rows=written_rows,
                 generated_size_gb=approximate_size_gb(written_rows, self.approximate_row_bytes),
                 message=(
@@ -194,6 +222,7 @@ class PgUnionSqlFunctionalityS3DataGenerator(DataGenerator):
                 message="Cancellation requested. Partial PostgreSQL and S3 output were removed.",
                 target_relation="",
                 target_path="",
+                written_targets=[],
                 generated_rows=0,
                 generated_size_gb=0.0,
             )
