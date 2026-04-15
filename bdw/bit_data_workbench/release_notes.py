@@ -1,9 +1,28 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.4.7. Keep entries concise and
+# Derived from git history through version 0.5.1. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.5.1",
+        "releasedAt": "2026-04-15T12:00:00+02:00",
+        "features": [
+            (
+                "Landing page and workbench navigation now remain clickable "
+                "after overlay and shell initialization changes."
+            ),
+            (
+                "Runtime status overlay now shows a PoC attribution line "
+                "under the Workbench version for clearer provenance."
+            ),
+            (
+                "Runtime overlay styling has been tuned to reduce visual "
+                "obstruction while keeping version and connection readouts "
+                "visible."
+            ),
+        ],
+    },
     {
         "version": "0.4.7",
         "releasedAt": "2026-04-14T10:09:33.5282495+02:00",

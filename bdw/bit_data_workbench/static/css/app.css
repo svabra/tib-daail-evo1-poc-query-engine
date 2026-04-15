@@ -176,7 +176,7 @@ body.sidebar-collapsed .sidebar-resizer::before {
   padding: 8px 11px;
   border: 1px solid rgba(124, 140, 158, 0.22);
   border-radius: 2px;
-  background: rgba(244, 247, 250, 0.5);
+  background: rgba(244, 247, 250, 0.2);
   color: rgba(34, 51, 68, 0.82);
   box-shadow: 0 10px 24px rgba(17, 33, 51, 0.08);
   backdrop-filter: blur(12px);
@@ -188,6 +188,17 @@ body.sidebar-collapsed .sidebar-resizer::before {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.app-version-overlay-row-poc {
+  justify-content: flex-start;
+}
+
+.app-version-overlay-poc-text {
+  font-size: 0.65rem;
+  font-weight: 600;
+  opacity: 0.74;
+  text-wrap: nowrap;
 }
 
 .app-version-overlay-label,
