@@ -261,7 +261,7 @@ def build_static_notebooks(
         "ORDER BY tax_period_end DESC, net_vat_due_chf DESC, refund_claim_chf DESC\n"
         "LIMIT 100;"
         if preferred_s3_relation
-        else "SELECT 'Run the S3 VAT Smoke Loader from the Ingestion Workbench first.' AS status;"
+        else "SELECT 'Run the S3 VAT Smoke Loader from the Loader Workbench first.' AS status;"
     )
 
     postgres_sql = (
@@ -281,7 +281,7 @@ def build_static_notebooks(
         "ORDER BY tax_period_end DESC, net_vat_due_chf DESC, filing_id DESC\n"
         "LIMIT 100;"
         if preferred_postgres_relation
-        else "SELECT 'Run the PostgreSQL OLTP VAT Smoke Loader from the Ingestion Workbench first.' AS status;"
+        else "SELECT 'Run the PostgreSQL OLTP VAT Smoke Loader from the Loader Workbench first.' AS status;"
     )
     performance_sql_template = (
         "-- Approximation: summarize quarterly tax-assessment pressure across cantons and sectors.\n"
@@ -346,20 +346,20 @@ def build_static_notebooks(
     contest_postgres_sql = (
         performance_sql_template.format(relation=contest_postgres_relation)
         if contest_postgres_relation
-        else "SELECT 'Run the PG vs S3 Contest Loader from the Ingestion Workbench first.' AS status;"
+        else "SELECT 'Run the PG vs S3 Contest Loader from the Loader Workbench first.' AS status;"
     )
     contest_s3_sql = (
         performance_sql_template.format(relation=contest_s3_relation)
         if contest_s3_relation
-        else "SELECT 'Run the PG vs S3 Contest Loader from the Ingestion Workbench first.' AS status;"
+        else "SELECT 'Run the PG vs S3 Contest Loader from the Loader Workbench first.' AS status;"
     )
     contest_postgres_native_sql = (
         performance_sql_template.format(relation=contest_postgres_native_relation)
         if contest_postgres_native_relation
-        else "SELECT 'Run the PG vs S3 Contest Loader from the Ingestion Workbench first.' AS status;"
+        else "SELECT 'Run the PG vs S3 Contest Loader from the Loader Workbench first.' AS status;"
     )
     multi_table_status_sql = (
-        "SELECT 'Run the PG vs S3 Multi-Table Federal Tax Loader from the Ingestion Workbench first.' AS status;"
+        "SELECT 'Run the PG vs S3 Multi-Table Federal Tax Loader from the Loader Workbench first.' AS status;"
     )
     multi_table_postgres_sql = (
         _build_multi_table_performance_sql(
@@ -471,7 +471,7 @@ def build_static_notebooks(
         "WHERE source_rank <= 30\n"
         "ORDER BY database_name, source_rank, canton_code, processing_status, risk_band;"
         if union_oltp_relation and union_olap_relation
-        else "SELECT 'Run the PostgreSQL OLTP + OLAP UNION Loader from the Ingestion Workbench first.' AS status;"
+        else "SELECT 'Run the PostgreSQL OLTP + OLAP UNION Loader from the Loader Workbench first.' AS status;"
     )
     cross_source_union_sql = (
         "-- Approximation: compare the same tax-position reference shape across OLTP and S3-backed object storage.\n"
@@ -550,7 +550,7 @@ def build_static_notebooks(
         "WHERE source_rank <= 30\n"
         "ORDER BY source_name, source_rank, canton_code, processing_status, risk_band;"
         if union_oltp_s3_relation and union_s3_relation
-        else "SELECT 'Run the PostgreSQL OLTP + S3 UNION Loader from the Ingestion Workbench first.' AS status;"
+        else "SELECT 'Run the PostgreSQL OLTP + S3 UNION Loader from the Loader Workbench first.' AS status;"
     )
     oltp_write_test_table = "public.notebook_oltp_write_test"
     oltp_write_test_setup_sql = (

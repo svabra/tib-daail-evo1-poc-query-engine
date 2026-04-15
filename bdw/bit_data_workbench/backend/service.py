@@ -47,6 +47,11 @@ from .data_sources import DataSourceCreateRequest, DataSourceDeleteRequest, Data
 from .data_sources.postgres import PostgresDataSourcePlugin
 from .data_sources.s3 import S3DataSourcePlugin
 from .data_generation_jobs import DataGenerationJobManager
+from .ingestion_types.csv import (
+    CsvIngestionManager,
+    attach_query_sources_to_csv_imports,
+)
+from .local_workspace_query_sources import LocalWorkspaceQuerySourceManager
 from .query_analysis import analyze_query_touches, build_relation_index
 from .query_jobs import QueryJobManager
 from .query_result_exports import QueryResultExportManager
@@ -174,6 +179,13 @@ class WorkbenchService:
                 "data-generation-jobs",
                 snapshot,
             ),
+        )
+        self._csv_ingestion = CsvIngestionManager(
+            settings=settings,
+            postgres_connection_factory=self._create_postgres_native_connection,
+        )
+        self._local_workspace_query_sources = LocalWorkspaceQuerySourceManager(
+            settings=settings,
         )
         self._data_source_discovery = DataSourceDiscoveryManager(
             connection_factory=self._create_worker_connection,
@@ -604,6 +616,89 @@ class WorkbenchService:
         snapshot = self._data_generation_jobs.cleanup_job(job_id)
         self.refresh_metadata_state()
         return snapshot.payload
+
+    def import_csv_files(
+        self,
+        *,
+        files,
+        target_id: str,
+        bucket: str = "",
+        prefix: str = "",
+        schema_name: str = "public",
+        table_prefix: str = "",
+        delimiter: str = "",
+        has_header: bool = True,
+        replace_existing: bool = True,
+        storage_format: str = "csv",
+    ) -> dict[str, object]:
+        normalized_target_id = str(target_id or "").strip()
+        payload = self._csv_ingestion.import_csv_files(
+            files=list(files or []),
+            target_id=normalized_target_id,
+            bucket=bucket,
+            prefix=prefix,
+            schema_name=schema_name,
+            table_prefix=table_prefix,
+            delimiter=delimiter,
+            has_header=has_header,
+            replace_existing=replace_existing,
+            storage_format=storage_format,
+        )
+        if payload.get("importedCount"):
+            if normalized_target_id == "workspace.s3":
+                self._data_source_discovery.sync_source("workspace.s3", emit_event=True)
+            else:
+                self.refresh_metadata_state()
+            payload = attach_query_sources_to_csv_imports(payload, self._catalogs)
+        return payload
+
+    def sync_local_workspace_query_source(
+        self,
+        *,
+        client_id: str,
+        entry_id: str,
+        relation: str,
+        file_name: str,
+        export_format: str = "",
+        mime_type: str = "",
+        file_bytes: bytes,
+        csv_delimiter: str = "",
+        csv_has_header: bool = True,
+    ) -> dict[str, object]:
+        with self._lock:
+            result = self._local_workspace_query_sources.sync_source(
+                conn=self._require_connection(),
+                client_id=client_id,
+                entry_id=entry_id,
+                logical_relation=relation,
+                file_name=file_name,
+                export_format=export_format,
+                mime_type=mime_type,
+                file_bytes=file_bytes,
+                csv_delimiter=csv_delimiter,
+                csv_has_header=csv_has_header,
+            )
+        return result.payload
+
+    def delete_local_workspace_query_source(
+        self,
+        *,
+        client_id: str,
+        entry_id: str,
+    ) -> None:
+        with self._lock:
+            self._local_workspace_query_sources.delete_source(
+                conn=self._require_connection(),
+                client_id=client_id,
+                entry_id=entry_id,
+            )
+
+    def clear_local_workspace_query_sources(self, *, client_id: str) -> None:
+        with self._lock:
+            self._local_workspace_query_sources.clear_client_sources(
+                conn=self._require_connection(),
+                client_id=client_id,
+            )
 
     def source_object_fields(self, relation: str) -> list[SourceField]:
         normalized_relation = relation.strip()

@@ -28,15 +28,15 @@
         id="sidebar-search-input"
         class="search-input"
         type="search"
-        placeholder="{{ 'Search runbooks and data sources' if workspace_mode == 'ingestion' else 'Search notebooks and data sources' }}"
+        placeholder="{{ 'Search loaders and data sources' if workspace_mode == 'loader' else 'Search notebooks and data sources' }}"
         data-sidebar-search
       >
     </div>
 
-    {% if workspace_mode == 'ingestion' %}
+    {% if workspace_mode == 'loader' %}
       <details class="sidebar-section notebook-section" data-ingestion-runbook-section>
         <summary class="section-heading section-summary">
-          <h2>Ingestion Runbooks</h2>
+          <h2>Loader Runbooks</h2>
           <div class="section-tools">
             <button
               type="button"
@@ -199,7 +199,7 @@
       <div class="source-tree">
         {% for catalog in catalogs %}
           {% set catalog_source_id = catalog.connection_source_id or catalog.name %}
-          {% set catalog_display_name = "Shared Workspace" if catalog_source_id == "workspace.s3" else "Local Workspace" if catalog_source_id == "workspace.local" else catalog.name %}
+          {% set catalog_display_name = "Shared Workspace (S3)" if catalog_source_id == "workspace.s3" else "Local Workspace" if catalog_source_id == "workspace.local" else catalog.name %}
           <details
             class="source-catalog"
             data-source-catalog
@@ -461,18 +461,18 @@
 
   <div class="sidebar-divider" aria-hidden="true"></div>
 
-  {% if workspace_mode == 'ingestion' %}
+  {% if workspace_mode == 'loader' %}
 
     <details class="sidebar-section sidebar-query-monitor" data-generation-monitor-section>
       <summary class="section-heading section-summary">
-        <h2>Ingestion Monitoring</h2>
+        <h2>Loader Monitoring</h2>
         <div class="section-tools">
           <span class="section-count query-monitor-count" data-generation-monitor-count>0</span>
         </div>
       </summary>
       <div class="query-monitor-body">
         <div class="query-monitor-list" data-generation-monitor-list>
-          <p class="query-monitor-empty">No ingestion jobs yet.</p>
+          <p class="query-monitor-empty">No loader jobs yet.</p>
         </div>
       </div>
     </details>

@@ -4,6 +4,7 @@ export function createWorkbenchNavigationController(helpers) {
     closeSettingsMenus,
     getClearVisibleNotifications,
     getQueryNotificationMenu,
+    openLoaderWorkbench,
     loadQueryWorkbenchDataSources,
     loadQueryWorkbenchEntry,
     openIngestionWorkbench,
@@ -36,8 +37,17 @@ export function createWorkbenchNavigationController(helpers) {
       event.preventDefault();
       event.stopPropagation();
       closeNotificationMenu();
-      await openIngestionWorkbench({
-        focusJobId: openIngestionWorkbenchButton.dataset.focusGenerationJob || "",
+      await openIngestionWorkbench();
+      return true;
+    }
+
+    const openLoaderWorkbenchButton = event.target.closest("[data-open-loader-workbench]");
+    if (openLoaderWorkbenchButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeNotificationMenu();
+      await openLoaderWorkbench({
+        focusJobId: openLoaderWorkbenchButton.dataset.focusGenerationJob || "",
       });
       return true;
     }
@@ -96,7 +106,7 @@ export function createWorkbenchNavigationController(helpers) {
       event.preventDefault();
       const generatorId = openIngestionRunbookButton.dataset.openIngestionRunbook || "";
       selectIngestionRunbook(generatorId, { spotlight: true });
-      await openIngestionWorkbench({
+      await openLoaderWorkbench({
         focusGeneratorId: generatorId,
       });
       return true;

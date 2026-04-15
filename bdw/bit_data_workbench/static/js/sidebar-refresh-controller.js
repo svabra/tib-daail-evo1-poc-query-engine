@@ -50,7 +50,7 @@ export function createSidebarRefreshController(helpers) {
       return;
     }
 
-    const stateSidebarMode = state.sidebarMode === "ingestion" ? "ingestion" : "notebook";
+    const stateSidebarMode = state.sidebarMode === "loader" ? "loader" : "notebook";
     const sidebarMode = currentSidebarMode();
 
     const search = document.querySelector("[data-sidebar-search]");
@@ -64,11 +64,11 @@ export function createSidebarRefreshController(helpers) {
     }
 
     const ingestionRunbookSectionRoot = document.querySelector("[data-ingestion-runbook-section]");
-    if (ingestionRunbookSectionRoot && stateSidebarMode === "ingestion" && sidebarMode === "ingestion") {
+    if (ingestionRunbookSectionRoot && stateSidebarMode === "loader" && sidebarMode === "loader") {
       ingestionRunbookSectionRoot.open = Boolean(state.ingestionRunbookSectionOpen);
     }
 
-    if (stateSidebarMode === "ingestion" && sidebarMode === "ingestion") {
+    if (stateSidebarMode === "loader" && sidebarMode === "loader") {
       const openRunbookFolders = new Set(Array.isArray(state.runbookFoldersOpen) ? state.runbookFoldersOpen : []);
       document.querySelectorAll("[data-runbook-folder]").forEach((node) => {
         node.open = openRunbookFolders.has(node.dataset.runbookFolderId || "");
@@ -81,7 +81,7 @@ export function createSidebarRefreshController(helpers) {
     }
 
     const generationMonitorSectionRoot = document.querySelector("[data-generation-monitor-section]");
-    if (generationMonitorSectionRoot && stateSidebarMode === "ingestion" && sidebarMode === "ingestion") {
+    if (generationMonitorSectionRoot && stateSidebarMode === "loader" && sidebarMode === "loader") {
       generationMonitorSectionRoot.open = Boolean(state.generationMonitorSectionOpen);
     }
 

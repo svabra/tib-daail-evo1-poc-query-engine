@@ -3,32 +3,332 @@
     <div class="workspace-title-block ingestion-workbench-page-copy">
       <h2>Ingestion Workbench</h2>
       <p class="workspace-summary">
-        Launch server-side Python generator modules and follow their progress while data is written into PostgreSQL OLTP, PostgreSQL OLAP, or S3.
+        Choose a user-driven ingestion flow, then move external files into PostgreSQL, Shared Workspace S3, or the browser-local Local Workspace.
       </p>
     </div>
   </header>
 
-  <section class="ingestion-workbench-section">
-    <div class="ingestion-workbench-section-header">
-      <h3 data-ingestion-generator-section-title>Selected Runbook</h3>
-      <p data-ingestion-generator-section-copy>
-        Modules are discovered from the <code>data_generator</code> package on the server.
-      </p>
-    </div>
-    <div class="ingestion-generator-list" data-ingestion-generator-list>
-      <p class="ingestion-empty">Loading data generators...</p>
-    </div>
+  <section class="ingestion-entry-grid" aria-label="Ingestion tools">
+    <button
+      type="button"
+      class="home-workbench-card ingestion-entry-tile"
+      data-ingestion-tile="csv"
+      aria-pressed="false"
+      aria-controls="csv-ingestion-panel"
+    >
+      <span class="home-workbench-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24">
+          <path d="M6 3.2h8.2L18 7v13.8H6z"></path>
+          <path d="M14.2 3.2V7H18"></path>
+          <path d="M8.2 10.2h7.6"></path>
+          <path d="M8.2 13.1h7.6"></path>
+          <path d="M8.2 16h5.3"></path>
+        </svg>
+      </span>
+      <span class="home-workbench-title">CSV Files</span>
+      <span class="home-workbench-copy">
+        Drag and drop one or more CSV files, map them to a destination, and ingest them directly into the selected data source.
+      </span>
+    </button>
+    <button
+      type="button"
+      class="home-workbench-card ingestion-entry-tile ingestion-entry-tile-disabled"
+      disabled
+      title="Additional ingestion flows will be added here."
+    >
+      <span class="home-workbench-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24">
+          <rect x="4" y="4.2" width="16" height="15.6" rx="1.8"></rect>
+          <path d="M7.2 8.2h9.6"></path>
+          <path d="M7.2 12h9.6"></path>
+          <path d="M7.2 15.8h6.2"></path>
+        </svg>
+      </span>
+      <span class="home-workbench-title">More Ingestors</span>
+      <span class="home-workbench-copy">
+        JSON, Parquet, and pipeline-based ingestion flows will land here after the CSV path is stable.
+      </span>
+    </button>
   </section>
 
-  <section class="ingestion-workbench-section">
-    <div class="ingestion-workbench-section-header">
-      <h3 data-ingestion-job-section-title>Runbook Jobs</h3>
-      <p data-ingestion-job-section-copy>
-        Progress comes from server-side jobs, so it survives page refreshes while the server is running.
-      </p>
+  <section
+    id="csv-ingestion-panel"
+    class="ingestion-workbench-section ingestion-csv-panel"
+    data-ingestion-entry-panel="csv"
+    hidden
+  >
+    <div class="ingestion-workbench-section-header ingestion-csv-panel-header">
+      <div>
+        <h3>CSV Import</h3>
+        <p>
+          Work step by step: choose files, review the CSV shape, choose a destination, then import.
+        </p>
+      </div>
+      <button
+        type="button"
+        class="modal-button modal-button-secondary"
+        data-close-ingestion-entry
+      >
+        Back to ingest types
+      </button>
     </div>
-    <div class="ingestion-job-list" data-ingestion-job-list>
-      <p class="ingestion-empty">No data generation jobs yet. Run a loader first, then clean its output from the completed job card.</p>
-    </div>
+
+    <form class="ingestion-csv-form" data-csv-ingestion-form>
+      <div class="ingestion-csv-steps">
+        <section class="ingestion-csv-step">
+          <div class="ingestion-csv-step-header">
+            <span class="workspace-tags-label">Step 1</span>
+            <h4>Choose CSV files</h4>
+          </div>
+          <label class="ingestion-csv-dropzone" data-csv-dropzone>
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              multiple
+              data-csv-file-input
+              hidden
+            >
+            <strong>Drop CSV files here</strong>
+            <span>or click to browse from this machine</span>
+          </label>
+          <div class="ingestion-csv-file-list" data-csv-file-list>
+            <p class="ingestion-empty">No CSV files selected yet.</p>
+          </div>
+        </section>
+
+        <section class="ingestion-csv-step">
+          <div class="ingestion-csv-step-header">
+            <span class="workspace-tags-label">Step 2</span>
+            <h4>Review CSV settings</h4>
+          </div>
+          <div class="ingestion-csv-options-grid">
+            <label class="result-export-field">
+              <span class="result-export-field-label">Delimiter</span>
+              <select class="modal-input" data-csv-delimiter-mode>
+                <option value="auto" selected>Auto-detect</option>
+                <option value="comma">Comma</option>
+                <option value="semicolon">Semicolon</option>
+                <option value="tab">Tab</option>
+                <option value="pipe">Pipe</option>
+              </select>
+            </label>
+            <label class="ingestion-csv-toggle">
+              <input type="checkbox" data-csv-has-header checked>
+              <span>First row contains column names</span>
+            </label>
+            <label class="ingestion-csv-toggle" data-csv-replace-existing-row hidden>
+              <input type="checkbox" data-csv-replace-existing checked>
+              <span>Replace any existing destination with the same resolved name</span>
+            </label>
+          </div>
+          <div class="ingestion-csv-preview" data-csv-preview-root>
+            <p class="ingestion-empty">Select CSV files to preview the detected columns and sample rows.</p>
+          </div>
+        </section>
+
+        <section class="ingestion-csv-step">
+          <div class="ingestion-csv-step-header">
+            <span class="workspace-tags-label">Step 3</span>
+            <h4>Choose destination</h4>
+          </div>
+          <div class="ingestion-csv-target-grid">
+            <label class="ingestion-csv-target-card">
+              <input type="radio" name="target_id" value="workspace.local" data-csv-target-option checked>
+              <span class="ingestion-csv-target-title">Local Workspace</span>
+              <span class="ingestion-csv-target-copy">Store the raw CSV files in this browser using IndexedDB.</span>
+            </label>
+            <label class="ingestion-csv-target-card">
+              <input type="radio" name="target_id" value="workspace.s3" data-csv-target-option>
+              <span class="ingestion-csv-target-title">Shared Workspace S3</span>
+              <span class="ingestion-csv-target-copy">Upload into a bucket and optional object key prefix in Shared Workspace S3.</span>
+            </label>
+            <label class="ingestion-csv-target-card">
+              <input type="radio" name="target_id" value="pg_oltp" data-csv-target-option>
+              <span class="ingestion-csv-target-title">PostgreSQL OLTP</span>
+              <span class="ingestion-csv-target-copy">Create tables in the transactional PostgreSQL instance.</span>
+            </label>
+            <label class="ingestion-csv-target-card">
+              <input type="radio" name="target_id" value="pg_olap" data-csv-target-option>
+              <span class="ingestion-csv-target-title">PostgreSQL OLAP</span>
+              <span class="ingestion-csv-target-copy">Create tables in the analytical PostgreSQL instance.</span>
+            </label>
+          </div>
+        </section>
+
+        <section class="ingestion-csv-step">
+          <div class="ingestion-csv-step-header">
+            <span class="workspace-tags-label">Step 4</span>
+            <h4>Configure destination</h4>
+          </div>
+          <div class="ingestion-csv-target-config" data-csv-config-root>
+            <div class="ingestion-csv-config-panel" data-csv-config-panel="workspace.local">
+              <label class="result-export-field">
+                <span class="result-export-field-label">Local Workspace folder</span>
+                <input
+                  class="modal-input"
+                  type="text"
+                  name="folder_path"
+                  data-csv-folder-path
+                  placeholder="optional/subfolder"
+                >
+              </label>
+            </div>
+            <div class="ingestion-csv-config-panel" data-csv-config-panel="workspace.s3" hidden>
+              <label class="result-export-field">
+                <span class="result-export-field-label">Bucket</span>
+                <input
+                  class="modal-input"
+                  type="text"
+                  name="bucket"
+                  data-csv-s3-bucket
+                  placeholder="csv-imports"
+                >
+              </label>
+              <label class="result-export-field">
+                <span class="result-export-field-label ingestion-csv-storage-format-label">
+                  <span>Object key prefix</span>
+                  <span
+                    class="info-badge"
+                    title="Applied as literal S3 key text before the object name. S3 does not create real directories here."
+                    aria-label="Object key prefix guidance"
+                  >
+                    ?
+                  </span>
+                </span>
+                <input
+                  class="modal-input"
+                  type="text"
+                  name="prefix"
+                  data-csv-s3-prefix
+                  placeholder="incoming/2026-04"
+                >
+              </label>
+              <div class="ingestion-csv-storage-format-group">
+                <div class="result-export-field-label ingestion-csv-storage-format-label">
+                  <span>Shared Workspace storage format</span>
+                  <span
+                    class="info-badge"
+                    title="DuckDB remains the query engine for Shared Workspace files. This setting changes the stored S3 object format only."
+                    aria-label="Shared Workspace storage format guidance"
+                  >
+                    ?
+                  </span>
+                </div>
+                <div class="ingestion-csv-storage-format-grid">
+                  <label class="ingestion-csv-storage-format-card">
+                    <input type="radio" name="s3_storage_format" value="csv" data-csv-s3-storage-format checked>
+                    <span class="ingestion-csv-storage-format-header">
+                      <span class="ingestion-csv-storage-format-title">Plain CSV</span>
+                      <span
+                        class="info-badge"
+                        title="Pros: raw, human-readable, easiest to exchange with other tools.&#10;Cons: slowest repeated analytics, larger scans, delimiter and header settings remain important.&#10;DuckDB query path: read_csv_auto(...)."
+                        aria-label="Plain CSV format guidance"
+                      >
+                        ?
+                      </span>
+                    </span>
+                    <span class="ingestion-csv-target-copy">
+                      Best when you want the raw file preserved and easy to inspect outside the workbench.
+                    </span>
+                  </label>
+                  <label class="ingestion-csv-storage-format-card">
+                    <input type="radio" name="s3_storage_format" value="parquet" data-csv-s3-storage-format>
+                    <span class="ingestion-csv-storage-format-header">
+                      <span class="ingestion-csv-storage-format-title">Parquet</span>
+                      <span
+                        class="info-badge"
+                        title="Pros: fastest analytical scans, columnar compression, strongest default for DuckDB workloads.&#10;Cons: not human-readable and costs a conversion step during ingestion. This flow currently writes one Parquet object per CSV upload; multi-file partitioning is a separate optimization for larger curated datasets.&#10;DuckDB query path: read_parquet(...)."
+                        aria-label="Parquet format guidance"
+                      >
+                        ?
+                      </span>
+                    </span>
+                    <span class="ingestion-csv-target-copy">
+                      Best default for repeated analytics and larger datasets.
+                    </span>
+                  </label>
+                  <label class="ingestion-csv-storage-format-card">
+                    <input type="radio" name="s3_storage_format" value="json" data-csv-s3-storage-format>
+                    <span class="ingestion-csv-storage-format-header">
+                      <span class="ingestion-csv-storage-format-title">JSON</span>
+                      <span
+                        class="info-badge"
+                        title="Pros: easy to integrate with JSON-first tools and services.&#10;Cons: less efficient than Parquet for analytics and larger than compressed columnar storage.&#10;DuckDB query path: read_json_auto(...)."
+                        aria-label="JSON format guidance"
+                      >
+                        ?
+                      </span>
+                    </span>
+                    <span class="ingestion-csv-target-copy">
+                      Best when downstream consumers want schemaless records or API-friendly payloads.
+                    </span>
+                  </label>
+                </div>
+              </div>
+            </div>
+            <div class="ingestion-csv-config-panel" data-csv-config-panel="pg_oltp" hidden>
+              <label class="result-export-field">
+                <span class="result-export-field-label">Schema</span>
+                <input
+                  class="modal-input"
+                  type="text"
+                  name="schema_name"
+                  data-csv-schema-name
+                  placeholder="public"
+                  value="public"
+                >
+              </label>
+              <label class="result-export-field">
+                <span class="result-export-field-label">Table prefix</span>
+                <input
+                  class="modal-input"
+                  type="text"
+                  name="table_prefix"
+                  data-csv-table-prefix
+                  placeholder="csv_"
+                >
+              </label>
+            </div>
+            <div class="ingestion-csv-config-panel" data-csv-config-panel="pg_olap" hidden>
+              <label class="result-export-field">
+                <span class="result-export-field-label">Schema</span>
+                <input
+                  class="modal-input"
+                  type="text"
+                  name="schema_name_olap"
+                  data-csv-schema-name
+                  placeholder="public"
+                  value="public"
+                >
+              </label>
+              <label class="result-export-field">
+                <span class="result-export-field-label">Table prefix</span>
+                <input
+                  class="modal-input"
+                  type="text"
+                  name="table_prefix_olap"
+                  data-csv-table-prefix
+                  placeholder="csv_"
+                >
+              </label>
+            </div>
+          </div>
+        </section>
+
+        <section class="ingestion-csv-step">
+          <div class="ingestion-csv-step-header">
+            <span class="workspace-tags-label">Step 5</span>
+            <h4>Import and review</h4>
+          </div>
+          <div class="ingestion-csv-review" data-csv-review-list>
+            <p class="ingestion-empty">Select files to see the resolved destination names.</p>
+          </div>
+          <div class="ingestion-csv-actions">
+            <button type="submit" class="modal-button" data-csv-import-submit disabled>Import CSV files</button>
+          </div>
+          <div class="ingestion-csv-results" data-csv-result-list hidden></div>
+        </section>
+      </div>
+    </form>
   </section>
 </article>

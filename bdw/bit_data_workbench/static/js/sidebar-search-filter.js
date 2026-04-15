@@ -64,9 +64,13 @@ export function createSidebarSearchFilter({ dataSourcesSection, notebookSection,
     const sourceSchemas = Array.from(sidebar.querySelectorAll("[data-source-schema]")).reverse();
     for (const schema of sourceSchemas) {
       const selfMatches = matches(schema.querySelector(":scope > summary"));
-      const visibleChildren = schema.querySelector(
-        ":scope > .source-object-list > :not([data-search-hidden='true'])"
-      );
+      const visibleChildren = schema.hasAttribute("data-local-workspace-root-schema") ||
+        schema.hasAttribute("data-local-workspace-folder-node")
+        ? schema.querySelector(
+            ":scope > .local-workspace-folder-branch > [data-local-workspace-folder-node]:not([data-search-hidden='true']), " +
+              ":scope > .local-workspace-folder-branch > .source-object-list > :not([data-search-hidden='true'])"
+          )
+        : schema.querySelector(":scope > .source-object-list > :not([data-search-hidden='true'])");
       const visible = !term || selfMatches || Boolean(visibleChildren);
       schema.dataset.searchHidden = visible ? "false" : "true";
       if (term && visibleChildren) {

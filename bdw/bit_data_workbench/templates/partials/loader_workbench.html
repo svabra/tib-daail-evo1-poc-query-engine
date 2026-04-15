@@ -1,0 +1,34 @@
+<article class="workspace-card loader-workbench-page" data-loader-workbench-page>
+  <header class="workspace-header ingestion-workbench-page-header">
+    <div class="workspace-title-block ingestion-workbench-page-copy">
+      <h2>Loader Workbench</h2>
+      <p class="workspace-summary">
+        Launch server-side Python loader modules and follow their progress while data is written into PostgreSQL OLTP, PostgreSQL OLAP, or Shared Workspace S3.
+      </p>
+    </div>
+  </header>
+
+  <section class="ingestion-workbench-section">
+    <div class="ingestion-workbench-section-header">
+      <h3 data-ingestion-generator-section-title>Selected Loader</h3>
+      <p data-ingestion-generator-section-copy>
+        Loader modules are discovered from the <code>data_generator</code> package on the server.
+      </p>
+    </div>
+    <div class="ingestion-generator-list" data-ingestion-generator-list>
+      <p class="ingestion-empty">Loading loader modules...</p>
+    </div>
+  </section>
+
+  <section class="ingestion-workbench-section">
+    <div class="ingestion-workbench-section-header">
+      <h3 data-ingestion-job-section-title>Loader Jobs</h3>
+      <p data-ingestion-job-section-copy>
+        Progress comes from server-side jobs, so it survives page refreshes while the server is running.
+      </p>
+    </div>
+    <div class="ingestion-job-list" data-ingestion-job-list>
+      <p class="ingestion-empty">No loader jobs yet. Run a loader first, then clean its output from the completed job card.</p>
+    </div>
+  </section>
+</article>

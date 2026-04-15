@@ -17,10 +17,12 @@ import {
 import { createIngestionController } from "./ingestion-controller.js";
 import { createIngestionUi } from "./ingestion-ui.js";
 import { createHomeUi } from "./home-ui.js";
+import { createCsvIngestionController } from "./ingestion-types/csv/index.js";
 import { createEditorAutosizeManager } from "./editor-autosize-manager.js";
 import { createLocalWorkspaceDialogController } from "./local-workspace-dialog-controller.js";
 import { createLocalWorkspaceExportManager } from "./local-workspace-export-manager.js";
 import { createLocalWorkspacePathUtils } from "./local-workspace-path-utils.js";
+import { createLocalWorkspaceQueryBridge } from "./local-workspace-query-bridge.js";
 import { createLocalWorkspacePickerUi } from "./local-workspace-picker.js";
 import { createLocalWorkspaceSidebarUi } from "./local-workspace-sidebar.js";
 import { createNotebookModel } from "./notebook-model.js";
@@ -244,7 +246,9 @@ const {
   localWorkspaceFolderName,
   localWorkspaceFolderPaths,
   localWorkspaceParentFolderPath,
+  localWorkspaceEntryIdFromRelation,
   localWorkspaceRelation,
+  isLocalWorkspaceRelation,
   localWorkspaceStoredFolderPaths,
   normalizeLocalWorkspaceFolderPath,
   removeLocalWorkspaceFolderBranch,
@@ -264,6 +268,21 @@ const {
   databaseVersion: localWorkspaceDatabaseVersion,
   exportStoreName: localWorkspaceExportStoreName,
   normalizeFolderPath: normalizeLocalWorkspaceFolderPath,
+});
+
+const {
+  clearLocalWorkspaceQuerySourceCache,
+  clearLocalWorkspaceQuerySources,
+  deleteLocalWorkspaceQuerySource,
+  loadLocalWorkspaceSourceFields,
+  prepareQuerySql: prepareLocalWorkspaceQuerySql,
+} = createLocalWorkspaceQueryBridge({
+  getLocalWorkspaceExport,
+  isLocalWorkspaceRelation,
+  localWorkspaceEntryIdFromRelation,
+  localWorkspaceRelation,
+  normalizeSourceObjectFields,
+  workbenchClientId,
 });
 
 const {
@@ -367,7 +386,7 @@ const {
   setSelectedSourceObjectState,
 } = createSourceInspectorController({
   isLocalWorkspaceSourceObject,
-  localWorkspaceInspectorMarkup,
+  loadLocalWorkspaceSourceFields,
   normalizeSourceObjectFields,
   renderSourceInspector,
   renderSourceInspectorError,
@@ -557,13 +576,14 @@ const { querySourceInCurrentNotebook, querySourceInNewNotebook, viewSourceData }
     setNotebookCells,
   });
 
-const {
+  const {
   handleClick: handleWorkbenchNavigationClick,
 } = createWorkbenchNavigationController({
   applySidebarCollapsedState,
   closeSettingsMenus,
   getClearVisibleNotifications: () => clearVisibleNotifications,
   getQueryNotificationMenu: queryNotificationMenu,
+  openLoaderWorkbench,
   loadQueryWorkbenchDataSources,
   loadQueryWorkbenchEntry,
   openIngestionWorkbench,
@@ -614,6 +634,31 @@ const {
   syncOpenLocalWorkspaceMoveDialog,
   syncOpenLocalWorkspaceSaveDialog,
   workspaceNotebookId,
+});
+
+const {
+  handleCsvIngestionClick,
+  handleCsvDragLeave,
+  handleCsvDragOver,
+  handleCsvDrop,
+  handleCsvIngestionChange,
+  handleCsvIngestionInput,
+  renderCsvIngestionWorkbench,
+  showIngestionLanding,
+  submitCsvIngestionForm,
+} = createCsvIngestionController({
+  ensureLocalWorkspaceFolderPath,
+  escapeHtml,
+  formatByteCount,
+  localWorkspaceDisplayPath,
+  localWorkspaceRelation,
+  normalizeLocalWorkspaceFolderPath,
+  openQueryWorkbench,
+  querySourceInNewNotebook,
+  refreshSidebar,
+  renderLocalWorkspaceSidebarEntries,
+  saveLocalWorkspaceExport,
+  showMessageDialog,
 });
 
 const {
@@ -859,7 +904,13 @@ function currentSidebarMode() {
 }
 
 function currentWorkspaceMode() {
-  return document.querySelector("[data-ingestion-workbench-page]") ? "ingestion" : "notebook";
+  if (document.querySelector("[data-loader-workbench-page]")) {
+    return "loader";
+  }
+  if (document.querySelector("[data-ingestion-workbench-page]")) {
+    return "ingestion";
+  }
+  return "notebook";
 }
 
 function currentWorkbenchSection() {
@@ -871,7 +922,14 @@ function currentWorkbenchSection() {
     return "data-sources";
   }
 
-  return currentWorkspaceMode() === "ingestion" ? "ingestion" : "query";
+  const mode = currentWorkspaceMode();
+  if (mode === "loader") {
+    return "loader";
+  }
+  if (mode === "ingestion") {
+    return "ingestion";
+  }
+  return "query";
 }
 
 function applicationVersion() {
@@ -904,9 +962,15 @@ function workbenchTitle(section = currentWorkbenchSection()) {
     return "DAAIFL Data Source Workbench";
   }
 
-  return section === "ingestion"
-    ? "DAAIFL Ingestion Workbench"
-    : "DAAIFL Query Workbench";
+  if (section === "loader") {
+    return "DAAIFL Loader Workbench";
+  }
+
+  if (section === "ingestion") {
+    return "DAAIFL Ingestion Workbench";
+  }
+
+  return "DAAIFL Query Workbench";
 }
 
 function applyWorkbenchTitle(section = currentWorkbenchSection()) {
@@ -1143,6 +1207,7 @@ async function promptClearLocalWorkspace() {
   }
 
   try {
+    await clearLocalWorkspaceQuerySources();
     await clearLocalWorkspaceExports();
     clearWorkbenchLocalCache();
   } catch (_error) {
@@ -1181,7 +1246,7 @@ function openNotebookNavigation(notebookId = "") {
   }
 }
 
-function openIngestionNavigation(generatorId = "") {
+function openLoaderNavigation(generatorId = "") {
   setShellSidebarHidden(false);
   applySidebarCollapsedState(false);
   writeSidebarCollapsed(false);
@@ -1199,7 +1264,12 @@ function openIngestionNavigation(generatorId = "") {
 }
 
 function syncShellVisibility() {
-  if (homePageRoot() || queryWorkbenchEntryPageRoot() || queryWorkbenchDataSourcesPageRoot()) {
+  if (
+    homePageRoot() ||
+    queryWorkbenchEntryPageRoot() ||
+    queryWorkbenchDataSourcesPageRoot() ||
+    currentWorkspaceMode() === "ingestion"
+  ) {
     setShellSidebarHidden(true);
     return;
   }
@@ -1718,7 +1788,7 @@ function scheduleIngestionRunbookSpotlight(generatorId) {
     window.clearTimeout(ingestionRunbookSpotlightHandle);
   }
   syncSelectedIngestionRunbookState();
-  if (currentWorkspaceMode() === "ingestion") {
+  if (currentWorkspaceMode() === "loader") {
     renderIngestionWorkbench();
   }
 
@@ -1726,7 +1796,7 @@ function scheduleIngestionRunbookSpotlight(generatorId) {
     spotlightIngestionRunbookId = "";
     ingestionRunbookSpotlightHandle = null;
     syncSelectedIngestionRunbookState();
-    if (currentWorkspaceMode() === "ingestion") {
+    if (currentWorkspaceMode() === "loader") {
       renderIngestionWorkbench();
     }
   }, 3200);
@@ -4056,13 +4126,11 @@ function ensureRealtimeEventsEventSource() {
   realtimeEventsEventSource = eventSource;
 }
 
-async function openIngestionWorkbench({ focusJobId = "", focusGeneratorId = "" } = {}) {
+async function openIngestionWorkbench() {
   const panel = document.getElementById("workspace-panel");
   if (!panel) {
     return;
   }
-
-  openIngestionNavigation();
 
   const response = await window.fetch("/ingestion-workbench", {
     headers: { "HX-Request": "true" },
@@ -4073,7 +4141,36 @@ async function openIngestionWorkbench({ focusJobId = "", focusGeneratorId = "" }
 
   panel.innerHTML = await response.text();
   processHtmx(panel);
+  setShellSidebarHidden(true);
   applyWorkbenchTitle("ingestion");
+  if (window.location.pathname !== "/ingestion-workbench") {
+    window.history.pushState({}, "", "/ingestion-workbench");
+  }
+  showIngestionLanding();
+  renderQueryNotificationMenu();
+}
+
+async function openLoaderWorkbench({ focusJobId = "", focusGeneratorId = "" } = {}) {
+  const panel = document.getElementById("workspace-panel");
+  if (!panel) {
+    return;
+  }
+
+  openLoaderNavigation();
+
+  const response = await window.fetch("/loader-workbench", {
+    headers: { "HX-Request": "true" },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load the Loader Workbench: ${response.status}`);
+  }
+
+  panel.innerHTML = await response.text();
+  processHtmx(panel);
+  applyWorkbenchTitle("loader");
+  if (window.location.pathname !== "/loader-workbench") {
+    window.history.pushState({}, "", "/loader-workbench");
+  }
   await Promise.allSettled([loadDataGeneratorCatalog(), loadDataGenerationJobsState()]);
   const focusedJob = focusJobId
     ? dataGenerationJobsSnapshot.find((job) => job.jobId === focusJobId) ?? null
@@ -4083,13 +4180,13 @@ async function openIngestionWorkbench({ focusJobId = "", focusGeneratorId = "" }
     { spotlight: Boolean(focusGeneratorId) }
   );
   renderIngestionWorkbench();
-  if (currentSidebarMode() !== "ingestion") {
-    await refreshSidebar("ingestion");
+  if (currentSidebarMode() !== "loader") {
+    await refreshSidebar("loader");
   } else {
     syncSelectedIngestionRunbookState();
     renderDataGenerationMonitor();
   }
-  openIngestionNavigation(selectedGeneratorId || focusGeneratorId);
+  openLoaderNavigation(selectedGeneratorId || focusGeneratorId);
   renderQueryNotificationMenu();
 
   if (focusJobId) {
@@ -4263,7 +4360,37 @@ async function startQueryJobForForm(form) {
 
   const formData = new FormData(form);
   const editorSource = cellRoot.querySelector("[data-editor-source]");
-  formData.set("sql", editorSource?.value ?? "");
+  const originalSql = editorSource?.value ?? "";
+  let executionSql = originalSql;
+  try {
+    const preparedQuery = await prepareLocalWorkspaceQuerySql(originalSql);
+    executionSql = preparedQuery.sql;
+  } catch (error) {
+    const resultRoot = cellRoot.querySelector("[data-cell-result]");
+    if (resultRoot) {
+      resultRoot.outerHTML = queryResultPanelMarkup(cellId, {
+        jobId: `local-error-${cellId}`,
+        notebookId,
+        notebookTitle: currentWorkspaceNotebookTitle(workspaceRoot),
+        cellId,
+        sql: originalSql,
+        status: "failed",
+        durationMs: 0,
+        updatedAt: new Date().toISOString(),
+        rowsShown: 0,
+        truncated: false,
+        message: "Query failed.",
+        error:
+          error instanceof Error
+            ? error.message
+            : "The Local Workspace sources could not be prepared for querying.",
+        columns: [],
+        rows: [],
+      });
+    }
+    return;
+  }
+  formData.set("sql", executionSql);
   formData.set("notebook_id", notebookId);
   formData.set("cell_id", cellId);
   formData.set("notebook_title", currentWorkspaceNotebookTitle(workspaceRoot));
@@ -4293,7 +4420,7 @@ async function startQueryJobForForm(form) {
         notebookId,
         notebookTitle: currentWorkspaceNotebookTitle(workspaceRoot),
         cellId,
-        sql: editorSource?.value ?? "",
+        sql: originalSql,
         status: "failed",
         durationMs: 0,
         updatedAt: new Date().toISOString(),
@@ -4471,7 +4598,7 @@ async function revealLocalWorkspaceFolderPath(folderPath = "") {
 
   if (!normalizedFolderPath) {
     blinkSourceCatalog(localWorkspaceCatalogSourceId);
-    schemaNode?.scrollIntoView({ block: "nearest" });
+    localWorkspaceCatalog?.scrollIntoView({ block: "nearest" });
     return;
   }
 
@@ -4610,11 +4737,16 @@ async function deleteLocalWorkspaceFolder(folderPath = "") {
   });
 
   try {
+    await Promise.all(
+      descendantEntries.map((entry) => deleteLocalWorkspaceQuerySource(entry.id))
+    );
     await Promise.all(descendantEntries.map((entry) => deleteLocalWorkspaceExport(entry.id)));
     removeLocalWorkspaceFolderBranch(normalizedFolderPath);
 
     const activeSourceObjectRelation = getActiveSourceObjectRelation();
     const deletedRelations = new Set(descendantEntries.map((entry) => localWorkspaceRelation(entry.id)));
+    descendantEntries.forEach((entry) => clearLocalWorkspaceQuerySourceCache(entry.id));
+    clearSourceObjectFieldCacheForRelations(Array.from(deletedRelations));
     if (activeSourceObjectRelation && deletedRelations.has(activeSourceObjectRelation)) {
       setSelectedSourceObjectState(null);
       renderSourceInspectorMarkup("", true);
@@ -4671,6 +4803,8 @@ async function saveQueryResultExportToLocalWorkspace(job, exportFormat, options 
     cellId: String(job.cellId || "").trim(),
     columnCount: Array.isArray(job.columns) ? job.columns.length : 0,
     rowCount: Array.isArray(job.rows) ? job.rows.length : 0,
+    csvDelimiter: String(exportFormat || "").trim().toLowerCase() === "csv" ? "," : "",
+    csvHasHeader: String(exportFormat || "").trim().toLowerCase() === "csv",
     blob: exported.blob,
   });
 
@@ -4797,7 +4931,10 @@ async function deleteLocalWorkspaceExportFromSource(sourceObjectRoot) {
     return true;
   }
 
+  await deleteLocalWorkspaceQuerySource(entryId);
   await deleteLocalWorkspaceExport(entryId);
+  clearLocalWorkspaceQuerySourceCache(entryId);
+  clearSourceObjectFieldCacheForRelations([localWorkspaceRelation(entryId)]);
   if (getActiveSourceObjectRelation() === localWorkspaceRelation(entryId)) {
     setSelectedSourceObjectState(null);
     renderSourceInspectorMarkup("", true);
@@ -5637,6 +5774,21 @@ async function restoreLastNotebook() {
 document.body.addEventListener(
   "submit",
   async (event) => {
+    const csvIngestionForm = event.target.closest("[data-csv-ingestion-form]");
+    if (csvIngestionForm) {
+      event.preventDefault();
+      try {
+        await submitCsvIngestionForm();
+      } catch (error) {
+        console.error("Failed to import CSV files.", error);
+        await showMessageDialog({
+          title: "CSV import failed",
+          copy: error instanceof Error ? error.message : "The CSV files could not be imported.",
+        });
+      }
+      return;
+    }
+
     const resultExportForm = event.target.closest("[data-result-export-form]");
     if (resultExportForm) {
       event.preventDefault();
@@ -5759,6 +5911,10 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  if (handleCsvIngestionClick(event)) {
+    return;
+  }
+
   if (await handleCreateNotebookClick(event)) {
     return;
   }
@@ -5848,6 +6004,10 @@ document.body.addEventListener("focusin", (event) => {
 });
 
 document.body.addEventListener("input", (event) => {
+  if (handleCsvIngestionInput(event)) {
+    return;
+  }
+
   if (handleNotebookWorkspaceInput(event)) {
     return;
   }
@@ -5909,6 +6069,10 @@ document.addEventListener("mouseout", (event) => {
 });
 
 document.body.addEventListener("change", (event) => {
+  if (handleCsvIngestionChange(event)) {
+    return;
+  }
+
   if (!handleNotebookWorkspaceChange(event)) {
     return;
   }
@@ -5931,7 +6095,19 @@ document.body.addEventListener("dragstart", (event) => {
 });
 
 document.body.addEventListener("dragover", (event) => {
+  if (handleCsvDragOver(event)) {
+    return;
+  }
+
   handleNotebookDragOver(event);
+});
+
+document.body.addEventListener("dragleave", (event) => {
+  handleCsvDragLeave(event);
+});
+
+document.body.addEventListener("drop", (event) => {
+  handleCsvDrop(event);
 });
 
 document.body.addEventListener("drop", (event) => {
@@ -6013,6 +6189,28 @@ window.addEventListener("popstate", async () => {
     return;
   }
 
+  if (window.location.pathname === "/loader-workbench") {
+    try {
+      await openLoaderWorkbench();
+    } catch (error) {
+      if (error?.name !== "AbortError") {
+        console.error("Failed to restore the Loader Workbench from browser history.", error);
+      }
+    }
+    return;
+  }
+
+  if (window.location.pathname === "/ingestion-workbench") {
+    try {
+      await openIngestionWorkbench();
+    } catch (error) {
+      if (error?.name !== "AbortError") {
+        console.error("Failed to restore the Ingestion Workbench from browser history.", error);
+      }
+    }
+    return;
+  }
+
   if (window.location.pathname === "/") {
     try {
       await loadHomePage({ pushHistory: false });
@@ -6068,7 +6266,7 @@ const initialLoadTasks = [
   }),
 ];
 
-if (initialWorkspaceMode === "ingestion") {
+if (initialWorkspaceMode === "loader") {
   initialLoadTasks.push(
     loadDataGeneratorCatalog().catch((error) => {
       console.error("Failed to load data generators.", error);
@@ -6079,13 +6277,20 @@ if (initialWorkspaceMode === "ingestion") {
 Promise.allSettled(initialLoadTasks)
   .finally(() => {
     ensureRealtimeEventsEventSource();
-    refreshSidebar(initialWorkspaceMode).catch((error) => {
+    const initialSidebarMode = initialWorkspaceMode === "loader" ? "loader" : "notebook";
+    refreshSidebar(initialSidebarMode).catch((error) => {
       console.error("Failed to refresh the sidebar during startup.", error);
     });
 
-    if (initialWorkspaceMode === "ingestion") {
+    if (initialWorkspaceMode === "loader") {
       renderIngestionWorkbench();
       renderDataGenerationMonitor();
+      renderQueryNotificationMenu();
+      return;
+    }
+
+    if (initialWorkspaceMode === "ingestion") {
+      showIngestionLanding();
       renderQueryNotificationMenu();
       return;
     }

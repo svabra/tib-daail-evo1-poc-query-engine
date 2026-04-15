@@ -142,30 +142,30 @@ export function createIngestionController(helpers) {
     const renderState = captureIngestionWorkbenchRenderState(generatorList, jobList);
 
     if (generatorSectionTitle) {
-      generatorSectionTitle.textContent = selectedGenerator ? selectedGenerator.title : "Selected Runbook";
+      generatorSectionTitle.textContent = selectedGenerator ? selectedGenerator.title : "Selected Loader";
     }
 
     if (generatorSectionCopy) {
       generatorSectionCopy.innerHTML = selectedGenerator
-        ? `Only the selected runbook is shown here. Module: <code>${escapeHtml(
+        ? `Only the selected loader is shown here. Module: <code>${escapeHtml(
             selectedGenerator.moduleName || selectedGenerator.generatorId
           )}</code>`
-        : "No ingestion runbook is currently selected.";
+        : "No loader is currently selected.";
     }
 
     if (jobSectionTitle) {
-      jobSectionTitle.textContent = selectedGenerator ? `${selectedGenerator.title} Jobs` : "Runbook Jobs";
+      jobSectionTitle.textContent = selectedGenerator ? `${selectedGenerator.title} Jobs` : "Loader Jobs";
     }
 
     if (jobSectionCopy) {
       jobSectionCopy.textContent = selectedGenerator
-        ? "Only executions for the selected runbook are listed here."
-        : "Select a runbook from the left navigation to inspect its executions.";
+        ? "Only executions for the selected loader are listed here."
+        : "Select a loader from the left navigation to inspect its executions.";
     }
 
     if (generatorList && refreshGeneratorCards) {
       if (!visibleGenerators.length) {
-        generatorList.innerHTML = '<p class="ingestion-empty">No data generators discovered.</p>';
+        generatorList.innerHTML = '<p class="ingestion-empty">No loader modules discovered.</p>';
       } else {
         generatorList.innerHTML = visibleGenerators.map((generator) => dataGeneratorCardMarkup(generator)).join("");
       }
@@ -173,10 +173,10 @@ export function createIngestionController(helpers) {
 
     if (jobList) {
       if (!selectedGenerator) {
-        jobList.innerHTML = '<p class="ingestion-empty">Select a runbook from the left navigation.</p>';
+        jobList.innerHTML = '<p class="ingestion-empty">Select a loader from the left navigation.</p>';
       } else if (!visibleJobs.length) {
         jobList.innerHTML =
-          '<p class="ingestion-empty">No data generation jobs for this runbook yet. Run the loader first, then clean its output from the completed job card.</p>';
+          '<p class="ingestion-empty">No loader jobs for this loader yet. Run it first, then clean its output from the completed job card.</p>';
       } else {
         jobList.innerHTML = visibleJobs.map((job) => dataGenerationJobCardMarkup(job)).join("");
       }
@@ -195,14 +195,14 @@ export function createIngestionController(helpers) {
       return;
     }
 
-    const visibleJobs = currentWorkspaceMode() === "ingestion"
+    const visibleJobs = currentWorkspaceMode() === "loader"
       ? filteredDataGenerationJobs()
       : getDataGenerationJobsSnapshot();
     const runningCount = visibleJobs.filter((job) => dataGenerationJobIsRunning(job)).length;
     countRoot.textContent = String(runningCount);
     countRoot.classList.toggle("is-live", runningCount > 0);
 
-    if (currentWorkspaceMode() === "ingestion") {
+    if (currentWorkspaceMode() === "loader") {
       toggleCountRoots.forEach((toggleCountRoot) => {
         toggleCountRoot.textContent = String(runningCount);
         toggleCountRoot.hidden = runningCount === 0;
@@ -212,9 +212,9 @@ export function createIngestionController(helpers) {
 
     if (!visibleJobs.length) {
       listRoot.innerHTML =
-        currentWorkspaceMode() === "ingestion"
-          ? '<p class="query-monitor-empty">No ingestion jobs for this runbook yet.</p>'
-          : '<p class="query-monitor-empty">No ingestion jobs yet.</p>';
+        currentWorkspaceMode() === "loader"
+          ? '<p class="query-monitor-empty">No loader jobs for this loader yet.</p>'
+          : '<p class="query-monitor-empty">No loader jobs yet.</p>';
       return;
     }
 

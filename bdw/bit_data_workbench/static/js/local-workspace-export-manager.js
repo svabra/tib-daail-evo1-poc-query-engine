@@ -73,6 +73,8 @@ export function createLocalWorkspaceExportManager({
       cellId: String(entry.cellId || "").trim(),
       columnCount: Number.isFinite(Number(entry.columnCount)) ? Number(entry.columnCount) : 0,
       rowCount: Number.isFinite(Number(entry.rowCount)) ? Number(entry.rowCount) : 0,
+      csvDelimiter: String(entry.csvDelimiter || "").trim(),
+      csvHasHeader: entry.csvHasHeader !== false,
       blob: entry.blob instanceof Blob ? entry.blob : null,
     };
   }

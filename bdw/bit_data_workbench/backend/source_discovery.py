@@ -17,6 +17,7 @@ import duckdb
 
 from ..config import Settings
 from ..models import DataSourceDiscoveryEventDefinition, SourceConnectionStatus
+from .ingestion_types.csv.dialect import csv_read_settings_from_s3_metadata
 from .sql_utils import (
     parse_s3_startup_views,
     qualified_name,
@@ -34,10 +35,26 @@ def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def build_s3_query(data_format: str, path: str) -> str:
+def build_s3_query(
+    data_format: str,
+    path: str,
+    *,
+    csv_delimiter: str = "",
+    csv_has_header: bool | None = None,
+) -> str:
     if data_format == "parquet":
         return f"SELECT * FROM read_parquet({sql_literal(path)})"
     if data_format == "csv":
+        options: list[str] = []
+        if csv_has_header is not None:
+            options.append(f"HEADER = {'TRUE' if csv_has_header else 'FALSE'}")
+        if csv_delimiter:
+            options.append(f"DELIM = {sql_literal(csv_delimiter)}")
+        if options:
+            return (
+                f"SELECT * FROM read_csv_auto({sql_literal(path)}, "
+                f"{', '.join(options)})"
+            )
         return f"SELECT * FROM read_csv_auto({sql_literal(path)})"
     if data_format == "json":
         return f"SELECT * FROM read_json_auto({sql_literal(path)})"
@@ -111,6 +128,9 @@ class DiscoveredRelationSpec:
     query_sql: str
     object_path: str
     object_format: str
+    object_revision: str = ""
+    csv_delimiter: str = ""
+    csv_has_header: bool | None = None
 
 
 @dataclass(slots=True)
@@ -373,6 +393,8 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                 query_sql=spec.query_sql,
                 object_path=spec.object_path,
                 object_format=spec.object_format,
+                csv_delimiter=spec.csv_delimiter,
+                csv_has_header=spec.csv_has_header,
             )
 
     def specs_snapshot(self) -> dict[str, DiscoveredRelationSpec]:
@@ -384,6 +406,8 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                     query_sql=spec.query_sql,
                     object_path=spec.object_path,
                     object_format=spec.object_format,
+                    csv_delimiter=spec.csv_delimiter,
+                    csv_has_header=spec.csv_has_header,
                 )
                 for relation_id, spec in self._current_specs.items()
             }
@@ -738,15 +762,69 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                     used_names=used_names,
                 )
                 object_path = f"s3://{bucket}/{key}"
+                head_response = self._head_object(client, bucket=bucket, key=key)
+                csv_delimiter = ""
+                csv_has_header: bool | None = None
+                if data_format == "csv":
+                    csv_delimiter, csv_has_header = self._csv_read_settings_from_head(head_response)
                 desired_specs[f"{schema_name}.{relation_name}"] = DiscoveredRelationSpec(
                     schema_name=schema_name,
                     relation_name=relation_name,
-                    query_sql=build_s3_query(data_format, object_path),
+                    query_sql=build_s3_query(
+                        data_format,
+                        object_path,
+                        csv_delimiter=csv_delimiter,
+                        csv_has_header=csv_has_header,
+                    ),
                     object_path=object_path,
                     object_format=data_format,
+                    object_revision=self._object_revision_from_head(head_response),
+                    csv_delimiter=csv_delimiter,
+                    csv_has_header=csv_has_header,
                 )
 
         return desired_specs
+
+    def _head_object(
+        self,
+        client,
+        *,
+        bucket: str,
+        key: str,
+    ) -> dict[str, object]:
+        try:
+            return client.head_object(Bucket=bucket, Key=key) or {}
+        except Exception as exc:
+            logger.debug(
+                "Failed to read S3 object metadata for s3://%s/%s during discovery: %s",
+                bucket,
+                key,
+                exc,
+            )
+            return {}
+
+    def _csv_read_settings_from_head(
+        self,
+        response: dict[str, object] | None,
+    ) -> tuple[str, bool | None]:
+        metadata = (response or {}).get("Metadata") or {}
+        return csv_read_settings_from_s3_metadata(metadata)
+
+    def _object_revision_from_head(
+        self,
+        response: dict[str, object] | None,
+    ) -> str:
+        if not response:
+            return ""
+
+        etag = str(response.get("ETag") or "").strip().strip('"')
+        size = str(response.get("ContentLength") or "").strip()
+        last_modified_value = response.get("LastModified")
+        if hasattr(last_modified_value, "isoformat"):
+            last_modified = last_modified_value.isoformat()
+        else:
+            last_modified = str(last_modified_value or "").strip()
+        return "|".join(part for part in (etag, size, last_modified) if part)
 
     def _build_message(
         self,
@@ -786,6 +864,7 @@ class DataSourceDiscoveryManager:
         self._discoverers = list(discoverers)
         self._state_change_callback = state_change_callback
         self._lock = threading.RLock()
+        self._sync_lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
         self._events: list[DataSourceDiscoveryEventDefinition] = []
         self._source_statuses: dict[str, SourceConnectionStatus] = {}
@@ -896,22 +975,23 @@ class DataSourceDiscoveryManager:
         emit_event: bool,
     ) -> None:
         connection: duckdb.DuckDBPyConnection | None = None
-        try:
-            connection = self._connection_factory()
-            result = discoverer.sync(connection)
-        except Exception as exc:
-            logger.warning(
-                "Data source discovery failed for '%s': %s",
-                discoverer.source_type,
-                exc,
-            )
-            return
-        finally:
-            if connection is not None:
-                try:
-                    connection.close()
-                except Exception:
-                    pass
+        with self._sync_lock:
+            try:
+                connection = self._connection_factory()
+                result = discoverer.sync(connection)
+            except Exception as exc:
+                logger.warning(
+                    "Data source discovery failed for '%s': %s",
+                    discoverer.source_type,
+                    exc,
+                )
+                return
+            finally:
+                if connection is not None:
+                    try:
+                        connection.close()
+                    except Exception:
+                        pass
 
         if result is None or not result.has_changes:
             return

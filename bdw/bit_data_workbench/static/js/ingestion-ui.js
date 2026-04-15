@@ -273,12 +273,12 @@ export function createIngestionUi(helpers) {
       <button
         type="button"
         class="topbar-notification-item"
-        data-open-ingestion-workbench
+        data-open-loader-workbench
         data-focus-generation-job="${escapeHtml(job.jobId)}"
-        title="Open the ingestion workbench"
+        title="Open the Loader Workbench"
       >
         <span class="topbar-notification-item-status topbar-notification-item-status-notice${dataGenerationJobIsRunning(job) ? " is-live" : ""}">${escapeHtml(
-          `${dataGenerationJobStatusCopy(job)} ingestion`
+          `${dataGenerationJobStatusCopy(job)} loader`
         )}</span>
         <span class="topbar-notification-item-title">${escapeHtml(job.title)}</span>
         <span class="topbar-notification-item-copy" data-data-generation-notification-copy data-job-id="${escapeHtml(
@@ -310,7 +310,7 @@ export function createIngestionUi(helpers) {
           <button
             type="button"
             class="query-monitor-open"
-            data-open-ingestion-workbench
+            data-open-loader-workbench
             data-focus-generation-job="${escapeHtml(job.jobId)}"
             title="Open ${escapeHtml(job.title)}"
           >
