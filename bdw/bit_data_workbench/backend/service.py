@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import time
 import threading
 import uuid
@@ -27,6 +26,12 @@ from ..models import (
     SourceObject,
     SourceSchema,
 )
+from .sql_utils import (
+    parse_s3_startup_views,
+    qualified_name,
+    sql_identifier,
+    sql_literal,
+)
 from .s3_storage import (
     download_s3_file,
     effective_s3_url_style,
@@ -45,6 +50,7 @@ from .data_generation_jobs import DataGenerationJobManager
 from .query_analysis import analyze_query_touches, build_relation_index
 from .query_jobs import QueryJobManager
 from .query_result_exports import QueryResultExportManager
+from .realtime_facade import WorkbenchRealtimeFacade
 from .notebooks import (
     build_completion_schema,
     build_generator_notebook_links,
@@ -91,18 +97,6 @@ CHE-100.000.012,Valais Hydro SA,VS,2025-12-31,TX-10012,301400.00,25400.00,0.00,a
 """
 
 
-def sql_identifier(value: str) -> str:
-    return '"' + value.replace('"', '""') + '"'
-
-
-def sql_literal(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
-
-
-def qualified_name(*parts: str) -> str:
-    return ".".join(sql_identifier(part) for part in parts)
-
-
 def normalize_port(value: str, variable_name: str) -> str:
     if not value.isdigit():
         raise ValueError(f"{variable_name} must be numeric, got: {value}")
@@ -114,51 +108,6 @@ def normalize_postgres_host(value: str | None) -> str | None:
     if normalized in {"localhost", "::1"}:
         return "127.0.0.1"
     return value
-
-
-def infer_s3_view_format(path: str) -> str:
-    lowered = path.lower()
-    if ".parquet" in lowered:
-        return "parquet"
-    if ".csv" in lowered or ".tsv" in lowered:
-        return "csv"
-    if ".json" in lowered or ".jsonl" in lowered or ".ndjson" in lowered:
-        return "json"
-    raise ValueError(
-        "Could not infer the S3 startup view format from the configured path. "
-        "Use 'view_name=format:s3://bucket/path'."
-    )
-
-
-def parse_s3_startup_views(raw_value: str | None) -> list[tuple[str, str, str]]:
-    if not raw_value:
-        return []
-
-    entries: list[tuple[str, str, str]] = []
-    for item in re.split(r"[;\r\n]+", raw_value):
-        entry = item.strip()
-        if not entry:
-            continue
-        if "=" not in entry:
-            raise ValueError(
-                "Each S3 startup view entry must use 'view_name=s3://bucket/path' "
-                "or 'view_name=format:s3://bucket/path'."
-            )
-
-        view_name, spec = entry.split("=", 1)
-        view_name = view_name.strip()
-        spec = spec.strip()
-        if not view_name or not spec:
-            raise ValueError(f"Invalid S3 startup view entry: {entry}")
-
-        prefix = spec.split(":", 1)[0].lower()
-        if prefix in SUPPORTED_S3_VIEW_FORMATS and ":" in spec:
-            data_format, path = spec.split(":", 1)
-            entries.append((view_name, data_format.strip().lower(), path.strip()))
-        else:
-            entries.append((view_name, infer_s3_view_format(spec), spec))
-
-    return entries
 
 
 class WorkbenchService:
@@ -174,13 +123,7 @@ class WorkbenchService:
         )
         self._notebook_events: list[NotebookEventDefinition] = []
         self._notebook_events_version = 0
-        self._client_connections_version = 0
-        self._active_realtime_clients = 0
-        self._realtime_signal_version = 0
-        self._realtime_topic_versions: dict[str, int] = {
-            topic: 0 for topic in REALTIME_TOPIC_ORDER
-        }
-        self._realtime_snapshots: dict[str, dict[str, Any]] = {}
+        self._realtime_facade().initialize_state()
         self._completion_schema: dict[str, object] = {}
         self._source_options: list[dict[str, str]] = []
         self._startup_threads: list[Thread] = []
@@ -256,6 +199,13 @@ class WorkbenchService:
             ],
         )
         self._initialize_realtime_snapshots()
+
+    def _realtime_facade(self) -> WorkbenchRealtimeFacade:
+        facade = getattr(self, "_realtime_facade_instance", None)
+        if facade is None:
+            facade = WorkbenchRealtimeFacade(self, REALTIME_TOPIC_ORDER)
+            self._realtime_facade_instance = facade
+        return facade
 
     def _initialize_realtime_snapshots(self) -> None:
         self._set_realtime_snapshot(
@@ -387,54 +337,20 @@ class WorkbenchService:
             return self._notebook_events_state_locked()
 
     def client_connections_state(self) -> dict[str, object]:
-        with self._condition:
-            return self._client_connections_state_locked()
+        return self._realtime_facade().client_connections_state()
 
     def register_realtime_client(self) -> dict[str, object]:
-        with self._condition:
-            self._active_realtime_clients += 1
-            self._client_connections_version += 1
-            snapshot = self._client_connections_state_locked()
-            self._set_realtime_snapshot_locked(
-                "client-connections",
-                snapshot,
-                notify=True,
-            )
-            return snapshot
+        return self._realtime_facade().register_client()
 
     def unregister_realtime_client(self) -> dict[str, object]:
-        with self._condition:
-            self._active_realtime_clients = max(
-                0,
-                self._active_realtime_clients - 1,
-            )
-            self._client_connections_version += 1
-            snapshot = self._client_connections_state_locked()
-            self._set_realtime_snapshot_locked(
-                "client-connections",
-                snapshot,
-                notify=True,
-            )
-            return snapshot
+        return self._realtime_facade().unregister_client()
 
     def wait_for_realtime_updates(
         self,
         last_versions: dict[str, int] | None,
         timeout: float = 15.0,
     ) -> list[dict[str, Any]]:
-        normalized_versions = {
-            topic: int((last_versions or {}).get(topic, -1))
-            for topic in REALTIME_TOPIC_ORDER
-        }
-        with self._condition:
-            if self._has_realtime_updates_locked(normalized_versions):
-                return self._realtime_updates_locked(normalized_versions)
-
-            self._condition.wait_for(
-                lambda: self._has_realtime_updates_locked(normalized_versions),
-                timeout=timeout,
-            )
-            return self._realtime_updates_locked(normalized_versions)
+        return self._realtime_facade().wait_for_updates(last_versions, timeout)
 
     def upsert_shared_notebook(
         self,
@@ -922,49 +838,25 @@ class WorkbenchService:
             self._notebook_events_state_locked(),
             notify=False,
         )
-        self._realtime_signal_version += 1
-        self._condition.notify_all()
+        self._realtime_facade().notify_listeners_locked()
 
     def _set_realtime_snapshot(self, topic: str, snapshot: dict[str, Any], *, notify: bool) -> None:
-        with self._condition:
-            self._set_realtime_snapshot_locked(topic, snapshot, notify=notify)
+        self._realtime_facade().set_snapshot(topic, snapshot, notify=notify)
 
     def _client_connections_state_locked(self) -> dict[str, object]:
-        return {
-            "version": self._client_connections_version,
-            "count": self._active_realtime_clients,
-        }
+        return self._realtime_facade().client_connections_state_locked()
 
     def _set_realtime_snapshot_locked(self, topic: str, snapshot: dict[str, Any], *, notify: bool) -> None:
-        self._realtime_snapshots[topic] = snapshot
-        self._realtime_topic_versions[topic] = int(snapshot.get("version", 0))
-        if notify:
-            self._realtime_signal_version += 1
-            self._condition.notify_all()
+        self._realtime_facade().set_snapshot_locked(topic, snapshot, notify=notify)
 
     def _publish_realtime_snapshot(self, topic: str, snapshot: dict[str, Any]) -> None:
-        with self._condition:
-            self._set_realtime_snapshot_locked(topic, snapshot, notify=True)
+        self._realtime_facade().publish_snapshot(topic, snapshot)
 
     def _has_realtime_updates_locked(self, last_versions: dict[str, int]) -> bool:
-        return any(
-            self._realtime_topic_versions.get(topic, 0) != last_versions.get(topic, -1)
-            for topic in REALTIME_TOPIC_ORDER
-        )
+        return self._realtime_facade().has_updates_locked(last_versions)
 
     def _realtime_updates_locked(self, last_versions: dict[str, int]) -> list[dict[str, Any]]:
-        updates: list[dict[str, Any]] = []
-        for topic in REALTIME_TOPIC_ORDER:
-            version = self._realtime_topic_versions.get(topic, 0)
-            if version == last_versions.get(topic, -1):
-                continue
-            updates.append(
-                {
-                    "topic": topic,
-                    "snapshot": self._realtime_snapshots.get(topic, {"version": version}),
-                }
-            )
-        return updates
+        return self._realtime_facade().updates_locked(last_versions)
 
     def _set_minimal_state(self) -> None:
         catalogs: list[SourceCatalog] = []

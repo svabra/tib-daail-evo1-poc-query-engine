@@ -1,0 +1,11 @@
+.git/
+.venv/
+.local/
+workspace/
+logs/
+__pycache__/
+*.pyc
+*.pyo
+*.duckdb
+*.duckdb.wal
+bdw/bit_data_workbench/static/vendor/

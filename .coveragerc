@@ -1,0 +1,13 @@
+[run]
+branch = True
+source =
+    bdw/bit_data_workbench
+omit =
+    */tests/*
+    */scripts/*
+    */static/vendor/*
+    */__pycache__/*
+
+[report]
+show_missing = True
+skip_covered = True

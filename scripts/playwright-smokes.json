@@ -1,0 +1,59 @@
+{
+  "smokes": [
+    {
+      "id": "query-workbench",
+      "script": "playwright_query_workbench_smoke.py",
+      "enabledByDefault": true
+    },
+    {
+      "id": "home-navigation",
+      "script": "playwright_home_navigation_smoke.py",
+      "enabledByDefault": true
+    },
+    {
+      "id": "query-source-new-notebook",
+      "script": "playwright_query_source_new_notebook_smoke.py",
+      "enabledByDefault": true
+    },
+    {
+      "id": "notebook-tree-folders",
+      "script": "playwright_notebook_tree_folders_smoke.py",
+      "enabledByDefault": true
+    },
+    {
+      "id": "notebook-tree-drag-drop",
+      "script": "playwright_notebook_tree_drag_drop_smoke.py",
+      "enabledByDefault": true
+    },
+    {
+      "id": "ingestion-workbench",
+      "script": "playwright_ingestion_workbench_smoke.py",
+      "enabledByDefault": true
+    },
+    {
+      "id": "local-workspace-sidebar-folders",
+      "script": "playwright_local_workspace_sidebar_folders.py",
+      "enabledByDefault": true
+    },
+    {
+      "id": "cell-action-menu",
+      "script": "playwright_cell_action_menu_smoke.py",
+      "enabledByDefault": true
+    },
+    {
+      "id": "notebook-workspace-metadata",
+      "script": "playwright_notebook_workspace_metadata_smoke.py",
+      "enabledByDefault": true
+    },
+    {
+      "id": "local-workspace-move-file",
+      "script": "playwright_local_workspace_move_file.py",
+      "enabledByDefault": false
+    },
+    {
+      "id": "s3-sidebar",
+      "script": "playwright_s3_sidebar_smoke.py",
+      "enabledByDefault": false
+    }
+  ]
+}

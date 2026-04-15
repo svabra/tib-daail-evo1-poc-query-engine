@@ -12,39 +12,68 @@ if str(BDW_ROOT) not in sys.path:
 
 
 def import_notebook_helpers():
-    from bit_data_workbench.backend.notebooks import build_generator_notebook_links
-    from bit_data_workbench.models import NotebookCellDefinition, NotebookDefinition
+    from bit_data_workbench.backend.notebooks import (
+        build_generator_notebook_links,
+        build_notebooks,
+    )
+    from bit_data_workbench.models import (
+        NotebookCellDefinition,
+        NotebookDefinition,
+        SourceCatalog,
+        SourceObject,
+        SourceSchema,
+    )
 
-    return build_generator_notebook_links, NotebookCellDefinition, NotebookDefinition
+    return (
+        build_generator_notebook_links,
+        build_notebooks,
+        NotebookCellDefinition,
+        NotebookDefinition,
+        SourceCatalog,
+        SourceObject,
+        SourceSchema,
+    )
 
 
 class GeneratorNotebookLinkTests(unittest.TestCase):
-    def test_build_generator_notebook_links_groups_all_notebooks_for_a_loader(self) -> None:
+    def test_build_generator_notebook_links_groups_all_notebooks_for_a_loader(
+        self,
+    ) -> None:
         (
             build_generator_notebook_links,
+            _,
             notebook_cell_type,
             notebook_type,
+            _,
+            _,
+            _,
         ) = import_notebook_helpers()
         notebooks = [
             notebook_type(
                 notebook_id="pg-vs-s3-contest-oltp",
                 title="PG vs S3 Contest OLTP via DuckDB",
                 summary="Contest OLTP",
-                cells=[notebook_cell_type(cell_id="contest-1", sql="select 1")],
+                cells=[
+                    notebook_cell_type(cell_id="contest-1", sql="select 1")
+                ],
                 linked_generator_id="pg_vs_s3_contest_loader",
             ),
             notebook_type(
                 notebook_id="pg-vs-s3-contest-s3",
                 title="PG vs S3 Contest S3 via DuckDB",
                 summary="Contest S3",
-                cells=[notebook_cell_type(cell_id="contest-2", sql="select 2")],
+                cells=[
+                    notebook_cell_type(cell_id="contest-2", sql="select 2")
+                ],
                 linked_generator_id="pg_vs_s3_contest_loader",
             ),
             notebook_type(
                 notebook_id="pg-vs-s3-contest-pg-native",
                 title="PG vs S3 Contest OLTP via Native",
                 summary="Contest Native",
-                cells=[notebook_cell_type(cell_id="contest-3", sql="select 3")],
+                cells=[
+                    notebook_cell_type(cell_id="contest-3", sql="select 3")
+                ],
                 linked_generator_id="pg_vs_s3_contest_loader",
             ),
             notebook_type(
@@ -85,11 +114,17 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             ],
         )
 
-    def test_build_generator_notebook_links_skips_empty_and_duplicate_entries(self) -> None:
+    def test_build_generator_notebook_links_skips_empty_and_duplicate_entries(
+        self,
+    ) -> None:
         (
             build_generator_notebook_links,
+            _,
             notebook_cell_type,
             notebook_type,
+            _,
+            _,
+            _,
         ) = import_notebook_helpers()
         notebooks = [
             notebook_type(
@@ -121,6 +156,97 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
         self.assertEqual(
             [item.payload for item in result["loader-a"]],
             [{"notebookId": "shared-a", "title": "Shared Notebook A"}],
+        )
+
+    def test_build_notebooks_uses_fallback_sql_when_sources_are_missing(
+        self,
+    ) -> None:
+        (
+            _,
+            build_notebooks,
+            _,
+            _,
+            _,
+            _,
+            _,
+        ) = import_notebook_helpers()
+
+        notebooks = {
+            notebook.notebook_id: notebook
+            for notebook in build_notebooks([])
+        }
+
+        self.assertIn(
+            "Run the S3 VAT Smoke Loader",
+            notebooks["s3-smoke-test"].cells[0].sql,
+        )
+        self.assertIn(
+            "Run the PostgreSQL OLTP VAT Smoke Loader",
+            notebooks["postgres-smoke-test"].cells[0].sql,
+        )
+
+    def test_build_notebooks_uses_discovered_relations_for_smoke_presets(
+        self,
+    ) -> None:
+        (
+            _,
+            build_notebooks,
+            _,
+            _,
+            source_catalog_type,
+            source_object_type,
+            source_schema_type,
+        ) = import_notebook_helpers()
+
+        catalogs = [
+            source_catalog_type(
+                name="workspace",
+                schemas=[
+                    source_schema_type(
+                        name="s3",
+                        objects=[
+                            source_object_type(
+                                name="vat_smoke",
+                                kind="view",
+                                relation="workspace.s3.vat_smoke_generated",
+                                s3_key="generated/vat_smoke/part-0001.parquet",
+                            )
+                        ],
+                    )
+                ],
+            ),
+            source_catalog_type(
+                name="pg_oltp",
+                schemas=[
+                    source_schema_type(
+                        name="public",
+                        objects=[
+                            source_object_type(
+                                name="vat_smoke_test_reference",
+                                kind="table",
+                                relation=(
+                                    "pg_oltp.public."
+                                    "vat_smoke_test_reference"
+                                ),
+                            )
+                        ],
+                    )
+                ],
+            ),
+        ]
+
+        notebooks = {
+            notebook.notebook_id: notebook
+            for notebook in build_notebooks(catalogs)
+        }
+
+        self.assertIn(
+            "FROM workspace.s3.vat_smoke_generated",
+            notebooks["s3-smoke-test"].cells[0].sql,
+        )
+        self.assertIn(
+            "FROM pg_oltp.public.vat_smoke_test_reference",
+            notebooks["postgres-smoke-test"].cells[0].sql,
         )
 
 
