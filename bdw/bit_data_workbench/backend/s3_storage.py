@@ -609,7 +609,26 @@ def list_s3_buckets_from_client(client) -> list[str]:
     return sorted(set(buckets))
 
 
-def upload_s3_file(client, *, local_path: Path, bucket: str, key: str) -> None:
+def upload_s3_file(
+    client,
+    *,
+    local_path: Path,
+    bucket: str,
+    key: str,
+    metadata: dict[str, str] | None = None,
+) -> None:
+    extra_args = None
+    if metadata:
+        extra_args = {
+            "Metadata": {
+                str(name): str(value)
+                for name, value in metadata.items()
+                if str(name).strip()
+            }
+        }
+    if extra_args:
+        client.upload_file(str(local_path), bucket, key, ExtraArgs=extra_args)
+        return
     client.upload_file(str(local_path), bucket, key)
 
 

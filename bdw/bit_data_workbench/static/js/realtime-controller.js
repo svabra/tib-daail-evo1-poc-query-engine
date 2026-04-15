@@ -359,7 +359,7 @@ export function createRealtimeController(helpers) {
 
     pruneDismissedNotificationKeys();
     renderIngestionWorkbench({
-      refreshGeneratorCards: currentWorkspaceMode() !== "ingestion",
+      refreshGeneratorCards: currentWorkspaceMode() !== "loader",
     });
     renderDataGenerationMonitor();
     renderQueryNotificationMenu();

@@ -67,7 +67,19 @@
           </svg>
         </span>
         <span class="home-workbench-title">Ingestion Workbench</span>
-        <span class="home-workbench-copy">Launch generator runbooks and monitor ingestion progress.</span>
+        <span class="home-workbench-copy">Start user-driven ingestion flows such as drag-and-drop CSV imports into your data sources.</span>
+      </button>
+      <button type="button" class="home-workbench-card" data-open-loader-workbench>
+        <span class="home-workbench-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M5.3 6.2h13.4"></path>
+            <path d="M5.3 12h13.4"></path>
+            <path d="M5.3 17.8h8.3"></path>
+            <rect x="4" y="3.4" width="16" height="17.2" rx="1.8"></rect>
+          </svg>
+        </span>
+        <span class="home-workbench-title">Loader Workbench</span>
+        <span class="home-workbench-copy">Run the existing server-side loader modules and monitor their job output separately from user ingestion.</span>
       </button>
     </div>
   </div>
@@ -112,11 +124,11 @@
 
     <section class="home-section">
       <div class="home-section-header">
-        <h3>Latest Ingestions Run</h3>
-        <p>Most recent ingestion jobs observed by the workbench.</p>
+        <h3>Latest Loader Runs</h3>
+        <p>Most recent loader jobs observed by the workbench.</p>
       </div>
       <div class="home-activity-list" data-home-recent-ingestions>
-        <p class="home-empty">No ingestion runs yet.</p>
+        <p class="home-empty">No loader runs yet.</p>
       </div>
     </section>
   </div>

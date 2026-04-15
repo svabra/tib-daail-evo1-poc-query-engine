@@ -55,10 +55,6 @@ async def ensure_local_workspace_open(page) -> None:
     await ensure_sidebar_expanded(page)
     await ensure_details_open(page, "[data-data-sources-section]")
     await ensure_details_open(page, '[data-source-catalog-source-id="workspace.local"]')
-    await ensure_details_open(
-        page,
-        '[data-source-schema][data-source-schema-key="workspace_local::saved-results"]',
-    )
 
 
 async def seed_local_workspace_entry(

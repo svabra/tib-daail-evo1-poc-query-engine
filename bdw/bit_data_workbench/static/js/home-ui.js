@@ -35,14 +35,14 @@ export function createHomeUi(helpers) {
       <button
         type="button"
         class="home-activity-card"
-        data-open-ingestion-workbench
+        data-open-loader-workbench
         data-focus-generation-job="${escapeHtml(job.jobId || "")}" 
       >
         <span class="home-activity-title-row">
-          <span class="home-activity-title">${escapeHtml(job.title || "Ingestion run")}</span>
+          <span class="home-activity-title">${escapeHtml(job.title || "Loader run")}</span>
           <span class="home-activity-meta">${escapeHtml(formatRelativeTimestamp(job.startedAt || job.updatedAt))}</span>
         </span>
-        <span class="home-activity-copy">${escapeHtml(job.message || job.description || "No ingestion message yet.")}</span>
+        <span class="home-activity-copy">${escapeHtml(job.message || job.description || "No loader message yet.")}</span>
         <span class="home-activity-meta">${escapeHtml((job.status || "unknown").replace(/^./, (match) => match.toUpperCase()))} • ${escapeHtml(formatQueryDuration(dataGenerationJobElapsedMs(job)))}</span>
       </button>
     `;
@@ -81,7 +81,7 @@ export function createHomeUi(helpers) {
         .sort((left, right) => Date.parse(right.startedAt || "") - Date.parse(left.startedAt || ""))
         .slice(0, 3);
       if (!recentJobs.length) {
-        recentIngestionsRoot.innerHTML = '<p class="home-empty">No ingestion runs yet.</p>';
+        recentIngestionsRoot.innerHTML = '<p class="home-empty">No loader runs yet.</p>';
       } else {
         recentIngestionsRoot.innerHTML = recentJobs.map((job) => ingestionActivityMarkup(job)).join("");
       }

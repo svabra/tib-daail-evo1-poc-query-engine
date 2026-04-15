@@ -57,10 +57,6 @@ async def wait_for_local_workspace_folder(page, folder_path: str, timeout_ms: in
     await ensure_sidebar_expanded(page)
     await ensure_details_open(page, "[data-data-sources-section]")
     await ensure_details_open(page, '[data-source-catalog-source-id="workspace.local"]')
-    await ensure_details_open(
-        page,
-        '[data-source-schema][data-source-schema-key="workspace_local::saved-results"]',
-    )
     folder = page.locator(
         f'[data-local-workspace-folder-node][data-local-workspace-folder-path="{folder_path}"]'
     )
@@ -84,6 +80,12 @@ async def create_root_folder(page, folder_name: str, timeout_ms: int) -> float:
     await ensure_details_open(page, "[data-data-sources-section]")
     catalog = local_workspace_catalog(page)
     await ensure_details_open(page, '[data-source-catalog-source-id="workspace.local"]')
+    root_summary = page.locator(
+        '[data-source-schema][data-source-schema-key="workspace_local::saved-results"] > summary'
+    )
+    if await root_summary.count():
+        if await root_summary.first.is_visible():
+            raise RuntimeError("The synthetic Saved Results root is still visible in Local Workspace.")
     summary = catalog.locator(":scope > summary")
     await summary.hover()
     await summary.locator("[data-create-local-workspace-root-folder]").click()

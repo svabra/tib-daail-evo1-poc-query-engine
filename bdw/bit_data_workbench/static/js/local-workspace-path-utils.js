@@ -159,6 +159,20 @@ export function createLocalWorkspacePathUtils({ folderStorageKey, relationPrefix
     return `${relationPrefix}${String(entryId || "").trim()}`;
   }
 
+  function isLocalWorkspaceRelation(relation = "") {
+    return String(relation || "").trim().startsWith(relationPrefix);
+  }
+
+  function localWorkspaceEntryIdFromRelation(relation = "") {
+    if (!isLocalWorkspaceRelation(relation)) {
+      return "";
+    }
+    return String(relation || "")
+      .trim()
+      .slice(relationPrefix.length)
+      .trim();
+  }
+
   return {
     allLocalWorkspaceFolderPaths,
     closestExistingLocalWorkspaceFolderPath,
@@ -169,7 +183,9 @@ export function createLocalWorkspacePathUtils({ folderStorageKey, relationPrefix
     localWorkspaceFolderName,
     localWorkspaceFolderPaths,
     localWorkspaceParentFolderPath,
+    localWorkspaceEntryIdFromRelation,
     localWorkspaceRelation,
+    isLocalWorkspaceRelation,
     localWorkspaceStoredFolderPaths,
     normalizeLocalWorkspaceFolderPath,
     readLocalWorkspaceStoredFolderPaths,

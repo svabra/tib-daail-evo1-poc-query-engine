@@ -4,7 +4,7 @@ import asyncio
 import json
 import shutil
 
-from fastapi import APIRouter, Depends, Form, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from botocore.exceptions import BotoCoreError
@@ -75,6 +75,10 @@ class QueryResultS3ExportPayload(BaseModel):
     bucket: str = ""
     prefix: str = ""
     file_name: str = Field(default="", validation_alias="fileName", serialization_alias="fileName")
+
+
+class LocalWorkspaceQuerySourceDeletePayload(BaseModel):
+    entry_id: str = Field(validation_alias="entryId", serialization_alias="entryId")
 
 
 @router.get("/info")
@@ -262,6 +266,94 @@ def cleanup_data_generation_job(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return JSONResponse(jsonable_encoder(snapshot))
+
+
+@router.post("/api/ingestion/csv/import")
+def import_csv_files(
+    files: list[UploadFile] | None = File(default=None),
+    target_id: str = Form("", alias="targetId"),
+    bucket: str = Form(""),
+    prefix: str = Form(""),
+    schema_name: str = Form("public", alias="schemaName"),
+    table_prefix: str = Form("", alias="tablePrefix"),
+    delimiter: str = Form(""),
+    has_header: bool = Form(True, alias="hasHeader"),
+    replace_existing: bool = Form(True, alias="replaceExisting"),
+    storage_format: str = Form("csv", alias="storageFormat"),
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        payload = service.import_csv_files(
+            files=files or [],
+            target_id=target_id,
+            bucket=bucket,
+            prefix=prefix,
+            schema_name=schema_name,
+            table_prefix=table_prefix,
+            delimiter=delimiter,
+            has_header=has_header,
+            replace_existing=replace_existing,
+            storage_format=storage_format,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(payload))
+
+
+@router.post("/api/local-workspace/query-sources/sync")
+async def sync_local_workspace_query_source(
+    file: UploadFile = File(...),
+    entry_id: str = Form("", alias="entryId"),
+    relation: str = Form(""),
+    file_name: str = Form("", alias="fileName"),
+    export_format: str = Form("", alias="exportFormat"),
+    mime_type: str = Form("", alias="mimeType"),
+    csv_delimiter: str = Form("", alias="csvDelimiter"),
+    csv_has_header: bool = Form(True, alias="csvHasHeader"),
+    service: WorkbenchService = Depends(get_workbench_service),
+    workbench_client_id: str | None = Header(default=None, alias="X-Workbench-Client-Id"),
+) -> JSONResponse:
+    try:
+        payload = service.sync_local_workspace_query_source(
+            client_id=str(workbench_client_id or "").strip(),
+            entry_id=entry_id,
+            relation=relation,
+            file_name=file_name or file.filename or "",
+            export_format=export_format,
+            mime_type=mime_type or file.content_type or "",
+            file_bytes=await file.read(),
+            csv_delimiter=csv_delimiter,
+            csv_has_header=csv_has_header,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(payload))
+
+
+@router.post("/api/local-workspace/query-sources/delete")
+def delete_local_workspace_query_source(
+    payload: LocalWorkspaceQuerySourceDeletePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+    workbench_client_id: str | None = Header(default=None, alias="X-Workbench-Client-Id"),
+) -> JSONResponse:
+    service.delete_local_workspace_query_source(
+        client_id=str(workbench_client_id or "").strip(),
+        entry_id=payload.entry_id,
+    )
+    return JSONResponse({"ok": True})
+
+
+@router.post("/api/local-workspace/query-sources/clear")
+def clear_local_workspace_query_sources(
+    service: WorkbenchService = Depends(get_workbench_service),
+    workbench_client_id: str | None = Header(default=None, alias="X-Workbench-Client-Id"),
+) -> JSONResponse:
+    service.clear_local_workspace_query_sources(
+        client_id=str(workbench_client_id or "").strip(),
+    )
+    return JSONResponse({"ok": True})
 
 
 @router.get("/api/query-jobs")

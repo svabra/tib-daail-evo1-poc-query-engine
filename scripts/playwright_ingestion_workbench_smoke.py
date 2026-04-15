@@ -11,7 +11,7 @@ from playwright.async_api import async_playwright
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Exercise the ingestion workbench generator-launch flow in the browser "
+            "Exercise the CSV-first ingestion landing page in the browser "
             "using Playwright. The target app must already be running."
         )
     )
@@ -32,64 +32,124 @@ async def open_ingestion_workbench(page, base_url: str, timeout_ms: int) -> None
         state="visible",
         timeout=timeout_ms,
     )
-    await page.locator("[data-generator-card]").first.wait_for(
+    await page.locator('[data-ingestion-tile="csv"]').wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
+    await page.locator('[data-ingestion-entry-panel="csv"]').wait_for(
+        state="hidden",
+        timeout=timeout_ms,
+    )
+
+
+async def open_csv_ingestor(page, timeout_ms: int) -> None:
+    csv_tile = page.locator('[data-ingestion-tile="csv"]').first
+    await csv_tile.click()
+    await page.locator("[data-csv-ingestion-form]").wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
+    await page.locator('[data-csv-target-option][value="workspace.s3"]').check()
+    for value in ("csv", "parquet", "json"):
+        await page.locator(f'[data-csv-s3-storage-format][value="{value}"]').wait_for(
+            state="visible",
+            timeout=timeout_ms,
+        )
+    duckdb_guidance = (
+        await page.locator('[aria-label="Shared Workspace storage format guidance"]').get_attribute("title")
+        or ""
+    )
+    if "DuckDB remains the query engine" not in duckdb_guidance:
+        raise RuntimeError("Expected Shared Workspace storage format guidance to mention DuckDB.")
+    prefix_guidance = (
+        await page.locator('[aria-label="Object key prefix guidance"]').get_attribute("title")
+        or ""
+    )
+    if "literal S3 key text" not in prefix_guidance:
+        raise RuntimeError("Expected object key prefix guidance to explain S3 prefix semantics.")
+    await page.locator('[data-csv-target-option][value="workspace.local"]').check()
+
+
+async def assert_ingestion_returns_to_landing_after_navigation(page, timeout_ms: int) -> None:
+    await open_csv_ingestor(page, timeout_ms)
+
+    await page.locator(
+        '[data-open-query-workbench][data-open-query-workbench-navigation="true"]'
+    ).click()
+    await page.locator("[data-ingestion-workbench-page]").wait_for(state="hidden", timeout=timeout_ms)
+
+    await page.locator("[data-open-ingestion-workbench]").click()
+    await page.locator("[data-ingestion-workbench-page]").wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
+    await page.locator('[data-ingestion-entry-panel="csv"]').wait_for(
+        state="hidden",
+        timeout=timeout_ms,
+    )
+
+
+async def reject_invalid_csv_file(page, timeout_ms: int) -> None:
+    file_input = page.locator("[data-csv-file-input]").first
+    await file_input.set_input_files(
+        files=[
+            {
+                "name": "playwright-invalid.csv",
+                "mimeType": "text/csv",
+                "buffer": b"id,name,amount\n1,alpha,9,536.31\n",
+            }
+        ]
+    )
+
+    preview_error = page.locator(
+        "[data-csv-preview-root] .ingestion-csv-preview-card-error"
+    ).first
+    await preview_error.wait_for(state="visible", timeout=timeout_ms)
+    error_text = (await preview_error.text_content() or "").strip()
+    if "CSV row width mismatch at line 2" not in error_text:
+        raise RuntimeError(f"Expected CSV validation error, got: {error_text!r}")
+
+    import_button = page.locator("[data-csv-import-submit]").first
+    if await import_button.is_enabled():
+        raise RuntimeError("Invalid CSV preview must keep the import button disabled.")
+
+
+async def import_local_csv_file(page, timeout_ms: int) -> None:
+    file_input = page.locator("[data-csv-file-input]").first
+    await file_input.set_input_files(
+        files=[
+            {
+                "name": "playwright-sample.csv",
+                "mimeType": "text/csv",
+                "buffer": b"id,name\n1,alpha\n2,beta\n",
+            }
+        ]
+    )
+
+    await page.locator("[data-csv-review-list] .ingestion-csv-review-card").first.wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
+    await page.locator("[data-csv-preview-root] .ingestion-csv-preview-card").first.wait_for(
         state="visible",
         timeout=timeout_ms,
     )
 
+    import_button = page.locator("[data-csv-import-submit]").first
+    await import_button.wait_for(state="visible", timeout=timeout_ms)
+    await import_button.click()
 
-async def reduce_requested_size(page, timeout_ms: int) -> None:
-    first_card = page.locator("[data-generator-card]").first
-    await first_card.wait_for(state="visible", timeout=timeout_ms)
-    size_input = first_card.locator("[data-ingestion-size-input]")
-    await size_input.wait_for(state="visible", timeout=timeout_ms)
-    min_value = (await size_input.get_attribute("min") or "").strip()
-    current_value = (await size_input.input_value()).strip()
-    next_value = min_value or current_value
-    if not next_value:
-        raise RuntimeError("The ingestion generator did not expose a usable size input.")
-    await size_input.fill(next_value)
-
-
-async def start_generator_and_assert_job(page, timeout_ms: int) -> tuple[str, str]:
-    first_card = page.locator("[data-generator-card]").first
-    generator_id = (await first_card.get_attribute("data-generator-id") or "").strip()
-    if not generator_id:
-        raise RuntimeError("The first ingestion generator card is missing its generator id.")
-
-    launch_button = first_card.locator("[data-start-data-generation]")
-    await launch_button.wait_for(state="visible", timeout=timeout_ms)
-
-    async with page.expect_response(
-        lambda response: response.request.method == "POST"
-        and response.url.endswith("/api/data-generation-jobs"),
+    await page.locator("[data-csv-result-list] .ingestion-csv-result-card-imported").first.wait_for(
+        state="visible",
         timeout=timeout_ms,
-    ) as response_info:
-        await launch_button.click()
-
-    response = await response_info.value
-    if not response.ok:
-        raise RuntimeError(
-            f"Data generation job creation failed with status {response.status}."
-        )
-
-    payload = await response.json()
-    job_id = str(payload.get("jobId") or payload.get("job_id") or "").strip()
-    if not job_id:
-        raise RuntimeError(
-            "The data generation job response did not include a job id."
-        )
-
-    job_card = page.locator(
-        f'[data-data-generation-job-card][data-job-id="{job_id}"]'
     )
-    await job_card.wait_for(state="visible", timeout=timeout_ms)
+    message_dialog = page.locator("[data-message-dialog]")
+    if await message_dialog.is_visible():
+        await page.locator("[data-message-submit]").click()
+        await message_dialog.wait_for(state="hidden", timeout=timeout_ms)
 
-    status_copy = (await job_card.locator(".ingestion-job-status").inner_text()).strip()
-    if not status_copy:
-        raise RuntimeError("The ingestion job card rendered without a status label.")
-
-    return generator_id, job_id
+    query_button = page.locator("[data-csv-import-open-query]").first
+    await query_button.wait_for(state="visible", timeout=timeout_ms)
 
 
 async def run_smoke(args: argparse.Namespace) -> int:
@@ -120,15 +180,14 @@ async def run_smoke(args: argparse.Namespace) -> int:
 
         try:
             await open_ingestion_workbench(page, args.base_url, args.timeout_ms)
-            await reduce_requested_size(page, args.timeout_ms)
-            generator_id, job_id = await start_generator_and_assert_job(
-                page,
-                args.timeout_ms,
-            )
+            await assert_ingestion_returns_to_landing_after_navigation(page, args.timeout_ms)
+            await open_csv_ingestor(page, args.timeout_ms)
+            await reject_invalid_csv_file(page, args.timeout_ms)
+            await import_local_csv_file(page, args.timeout_ms)
         except (PlaywrightTimeoutError, RuntimeError) as exc:
             print(str(exc), file=sys.stderr)
             for method, url, status in responses:
-                if "/api/data-generation-jobs" in url:
+                if "/api/ingestion/csv/import" in url:
                     print(f"HTTP {method} {status} {url}", file=sys.stderr)
             for message in console_messages:
                 print(message, file=sys.stderr)
@@ -137,10 +196,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
 
         await browser.close()
 
-    print(
-        "Playwright ingestion workbench smoke passed "
-        f"for generator {generator_id} and job {job_id}."
-    )
+    print("Playwright ingestion workbench smoke passed.")
     return 0
 
 

@@ -106,6 +106,31 @@ export function createLocalWorkspaceSidebarUi(helpers) {
               <button
                 type="button"
                 class="workspace-action-menu-item"
+                data-view-source-data
+                title="Insert and run a query with all fields in the current notebook"
+              >
+                View Data
+              </button>
+              <button
+                type="button"
+                class="workspace-action-menu-item"
+                data-query-source-current
+                title="Insert a query into the current notebook"
+              >
+                Query in current notebook
+              </button>
+              <button
+                type="button"
+                class="workspace-action-menu-item"
+                data-query-source-new
+                title="Create a new notebook with this query"
+              >
+                Query in new notebook
+              </button>
+              <div class="workspace-action-menu-separator" aria-hidden="true"></div>
+              <button
+                type="button"
+                class="workspace-action-menu-item"
                 data-move-local-workspace-object
                 title="Move the Local Workspace file"
               >
@@ -232,31 +257,15 @@ export function createLocalWorkspaceSidebarUi(helpers) {
       .sort((left, right) => left.fileName.localeCompare(right.fileName, undefined, { sensitivity: "base" }))
       .map((entry) => localWorkspaceEntryMarkup(entry))
       .join("");
-    const folderCount = allLocalWorkspaceFolderPaths(folderPaths).filter(Boolean).length;
-
     return `
       <details
         class="source-schema"
         data-source-schema
+        data-local-workspace-root-schema
         data-source-schema-key="${escapeHtml(getLocalWorkspaceSchemaKey())}"
-        ${open ? "open" : ""}
+        open
       >
-        <summary data-searchable-item="Saved Results Local Workspace IndexedDB">
-          <span class="source-node-label">
-            <svg class="source-icon source-icon-schema" viewBox="0 0 16 16" aria-hidden="true">
-              <rect x="1.6" y="1.8" width="3.7" height="3.7" rx="0.7"></rect>
-              <rect x="10.7" y="1.8" width="3.7" height="3.7" rx="0.7"></rect>
-              <rect x="10.7" y="10.5" width="3.7" height="3.7" rx="0.7"></rect>
-              <path d="M5.3 3.7h2.8a2 2 0 0 1 2 2v1.5"></path>
-              <path d="M10.1 8H7.4a2 2 0 0 0-2 2v.5"></path>
-            </svg>
-            <span>Saved Results</span>
-          </span>
-          <span class="source-schema-meta">
-            <small>${escapeHtml(String(folderCount))} folder${folderCount === 1 ? "" : "s"}</small>
-            <small>${escapeHtml(String(entries.length))} file${entries.length === 1 ? "" : "s"}</small>
-          </span>
-        </summary>
+        <summary hidden aria-hidden="true"></summary>
         <div class="local-workspace-folder-branch local-workspace-root-branch">
           ${folderMarkup}
           ${rootFileMarkup ? `<ul class="source-object-list">${rootFileMarkup}</ul>` : ""}

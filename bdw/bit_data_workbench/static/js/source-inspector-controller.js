@@ -1,7 +1,7 @@
 export function createSourceInspectorController(helpers) {
   const {
     isLocalWorkspaceSourceObject,
-    localWorkspaceInspectorMarkup,
+    loadLocalWorkspaceSourceFields,
     normalizeSourceObjectFields,
     renderSourceInspector,
     renderSourceInspectorError,
@@ -99,10 +99,52 @@ export function createSourceInspectorController(helpers) {
     }
 
     if (isLocalWorkspaceSourceObject(sourceObjectRoot)) {
-      if (getActiveSourceObjectRelation() === relation) {
-        renderSourceInspectorMarkup(localWorkspaceInspectorMarkup(sourceObjectRoot));
+      if (sourceObjectFieldCache.has(relation)) {
+        const fields = sourceObjectFieldCache.get(relation) ?? [];
+        if (getActiveSourceObjectRelation() === relation) {
+          renderSourceInspector(sourceObjectRoot, fields);
+        }
+        return fields;
       }
-      return [];
+
+      if (renderLoading && getActiveSourceObjectRelation() === relation) {
+        setSourceObjectLoadingState(sourceObjectRoot, true);
+        renderSourceInspectorLoading(sourceObjectRoot);
+      }
+
+      let pendingRequest = sourceObjectFieldRequests.get(relation);
+      if (!pendingRequest) {
+        pendingRequest = loadLocalWorkspaceSourceFields(sourceObjectRoot)
+          .then((fields) => {
+            const normalizedFields = normalizeSourceObjectFields(fields);
+            sourceObjectFieldCache.set(relation, normalizedFields);
+            return normalizedFields;
+          })
+          .finally(() => {
+            sourceObjectFieldRequests.delete(relation);
+          });
+        sourceObjectFieldRequests.set(relation, pendingRequest);
+      }
+
+      try {
+        const fields = await pendingRequest;
+        if (getActiveSourceObjectRelation() === relation) {
+          renderSourceInspector(sourceObjectRoot, fields);
+        }
+        return fields;
+      } catch (error) {
+        if (getActiveSourceObjectRelation() === relation) {
+          renderSourceInspectorError(
+            sourceObjectRoot,
+            error instanceof Error
+              ? error.message
+              : "The fields could not be loaded for this source object."
+          );
+        }
+        throw error;
+      } finally {
+        setSourceObjectLoadingState(sourceObjectRoot, false);
+      }
     }
 
     if (sourceObjectFieldCache.has(relation)) {

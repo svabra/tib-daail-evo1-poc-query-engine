@@ -31,6 +31,26 @@
       "enabledByDefault": true
     },
     {
+      "id": "ingestion-query-handoff",
+      "script": "playwright_ingestion_query_handoff_smoke.py",
+      "enabledByDefault": true
+    },
+    {
+      "id": "local-workspace-query-handoff",
+      "script": "playwright_local_workspace_query_handoff_smoke.py",
+      "enabledByDefault": true
+    },
+    {
+      "id": "ingestion-s3-query-handoff",
+      "script": "playwright_ingestion_s3_query_handoff_smoke.py",
+      "enabledByDefault": false
+    },
+    {
+      "id": "loader-workbench",
+      "script": "playwright_loader_workbench_smoke.py",
+      "enabledByDefault": true
+    },
+    {
       "id": "local-workspace-sidebar-folders",
       "script": "playwright_local_workspace_sidebar_folders.py",
       "enabledByDefault": true

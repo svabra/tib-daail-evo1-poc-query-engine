@@ -22,11 +22,11 @@ def is_partial_request(request: Request) -> bool:
 
 
 def brand_title_for_mode(workspace_mode: str) -> str:
-    return (
-        "DAAIFL Ingestion Workbench"
-        if workspace_mode == "ingestion"
-        else "DAAIFL Query Workbench"
-    )
+    if workspace_mode == "loader":
+        return "DAAIFL Loader Workbench"
+    if workspace_mode == "ingestion":
+        return "DAAIFL Ingestion Workbench"
+    return "DAAIFL Query Workbench"
 
 
 def _display_value(value: object, fallback: str = "Not configured") -> str:
@@ -620,7 +620,7 @@ def sidebar_partial(
     mode: str = Query(default="notebook"),
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> HTMLResponse:
-    workspace_mode = "ingestion" if mode == "ingestion" else "notebook"
+    workspace_mode = "loader" if mode == "loader" else "notebook"
     return templates.TemplateResponse(
         request=request,
         name="partials/sidebar.html",
@@ -644,23 +644,47 @@ def ingestion_workbench_partial(
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> HTMLResponse:
     if not is_partial_request(request):
-        notebooks = service.notebooks()
-        active_notebook = notebooks[0] if notebooks else None
         return templates.TemplateResponse(
             request=request,
             name="index.html",
             context=shell_context(
                 request,
                 service,
-                active_notebook=active_notebook,
+                active_notebook=None,
                 workspace_mode="ingestion",
                 workspace_partial_template="partials/ingestion_workbench.html",
+                shell_sidebar_hidden=True,
             ),
         )
 
     return templates.TemplateResponse(
         request=request,
         name="partials/ingestion_workbench.html",
+        context={},
+    )
+
+
+@router.get("/loader-workbench", response_class=HTMLResponse)
+def loader_workbench_partial(
+    request: Request,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> HTMLResponse:
+    if not is_partial_request(request):
+        return templates.TemplateResponse(
+            request=request,
+            name="index.html",
+            context=shell_context(
+                request,
+                service,
+                active_notebook=None,
+                workspace_mode="loader",
+                workspace_partial_template="partials/loader_workbench.html",
+            ),
+        )
+
+    return templates.TemplateResponse(
+        request=request,
+        name="partials/loader_workbench.html",
         context={
             "data_generators": service.data_generators(),
             "runbook_tree": service.runbook_tree(),

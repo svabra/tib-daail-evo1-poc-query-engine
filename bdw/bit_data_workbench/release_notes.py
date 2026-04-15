@@ -1,9 +1,30 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.5.1. Keep entries concise and
+# Derived from git history through version 0.5.2. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.5.2",
+        "releasedAt": "2026-04-16T10:30:00+02:00",
+        "features": [
+            (
+                "The new Ingestion Workbench now opens on a dedicated tile-based "
+                "landing page, while loader-specific flows move into a separate "
+                "Loader Workbench."
+            ),
+            (
+                "CSV ingestion now guides users step by step into Local Workspace, "
+                "Shared Workspace S3, PostgreSQL OLTP, or PostgreSQL OLAP with "
+                "preview, delimiter and header controls, and destination-specific configuration."
+            ),
+            (
+                "Imported CSV files can now be handed off directly into the Query "
+                "Workbench, and Shared Workspace S3 uploads support explicit object "
+                "names plus CSV, Parquet, and JSON storage options with clear tradeoff guidance."
+            ),
+        ],
+    },
     {
         "version": "0.5.1",
         "releasedAt": "2026-04-15T12:00:00+02:00",
@@ -142,8 +163,8 @@ RELEASE_NOTES: list[dict[str, object]] = [
         "releasedAt": "2026-04-07T01:14:29+02:00",
         "features": [
             (
-                "Opening the Ingestion Workbench now immediately reopens "
-                "the ingestion navigation, uncollapses the sidebar, and "
+                "Opening the Loader Workbench now immediately reopens "
+                "the loader navigation, uncollapses the sidebar, and "
                 "expands the selected runbook path when a generator is in "
                 "focus."
             ),
