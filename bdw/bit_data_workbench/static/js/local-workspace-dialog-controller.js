@@ -4,6 +4,16 @@ import {
   localWorkspaceMoveDialog,
   localWorkspaceSaveDialog,
 } from "./dialogs.js";
+import {
+  ensureResultExportFileNameExtension,
+  normalizeResultExportFormat,
+} from "./data-exporters/export-format-definitions.js";
+import {
+  defaultResultExportSettings,
+  normalizeResultExportSettings,
+  readResultExportSettings,
+  renderResultExportSettings,
+} from "./data-exporters/export-settings.js";
 
 export function createLocalWorkspaceDialogController(helpers) {
   const {
@@ -69,15 +79,16 @@ export function createLocalWorkspaceDialogController(helpers) {
       fileNameInput.value = state.fileName;
     }
 
-    const formatCopy = dialog.querySelector("[data-local-workspace-format-copy]");
-    if (formatCopy) {
-      formatCopy.textContent = `Format: ${String(state.exportFormat || "").toUpperCase()}`;
+    const formatSelect = dialog.querySelector("[data-export-format-select]");
+    if (formatSelect instanceof HTMLSelectElement && formatSelect.value !== state.exportFormat) {
+      formatSelect.value = state.exportFormat;
     }
+    renderResultExportSettings(dialog, state.exportFormat, state.exportSettings);
 
     const submitButton = localWorkspaceSaveSubmitButton();
     if (submitButton) {
       submitButton.disabled = state.saving || !String(state.fileName || "").trim();
-      submitButton.textContent = state.saving ? "Saving..." : "Save to Local Workspace";
+      submitButton.textContent = state.saving ? "Saving..." : "Save to Local Workspace (IndexDB)";
     }
 
     dialog.querySelectorAll("[data-local-workspace-folder-option]").forEach((node) => {
@@ -149,7 +160,8 @@ export function createLocalWorkspaceDialogController(helpers) {
     const dialog = ensureLocalWorkspaceSaveDialog();
     const state = getSaveState();
     state.jobId = job.jobId;
-    state.exportFormat = String(exportFormat || "").trim().toLowerCase();
+    state.exportFormat = normalizeResultExportFormat(exportFormat);
+    state.exportSettings = defaultResultExportSettings(state.exportFormat);
     state.fileName = defaultQueryResultExportFilename(job, state.exportFormat);
     state.folderPath = "";
     state.saving = false;
@@ -158,11 +170,11 @@ export function createLocalWorkspaceDialogController(helpers) {
     const titleNode = dialog.querySelector("[data-local-workspace-save-title]");
     const copyNode = dialog.querySelector("[data-local-workspace-save-copy]");
     if (titleNode) {
-      titleNode.textContent = `Save Results in ${state.exportFormat.toUpperCase()} Format to Local Workspace`;
+      titleNode.textContent = "Save Results in Local Workspace (IndexDB) ...";
     }
     if (copyNode) {
       copyNode.textContent =
-        "Choose a Local Workspace folder path or create a new one, then provide the file name to save in this browser.";
+        "Choose a Local Workspace (IndexDB) folder path, then select the export format and format-specific settings.";
     }
 
     syncLocalWorkspaceSaveDialogState();
@@ -354,6 +366,30 @@ export function createLocalWorkspaceDialogController(helpers) {
     syncLocalWorkspaceSaveDialogState();
   }
 
+  function updateLocalWorkspaceSaveExportFormat(value) {
+    const state = getSaveState();
+    state.exportFormat = normalizeResultExportFormat(value);
+    state.exportSettings = defaultResultExportSettings(state.exportFormat);
+    state.fileName = ensureResultExportFileNameExtension(
+      state.fileName,
+      state.exportFormat,
+      "query-result"
+    );
+    syncLocalWorkspaceSaveDialogState();
+  }
+
+  function updateLocalWorkspaceSaveExportSettingsFromDialog() {
+    const dialog = localWorkspaceSaveDialog();
+    if (!(dialog instanceof HTMLDialogElement)) {
+      return;
+    }
+    const state = getSaveState();
+    state.exportSettings = normalizeResultExportSettings(
+      state.exportFormat,
+      readResultExportSettings(dialog, state.exportFormat)
+    );
+  }
+
   function updateLocalWorkspaceMoveFolderPath(value) {
     getMoveState().folderPath = normalizeLocalWorkspaceFolderPath(value);
     syncLocalWorkspaceMoveDialogState();
@@ -379,6 +415,8 @@ export function createLocalWorkspaceDialogController(helpers) {
     syncOpenLocalWorkspaceSaveDialog,
     updateLocalWorkspaceMoveFileName,
     updateLocalWorkspaceMoveFolderPath,
+    updateLocalWorkspaceSaveExportFormat,
+    updateLocalWorkspaceSaveExportSettingsFromDialog,
     updateLocalWorkspaceSaveFileName,
     updateLocalWorkspaceSaveFolderPath,
   };

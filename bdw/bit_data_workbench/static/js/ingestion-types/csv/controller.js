@@ -267,7 +267,7 @@ export function createCsvIngestionController(helpers) {
       case "pg_olap":
         return "PostgreSQL OLAP";
       default:
-        return "Local Workspace";
+        return "Local Workspace (IndexDB)";
     }
   }
 
@@ -931,7 +931,7 @@ export function createCsvIngestionController(helpers) {
         title: "CSV import finished",
         copy:
           selectedTargetId() === "workspace.local"
-            ? `${completedCount} file(s) stored in Local Workspace and ready for Query Workbench handoff.`
+            ? `${completedCount} file(s) stored in Local Workspace (IndexDB) and ready for Query Workbench handoff.`
             : `${completedCount} file(s) processed for ${targetLabel()}.`,
       });
     } finally {

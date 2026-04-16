@@ -1,3 +1,5 @@
+import { resultExportFormatOptionsMarkup, renderResultExportSettings } from "./data-exporters/export-settings.js";
+
 export function folderNameDialog() {
   return document.querySelector("[data-folder-name-dialog]");
 }
@@ -28,6 +30,10 @@ export function localWorkspaceSaveDialog() {
 
 export function localWorkspaceMoveDialog() {
   return document.querySelector("[data-local-workspace-move-dialog]");
+}
+
+export function resultDownloadDialog() {
+  return document.querySelector("[data-result-download-dialog]");
 }
 
 function appendModalDialog(markup) {
@@ -219,10 +225,16 @@ export function ensureResultExportDialog() {
                 placeholder="query-result.parquet"
               >
             </label>
-            <div class="result-export-target-card">
-              <span class="workspace-tags-label">Export Format</span>
-              <p class="result-export-target-path" data-result-export-format-copy>Format: Parquet</p>
-            </div>
+            <label class="result-export-field">
+              <span class="result-export-field-label">Export format</span>
+              <select class="modal-input" data-export-format-select>
+                ${resultExportFormatOptionsMarkup("csv")}
+              </select>
+            </label>
+            <section class="result-export-target-card">
+              <span class="workspace-tags-label">Format settings</span>
+              <div data-export-settings-panel></div>
+            </section>
           </aside>
         </div>
         <menu class="modal-actions">
@@ -238,6 +250,7 @@ export function ensureResultExportDialog() {
   `);
 
   dialog = resultExportDialog();
+  renderResultExportSettings(dialog, "csv");
   return dialog;
 }
 
@@ -252,9 +265,9 @@ export function ensureLocalWorkspaceSaveDialog() {
       <form method="dialog" class="modal-card modal-card-wide result-export-dialog-card" data-local-workspace-save-form>
         <div class="result-export-dialog-header">
           <div class="result-export-dialog-copy">
-            <h2 class="modal-title" data-local-workspace-save-title>Save Results to Local Workspace</h2>
+            <h2 class="modal-title" data-local-workspace-save-title>Save Results to Local Workspace (IndexDB)</h2>
             <p class="modal-copy" data-local-workspace-save-copy>
-              Choose a Local Workspace folder path and provide the file name to save in this browser.
+              Choose a Local Workspace (IndexDB) folder path and provide the file name to save in this browser.
             </p>
           </div>
           <div class="result-export-dialog-toolbar">
@@ -269,7 +282,7 @@ export function ensureLocalWorkspaceSaveDialog() {
               <span
                 class="workspace-tags-label"
                 title="Local Workspace data is stored in this browser profile using IndexedDB."
-              >Local Workspace Folders</span>
+              >Local Workspace (IndexDB) Folders</span>
               <div class="result-export-breadcrumbs" data-local-workspace-breadcrumbs></div>
             </div>
             <div class="result-export-explorer-shell">
@@ -278,9 +291,9 @@ export function ensureLocalWorkspaceSaveDialog() {
           </section>
           <aside class="result-export-target-panel">
             <div class="result-export-target-card">
-              <span class="workspace-tags-label">Selected Local Workspace Location</span>
+              <span class="workspace-tags-label">Selected Local Workspace (IndexDB) Location</span>
               <p class="result-export-target-path" data-local-workspace-selected-path>
-                Local Workspace /
+                Local Workspace (IndexDB) /
               </p>
             </div>
             <label class="result-export-field">
@@ -303,10 +316,16 @@ export function ensureLocalWorkspaceSaveDialog() {
                 placeholder="query-result.parquet"
               >
             </label>
-            <div class="result-export-target-card">
-              <span class="workspace-tags-label">Export Format</span>
-              <p class="result-export-target-path" data-local-workspace-format-copy>Format: Parquet</p>
-            </div>
+            <label class="result-export-field">
+              <span class="result-export-field-label">Export format</span>
+              <select class="modal-input" data-export-format-select>
+                ${resultExportFormatOptionsMarkup("csv")}
+              </select>
+            </label>
+            <section class="result-export-target-card">
+              <span class="workspace-tags-label">Format settings</span>
+              <div data-export-settings-panel></div>
+            </section>
           </aside>
         </div>
         <menu class="modal-actions">
@@ -314,7 +333,7 @@ export function ensureLocalWorkspaceSaveDialog() {
             Cancel
           </button>
           <button class="modal-button" type="submit" value="confirm" data-local-workspace-save-submit disabled>
-            Save to Local Workspace
+            Save to Local Workspace (IndexDB)
           </button>
         </menu>
       </form>
@@ -322,6 +341,65 @@ export function ensureLocalWorkspaceSaveDialog() {
   `);
 
   dialog = localWorkspaceSaveDialog();
+  renderResultExportSettings(dialog, "csv");
+  return dialog;
+}
+
+export function ensureResultDownloadDialog() {
+  let dialog = resultDownloadDialog();
+  if (dialog) {
+    return dialog;
+  }
+
+  appendModalDialog(`
+    <dialog class="modal-dialog modal-dialog-wide" data-result-download-dialog>
+      <form method="dialog" class="modal-card modal-card-wide result-export-dialog-card" data-result-download-form>
+        <div class="result-export-dialog-header">
+          <div class="result-export-dialog-copy">
+            <h2 class="modal-title" data-result-download-title>Download Results as ...</h2>
+            <p class="modal-copy" data-result-download-copy>
+              Choose the export format, adjust any format-specific settings, and confirm the download file name.
+            </p>
+          </div>
+        </div>
+        <div class="result-export-dialog-body">
+          <aside class="result-export-target-panel result-export-target-panel-single">
+            <label class="result-export-field">
+              <span class="result-export-field-label">File name</span>
+              <input
+                class="modal-input"
+                type="text"
+                data-result-download-file-name
+                autocomplete="off"
+                placeholder="query-result.csv"
+              >
+            </label>
+            <label class="result-export-field">
+              <span class="result-export-field-label">Export format</span>
+              <select class="modal-input" data-export-format-select>
+                ${resultExportFormatOptionsMarkup("csv")}
+              </select>
+            </label>
+            <section class="result-export-target-card">
+              <span class="workspace-tags-label">Format settings</span>
+              <div data-export-settings-panel></div>
+            </section>
+          </aside>
+        </div>
+        <menu class="modal-actions">
+          <button class="modal-button modal-button-secondary" type="button" data-modal-cancel>
+            Cancel
+          </button>
+          <button class="modal-button" type="submit" value="confirm" data-result-download-submit>
+            Download Results
+          </button>
+        </menu>
+      </form>
+    </dialog>
+  `);
+
+  dialog = resultDownloadDialog();
+  renderResultExportSettings(dialog, "csv");
   return dialog;
 }
 

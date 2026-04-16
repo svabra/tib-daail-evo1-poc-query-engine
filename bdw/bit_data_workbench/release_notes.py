@@ -1,9 +1,30 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.5.2. Keep entries concise and
+# Derived from git history through version 0.5.3. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.5.3",
+        "releasedAt": "2026-04-16T15:00:00+02:00",
+        "features": [
+            (
+                "Result export is now destination-first, with dedicated save or "
+                "download dialogs and support for CSV, JSON Array, JSONL, "
+                "Parquet, XML, and Excel export formats."
+            ),
+            (
+                "Export formats now expose format-specific settings where they "
+                "matter, including CSV delimiter and header controls plus XML and "
+                "Excel output options."
+            ),
+            (
+                "Local Workspace (IndexDB) and Shared Workspace (S3) data sources "
+                "now behave more consistently in the sidebar, and XML plus Excel "
+                "files can now be queried through DuckDB-backed conversion."
+            ),
+        ],
+    },
     {
         "version": "0.5.2",
         "releasedAt": "2026-04-16T10:30:00+02:00",

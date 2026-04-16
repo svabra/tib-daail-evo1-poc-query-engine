@@ -64,7 +64,7 @@ async def import_csv_to_s3(page, args: argparse.Namespace) -> tuple[str, str]:
     await page.locator('[data-csv-target-option][value="workspace.s3"]').check()
     await page.locator('[data-csv-config-panel="workspace.s3"] [data-csv-s3-bucket]').fill(args.bucket)
     await page.locator('[data-csv-config-panel="workspace.s3"] [data-csv-s3-prefix]').fill(prefix)
-    await page.locator('[data-csv-s3-storage-format][value="parquet"]').check()
+    await page.locator('[data-csv-s3-storage-format][value="json"]').check()
     await page.locator("[data-csv-file-input]").set_input_files(
         files=[
             {
@@ -91,8 +91,10 @@ async def import_csv_to_s3(page, args: argparse.Namespace) -> tuple[str, str]:
         raise RuntimeError(f"S3 review card should not render a path-like URI anymore: {review_copy!r}")
     if "Key prefix" not in review_copy or prefix not in review_copy:
         raise RuntimeError(f"S3 review card does not show the key prefix explicitly: {review_copy!r}")
-    if "Object name" not in review_copy or f"{object_base_name}.parquet" not in review_copy:
+    if "Object name" not in review_copy or f"{object_base_name}.jsonl" not in review_copy:
         raise RuntimeError(f"S3 review card does not show the object name explicitly: {review_copy!r}")
+    if "stored as JSONL" not in review_copy:
+        raise RuntimeError(f"Expected JSONL storage copy, got: {review_copy!r}")
 
     async with page.expect_response(
         lambda response: response.request.method == "POST"
@@ -123,17 +125,17 @@ async def import_csv_to_s3(page, args: argparse.Namespace) -> tuple[str, str]:
     result_copy = (
         await page.locator(".ingestion-csv-result-card-imported").first.text_content() or ""
     ).strip()
-    if "stored as Parquet" not in result_copy:
-        raise RuntimeError(f"Expected Parquet storage copy, got: {result_copy!r}")
+    if "stored as JSONL" not in result_copy:
+        raise RuntimeError(f"Expected JSONL storage copy, got: {result_copy!r}")
     if "s3://" in result_copy:
         raise RuntimeError(f"S3 result card should not render a path-like URI anymore: {result_copy!r}")
     if "Key prefix" not in result_copy or prefix not in result_copy:
         raise RuntimeError(f"Expected explicit key prefix in result copy, got: {result_copy!r}")
-    if "Object name" not in result_copy or f"{object_base_name}.parquet" not in result_copy:
+    if "Object name" not in result_copy or f"{object_base_name}.jsonl" not in result_copy:
         raise RuntimeError(f"Expected explicit object name in result copy, got: {result_copy!r}")
 
     await query_button.click()
-    return relation, f"{prefix}/{object_base_name}.parquet"
+    return relation, f"{prefix}/{object_base_name}.jsonl"
 
 
 async def assert_query_handoff(page, expected_relation: str, timeout_ms: int) -> None:

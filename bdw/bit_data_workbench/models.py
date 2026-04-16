@@ -23,11 +23,13 @@ class SourceObject:
     name: str
     kind: str
     relation: str
+    display_name: str = ""
     s3_bucket: str = ""
     s3_key: str = ""
     s3_path: str = ""
     s3_file_format: str = ""
     s3_downloadable: bool = False
+    size_bytes: int = 0
 
 
 @dataclass(slots=True)

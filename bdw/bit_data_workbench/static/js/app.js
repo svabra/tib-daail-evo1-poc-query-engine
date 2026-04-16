@@ -3,9 +3,11 @@ import { sql, PostgreSQL } from "../vendor/lang-sql.bundle.mjs";
 import {
   ensureAboutDialog,
   ensureFeatureListDialog,
+  ensureResultDownloadDialog,
   ensureResultExportDialog,
   localWorkspaceMoveDialog,
   localWorkspaceSaveDialog,
+  resultDownloadDialog,
   resultExportDialog,
 } from "./dialogs.js";
 import {
@@ -25,6 +27,16 @@ import { createLocalWorkspacePathUtils } from "./local-workspace-path-utils.js";
 import { createLocalWorkspaceQueryBridge } from "./local-workspace-query-bridge.js";
 import { createLocalWorkspacePickerUi } from "./local-workspace-picker.js";
 import { createLocalWorkspaceSidebarUi } from "./local-workspace-sidebar.js";
+import {
+  ensureResultExportFileNameExtension,
+  normalizeResultExportFormat,
+} from "./data-exporters/export-format-definitions.js";
+import {
+  defaultResultExportSettings,
+  normalizeResultExportSettings,
+  readResultExportSettings,
+  renderResultExportSettings,
+} from "./data-exporters/export-settings.js";
 import { createNotebookModel } from "./notebook-model.js";
 import { createNotebookWorkspaceMarkup } from "./notebook-workspace-markup.js";
 import { createNotebookWorkspaceController } from "./notebook-workspace-controller.js";
@@ -150,7 +162,8 @@ const sharedNotebookSyncHandles = new Map();
 const s3ExplorerNodeRequests = new Map();
 const resultExportDialogState = {
   jobId: "",
-  exportFormat: "",
+  exportFormat: "csv",
+  exportSettings: defaultResultExportSettings("csv"),
   selectedBucket: "",
   selectedPrefix: "",
   fileName: "",
@@ -158,11 +171,19 @@ const resultExportDialogState = {
 };
 const localWorkspaceSaveDialogState = {
   jobId: "",
-  exportFormat: "",
+  exportFormat: "csv",
+  exportSettings: defaultResultExportSettings("csv"),
   fileName: "",
   folderPath: "",
   saving: false,
   createdFolderPaths: [],
+};
+const resultDownloadDialogState = {
+  jobId: "",
+  exportFormat: "csv",
+  exportSettings: defaultResultExportSettings("csv"),
+  fileName: "",
+  downloading: false,
 };
 const localWorkspaceMoveDialogState = {
   entryId: "",
@@ -326,6 +347,8 @@ const {
   syncOpenLocalWorkspaceSaveDialog,
   updateLocalWorkspaceMoveFileName,
   updateLocalWorkspaceMoveFolderPath,
+  updateLocalWorkspaceSaveExportFormat,
+  updateLocalWorkspaceSaveExportSettingsFromDialog,
   updateLocalWorkspaceSaveFileName,
   updateLocalWorkspaceSaveFolderPath,
 } = createLocalWorkspaceDialogController({
@@ -688,6 +711,7 @@ const {
   openLocalWorkspaceMoveDialog,
   openLocalWorkspaceSaveDialog,
   openNotebookForQueryJob,
+  openResultDownloadDialog,
   openResultExportDialog,
   queryJobForResultActionTarget,
   queryNotificationMenu,
@@ -4525,24 +4549,26 @@ function filenameFromContentDisposition(value) {
 }
 
 function defaultQueryResultExportFilename(job, format) {
-  const normalizedFormat = String(format || "").trim().toLowerCase() || "json";
   const baseName = `${job?.notebookTitle || "query"}-${job?.cellId || "cell"}`
     .replace(/[^\w.-]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "")
     .toLowerCase();
-  return `${baseName || "query-result"}.${normalizedFormat}`;
+  return ensureResultExportFileNameExtension("", format, baseName || "query-result");
 }
 
-async function fetchQueryResultExportBlob(job, exportFormat) {
-  const response = await window.fetch(
-    `/api/query-jobs/${encodeURIComponent(job.jobId)}/export/download?format=${encodeURIComponent(exportFormat)}`,
-    {
-      headers: {
-        Accept: "application/octet-stream",
-      },
-    }
-  );
+async function fetchQueryResultExportBlob(job, exportFormat, exportSettings = {}) {
+  const response = await window.fetch(`/api/query-jobs/${encodeURIComponent(job.jobId)}/export/download`, {
+    method: "POST",
+    headers: {
+      Accept: "application/octet-stream",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      format: normalizeResultExportFormat(exportFormat),
+      settings: normalizeResultExportSettings(exportFormat, exportSettings),
+    }),
+  });
 
   if (!response.ok) {
     throw new Error(
@@ -4785,7 +4811,9 @@ async function saveQueryResultExportToLocalWorkspace(job, exportFormat, options 
     return;
   }
 
-  const exported = await fetchQueryResultExportBlob(job, exportFormat);
+  const normalizedFormat = normalizeResultExportFormat(exportFormat);
+  const exportSettings = normalizeResultExportSettings(normalizedFormat, options.exportSettings);
+  const exported = await fetchQueryResultExportBlob(job, normalizedFormat, exportSettings);
   const timestamp = new Date().toISOString();
   const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(options.folderPath);
   const fileName = String(options.fileName || exported.fileName || "").trim() || exported.fileName;
@@ -4794,7 +4822,7 @@ async function saveQueryResultExportToLocalWorkspace(job, exportFormat, options 
     id: `local-workspace-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
     fileName,
     folderPath: normalizedFolderPath,
-    exportFormat: String(exportFormat || "").trim().toLowerCase(),
+    exportFormat: normalizedFormat,
     mimeType: exported.blob.type,
     sizeBytes: exported.blob.size,
     createdAt: timestamp,
@@ -4803,8 +4831,8 @@ async function saveQueryResultExportToLocalWorkspace(job, exportFormat, options 
     cellId: String(job.cellId || "").trim(),
     columnCount: Array.isArray(job.columns) ? job.columns.length : 0,
     rowCount: Array.isArray(job.rows) ? job.rows.length : 0,
-    csvDelimiter: String(exportFormat || "").trim().toLowerCase() === "csv" ? "," : "",
-    csvHasHeader: String(exportFormat || "").trim().toLowerCase() === "csv",
+    csvDelimiter: normalizedFormat === "csv" ? String(exportSettings.delimiter || ",") : "",
+    csvHasHeader: normalizedFormat === "csv" ? exportSettings.includeHeader !== false : true,
     blob: exported.blob,
   });
 
@@ -4835,8 +4863,8 @@ async function saveQueryResultExportToLocalWorkspace(job, exportFormat, options 
   }
 
   await showMessageDialog({
-    title: "Results saved to Local Workspace",
-    copy: `${storedEntry.fileName} was saved to ${localWorkspaceDisplayPath(storedEntry.folderPath)} using IndexedDB in this browser.`,
+    title: "Results saved to Local Workspace (IndexDB)",
+    copy: `${storedEntry.fileName} was saved to ${localWorkspaceDisplayPath(storedEntry.folderPath)} in this browser.`,
   });
 }
 
@@ -5448,10 +5476,15 @@ function syncResultExportSelectionState() {
       "Select a bucket or folder from the Shared Workspace explorer.";
   }
 
-  const formatCopy = dialog.querySelector("[data-result-export-format-copy]");
-  if (formatCopy) {
-    formatCopy.textContent = `Format: ${String(resultExportDialogState.exportFormat || "").toUpperCase()}`;
+  const formatSelect = dialog.querySelector("[data-export-format-select]");
+  if (formatSelect instanceof HTMLSelectElement && formatSelect.value !== resultExportDialogState.exportFormat) {
+    formatSelect.value = resultExportDialogState.exportFormat;
   }
+  renderResultExportSettings(
+    dialog,
+    resultExportDialogState.exportFormat,
+    resultExportDialogState.exportSettings
+  );
 
   const fileNameInput = resultExportFileNameInput();
   if (fileNameInput && fileNameInput.value !== resultExportDialogState.fileName) {
@@ -5471,7 +5504,7 @@ function syncResultExportSelectionState() {
       !String(resultExportDialogState.fileName || "").trim();
     submitButton.textContent = resultExportDialogState.saving
       ? "Saving..."
-      : "Save to Shared Workspace";
+      : "Save to Shared Workspace (S3)";
   }
 
   dialog.querySelectorAll("[data-s3-explorer-node]").forEach((node) => {
@@ -5495,6 +5528,15 @@ function setResultExportDialogBusy(busy) {
     if (fileNameInput instanceof HTMLInputElement) {
       fileNameInput.disabled = busy;
     }
+    const formatSelect = dialog.querySelector("[data-export-format-select]");
+    if (formatSelect instanceof HTMLSelectElement) {
+      formatSelect.disabled = busy;
+    }
+    dialog.querySelectorAll("[data-export-setting]").forEach((node) => {
+      if (node instanceof HTMLInputElement || node instanceof HTMLSelectElement) {
+        node.disabled = busy;
+      }
+    });
   }
   syncResultExportSelectionState();
 }
@@ -5596,6 +5638,10 @@ async function saveResultExportToS3() {
     return;
   }
 
+  resultExportDialogState.exportSettings = normalizeResultExportSettings(
+    resultExportDialogState.exportFormat,
+    readResultExportSettings(dialog, resultExportDialogState.exportFormat)
+  );
   setResultExportDialogBusy(true);
   try {
     const payload = await fetchJsonOrThrow(
@@ -5611,6 +5657,7 @@ async function saveResultExportToS3() {
           bucket: resultExportDialogState.selectedBucket,
           prefix: resultExportDialogState.selectedPrefix,
           fileName: String(resultExportDialogState.fileName || "").trim(),
+          settings: resultExportDialogState.exportSettings,
         }),
       }
     );
@@ -5626,25 +5673,37 @@ async function saveResultExportToS3() {
   }
 }
 
-async function openResultExportDialog(job, exportFormat) {
+function updateResultExportFormat(value) {
+  resultExportDialogState.exportFormat = normalizeResultExportFormat(value);
+  resultExportDialogState.exportSettings = defaultResultExportSettings(resultExportDialogState.exportFormat);
+  resultExportDialogState.fileName = ensureResultExportFileNameExtension(
+    resultExportDialogState.fileName,
+    resultExportDialogState.exportFormat,
+    "query-result"
+  );
+  syncResultExportSelectionState();
+}
+
+async function openResultExportDialog(job, exportFormat = "csv") {
   if (!job?.jobId || !job?.columns?.length) {
     return;
   }
 
   const dialog = ensureResultExportDialog();
   resultExportDialogState.jobId = job.jobId;
-  resultExportDialogState.exportFormat = String(exportFormat || "").trim().toLowerCase();
+  resultExportDialogState.exportFormat = normalizeResultExportFormat(exportFormat);
+  resultExportDialogState.exportSettings = defaultResultExportSettings(resultExportDialogState.exportFormat);
   resultExportDialogState.fileName = defaultQueryResultExportFilename(job, resultExportDialogState.exportFormat);
   resultExportDialogState.saving = false;
 
   const titleNode = dialog.querySelector("[data-result-export-title]");
   const copyNode = dialog.querySelector("[data-result-export-copy]");
   if (titleNode) {
-    titleNode.textContent = `Save Results in ${resultExportDialogState.exportFormat.toUpperCase()} Format to Shared Workspace`;
+    titleNode.textContent = "Save Results in Shared Workspace (S3) ...";
   }
   if (copyNode) {
     copyNode.textContent =
-      "Choose a Shared Workspace bucket or folder, create new locations if needed, and provide the file name to save.";
+      "Choose a Shared Workspace (S3) location, then select the export format and any format-specific settings.";
   }
 
   syncResultExportSelectionState();
@@ -5655,20 +5714,120 @@ async function openResultExportDialog(job, exportFormat) {
   });
 }
 
-async function downloadQueryResultExport(job, exportFormat) {
+function resultDownloadFileNameInput() {
+  return resultDownloadDialog()?.querySelector("[data-result-download-file-name]") ?? null;
+}
+
+function resultDownloadSubmitButton() {
+  return resultDownloadDialog()?.querySelector("[data-result-download-submit]") ?? null;
+}
+
+function syncResultDownloadDialogState() {
+  const dialog = resultDownloadDialog();
+  if (!dialog) {
+    return;
+  }
+
+  const fileNameInput = resultDownloadFileNameInput();
+  if (fileNameInput instanceof HTMLInputElement && fileNameInput.value !== resultDownloadDialogState.fileName) {
+    fileNameInput.value = resultDownloadDialogState.fileName;
+  }
+
+  const formatSelect = dialog.querySelector("[data-export-format-select]");
+  if (formatSelect instanceof HTMLSelectElement && formatSelect.value !== resultDownloadDialogState.exportFormat) {
+    formatSelect.value = resultDownloadDialogState.exportFormat;
+  }
+
+  renderResultExportSettings(
+    dialog,
+    resultDownloadDialogState.exportFormat,
+    resultDownloadDialogState.exportSettings
+  );
+
+  const submitButton = resultDownloadSubmitButton();
+  if (submitButton instanceof HTMLButtonElement) {
+    submitButton.disabled =
+      resultDownloadDialogState.downloading || !String(resultDownloadDialogState.fileName || "").trim();
+    submitButton.textContent = resultDownloadDialogState.downloading
+      ? "Downloading..."
+      : "Download Results";
+  }
+}
+
+function setResultDownloadDialogBusy(busy) {
+  resultDownloadDialogState.downloading = busy;
+  const dialog = resultDownloadDialog();
+  if (dialog) {
+    const fileNameInput = resultDownloadFileNameInput();
+    if (fileNameInput instanceof HTMLInputElement) {
+      fileNameInput.disabled = busy;
+    }
+    const formatSelect = dialog.querySelector("[data-export-format-select]");
+    if (formatSelect instanceof HTMLSelectElement) {
+      formatSelect.disabled = busy;
+    }
+    dialog.querySelectorAll("[data-export-setting]").forEach((node) => {
+      if (node instanceof HTMLInputElement || node instanceof HTMLSelectElement) {
+        node.disabled = busy;
+      }
+    });
+  }
+  syncResultDownloadDialogState();
+}
+
+function updateResultDownloadFormat(value) {
+  resultDownloadDialogState.exportFormat = normalizeResultExportFormat(value);
+  resultDownloadDialogState.exportSettings = defaultResultExportSettings(resultDownloadDialogState.exportFormat);
+  resultDownloadDialogState.fileName = ensureResultExportFileNameExtension(
+    resultDownloadDialogState.fileName,
+    resultDownloadDialogState.exportFormat,
+    "query-result"
+  );
+  syncResultDownloadDialogState();
+}
+
+async function openResultDownloadDialog(job, exportFormat = "csv") {
   if (!job?.jobId || !job?.columns?.length) {
     return;
   }
 
-  const downloadUrl =
-    `/api/query-jobs/${encodeURIComponent(job.jobId)}/export/download?format=${encodeURIComponent(exportFormat)}`;
-  const anchor = document.createElement("a");
-  anchor.href = downloadUrl;
-  anchor.download = defaultQueryResultExportFilename(job, exportFormat);
-  anchor.style.display = "none";
-  document.body.appendChild(anchor);
-  anchor.click();
-  anchor.remove();
+  const dialog = ensureResultDownloadDialog();
+  resultDownloadDialogState.jobId = job.jobId;
+  resultDownloadDialogState.exportFormat = normalizeResultExportFormat(exportFormat);
+  resultDownloadDialogState.exportSettings = defaultResultExportSettings(resultDownloadDialogState.exportFormat);
+  resultDownloadDialogState.fileName = defaultQueryResultExportFilename(job, resultDownloadDialogState.exportFormat);
+  resultDownloadDialogState.downloading = false;
+
+  const titleNode = dialog.querySelector("[data-result-download-title]");
+  const copyNode = dialog.querySelector("[data-result-download-copy]");
+  if (titleNode) {
+    titleNode.textContent = "Download Results as ...";
+  }
+  if (copyNode) {
+    copyNode.textContent =
+      "Choose the export format, adjust any format-specific settings, and confirm the download file name.";
+  }
+
+  syncResultDownloadDialogState();
+  dialog.showModal();
+}
+
+async function downloadQueryResultExport(job, exportFormat, exportSettings = {}, fileName = "") {
+  if (!job?.jobId || !job?.columns?.length) {
+    return;
+  }
+
+  const normalizedFormat = normalizeResultExportFormat(exportFormat);
+  const normalizedSettings = normalizeResultExportSettings(normalizedFormat, exportSettings);
+  const exported = await fetchQueryResultExportBlob(job, normalizedFormat, normalizedSettings);
+  downloadBlobFile(
+    ensureResultExportFileNameExtension(
+      String(fileName || exported.fileName || "").trim(),
+      normalizedFormat,
+      "query-result"
+    ),
+    exported.blob
+  );
 }
 
 async function loadNotebookWorkspace(notebookId) {
@@ -5810,27 +5969,69 @@ document.body.addEventListener(
       const job = queryJobById(localWorkspaceSaveDialogState.jobId);
       if (!job) {
         await showMessageDialog({
-          title: "Local Workspace save unavailable",
-          copy: "Run the cell again so the current query result can be saved to Local Workspace.",
+          title: "Local Workspace (IndexDB) save unavailable",
+          copy: "Run the cell again so the current query result can be saved to Local Workspace (IndexDB).",
         });
         return;
       }
 
       try {
+        updateLocalWorkspaceSaveExportSettingsFromDialog();
         setLocalWorkspaceSaveDialogBusy(true);
         await saveQueryResultExportToLocalWorkspace(job, localWorkspaceSaveDialogState.exportFormat, {
           fileName: localWorkspaceSaveDialogState.fileName,
           folderPath: localWorkspaceSaveDialogState.folderPath,
+          exportSettings: localWorkspaceSaveDialogState.exportSettings,
         });
         closeDialog(localWorkspaceSaveDialog(), "confirm");
       } catch (error) {
         console.error("Failed to save the query result to Local Workspace.", error);
         await showMessageDialog({
-          title: "Local Workspace save failed",
-          copy: error instanceof Error ? error.message : "The query result could not be saved to Local Workspace.",
+          title: "Local Workspace (IndexDB) save failed",
+          copy:
+            error instanceof Error
+              ? error.message
+              : "The query result could not be saved to Local Workspace (IndexDB).",
         });
       } finally {
         setLocalWorkspaceSaveDialogBusy(false);
+      }
+      return;
+    }
+
+    const resultDownloadForm = event.target.closest("[data-result-download-form]");
+    if (resultDownloadForm) {
+      event.preventDefault();
+      const job = queryJobById(resultDownloadDialogState.jobId);
+      if (!job) {
+        await showMessageDialog({
+          title: "Result download unavailable",
+          copy: "Run the cell again so the current query result can be downloaded.",
+        });
+        return;
+      }
+
+      try {
+        resultDownloadDialogState.exportSettings = normalizeResultExportSettings(
+          resultDownloadDialogState.exportFormat,
+          readResultExportSettings(resultDownloadDialog(), resultDownloadDialogState.exportFormat)
+        );
+        setResultDownloadDialogBusy(true);
+        await downloadQueryResultExport(
+          job,
+          resultDownloadDialogState.exportFormat,
+          resultDownloadDialogState.exportSettings,
+          resultDownloadDialogState.fileName
+        );
+        closeDialog(resultDownloadDialog(), "confirm");
+      } catch (error) {
+        console.error("Failed to download the query result export.", error);
+        await showMessageDialog({
+          title: "Result download failed",
+          copy: error instanceof Error ? error.message : "The query result could not be downloaded.",
+        });
+      } finally {
+        setResultDownloadDialogBusy(false);
       }
       return;
     }
@@ -6019,6 +6220,38 @@ document.body.addEventListener("input", (event) => {
     return;
   }
 
+  const resultDownloadFileName = event.target.closest("[data-result-download-file-name]");
+  if (resultDownloadFileName) {
+    resultDownloadDialogState.fileName = resultDownloadFileName.value;
+    syncResultDownloadDialogState();
+    return;
+  }
+
+  const exportSettingInput = event.target.closest("[data-export-setting]");
+  if (exportSettingInput) {
+    const sharedDialog = resultExportDialog();
+    const localDialog = localWorkspaceSaveDialog();
+    const downloadDialog = resultDownloadDialog();
+    if (sharedDialog?.contains(exportSettingInput)) {
+      resultExportDialogState.exportSettings = normalizeResultExportSettings(
+        resultExportDialogState.exportFormat,
+        readResultExportSettings(sharedDialog, resultExportDialogState.exportFormat)
+      );
+      return;
+    }
+    if (localDialog?.contains(exportSettingInput)) {
+      updateLocalWorkspaceSaveExportSettingsFromDialog();
+      return;
+    }
+    if (downloadDialog?.contains(exportSettingInput)) {
+      resultDownloadDialogState.exportSettings = normalizeResultExportSettings(
+        resultDownloadDialogState.exportFormat,
+        readResultExportSettings(downloadDialog, resultDownloadDialogState.exportFormat)
+      );
+      return;
+    }
+  }
+
   const localWorkspaceFolderPathInput = event.target.closest("[data-local-workspace-folder-path]");
   if (localWorkspaceFolderPathInput) {
     updateLocalWorkspaceSaveFolderPath(localWorkspaceFolderPathInput.value);
@@ -6073,8 +6306,52 @@ document.body.addEventListener("change", (event) => {
     return;
   }
 
-  if (!handleNotebookWorkspaceChange(event)) {
+  if (handleNotebookWorkspaceChange(event)) {
     return;
+  }
+
+  const exportFormatSelect = event.target.closest("[data-export-format-select]");
+  if (exportFormatSelect instanceof HTMLSelectElement) {
+    const sharedDialog = resultExportDialog();
+    const localDialog = localWorkspaceSaveDialog();
+    const downloadDialog = resultDownloadDialog();
+    if (sharedDialog?.contains(exportFormatSelect)) {
+      updateResultExportFormat(exportFormatSelect.value);
+      return;
+    }
+    if (localDialog?.contains(exportFormatSelect)) {
+      updateLocalWorkspaceSaveExportFormat(exportFormatSelect.value);
+      return;
+    }
+    if (downloadDialog?.contains(exportFormatSelect)) {
+      updateResultDownloadFormat(exportFormatSelect.value);
+      return;
+    }
+  }
+
+  const exportSettingInput = event.target.closest("[data-export-setting]");
+  if (exportSettingInput) {
+    const sharedDialog = resultExportDialog();
+    const localDialog = localWorkspaceSaveDialog();
+    const downloadDialog = resultDownloadDialog();
+    if (sharedDialog?.contains(exportSettingInput)) {
+      resultExportDialogState.exportSettings = normalizeResultExportSettings(
+        resultExportDialogState.exportFormat,
+        readResultExportSettings(sharedDialog, resultExportDialogState.exportFormat)
+      );
+      return;
+    }
+    if (localDialog?.contains(exportSettingInput)) {
+      updateLocalWorkspaceSaveExportSettingsFromDialog();
+      return;
+    }
+    if (downloadDialog?.contains(exportSettingInput)) {
+      resultDownloadDialogState.exportSettings = normalizeResultExportSettings(
+        resultDownloadDialogState.exportFormat,
+        readResultExportSettings(downloadDialog, resultDownloadDialogState.exportFormat)
+      );
+      return;
+    }
   }
 });
 

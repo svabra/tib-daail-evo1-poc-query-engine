@@ -36,6 +36,8 @@ def resolve_csv_s3_file_name(file_name: str, storage_format: str) -> str:
         return normalized_file_name
 
     normalized_stem = Path(normalized_file_name).stem.strip() or "csv_import"
+    if normalized_storage_format == "json":
+        return f"{normalized_stem}.jsonl"
     return f"{normalized_stem}.{normalized_storage_format}"
 
 

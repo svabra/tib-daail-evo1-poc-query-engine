@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
 import sys
+from tempfile import TemporaryDirectory
 from unittest import TestCase
+
+from openpyxl import Workbook
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -51,6 +55,13 @@ def make_settings() -> Settings:
     )
 
 
+def make_temp_settings(database_path: Path) -> Settings:
+    settings = make_settings()
+    settings.duckdb_database = database_path
+    settings.duckdb_extension_directory = database_path.parent / "duckdb-ext"
+    return settings
+
+
 class FakeS3Client:
     def list_objects_v2(self, **kwargs):
         bucket = kwargs["Bucket"]
@@ -90,3 +101,73 @@ class CsvS3DiscoveryTests(TestCase):
         self.assertTrue(spec.csv_has_header)
         self.assertIn("HEADER = TRUE", spec.query_sql)
         self.assertIn("DELIM = ','", spec.query_sql)
+
+    def test_discovered_xml_and_xlsx_specs_materialize_to_queryable_csv_views(self) -> None:
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.append(["record_id", "tax_office"])
+        worksheet.append([1, "Zurich Central Tax Office"])
+        output = BytesIO()
+        workbook.save(output)
+        workbook.close()
+
+        class QueryableFileClient:
+            def list_objects_v2(self, **kwargs):
+                bucket = kwargs["Bucket"]
+                if bucket != "vat-smoke-test":
+                    return {"Contents": [], "IsTruncated": False}
+                return {
+                    "Contents": [
+                        {"Key": "incoming/tax-office.xml"},
+                        {"Key": "incoming/tax-office.xlsx"},
+                    ],
+                    "IsTruncated": False,
+                }
+
+            def head_object(self, **kwargs):
+                key = kwargs["Key"]
+                if key.endswith(".xml"):
+                    return {
+                        "ETag": '"xml123"',
+                        "ContentLength": 144,
+                        "Metadata": {},
+                    }
+                if key.endswith(".xlsx"):
+                    return {
+                        "ETag": '"xlsx123"',
+                        "ContentLength": 256,
+                        "Metadata": {},
+                    }
+                raise AssertionError("Unexpected head_object request.")
+
+            def get_object(self, **kwargs):
+                key = kwargs["Key"]
+                if key.endswith(".xml"):
+                    return {
+                        "Body": BytesIO(
+                            b"<rows><row><record_id>1</record_id><tax_office>Zurich Central Tax Office</tax_office></row></rows>"
+                        )
+                    }
+                if key.endswith(".xlsx"):
+                    return {"Body": BytesIO(output.getvalue())}
+                raise AssertionError("Unexpected get_object request.")
+
+        with TemporaryDirectory() as temp_dir:
+            discoverer = S3DataSourceDiscoverer(
+                make_temp_settings(Path(temp_dir) / "workspace.duckdb")
+            )
+
+            specs = discoverer._build_desired_specs(QueryableFileClient(), {"vat-smoke-test"})
+
+            xml_spec = next(spec for spec in specs.values() if spec.display_name == "tax-office.xml")
+            self.assertEqual(xml_spec.object_format, "xml")
+            self.assertEqual(xml_spec.display_name, "tax-office.xml")
+            self.assertEqual(xml_spec.size_bytes, 144)
+            self.assertIn("read_csv_auto(", xml_spec.query_sql)
+            self.assertTrue((Path(temp_dir) / "s3-query-sources").exists())
+
+            xlsx_spec = next(spec for spec in specs.values() if spec.display_name == "tax-office.xlsx")
+            self.assertEqual(xlsx_spec.object_format, "xlsx")
+            self.assertEqual(xlsx_spec.display_name, "tax-office.xlsx")
+            self.assertEqual(xlsx_spec.size_bytes, 256)
+            self.assertIn("read_csv_auto(", xlsx_spec.query_sql)

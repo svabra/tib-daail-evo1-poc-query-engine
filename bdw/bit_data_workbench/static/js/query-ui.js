@@ -174,7 +174,7 @@ export function createQueryUi(helpers) {
     const sharedWorkspaceTooltip =
       "Saves into the configured Shared Workspace MinIO / S3 bucket.";
     const localWorkspaceTooltip =
-      "Saves in this browser's Local Workspace using IndexedDB.";
+      "Saves in this browser's Local Workspace (IndexDB).";
     return `
       <details
         class="workspace-action-menu result-action-menu"
@@ -193,51 +193,24 @@ export function createQueryUi(helpers) {
           <button
             type="button"
             class="workspace-action-menu-item"
-            data-result-export-s3="parquet"
+            data-result-export-local=""
             data-result-job-id="${escapeHtml(normalizedJobId)}"
-            title="${escapeHtml(sharedWorkspaceTooltip)}"
-          >Save Results in Parquet Format to Shared Workspace ...</button>
+            title="${escapeHtml(localWorkspaceTooltip)}"
+          >Save Results in Local Workspace (IndexDB) ...</button>
           <button
             type="button"
             class="workspace-action-menu-item"
-            data-result-export-s3="json"
+            data-result-export-s3=""
             data-result-job-id="${escapeHtml(normalizedJobId)}"
             title="${escapeHtml(sharedWorkspaceTooltip)}"
-          >Save Results in JSON Format to Shared Workspace ...</button>
+          >Save Results in Shared Workspace (S3) ...</button>
           <div class="workspace-action-menu-separator"></div>
           <button
             type="button"
             class="workspace-action-menu-item"
-            data-result-export-local="parquet"
+            data-result-export-download=""
             data-result-job-id="${escapeHtml(normalizedJobId)}"
-            title="${escapeHtml(localWorkspaceTooltip)}"
-          >Save Results in Parquet Format to Local Workspace</button>
-          <button
-            type="button"
-            class="workspace-action-menu-item"
-            data-result-export-local="json"
-            data-result-job-id="${escapeHtml(normalizedJobId)}"
-            title="${escapeHtml(localWorkspaceTooltip)}"
-          >Save Results in JSON Format to Local Workspace</button>
-          <div class="workspace-action-menu-separator"></div>
-          <button
-            type="button"
-            class="workspace-action-menu-item"
-            data-result-export-download="parquet"
-            data-result-job-id="${escapeHtml(normalizedJobId)}"
-          >Download Results in Parquet Format</button>
-          <button
-            type="button"
-            class="workspace-action-menu-item"
-            data-result-export-download="json"
-            data-result-job-id="${escapeHtml(normalizedJobId)}"
-          >Download Results in JSON Format</button>
-          <button
-            type="button"
-            class="workspace-action-menu-item"
-            data-result-export-download="csv"
-            data-result-job-id="${escapeHtml(normalizedJobId)}"
-          >Download Results in CSV Format</button>
+          >Download Results as ...</button>
         </div>
       </details>
     `;

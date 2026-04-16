@@ -39,7 +39,7 @@ export function createLocalWorkspacePathUtils({ folderStorageKey, relationPrefix
     const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(folderPath);
     const folderSuffix = normalizedFolderPath ? `${normalizedFolderPath}/` : "";
     const normalizedFileName = String(fileName || "").trim();
-    return `Local Workspace / ${folderSuffix}${normalizedFileName}`.trim();
+    return `Local Workspace (IndexDB) / ${folderSuffix}${normalizedFileName}`.trim();
   }
 
   function localWorkspaceFolderName(folderPath = "") {

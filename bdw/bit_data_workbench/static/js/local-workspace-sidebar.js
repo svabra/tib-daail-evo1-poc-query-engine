@@ -1,3 +1,5 @@
+import { truncateSourceNavigationLabel } from "./source-navigation-labels.js";
+
 export function createLocalWorkspaceSidebarUi(helpers) {
   const {
     allLocalWorkspaceFolderPaths,
@@ -58,6 +60,7 @@ export function createLocalWorkspaceSidebarUi(helpers) {
     const formatLabel = String(entry.exportFormat || "file").toUpperCase();
     const displayPath = localWorkspaceDisplayPath(entry.folderPath, entry.fileName);
     const sizeLabel = formatByteCount(entry.sizeBytes);
+    const truncatedFileName = truncateSourceNavigationLabel(entry.fileName);
 
     return `
       <li
@@ -88,7 +91,7 @@ export function createLocalWorkspaceSidebarUi(helpers) {
             <path d="M3.2 10.7c1.5-1.7 3.1-2.6 4.8-2.6s3.3.9 4.8 2.6"></path>
             <circle cx="8" cy="10.2" r="1"></circle>
           </svg>
-          <span>${escapeHtml(entry.fileName)}</span>
+          <span title="${escapeHtml(entry.fileName)}">${escapeHtml(truncatedFileName)}</span>
         </span>
         <span class="source-object-meta">
           <small>${escapeHtml(formatLabel)}</small>
@@ -134,7 +137,7 @@ export function createLocalWorkspaceSidebarUi(helpers) {
                 data-move-local-workspace-object
                 title="Move the Local Workspace file"
               >
-                Move local file
+                Move ...
               </button>
               <button
                 type="button"
@@ -142,7 +145,7 @@ export function createLocalWorkspaceSidebarUi(helpers) {
                 data-download-local-workspace-object
                 title="Download the Local Workspace file"
               >
-                Download local file
+                Download
               </button>
               <div class="workspace-action-menu-separator" aria-hidden="true"></div>
               <button
@@ -151,7 +154,7 @@ export function createLocalWorkspaceSidebarUi(helpers) {
                 data-delete-local-workspace-object
                 title="Delete the Local Workspace file"
               >
-                Delete local file
+                Delete ...
               </button>
             </div>
           </details>
@@ -175,6 +178,7 @@ export function createLocalWorkspaceSidebarUi(helpers) {
 
   function localWorkspaceFolderMarkup(node, openPaths = new Set()) {
     const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(node.path);
+    const truncatedFolderName = truncateSourceNavigationLabel(node.name);
     const childFolderMarkup = Array.from(node.folders.values())
       .sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }))
       .map((childNode) => localWorkspaceFolderMarkup(childNode, openPaths))
@@ -203,7 +207,7 @@ export function createLocalWorkspaceSidebarUi(helpers) {
             <svg class="source-icon source-icon-schema" viewBox="0 0 16 16" aria-hidden="true">
               <path d="M2.2 4.1a1.1 1.1 0 0 1 1.1-1.1h3l1.2 1.5h5.2a1.1 1.1 0 0 1 1.1 1.1v5.9a1.1 1.1 0 0 1-1.1 1.1H3.3a1.1 1.1 0 0 1-1.1-1.1z"></path>
             </svg>
-            <span>${escapeHtml(node.name)}</span>
+            <span title="${escapeHtml(node.name)}">${escapeHtml(truncatedFolderName)}</span>
           </span>
           <span class="source-schema-meta">
             <small>${escapeHtml(localWorkspaceFolderSummaryLabel(node))}</small>

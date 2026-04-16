@@ -134,6 +134,36 @@ async def run_query_and_assert_result(page, timeout_ms: int) -> str:
             "The query workbench rendered an error panel for the smoke query."
         )
 
+    export_menu = cell.locator("[data-result-action-menu]")
+    await export_menu.wait_for(state="visible", timeout=timeout_ms)
+    export_text = (await export_menu.text_content() or "").strip()
+    if "Save Results in Local Workspace (IndexDB) ..." not in export_text:
+        raise RuntimeError(
+            "The query export menu does not expose the Local Workspace (IndexDB) export action."
+        )
+    if "Save Results in Shared Workspace (S3) ..." not in export_text:
+        raise RuntimeError(
+            "The query export menu does not expose the Shared Workspace (S3) export action."
+        )
+    if "Download Results as ..." not in export_text:
+        raise RuntimeError(
+            "The query export menu does not expose the download action."
+        )
+
+    await export_menu.locator("summary").click()
+    await export_menu.locator('[data-result-export-local]').click()
+    local_dialog = page.locator("[data-local-workspace-save-dialog]")
+    await local_dialog.wait_for(state="visible", timeout=timeout_ms)
+    format_options = await local_dialog.locator("[data-export-format-select] option").all_text_contents()
+    expected_options = {"CSV", "JSON Array", "JSONL", "Parquet", "XML", "Excel"}
+    if not expected_options.issubset(set(option.strip() for option in format_options)):
+        raise RuntimeError(f"Unexpected export format options: {format_options!r}")
+    await local_dialog.locator('[data-export-format-select]').select_option("csv")
+    delimiter_label = (await local_dialog.text_content() or "").strip()
+    if "Delimiter" not in delimiter_label:
+        raise RuntimeError("CSV export settings were not rendered in the Local Workspace export dialog.")
+    await local_dialog.locator("[data-modal-cancel]").click()
+
     return job_id
 
 

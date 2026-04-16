@@ -10,10 +10,12 @@ import duckdb
 
 from ..config import Settings
 from ..models import SourceField
+from .queryable_files import (
+    MaterializedQueryableFile,
+    materialize_queryable_file,
+    normalize_queryable_file_format,
+)
 from .sql_utils import qualified_name, sql_identifier, sql_literal
-
-
-SUPPORTED_LOCAL_WORKSPACE_QUERY_FORMATS = {"csv", "json", "parquet"}
 
 
 def _normalized_identifier(
@@ -31,36 +33,6 @@ def _normalized_identifier(
     normalized = normalized[:max_base_length].strip("_") or prefix
     digest = hashlib.sha1(str(value or "").encode("utf-8")).hexdigest()[:10]
     return f"{normalized}_{digest}"
-
-
-def normalize_local_workspace_query_format(
-    *,
-    file_name: str,
-    export_format: str = "",
-    mime_type: str = "",
-) -> str:
-    normalized_export_format = str(export_format or "").strip().lower()
-    if normalized_export_format in SUPPORTED_LOCAL_WORKSPACE_QUERY_FORMATS:
-        return normalized_export_format
-
-    suffix = Path(str(file_name or "").strip()).suffix.lower().lstrip(".")
-    if suffix in SUPPORTED_LOCAL_WORKSPACE_QUERY_FORMATS:
-        return suffix
-    if suffix in {"jsonl", "ndjson"}:
-        return "json"
-
-    normalized_mime_type = str(mime_type or "").strip().lower()
-    if "csv" in normalized_mime_type:
-        return "csv"
-    if "json" in normalized_mime_type:
-        return "json"
-    if "parquet" in normalized_mime_type:
-        return "parquet"
-
-    raise ValueError(
-        "Local Workspace query support currently handles CSV, JSON, and Parquet files only."
-    )
-
 
 @dataclass(slots=True)
 class LocalWorkspaceQuerySourceSyncResult:
@@ -119,15 +91,16 @@ class LocalWorkspaceQuerySourceManager:
         table_name = self._table_name(normalized_entry_id)
         relation = f"{schema_name}.{table_name}"
 
-        local_path = self._query_file_path(
-            client_id=normalized_client_id,
-            entry_id=normalized_entry_id,
+        client_root = self._client_root(normalized_client_id)
+        client_root.mkdir(parents=True, exist_ok=True)
+        self._remove_stale_entry_files(client_root, table_name)
+        materialized = materialize_queryable_file(
+            root=client_root,
+            base_name=table_name,
             file_name=normalized_file_name,
-            query_format=query_format,
+            source_format=query_format,
+            file_bytes=file_bytes,
         )
-        local_path.parent.mkdir(parents=True, exist_ok=True)
-        self._remove_stale_entry_files(local_path.parent, table_name, keep_path=local_path)
-        local_path.write_bytes(file_bytes)
 
         relation_name = qualified_name(schema_name, table_name)
         conn.execute(f"CREATE SCHEMA IF NOT EXISTS {sql_identifier(schema_name)}")
@@ -135,7 +108,7 @@ class LocalWorkspaceQuerySourceManager:
         conn.execute(f"DROP TABLE IF EXISTS {relation_name}")
         conn.execute(
             f"CREATE VIEW {relation_name} AS SELECT * FROM "
-            f"{self._reader_sql(local_path, query_format, csv_delimiter, csv_has_header)}"
+            f"{self._reader_sql(materialized, csv_delimiter, csv_has_header)}"
         )
 
         return LocalWorkspaceQuerySourceSyncResult(
@@ -192,30 +165,15 @@ class LocalWorkspaceQuerySourceManager:
     def _client_root(self, client_id: str) -> Path:
         return self._query_root() / self._schema_name(client_id)
 
-    def _query_file_path(
-        self,
-        *,
-        client_id: str,
-        entry_id: str,
-        file_name: str,
-        query_format: str,
-    ) -> Path:
-        suffix = Path(file_name).suffix if Path(file_name).suffix else f".{query_format}"
-        return self._client_root(client_id) / f"{self._table_name(entry_id)}{suffix.lower()}"
-
     def _remove_stale_entry_files(
         self,
         client_root: Path,
         table_name: str,
-        *,
-        keep_path: Path | None = None,
     ) -> None:
         if not client_root.exists():
             return
 
         for candidate in client_root.glob(f"{table_name}.*"):
-            if keep_path is not None and candidate == keep_path:
-                continue
             candidate.unlink(missing_ok=True)
 
     def _remove_empty_directories(self, root: Path) -> None:
@@ -230,11 +188,12 @@ class LocalWorkspaceQuerySourceManager:
 
     def _reader_sql(
         self,
-        local_path: Path,
-        query_format: str,
+        materialized: MaterializedQueryableFile,
         csv_delimiter: str,
         csv_has_header: bool,
     ) -> str:
+        local_path = materialized.local_path
+        query_format = materialized.reader_format
         if query_format == "parquet":
             return f"read_parquet({sql_literal(local_path.as_posix())})"
         if query_format == "json":
@@ -267,3 +226,16 @@ class LocalWorkspaceQuerySourceManager:
             [schema_name, table_name],
         ).fetchall()
         return [SourceField(name=column_name, data_type=data_type) for column_name, data_type in rows]
+
+
+def normalize_local_workspace_query_format(
+    *,
+    file_name: str,
+    export_format: str = "",
+    mime_type: str = "",
+) -> str:
+    return normalize_queryable_file_format(
+        file_name=file_name,
+        export_format=export_format,
+        mime_type=mime_type,
+    )

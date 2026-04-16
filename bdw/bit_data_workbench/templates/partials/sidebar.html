@@ -199,7 +199,7 @@
       <div class="source-tree">
         {% for catalog in catalogs %}
           {% set catalog_source_id = catalog.connection_source_id or catalog.name %}
-          {% set catalog_display_name = "Shared Workspace (S3)" if catalog_source_id == "workspace.s3" else "Local Workspace" if catalog_source_id == "workspace.local" else catalog.name %}
+          {% set catalog_display_name = "Shared Workspace (S3)" if catalog_source_id == "workspace.s3" else "Local Workspace (IndexDB)" if catalog_source_id == "workspace.local" else catalog.name %}
           <details
             class="source-catalog"
             data-source-catalog
@@ -303,15 +303,15 @@
                 {% if catalog.name == "workspace" %}data-source-bucket="{{ schema.label or schema.name }}"{% endif %}
               >
                 <summary data-searchable-item="{{ schema.label or schema.name }}">
-                  <span class="source-node-label">
-                    <svg class="source-icon source-icon-schema" viewBox="0 0 16 16" aria-hidden="true">
-                      <rect x="1.6" y="1.8" width="3.7" height="3.7" rx="0.7"></rect>
-                      <rect x="10.7" y="1.8" width="3.7" height="3.7" rx="0.7"></rect>
-                      <rect x="10.7" y="10.5" width="3.7" height="3.7" rx="0.7"></rect>
-                      <path d="M5.3 3.7h2.8a2 2 0 0 1 2 2v1.5"></path>
-                      <path d="M10.1 8H7.4a2 2 0 0 0-2 2v.5"></path>
-                    </svg>
-                    <span>{{ schema.label or schema.name }}</span>
+                <span class="source-node-label">
+                  <svg class="source-icon source-icon-schema" viewBox="0 0 16 16" aria-hidden="true">
+                    <rect x="1.6" y="1.8" width="3.7" height="3.7" rx="0.7"></rect>
+                    <rect x="10.7" y="1.8" width="3.7" height="3.7" rx="0.7"></rect>
+                    <rect x="10.7" y="10.5" width="3.7" height="3.7" rx="0.7"></rect>
+                    <path d="M5.3 3.7h2.8a2 2 0 0 1 2 2v1.5"></path>
+                    <path d="M10.1 8H7.4a2 2 0 0 0-2 2v.5"></path>
+                  </svg>
+                    <span title="{{ schema.label or schema.name }}">{{ (schema.label or schema.name) | truncate_source_navigation_label }}</span>
                   </span>
                   {% if catalog.name == "workspace" %}
                     <span class="source-schema-meta">
@@ -345,12 +345,14 @@
                     {% else %}
                       {% set source_option_id = catalog.name %}
                     {% endif %}
+                    {% set source_object_display_name = source_object.display_name or source_object.name %}
                     <li
                       class="source-object source-object-{{ source_object.kind | replace(' ', '-') }}"
-                      data-searchable-item="{{ source_object.name }} {{ source_object.relation }}"
+                      data-searchable-item="{{ source_object_display_name }} {{ source_object.name }} {{ source_object.relation }}"
                       data-source-object
                       data-source-object-kind="{{ source_object.kind }}"
                       data-source-object-name="{{ source_object.name }}"
+                      data-source-object-display-name="{{ source_object_display_name }}"
                       data-source-object-relation="{{ source_object.relation }}"
                       data-source-option-id="{{ source_option_id }}"
                       data-s3-bucket="{{ source_object.s3_bucket }}"
@@ -358,6 +360,7 @@
                       data-s3-path="{{ source_object.s3_path }}"
                       data-s3-file-format="{{ source_object.s3_file_format }}"
                       data-s3-downloadable="{{ 'true' if source_object.s3_downloadable else 'false' }}"
+                      data-s3-size-bytes="{{ source_object.size_bytes }}"
                     >
                       <span class="source-node-label">
                         {% if source_object.kind in ("view", "materialized view") %}
@@ -381,10 +384,15 @@
                             <path d="M2.8 6.1h10.4M2.8 9.4h10.4M6 2.9v9.8M10 2.9v9.8"></path>
                           </svg>
                         {% endif %}
-                        <span>{{ source_object.name }}</span>
+                        <span title="{{ source_object_display_name }}">{{ source_object_display_name | truncate_source_navigation_label }}</span>
                       </span>
                       <span class="source-object-meta">
-                        <small>{{ source_object.kind }}</small>
+                        {% if source_object.s3_file_format %}
+                          <small>{{ source_object.s3_file_format | upper }}</small>
+                          <small>{{ source_object.size_bytes | format_byte_count }}</small>
+                        {% else %}
+                          <small>{{ source_object.kind }}</small>
+                        {% endif %}
                         <details class="workspace-action-menu source-action-menu" data-source-action-menu>
                           <summary
                             class="workspace-action-menu-toggle"

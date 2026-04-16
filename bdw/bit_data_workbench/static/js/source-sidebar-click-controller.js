@@ -24,6 +24,7 @@ export function createSourceSidebarClickController(helpers) {
     openLocalWorkspaceMoveDialog,
     openLocalWorkspaceSaveDialog,
     openNotebookForQueryJob,
+    openResultDownloadDialog,
     openResultExportDialog,
     queryJobForResultActionTarget,
     queryNotificationMenu,
@@ -186,7 +187,7 @@ export function createSourceSidebarClickController(helpers) {
         return true;
       }
       try {
-        await downloadQueryResultExport(job, downloadResultExportButton.dataset.resultExportDownload || "");
+        await openResultDownloadDialog(job);
       } catch (error) {
         console.error("Failed to download the query result export.", error);
         await showMessageDialog({
@@ -210,7 +211,7 @@ export function createSourceSidebarClickController(helpers) {
         return true;
       }
       try {
-        await openResultExportDialog(job, saveResultExportButton.dataset.resultExportS3 || "");
+        await openResultExportDialog(job);
       } catch (error) {
         console.error("Failed to open the result export dialog.", error);
         await showMessageDialog({
@@ -229,20 +230,20 @@ export function createSourceSidebarClickController(helpers) {
       if (!job) {
         await showMessageDialog({
           title: "Result export unavailable",
-          copy: "Run the cell again so the current query result can be saved to Local Workspace.",
+          copy: "Run the cell again so the current query result can be saved to Local Workspace (IndexDB).",
         });
         return true;
       }
       try {
-        await openLocalWorkspaceSaveDialog(
-          job,
-          saveLocalResultExportButton.dataset.resultExportLocal || ""
-        );
+        await openLocalWorkspaceSaveDialog(job);
       } catch (error) {
         console.error("Failed to open the Local Workspace save dialog.", error);
         await showMessageDialog({
-          title: "Local Workspace save unavailable",
-          copy: error instanceof Error ? error.message : "The Local Workspace save dialog could not be opened.",
+          title: "Local Workspace (IndexDB) save unavailable",
+          copy:
+            error instanceof Error
+              ? error.message
+              : "The Local Workspace (IndexDB) save dialog could not be opened.",
         });
       }
       return true;

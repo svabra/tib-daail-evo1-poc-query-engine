@@ -11,10 +11,12 @@ from ..backend.service import WorkbenchService
 from ..dependencies import get_workbench_service
 from ..models import SourceCatalog
 from ..release_notes import release_notes
+from .template_filters import register_template_filters
 router = APIRouter(include_in_schema=False)
 templates = Jinja2Templates(
     directory=str(Path(__file__).resolve().parents[1] / "templates")
 )
+register_template_filters(templates)
 
 
 def is_partial_request(request: Request) -> bool:

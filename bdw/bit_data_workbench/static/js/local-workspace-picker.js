@@ -34,7 +34,7 @@ function breadcrumbsMarkup(folderPath, breadcrumbAttribute, helpers) {
     .split("/")
     .filter(Boolean);
   const crumbs = [
-    { label: "Local Workspace", path: "" },
+    { label: "Local Workspace (IndexDB)", path: "" },
     ...segments.map((segment, index) => ({
       label: segment,
       path: segments.slice(0, index + 1).join("/"),
@@ -73,7 +73,7 @@ export function createLocalWorkspacePickerUi(helpers) {
         folderPaths,
         helpers.getSaveState().folderPath,
         "data-local-workspace-folder-option",
-        '<p class="local-workspace-folder-empty">No Local Workspace folders exist yet. Save into Root or create a new folder.</p>',
+        '<p class="local-workspace-folder-empty">No Local Workspace (IndexDB) folders exist yet. Save into Root or create a new folder.</p>',
         helpers
       );
     },
@@ -83,7 +83,7 @@ export function createLocalWorkspacePickerUi(helpers) {
         folderPaths,
         helpers.getMoveState().folderPath,
         "data-local-workspace-move-folder-option",
-        '<p class="local-workspace-folder-empty">No Local Workspace folders exist yet. Move into Root or create a new folder.</p>',
+        '<p class="local-workspace-folder-empty">No Local Workspace (IndexDB) folders exist yet. Move into Root or create a new folder.</p>',
         helpers
       );
     },

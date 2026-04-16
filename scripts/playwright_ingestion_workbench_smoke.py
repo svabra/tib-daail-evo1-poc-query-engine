@@ -55,6 +55,12 @@ async def open_csv_ingestor(page, timeout_ms: int) -> None:
             state="visible",
             timeout=timeout_ms,
         )
+    json_guidance = (
+        await page.locator('[aria-label="JSON format guidance"]').get_attribute("title")
+        or ""
+    )
+    if "line-delimited JSON / JSONL" not in json_guidance:
+        raise RuntimeError("Expected JSON guidance to explain line-delimited JSON / JSONL.")
     duckdb_guidance = (
         await page.locator('[aria-label="Shared Workspace storage format guidance"]').get_attribute("title")
         or ""

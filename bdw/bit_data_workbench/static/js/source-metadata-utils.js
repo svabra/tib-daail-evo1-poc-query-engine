@@ -153,6 +153,7 @@ export function normalizeSourceObjectFields(fields) {
 
 export function sourceObjectDisplayName(sourceObjectRoot) {
   return (
+    sourceObjectRoot?.dataset.sourceObjectDisplayName?.trim() ||
     sourceObjectRoot?.dataset.sourceObjectName?.trim() ||
     sourceObjectRoot?.dataset.sourceObjectRelation?.trim() ||
     "Selected source"
@@ -226,6 +227,22 @@ function sqlQueryIdentifier(name) {
 }
 
 export function sourceObjectDisplayKind(sourceObjectRoot) {
+  const localWorkspaceFormat = String(
+    sourceObjectRoot?.dataset.localWorkspaceExportFormat || ""
+  )
+    .trim()
+    .toUpperCase();
+  if (localWorkspaceFormat) {
+    return `${localWorkspaceFormat} FILE`;
+  }
+
+  const s3FileFormat = String(sourceObjectRoot?.dataset.s3FileFormat || "")
+    .trim()
+    .toUpperCase();
+  if (s3FileFormat) {
+    return `${s3FileFormat} FILE`;
+  }
+
   return sourceObjectRoot?.dataset.sourceObjectKind?.trim()?.toUpperCase() || "TABLE";
 }
 
@@ -258,7 +275,7 @@ export function sourceQueryDescriptor(sourceObjectRoot) {
   }
 
   return {
-    name: sourceObjectRoot.dataset.sourceObjectName?.trim() || relation,
+    name: sourceObjectDisplayName(sourceObjectRoot),
     relation,
     sourceId: sourceObjectRoot.dataset.sourceOptionId?.trim() || "",
   };

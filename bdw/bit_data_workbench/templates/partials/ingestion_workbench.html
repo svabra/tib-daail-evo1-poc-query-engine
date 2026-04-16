@@ -3,7 +3,7 @@
     <div class="workspace-title-block ingestion-workbench-page-copy">
       <h2>Ingestion Workbench</h2>
       <p class="workspace-summary">
-        Choose a user-driven ingestion flow, then move external files into PostgreSQL, Shared Workspace S3, or the browser-local Local Workspace.
+        Choose a user-driven ingestion flow, then move external files into PostgreSQL, Shared Workspace S3, or the browser-local Local Workspace (IndexDB).
       </p>
     </div>
   </header>
@@ -134,7 +134,7 @@
           <div class="ingestion-csv-target-grid">
             <label class="ingestion-csv-target-card">
               <input type="radio" name="target_id" value="workspace.local" data-csv-target-option checked>
-              <span class="ingestion-csv-target-title">Local Workspace</span>
+              <span class="ingestion-csv-target-title">Local Workspace (IndexDB)</span>
               <span class="ingestion-csv-target-copy">Store the raw CSV files in this browser using IndexedDB.</span>
             </label>
             <label class="ingestion-csv-target-card">
@@ -163,7 +163,7 @@
           <div class="ingestion-csv-target-config" data-csv-config-root>
             <div class="ingestion-csv-config-panel" data-csv-config-panel="workspace.local">
               <label class="result-export-field">
-                <span class="result-export-field-label">Local Workspace folder</span>
+                <span class="result-export-field-label">Local Workspace (IndexDB) folder</span>
                 <input
                   class="modal-input"
                   type="text"
@@ -253,14 +253,14 @@
                       <span class="ingestion-csv-storage-format-title">JSON</span>
                       <span
                         class="info-badge"
-                        title="Pros: easy to integrate with JSON-first tools and services.&#10;Cons: less efficient than Parquet for analytics and larger than compressed columnar storage.&#10;DuckDB query path: read_json_auto(...)."
+                        title="Pros: easy to integrate with JSON-first tools and services.&#10;Cons: less efficient than Parquet for analytics and larger than compressed columnar storage.&#10;This option writes line-delimited JSON / JSONL for DuckDB.&#10;DuckDB query path: read_json_auto(...)."
                         aria-label="JSON format guidance"
                       >
                         ?
                       </span>
                     </span>
                     <span class="ingestion-csv-target-copy">
-                      Best when downstream consumers want schemaless records or API-friendly payloads.
+                      Best when downstream consumers want schemaless records or API-friendly line-delimited JSON payloads.
                     </span>
                   </label>
                 </div>

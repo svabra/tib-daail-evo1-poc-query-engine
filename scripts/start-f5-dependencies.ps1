@@ -165,6 +165,21 @@ function Stop-LocalWorkbenchListener {
         [int]$LocalPort = 8000
     )
 
+    function Stop-OrphanedPythonChildren {
+        param(
+            [int]$ParentProcessId
+        )
+
+        $orphanChildren = Get-CimInstance Win32_Process | Where-Object {
+            $_.ParentProcessId -eq $ParentProcessId -and $_.Name -like "python*"
+        }
+
+        foreach ($child in $orphanChildren) {
+            Write-Host "Stopping orphaned Python child '$($child.Name)' (PID $($child.ProcessId)) for stale listener PID $ParentProcessId ..."
+            Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     $repoRootNormalized = $repoRoot.ToLowerInvariant()
     foreach ($processId in Get-ListeningProcessIds -LocalPort $LocalPort) {
         if (-not $processId) {
@@ -173,6 +188,7 @@ function Stop-LocalWorkbenchListener {
 
         $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
         if (-not $process) {
+            Stop-OrphanedPythonChildren -ParentProcessId $processId
             continue
         }
 

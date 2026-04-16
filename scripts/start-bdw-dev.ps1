@@ -36,6 +36,21 @@ function Resolve-PortConflicts {
         [int]$LocalPort
     )
 
+    function Stop-OrphanedPythonChildren {
+        param(
+            [int]$ParentProcessId
+        )
+
+        $orphanChildren = Get-CimInstance Win32_Process | Where-Object {
+            $_.ParentProcessId -eq $ParentProcessId -and $_.Name -like "python*"
+        }
+
+        foreach ($child in $orphanChildren) {
+            Write-Host "Stopping orphaned Python child '$($child.Name)' (PID $($child.ProcessId)) for stale listener PID $ParentProcessId..."
+            Stop-Process -Id $child.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    }
+
     $containerName = "bit-data-workbench"
     $dockerContainerId = docker ps --filter "name=^/${containerName}$" --format "{{.ID}}"
     if ($dockerContainerId) {
@@ -51,6 +66,7 @@ function Resolve-PortConflicts {
 
         $process = Get-Process -Id $processId -ErrorAction SilentlyContinue
         if (-not $process) {
+            Stop-OrphanedPythonChildren -ParentProcessId $processId
             continue
         }
 

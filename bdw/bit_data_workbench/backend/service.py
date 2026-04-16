@@ -5,7 +5,7 @@ import time
 import threading
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from threading import RLock, Thread
 from typing import Any
@@ -575,8 +575,18 @@ class WorkbenchService:
     def download_s3_object(self, *, bucket: str, key: str, file_name: str = ""):
         return self._s3_plugin.download_object(bucket=bucket, key=key, file_name=file_name)
 
-    def download_query_result_export(self, *, job_id: str, export_format: str):
-        return self._query_result_exports.download(job_id=job_id, export_format=export_format)
+    def download_query_result_export(
+        self,
+        *,
+        job_id: str,
+        export_format: str,
+        export_settings: dict[str, object] | None = None,
+    ):
+        return self._query_result_exports.download(
+            job_id=job_id,
+            export_format=export_format,
+            export_settings=export_settings,
+        )
 
     def save_query_result_export_to_s3(
         self,
@@ -586,6 +596,7 @@ class WorkbenchService:
         bucket: str,
         prefix: str = "",
         file_name: str = "",
+        export_settings: dict[str, object] | None = None,
     ) -> dict[str, object]:
         result = self._query_result_exports.save_to_s3(
             job_id=job_id,
@@ -593,6 +604,7 @@ class WorkbenchService:
             bucket=bucket,
             prefix=prefix,
             file_name=file_name,
+            export_settings=export_settings,
         )
         return result.payload
 
@@ -1918,11 +1930,13 @@ class WorkbenchService:
                     name=table_name,
                     kind="view" if table_type.upper() == "VIEW" else "table",
                     relation=relation_id,
+                    display_name=str(s3_metadata.get("display_name") or table_name),
                     s3_bucket=str(s3_metadata.get("bucket") or ""),
                     s3_key=str(s3_metadata.get("key") or ""),
                     s3_path=str(s3_metadata.get("path") or ""),
                     s3_file_format=str(s3_metadata.get("file_format") or ""),
                     s3_downloadable=s3_metadata.get("downloadable") is True,
+                    size_bytes=int(s3_metadata.get("size_bytes") or 0),
                 )
             )
 
@@ -2014,8 +2028,15 @@ class WorkbenchService:
                 "bucket": bucket_name,
                 "key": object_key,
                 "path": object_path,
+                "display_name": str(spec.display_name or "").strip()
+                or (
+                    PurePosixPath(object_key).name
+                    if object_key and not any(token in object_key for token in "*?[")
+                    else relation_id.split(".", 1)[-1]
+                ),
                 "file_format": str(spec.object_format or "").strip(),
                 "downloadable": downloadable,
+                "size_bytes": int(spec.size_bytes or 0),
             }
         return metadata
 

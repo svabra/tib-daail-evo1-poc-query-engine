@@ -174,7 +174,7 @@ class CsvIngestionHelperTests(TestCase):
         self.assertEqual(normalize_csv_s3_storage_format(""), "csv")
         self.assertEqual(normalize_csv_s3_storage_format("PARQUET"), "parquet")
         self.assertEqual(resolve_csv_s3_file_name("vat_smoke.csv", "csv"), "vat_smoke.csv")
-        self.assertEqual(resolve_csv_s3_file_name("vat_smoke.csv", "json"), "vat_smoke.json")
+        self.assertEqual(resolve_csv_s3_file_name("vat_smoke.csv", "json"), "vat_smoke.jsonl")
         self.assertEqual(resolve_csv_s3_file_name("vat_smoke.csv", "parquet"), "vat_smoke.parquet")
 
     def test_detect_csv_delimiter_uses_semicolon_when_file_shape_matches(self) -> None:
@@ -342,7 +342,7 @@ class CsvIngestionManagerTests(TestCase):
         self.assertIsNone(fake_client.uploads[0][3])
         self.assertEqual(fake_client.uploads[0][4][:4], b"PAR1")
 
-    def test_import_csv_files_to_s3_converts_csv_to_json_before_upload(self) -> None:
+    def test_import_csv_files_to_s3_converts_csv_to_jsonl_before_upload(self) -> None:
         fake_client = FakeS3Client()
         manager = CsvIngestionManager(
             settings=make_settings(),
@@ -367,20 +367,22 @@ class CsvIngestionManagerTests(TestCase):
         self.assertEqual(payload["importedCount"], 1)
         self.assertEqual(
             payload["imports"][0]["path"],
-            "s3://csv-imports/incoming/april/vat_smoke.json",
+            "s3://csv-imports/incoming/april/vat_smoke.jsonl",
         )
-        self.assertEqual(payload["imports"][0]["objectKey"], "incoming/april/vat_smoke.json")
+        self.assertEqual(payload["imports"][0]["objectKey"], "incoming/april/vat_smoke.jsonl")
         self.assertEqual(payload["imports"][0]["objectKeyPrefix"], "incoming/april")
-        self.assertEqual(payload["imports"][0]["storedFileName"], "vat_smoke.json")
+        self.assertEqual(payload["imports"][0]["storedFileName"], "vat_smoke.jsonl")
         self.assertEqual(payload["imports"][0]["storageFormat"], "json")
         self.assertEqual(
             fake_client.uploads[0][1:3],
-            ("csv-imports", "incoming/april/vat_smoke.json"),
+            ("csv-imports", "incoming/april/vat_smoke.jsonl"),
         )
         self.assertIsNone(fake_client.uploads[0][3])
         uploaded_text = fake_client.uploads[0][4].decode("utf-8")
-        self.assertIn('{"id":1,"name":"alpha"}', uploaded_text)
-        self.assertIn('{"id":2,"name":"beta"}', uploaded_text)
+        self.assertEqual(
+            uploaded_text.splitlines(),
+            ['{"id":1,"name":"alpha"}', '{"id":2,"name":"beta"}'],
+        )
 
     def test_import_csv_files_to_s3_rejects_unknown_storage_format(self) -> None:
         fake_client = FakeS3Client()

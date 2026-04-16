@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from io import BytesIO
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 
 import duckdb
+from openpyxl import Workbook
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -173,3 +175,87 @@ class LocalWorkspaceQuerySourceManagerTests(TestCase):
             ),
             "json",
         )
+
+    def test_sync_source_creates_queryable_xml_view(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "workspace.duckdb"
+            settings = make_settings(database_path)
+            manager = LocalWorkspaceQuerySourceManager(settings=settings)
+            connection = duckdb.connect(str(database_path))
+            try:
+                result = manager.sync_source(
+                    conn=connection,
+                    client_id="client-alpha",
+                    entry_id="local-entry-xml",
+                    logical_relation="workspace.local.saved_results.local-entry-xml",
+                    file_name="tax-office.xml",
+                    export_format="xml",
+                    mime_type="application/xml",
+                    file_bytes=(
+                        b"<rows>"
+                        b"<row><record_id>1</record_id><tax_office>Zurich Central Tax Office</tax_office></row>"
+                        b"<row><record_id>2</record_id><tax_office>Bern Regional Tax Office</tax_office></row>"
+                        b"</rows>"
+                    ),
+                )
+
+                self.assertEqual(
+                    [field.name for field in result.fields],
+                    ["record_id", "tax_office"],
+                )
+                self.assertEqual(
+                    connection.execute(
+                        f"SELECT record_id, tax_office FROM {result.relation} ORDER BY record_id"
+                    ).fetchall(),
+                    [
+                        (1, "Zurich Central Tax Office"),
+                        (2, "Bern Regional Tax Office"),
+                    ],
+                )
+            finally:
+                connection.close()
+
+    def test_sync_source_creates_queryable_xlsx_view(self) -> None:
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.append(["record_id", "tax_office"])
+        worksheet.append([1, "Zurich Central Tax Office"])
+        worksheet.append([2, "Bern Regional Tax Office"])
+        output = BytesIO()
+        workbook.save(output)
+        workbook.close()
+
+        with TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "workspace.duckdb"
+            settings = make_settings(database_path)
+            manager = LocalWorkspaceQuerySourceManager(settings=settings)
+            connection = duckdb.connect(str(database_path))
+            try:
+                result = manager.sync_source(
+                    conn=connection,
+                    client_id="client-alpha",
+                    entry_id="local-entry-xlsx",
+                    logical_relation="workspace.local.saved_results.local-entry-xlsx",
+                    file_name="tax-office.xlsx",
+                    export_format="xlsx",
+                    mime_type=(
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    ),
+                    file_bytes=output.getvalue(),
+                )
+
+                self.assertEqual(
+                    [field.name for field in result.fields],
+                    ["record_id", "tax_office"],
+                )
+                self.assertEqual(
+                    connection.execute(
+                        f"SELECT record_id, tax_office FROM {result.relation} ORDER BY record_id"
+                    ).fetchall(),
+                    [
+                        (1, "Zurich Central Tax Office"),
+                        (2, "Bern Regional Tax Office"),
+                    ],
+                )
+            finally:
+                connection.close()

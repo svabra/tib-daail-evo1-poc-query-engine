@@ -22,11 +22,12 @@ const CSV_S3_STORAGE_FORMATS = {
   json: {
     value: "json",
     label: "JSON",
-    reviewLabel: "stored as JSON",
-    description: "Best when downstream consumers want schemaless records or APIs expect JSON-shaped payloads.",
+    reviewLabel: "stored as JSONL",
+    description: "Best when downstream consumers want schemaless records or line-delimited JSON payloads.",
     tooltip:
       "Pros: easy to integrate with JSON-first tools and services.\n" +
       "Cons: less efficient than Parquet for analytics and larger than compressed columnar storage.\n" +
+      "This option writes line-delimited JSON / JSONL for DuckDB.\n" +
       "DuckDB query path: read_json_auto(...).",
   },
 };
@@ -48,5 +49,5 @@ export function resolveCsvS3StoredFileName(fileName, storageFormat) {
   }
 
   const stem = normalizedFileName.replace(/\.[^.]+$/, "") || "csv_import";
-  return `${stem}.${normalizedStorageFormat}`;
+  return `${stem}.${normalizedStorageFormat === "json" ? "jsonl" : normalizedStorageFormat}`;
 }

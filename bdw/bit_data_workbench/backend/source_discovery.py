@@ -9,7 +9,7 @@ import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 from urllib.parse import urlparse
 
@@ -18,6 +18,9 @@ import duckdb
 from ..config import Settings
 from ..models import DataSourceDiscoveryEventDefinition, SourceConnectionStatus
 from .ingestion_types.csv.dialect import csv_read_settings_from_s3_metadata
+from .queryable_files import (
+    materialize_queryable_file,
+)
 from .sql_utils import (
     parse_s3_startup_views,
     qualified_name,
@@ -27,7 +30,7 @@ from .s3_storage import iter_s3_keys, list_s3_buckets, s3_bucket_schema_name, s3
 
 
 logger = logging.getLogger(__name__)
-SUPPORTED_DISCOVERED_S3_FORMATS = {"parquet", "csv", "json"}
+SUPPORTED_DISCOVERED_S3_FORMATS = {"parquet", "csv", "json", "xml", "xlsx"}
 MAX_SOURCE_EVENT_HISTORY = 40
 
 
@@ -84,6 +87,10 @@ def infer_key_format(key: str) -> str | None:
         return "csv"
     if lowered.endswith(".json") or lowered.endswith(".jsonl") or lowered.endswith(".ndjson"):
         return "json"
+    if lowered.endswith(".xml"):
+        return "xml"
+    if lowered.endswith(".xlsx") or lowered.endswith(".xls") or lowered.endswith(".xlsxm"):
+        return "xlsx"
     return None
 
 
@@ -128,6 +135,8 @@ class DiscoveredRelationSpec:
     query_sql: str
     object_path: str
     object_format: str
+    display_name: str = ""
+    size_bytes: int = 0
     object_revision: str = ""
     csv_delimiter: str = ""
     csv_has_header: bool | None = None
@@ -393,6 +402,8 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                 query_sql=spec.query_sql,
                 object_path=spec.object_path,
                 object_format=spec.object_format,
+                display_name=spec.display_name,
+                size_bytes=spec.size_bytes,
                 csv_delimiter=spec.csv_delimiter,
                 csv_has_header=spec.csv_has_header,
             )
@@ -406,6 +417,8 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                     query_sql=spec.query_sql,
                     object_path=spec.object_path,
                     object_format=spec.object_format,
+                    display_name=spec.display_name,
+                    size_bytes=spec.size_bytes,
                     csv_delimiter=spec.csv_delimiter,
                     csv_has_header=spec.csv_has_header,
                 )
@@ -564,6 +577,10 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                     exc,
                 )
                 continue
+            self._remove_stale_relation_cache_files(
+                schema_name=current_spec.schema_name,
+                relation_name=current_spec.relation_name,
+            )
             next_specs.pop(spec_key, None)
             successful_removed.append(f"{current_spec.schema_name}.{current_spec.relation_name}")
 
@@ -658,6 +675,82 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
             checked_at=utc_now_iso(),
         )
 
+    def _query_cache_root(self) -> Path:
+        return self._settings.duckdb_database.parent / "s3-query-sources"
+
+    def _schema_cache_root(self, schema_name: str) -> Path:
+        return self._query_cache_root() / schema_name
+
+    def _remove_stale_relation_cache_files(
+        self,
+        *,
+        schema_name: str,
+        relation_name: str,
+    ) -> None:
+        schema_root = self._schema_cache_root(schema_name)
+        if not schema_root.exists():
+            return
+        for candidate in schema_root.glob(f"{relation_name}.*"):
+            candidate.unlink(missing_ok=True)
+        try:
+            schema_root.rmdir()
+        except OSError:
+            pass
+
+    def _display_file_format(self, key: str, fallback_format: str) -> str:
+        suffix = PurePosixPath(key).suffix.lower().lstrip(".")
+        if suffix in {"jsonl", "ndjson"}:
+            return "jsonl"
+        if suffix in {"xls", "xlsx", "xlsxm"}:
+            return "xlsx"
+        if suffix:
+            return suffix
+        return fallback_format
+
+    def _read_s3_object_bytes(
+        self,
+        client,
+        *,
+        bucket: str,
+        key: str,
+    ) -> bytes:
+        response = client.get_object(Bucket=bucket, Key=key) or {}
+        body = response.get("Body")
+        if body is None:
+            return b""
+        try:
+            return body.read()
+        finally:
+            close = getattr(body, "close", None)
+            if callable(close):
+                close()
+
+    def _materialized_s3_query_spec(
+        self,
+        client,
+        *,
+        bucket: str,
+        key: str,
+        schema_name: str,
+        relation_name: str,
+        source_format: str,
+    ) -> tuple[str, str]:
+        schema_root = self._schema_cache_root(schema_name)
+        schema_root.mkdir(parents=True, exist_ok=True)
+        self._remove_stale_relation_cache_files(
+            schema_name=schema_name,
+            relation_name=relation_name,
+        )
+        file_bytes = self._read_s3_object_bytes(client, bucket=bucket, key=key)
+        materialized = materialize_queryable_file(
+            root=schema_root,
+            base_name=relation_name,
+            file_name=PurePosixPath(key).name,
+            source_format=source_format,
+            file_bytes=file_bytes,
+        )
+        return materialized.reader_format, materialized.local_path.as_posix()
+
     def _load_existing_specs(
         self,
         connection: duckdb.DuckDBPyConnection,
@@ -715,6 +808,7 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                     query_sql=build_s3_query(data_format, path),
                     object_path=path,
                     object_format=data_format,
+                    display_name=view_name,
                 )
 
             generated_datasets = sorted(
@@ -739,6 +833,7 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                     query_sql=build_s3_query("parquet", object_path),
                     object_path=object_path,
                     object_format="parquet",
+                    display_name=dataset_name,
                 )
 
             startup_paths = {
@@ -752,8 +847,8 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                 if key.startswith("generated/"):
                     continue
 
-                data_format = infer_key_format(key)
-                if data_format is None:
+                reader_format = infer_key_format(key)
+                if reader_format is None:
                     continue
 
                 relation_name = choose_unique_relation_name(
@@ -763,24 +858,50 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                 )
                 object_path = f"s3://{bucket}/{key}"
                 head_response = self._head_object(client, bucket=bucket, key=key)
+                object_size_bytes = int(head_response.get("ContentLength") or 0)
+                display_name = PurePosixPath(key).name
+                display_format = self._display_file_format(key, reader_format)
                 csv_delimiter = ""
                 csv_has_header: bool | None = None
-                if data_format == "csv":
+                if reader_format == "csv":
                     csv_delimiter, csv_has_header = self._csv_read_settings_from_head(head_response)
+                query_format = reader_format
+                query_path = object_path
+                if reader_format in {"xml", "xlsx"}:
+                    try:
+                        query_format, query_path = self._materialized_s3_query_spec(
+                            client,
+                            bucket=bucket,
+                            key=key,
+                            schema_name=schema_name,
+                            relation_name=relation_name,
+                            source_format=reader_format,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Skipping discovered S3 object '%s' for relation '%s.%s': %s",
+                            object_path,
+                            schema_name,
+                            relation_name,
+                            exc,
+                        )
+                        continue
                 desired_specs[f"{schema_name}.{relation_name}"] = DiscoveredRelationSpec(
                     schema_name=schema_name,
                     relation_name=relation_name,
                     query_sql=build_s3_query(
-                        data_format,
-                        object_path,
+                        query_format,
+                        query_path,
                         csv_delimiter=csv_delimiter,
-                        csv_has_header=csv_has_header,
+                        csv_has_header=True if reader_format in {"xml", "xlsx"} else csv_has_header,
                     ),
                     object_path=object_path,
-                    object_format=data_format,
+                    object_format=display_format,
+                    display_name=display_name,
+                    size_bytes=object_size_bytes,
                     object_revision=self._object_revision_from_head(head_response),
                     csv_delimiter=csv_delimiter,
-                    csv_has_header=csv_has_header,
+                    csv_has_header=True if reader_format in {"xml", "xlsx"} else csv_has_header,
                 )
 
         return desired_specs

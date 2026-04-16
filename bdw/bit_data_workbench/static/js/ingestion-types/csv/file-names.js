@@ -68,7 +68,8 @@ export function csvImportNameSuffix(
   storageFormat = "csv"
 ) {
   if (String(targetId || "").trim() === "workspace.s3") {
-    return `.${normalizeCsvS3StorageFormat(storageFormat)}`;
+    const normalizedStorageFormat = normalizeCsvS3StorageFormat(storageFormat);
+    return normalizedStorageFormat === "json" ? ".jsonl" : `.${normalizedStorageFormat}`;
   }
   return ".csv";
 }

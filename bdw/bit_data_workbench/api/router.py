@@ -75,6 +75,12 @@ class QueryResultS3ExportPayload(BaseModel):
     bucket: str = ""
     prefix: str = ""
     file_name: str = Field(default="", validation_alias="fileName", serialization_alias="fileName")
+    settings: dict[str, object] = Field(default_factory=dict)
+
+
+class QueryResultDownloadExportPayload(BaseModel):
+    export_format: str = Field(validation_alias="format", serialization_alias="format")
+    settings: dict[str, object] = Field(default_factory=dict)
 
 
 class LocalWorkspaceQuerySourceDeletePayload(BaseModel):
@@ -418,6 +424,31 @@ def download_query_job_export(
     )
 
 
+@router.post("/api/query-jobs/{job_id}/export/download")
+def download_query_job_export_with_settings(
+    job_id: str,
+    payload: QueryResultDownloadExportPayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> FileResponse:
+    try:
+        artifact = service.download_query_result_export(
+            job_id=job_id,
+            export_format=payload.export_format,
+            export_settings=payload.settings,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return FileResponse(
+        path=artifact.local_path,
+        media_type=artifact.export.content_type,
+        filename=artifact.export.filename,
+        background=BackgroundTask(shutil.rmtree, artifact.cleanup_dir, True),
+    )
+
+
 @router.post("/api/query-jobs/{job_id}/export/s3")
 def save_query_job_export_to_s3(
     job_id: str,
@@ -431,6 +462,7 @@ def save_query_job_export_to_s3(
             bucket=payload.bucket,
             prefix=payload.prefix,
             file_name=payload.file_name,
+            export_settings=payload.settings,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

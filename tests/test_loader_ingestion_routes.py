@@ -98,6 +98,8 @@ class LoaderAndIngestionRouteTests(unittest.TestCase):
         self.assertIn("DuckDB remains the query engine for Shared Workspace files.", body)
         self.assertIn("Object key prefix", body)
         self.assertIn("S3 does not create real directories here.", body)
+        self.assertIn("Local Workspace (IndexDB)", body)
         self.assertIn("Parquet", body)
         self.assertIn("JSON", body)
+        self.assertIn("line-delimited JSON / JSONL", body)
         self.assertIn("CSV Files", body)
