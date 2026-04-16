@@ -586,6 +586,45 @@ export function createNotebookTreeUi(helpers) {
     updateNotebookSectionCount();
   }
 
+  function revealNotebookBranch(notebookId, { collapseOthers = true } = {}) {
+    const treeRoot = notebookTreeRoot();
+    if (!treeRoot || !notebookId) {
+      return;
+    }
+
+    const notebookLink = treeRoot.querySelector(
+      `[data-draggable-notebook][data-notebook-id="${CSS.escape(notebookId)}"]`
+    );
+    if (!(notebookLink instanceof Element)) {
+      return;
+    }
+
+    notebookSection()?.setAttribute("open", "");
+
+    const ancestorFolders = new Set();
+    let currentFolder = notebookLink.closest("[data-tree-folder]");
+    while (currentFolder instanceof Element) {
+      ancestorFolders.add(currentFolder);
+      currentFolder = currentFolder.parentElement?.closest("[data-tree-folder]") ?? null;
+    }
+
+    if (collapseOthers) {
+      treeRoot.querySelectorAll("[data-tree-folder]").forEach((folder) => {
+        if (folder instanceof HTMLDetailsElement) {
+          folder.open = ancestorFolders.has(folder);
+        }
+      });
+    } else {
+      ancestorFolders.forEach((folder) => {
+        if (folder instanceof HTMLDetailsElement) {
+          folder.open = true;
+        }
+      });
+    }
+
+    persistNotebookTree();
+  }
+
   return {
     clearDragState,
     clearDropTargets,
@@ -606,5 +645,6 @@ export function createNotebookTreeUi(helpers) {
     updateFolderCounts,
     updateNotebookSectionCount,
     notebookDefaultFolderPath,
+    revealNotebookBranch,
   };
 }

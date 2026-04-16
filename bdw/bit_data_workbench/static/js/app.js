@@ -104,6 +104,7 @@ import { createRealtimeController } from "./realtime-controller.js";
 import { createSidebarLayoutManager } from "./sidebar-layout-manager.js";
 import { createSidebarRefreshController } from "./sidebar-refresh-controller.js";
 import { createSidebarSearchFilter } from "./sidebar-search-filter.js";
+import { createWorkspaceScrollManager } from "./workspace-scroll-manager.js";
 import {
   accessModeForDataSources,
   accessModeHintForDataSources,
@@ -512,6 +513,7 @@ const {
   initializeNotebookTree,
   notebookDefaultFolderPath,
   persistNotebookTree,
+  revealNotebookBranch,
   resolveAddTarget,
   resolveDropTarget,
   rootUnassignedFolder,
@@ -547,6 +549,8 @@ const { applySidebarSearchFilter, initializeSidebarSearch, updateNotebookSearcha
     notebookSection,
     sourceLabelsForIds,
   });
+
+const { scrollWorkspaceNotebookIntoView } = createWorkspaceScrollManager();
 
 const { closePopupMenusForTarget, closeSettingsMenus } = createPopupMenuManager({
   closeCellActionMenus,
@@ -3076,12 +3080,13 @@ function renderEmptyWorkspace() {
   renderQueryNotificationMenu();
 }
 
-function renderLocalNotebookWorkspace(notebookId) {
+function renderLocalNotebookWorkspace(notebookId, options = {}) {
   const panel = document.getElementById("workspace-panel");
   if (!panel) {
     return;
   }
 
+  const { scrollToTop = false } = options;
   const metadata = notebookMetadata(notebookId);
   panel.innerHTML = buildWorkspaceMarkup(notebookId, metadata, activeCellId);
   syncShellVisibility();
@@ -3103,6 +3108,9 @@ function renderLocalNotebookWorkspace(notebookId) {
   writeLastNotebookId(notebookId);
   syncVisibleQueryCells();
   renderQueryNotificationMenu();
+  if (scrollToTop) {
+    scrollWorkspaceNotebookIntoView();
+  }
 }
 
 function defaultNotebookCreateTarget() {
@@ -3145,7 +3153,7 @@ function createNotebook(targetContainer, initialMetadata = {}) {
   updateNotebookSectionCount();
   persistNotebookTree();
   applyNotebookMetadata();
-  renderLocalNotebookWorkspace(notebookId);
+  renderLocalNotebookWorkspace(notebookId, { scrollToTop: true });
   return notebookId;
 }
 
@@ -3639,7 +3647,7 @@ function copyNotebook(notebookId) {
   updateNotebookSectionCount();
   persistNotebookTree();
   applyNotebookMetadata();
-  renderLocalNotebookWorkspace(duplicateId);
+  renderLocalNotebookWorkspace(duplicateId, { scrollToTop: true });
   return duplicateId;
 }
 
@@ -3743,24 +3751,7 @@ function deleteStoredNotebookState(notebookId) {
   writeStoredNotebookMetadata(state);
 }
 function revealNotebookLink(notebookId) {
-  const link = notebookLinks(notebookId)[0];
-  if (!link) {
-    return;
-  }
-
-  notebookSection()?.setAttribute("open", "");
-
-  let parent = link.parentElement;
-  while (parent) {
-    const folder = parent.closest("[data-tree-folder]");
-    if (!folder) {
-      break;
-    }
-    folder.open = true;
-    parent = folder.parentElement;
-  }
-
-  persistNotebookTree();
+  revealNotebookBranch(notebookId);
 }
 
 function processHtmx(root) {
@@ -5830,12 +5821,13 @@ async function downloadQueryResultExport(job, exportFormat, exportSettings = {},
   );
 }
 
-async function loadNotebookWorkspace(notebookId) {
+async function loadNotebookWorkspace(notebookId, options = {}) {
   const panel = document.getElementById("workspace-panel");
   if (!panel || !notebookId) {
     return;
   }
 
+  const { scrollToTop = true } = options;
   if (notebookMetadata(notebookId).deleted) {
     const fallbackNotebookId = nextVisibleNotebookId(notebookId);
     if (!fallbackNotebookId) {
@@ -5848,7 +5840,7 @@ async function loadNotebookWorkspace(notebookId) {
   }
 
   if (isLocalNotebookId(notebookId)) {
-    renderLocalNotebookWorkspace(notebookId);
+    renderLocalNotebookWorkspace(notebookId, { scrollToTop });
     return;
   }
 
@@ -5891,6 +5883,9 @@ async function loadNotebookWorkspace(notebookId) {
   writeLastNotebookId(notebookId);
   syncVisibleQueryCells();
   renderQueryNotificationMenu();
+  if (scrollToTop) {
+    scrollWorkspaceNotebookIntoView();
+  }
 }
 
 async function restoreLastNotebook() {

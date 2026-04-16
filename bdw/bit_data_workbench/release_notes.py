@@ -1,9 +1,27 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.5.3. Keep entries concise and
+# Derived from git history through version 0.5.4. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.5.4",
+        "releasedAt": "2026-04-16T16:00:00+02:00",
+        "features": [
+            (
+                "Opening a notebook now resets the page to the top of the notebook, "
+                "so switching from long workspaces no longer leaves the new notebook out of view."
+            ),
+            (
+                "The notebook tree now opens only the branch that contains the active notebook, "
+                "instead of expanding unrelated branches."
+            ),
+            (
+                "Home-page workbench navigation is now protected by stronger browser regressions "
+                "that fail on startup JavaScript errors and verify every workbench tile stays clickable."
+            ),
+        ],
+    },
     {
         "version": "0.5.3",
         "releasedAt": "2026-04-16T15:00:00+02:00",

@@ -36,7 +36,7 @@ class FakeWorkbenchService:
     def runtime_info(self) -> dict[str, str]:
         return {
             "service": "bit-data-workbench",
-            "image_version": "0.5.3",
+            "image_version": "0.5.4",
             "hostname": "test-host",
             "pod_name": "unknown",
             "pod_namespace": "unknown",

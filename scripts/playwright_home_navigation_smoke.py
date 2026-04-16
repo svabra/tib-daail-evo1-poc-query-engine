@@ -62,6 +62,28 @@ async def open_query_workbench_from_home(page, timeout_ms: int) -> None:
     )
 
 
+async def open_ingestion_workbench_from_home(page, timeout_ms: int) -> None:
+    button = page.locator("[data-home-page] [data-open-ingestion-workbench]").first
+    await button.wait_for(state="visible", timeout=timeout_ms)
+    await button.click()
+    await page.wait_for_url("**/ingestion-workbench", timeout=timeout_ms)
+    await page.locator("[data-ingestion-workbench-page]").wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
+
+
+async def open_loader_workbench_from_home(page, timeout_ms: int) -> None:
+    button = page.locator("[data-home-page] [data-open-loader-workbench]").first
+    await button.wait_for(state="visible", timeout=timeout_ms)
+    await button.click()
+    await page.wait_for_url("**/loader-workbench", timeout=timeout_ms)
+    await page.locator("[data-loader-workbench-page]").wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
+
+
 async def open_data_source_management(page, timeout_ms: int) -> None:
     button = page.locator("[data-open-query-data-sources]").first
     await button.wait_for(state="visible", timeout=timeout_ms)
@@ -140,9 +162,21 @@ async def run_smoke(args: argparse.Namespace) -> int:
         try:
             await open_home(page, args)
             await open_query_workbench_from_home(page, args.timeout_ms)
+            await open_home(page, args)
+            await open_ingestion_workbench_from_home(page, args.timeout_ms)
+            await open_home(page, args)
+            await open_loader_workbench_from_home(page, args.timeout_ms)
+            await open_home(page, args)
             await open_data_source_management(page, args.timeout_ms)
             await open_query_navigation_from_topbar(page, args.timeout_ms)
             await open_feature_list_dialog(page, args.timeout_ms)
+            page_errors = [
+                message for message in console_messages if message.startswith("pageerror:")
+            ]
+            if page_errors:
+                raise RuntimeError(
+                    "The browser reported page errors during home-page navigation."
+                )
         except (PlaywrightTimeoutError, RuntimeError) as exc:
             print(str(exc), file=sys.stderr)
             for message in console_messages:

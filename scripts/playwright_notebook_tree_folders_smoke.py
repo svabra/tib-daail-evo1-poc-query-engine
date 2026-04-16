@@ -73,6 +73,10 @@ async def ensure_folder_open(folder) -> None:
         await folder.locator(":scope > summary").click()
 
 
+async def folder_is_open(folder) -> bool:
+    return bool(await folder.evaluate("node => node.hasAttribute('open')"))
+
+
 async def notebook_tree_state(page) -> list[dict]:
     raw_value = await page.evaluate(
         """([key]) => window.localStorage.getItem(key)""",
@@ -117,7 +121,8 @@ async def create_root_folder(page, folder_name: str, timeout_ms: int) -> float:
     await ensure_details_open(page, "[data-notebook-section]")
     section = page.locator("[data-notebook-section]")
     summary = section.locator(":scope > summary")
-    await summary.locator("[data-add-tree-item]").click()
+    await summary.hover()
+    await summary.locator("[data-add-tree-item]").click(force=True)
     await page.locator("[data-folder-name-input]").fill(folder_name)
     started = time.perf_counter()
     await page.locator("[data-folder-name-submit]").click()
@@ -227,6 +232,7 @@ async def delete_folder_recursive(
 async def run_smoke(args: argparse.Namespace) -> int:
     root_folder = unique_name("pw-nb-folder")
     renamed_folder = f"{root_folder}-renamed"
+    sibling_folder = unique_name("pw-nb-sibling")
 
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=args.headless)
@@ -285,6 +291,18 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     f"{renamed_folder}"
                 )
 
+            sibling_create_ms = await create_root_folder(
+                page,
+                sibling_folder,
+                args.timeout_ms,
+            )
+            state = await notebook_tree_state(page)
+            if not tree_contains_folder(state, sibling_folder):
+                raise RuntimeError(
+                    "Sibling notebook folder was not persisted after creation: "
+                    f"{sibling_folder}"
+                )
+
             notebook_id, create_notebook_ms = await create_notebook_in_folder(
                 page,
                 renamed_folder,
@@ -297,6 +315,16 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     f"{notebook_id}"
                 )
 
+            sibling = await wait_for_notebook_folder(
+                page,
+                sibling_folder,
+                args.timeout_ms,
+            )
+            if await folder_is_open(sibling):
+                raise RuntimeError(
+                    "Opening a notebook left an unrelated notebook-tree branch open."
+                )
+
             await page.reload(
                 wait_until="domcontentloaded",
                 timeout=args.timeout_ms,
@@ -306,13 +334,25 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 renamed_folder,
                 args.timeout_ms,
             )
-            await ensure_folder_open(folder)
+            if not await folder_is_open(folder):
+                raise RuntimeError(
+                    "The active notebook branch was not reopened after reload."
+                )
             await folder.locator(
                 f'[data-draggable-notebook][data-notebook-id="{notebook_id}"]'
             ).wait_for(
                 state="attached",
                 timeout=args.timeout_ms,
             )
+            sibling = await wait_for_notebook_folder(
+                page,
+                sibling_folder,
+                args.timeout_ms,
+            )
+            if await folder_is_open(sibling):
+                raise RuntimeError(
+                    "Reloading the active notebook reopened an unrelated notebook-tree branch."
+                )
 
             delete_ms = await delete_folder_recursive(
                 page,
@@ -358,6 +398,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
 
     print(f"Notebook folder create: {create_ms:.0f} ms")
     print(f"Notebook folder rename: {rename_ms:.0f} ms")
+    print(f"Sibling notebook folder create: {sibling_create_ms:.0f} ms")
     print(f"Notebook create in folder: {create_notebook_ms:.0f} ms")
     print(f"Notebook folder recursive delete: {delete_ms:.0f} ms")
     print("Playwright notebook folder smoke passed.")

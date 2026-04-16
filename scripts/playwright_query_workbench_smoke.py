@@ -167,6 +167,55 @@ async def run_query_and_assert_result(page, timeout_ms: int) -> str:
     return job_id
 
 
+async def assert_notebook_load_scrolls_to_top(page, timeout_ms: int) -> None:
+    workspace_root = page.locator("[data-workspace-notebook]").first
+    await workspace_root.wait_for(state="visible", timeout=timeout_ms)
+    previous_notebook_id = (
+        await workspace_root.get_attribute("data-notebook-id") or ""
+    ).strip()
+    if not previous_notebook_id:
+        raise RuntimeError("The current workspace notebook id could not be determined.")
+
+    await page.evaluate(
+        """
+        () => {
+          document.body.style.minHeight = "3200px";
+          window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
+        }
+        """
+    )
+    await page.wait_for_timeout(150)
+
+    scroll_before = await page.evaluate("() => window.scrollY")
+    if scroll_before < 400:
+        raise RuntimeError(
+            f"The page did not reach a deep scroll position before notebook switching: {scroll_before}."
+        )
+
+    await page.evaluate(
+        """
+        () => {
+          const button = document.querySelector("[data-notebook-section] > summary [data-create-notebook]");
+          if (!(button instanceof HTMLButtonElement)) {
+            throw new Error("The sidebar create notebook action could not be located.");
+          }
+          button.click();
+        }
+        """
+    )
+
+    await page.locator(
+        f'[data-workspace-notebook]:not([data-notebook-id="{previous_notebook_id}"])'
+    ).first.wait_for(state="visible", timeout=timeout_ms)
+    await page.wait_for_timeout(500)
+
+    scroll_after = await page.evaluate("() => window.scrollY")
+    if scroll_after > 200:
+        raise RuntimeError(
+            f"Opening a new notebook did not scroll the workspace back to the top. Remaining scrollY={scroll_after}."
+        )
+
+
 async def run_smoke(args: argparse.Namespace) -> int:
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=args.headless)
@@ -197,6 +246,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
             await ensure_query_notebook(page, args.base_url, args.timeout_ms)
             await write_smoke_sql(page, args.timeout_ms)
             job_id = await run_query_and_assert_result(page, args.timeout_ms)
+            await assert_notebook_load_scrolls_to_top(page, args.timeout_ms)
         except (PlaywrightTimeoutError, RuntimeError) as exc:
             print(str(exc), file=sys.stderr)
             for method, url, status in responses:
