@@ -1,9 +1,27 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.5.4. Keep entries concise and
+# Derived from git history through version 0.5.5. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.5.5",
+        "releasedAt": "2026-04-16T17:00:00+02:00",
+        "features": [
+            (
+                "The new Service Consumption workbench now adds a dedicated page "
+                "for CPU, RAM, S3, and persistent-volume monitoring with recent-history charts."
+            ),
+            (
+                "Service-consumption data is now persisted on mounted storage so "
+                "the monitoring page can survive restarts and keep recent history."
+            ),
+            (
+                "The monitoring UI now includes clearer chart legends, dynamic "
+                "resource limits on the summary cards, and a balanced two-column chart layout."
+            ),
+        ],
+    },
     {
         "version": "0.5.4",
         "releasedAt": "2026-04-16T16:00:00+02:00",
