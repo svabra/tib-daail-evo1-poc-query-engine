@@ -1,0 +1,164 @@
+<section
+  class="service-consumption-page"
+  data-service-consumption-page
+  data-default-window="{{ service_consumption_default_window }}"
+>
+  <div class="service-consumption-hero">
+    <div class="service-consumption-hero-copy">
+      <span class="workspace-kicker">Service Consumption</span>
+      <h2>Historical infrastructure usage for the running workbench</h2>
+      <p>
+        Track the current workbench service footprint, compare the active node load, and review recent Shared Workspace and S3 storage usage.
+      </p>
+      <p class="service-consumption-sampled-at" data-service-consumption-sampled-at>
+        No samples yet.
+      </p>
+    </div>
+    <div class="service-consumption-toolbar">
+      <div class="service-consumption-toolbar-group">
+        <span class="service-consumption-toolbar-label">History window</span>
+        <div class="service-consumption-window-group">
+          <button type="button" class="service-consumption-window-button" data-service-consumption-window="15m">15m</button>
+          <button type="button" class="service-consumption-window-button" data-service-consumption-window="1h">1h</button>
+          <button type="button" class="service-consumption-window-button" data-service-consumption-window="6h">6h</button>
+          <button type="button" class="service-consumption-window-button" data-service-consumption-window="24h">24h</button>
+          <button type="button" class="service-consumption-window-button" data-service-consumption-window="48h">48h</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="service-consumption-summary-grid">
+    <article class="service-consumption-summary-card" data-service-consumption-summary="cpu-service">
+      <span class="service-consumption-summary-label">Workbench CPU</span>
+      <strong data-summary-value>Awaiting sample</strong>
+      <span class="service-consumption-summary-meta" data-summary-meta>Workbench service</span>
+    </article>
+    <article class="service-consumption-summary-card" data-service-consumption-summary="cpu-node">
+      <span class="service-consumption-summary-label">Node CPU</span>
+      <strong data-summary-value>Awaiting sample</strong>
+      <span class="service-consumption-summary-meta" data-summary-meta>Current node</span>
+    </article>
+    <article class="service-consumption-summary-card" data-service-consumption-summary="memory-service">
+      <span class="service-consumption-summary-label">Workbench RAM</span>
+      <strong data-summary-value>Awaiting sample</strong>
+      <span class="service-consumption-summary-meta" data-summary-meta>Workbench service</span>
+    </article>
+    <article class="service-consumption-summary-card" data-service-consumption-summary="memory-node">
+      <span class="service-consumption-summary-label">Node RAM</span>
+      <strong data-summary-value>Awaiting sample</strong>
+      <span class="service-consumption-summary-meta" data-summary-meta>Current node</span>
+    </article>
+    <article class="service-consumption-summary-card" data-service-consumption-summary="s3-total">
+      <span class="service-consumption-summary-label">S3 usage</span>
+      <strong data-summary-value>Awaiting sample</strong>
+      <span class="service-consumption-summary-meta" data-summary-meta>Total visible buckets</span>
+    </article>
+    <article class="service-consumption-summary-card" data-service-consumption-summary="pv-total">
+      <span class="service-consumption-summary-label">Persistent volume</span>
+      <strong data-summary-value>Awaiting sample</strong>
+      <span class="service-consumption-summary-meta" data-summary-meta>Mounted service-consumption storage</span>
+    </article>
+  </div>
+
+  <div class="service-consumption-status-strip">
+    <p data-service-consumption-node-status>Node metrics have not been sampled yet.</p>
+    <p data-service-consumption-s3-status>S3 usage has not been sampled yet.</p>
+    <p data-service-consumption-pv-status>Persistent volume usage has not been sampled yet.</p>
+  </div>
+
+  <div class="service-consumption-chart-grid">
+    <article class="service-consumption-panel">
+      <div class="service-consumption-panel-header">
+        <div>
+          <h3>CPU usage</h3>
+          <p>Recent operational history for the workbench service and the current node.</p>
+        </div>
+      </div>
+      <div class="service-consumption-chart-shell">
+        <canvas data-service-consumption-cpu-chart aria-label="CPU usage chart"></canvas>
+      </div>
+      <div
+        class="service-consumption-chart-legend"
+        data-service-consumption-cpu-legend
+        aria-label="CPU usage legend"
+      ></div>
+    </article>
+
+    <article class="service-consumption-panel">
+      <div class="service-consumption-panel-header">
+        <div>
+          <h3>RAM usage</h3>
+          <p>Recent operational history for the workbench service and the current node.</p>
+        </div>
+      </div>
+      <div class="service-consumption-chart-shell">
+        <canvas data-service-consumption-memory-chart aria-label="RAM usage chart"></canvas>
+      </div>
+      <div
+        class="service-consumption-chart-legend"
+        data-service-consumption-memory-legend
+        aria-label="RAM usage legend"
+      ></div>
+    </article>
+
+    <article class="service-consumption-panel">
+      <div class="service-consumption-panel-header">
+        <div>
+          <h3>S3 usage</h3>
+          <p>Recent S3 storage history using the latest hourly aggregate across all visible buckets.</p>
+        </div>
+      </div>
+      <div class="service-consumption-chart-shell">
+        <canvas data-service-consumption-s3-chart aria-label="S3 usage chart"></canvas>
+      </div>
+      <div
+        class="service-consumption-chart-legend"
+        data-service-consumption-s3-legend
+        aria-label="S3 usage legend"
+      ></div>
+    </article>
+
+    <article class="service-consumption-panel">
+      <div class="service-consumption-panel-header">
+        <div>
+          <h3>Persistent volume usage</h3>
+          <p>Recent occupied storage on the mounted service-consumption persistent volume.</p>
+        </div>
+      </div>
+      <div class="service-consumption-chart-shell">
+        <canvas data-service-consumption-pv-chart aria-label="Persistent volume usage chart"></canvas>
+      </div>
+      <div
+        class="service-consumption-chart-legend"
+        data-service-consumption-pv-legend
+        aria-label="Persistent volume usage legend"
+      ></div>
+    </article>
+
+    <aside class="service-consumption-panel service-consumption-panel-wide service-consumption-topology-panel">
+      <span class="workspace-kicker">Topology</span>
+      <h3>Current deployment scope</h3>
+      <p>
+        The current PoC runs API, backend, frontend, and query execution on a single node.
+      </p>
+      <dl class="service-consumption-topology-list">
+        <div>
+          <dt>Node</dt>
+          <dd data-service-consumption-topology-node>Unknown</dd>
+        </div>
+        <div>
+          <dt>Pod</dt>
+          <dd data-service-consumption-topology-pod>Unknown</dd>
+        </div>
+        <div>
+          <dt>Namespace</dt>
+          <dd data-service-consumption-topology-namespace>Unknown</dd>
+        </div>
+      </dl>
+      <p class="service-consumption-scale-out-copy">
+        Query nodes will scale out automatically under higher query pressure once DAAIFL goes live.
+      </p>
+    </aside>
+  </div>
+</section>

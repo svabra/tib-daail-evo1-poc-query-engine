@@ -64,6 +64,10 @@ from .notebooks import (
     build_source_options,
 )
 from .runbooks import build_runbook_tree
+from .service_consumption import (
+    SERVICE_CONSUMPTION_DEFAULT_WINDOW,
+    ServiceConsumptionMonitor,
+)
 from .shared_notebooks import SharedNotebookStore
 from .source_discovery import (
     DataSourceDiscoveryManager,
@@ -83,6 +87,7 @@ REALTIME_TOPIC_ORDER = (
     "query-jobs",
     "data-generation-jobs",
     "data-source-events",
+    "service-consumption",
     "notebook-events",
     "client-connections",
 )
@@ -210,6 +215,13 @@ class WorkbenchService:
                 S3DataSourceDiscoverer(settings),
             ],
         )
+        self._service_consumption = ServiceConsumptionMonitor(
+            settings,
+            state_change_callback=lambda snapshot: self._publish_realtime_snapshot(
+                "service-consumption",
+                snapshot,
+            ),
+        )
         self._initialize_realtime_snapshots()
 
     def _realtime_facade(self) -> WorkbenchRealtimeFacade:
@@ -233,6 +245,11 @@ class WorkbenchService:
         self._set_realtime_snapshot(
             "data-source-events",
             self._data_source_discovery.state_payload(),
+            notify=False,
+        )
+        self._set_realtime_snapshot(
+            "service-consumption",
+            self._service_consumption.realtime_payload(),
             notify=False,
         )
         with self._condition:
@@ -296,12 +313,25 @@ class WorkbenchService:
 
         self._log_startup_section("Schedule background S3 startup diagnostics")
         self._start_background_s3_startup_diagnostics()
+        self._log_startup_section("Start service consumption monitor")
+        try:
+            self._service_consumption.start()
+        except Exception as exc:
+            self._log_startup(
+                "Service consumption monitor failed to start; continuing without historical service metrics: %s",
+                exc,
+                level=logging.WARNING,
+                exc_info=True,
+            )
+        else:
+            self._log_startup("Startup step complete: service consumption monitor started")
         self._log_startup("Workbench startup completed in %.2fs", time.perf_counter() - started)
         self._log_startup(STARTUP_DIVIDER)
 
     def stop(self) -> None:
         self._log_startup_section("Shutdown workbench service")
         self._log_startup("Workbench shutdown begin")
+        self._service_consumption.stop()
         self._data_source_discovery.stop()
         self._close_persistent_postgres_connections()
         for thread in list(self._startup_threads):
@@ -509,6 +539,15 @@ class WorkbenchService:
 
     def data_source_events_state(self) -> dict[str, object]:
         return self._data_source_discovery.state_payload()
+
+    def service_consumption_state(
+        self,
+        *,
+        window: str = SERVICE_CONSUMPTION_DEFAULT_WINDOW,
+    ) -> dict[str, object]:
+        return self._service_consumption.state_payload(
+            window=window,
+        )
 
     def connect_data_source(self, source_id: str) -> dict[str, object]:
         return self._data_source_discovery.connect_source(source_id)
@@ -806,8 +845,48 @@ class WorkbenchService:
     def _create_worker_connection(self) -> duckdb.DuckDBPyConnection:
         with self._lock:
             if self._conn is not None:
-                return self._conn.cursor()
+                worker_connection = self._conn.cursor()
+                if self._worker_connection_ready(worker_connection):
+                    return worker_connection
+                try:
+                    self._bootstrap_integrations(worker_connection)
+                except Exception:
+                    logger.warning(
+                        "Worker connection bootstrap retry failed; opening a fresh DuckDB connection instead.",
+                        exc_info=True,
+                    )
+                else:
+                    if self._worker_connection_ready(worker_connection):
+                        return worker_connection
+                try:
+                    worker_connection.close()
+                except Exception:
+                    pass
         return self._create_connection()
+
+    def _worker_connection_ready(
+        self,
+        connection: duckdb.DuckDBPyConnection,
+    ) -> bool:
+        required_catalogs: set[str] = set()
+        if self.settings.pg_oltp_database:
+            required_catalogs.add("pg_oltp")
+        if self.settings.pg_olap_database:
+            required_catalogs.add("pg_olap")
+        if not required_catalogs:
+            return True
+
+        try:
+            rows = connection.execute("PRAGMA database_list").fetchall()
+        except Exception:
+            return False
+
+        attached_catalogs = {
+            str(row[1]).strip().lower()
+            for row in rows
+            if len(row) > 1 and str(row[1]).strip()
+        }
+        return required_catalogs.issubset(attached_catalogs)
 
     def _create_postgres_native_connection(self, target: str):
         normalized_target = str(target).strip().lower()

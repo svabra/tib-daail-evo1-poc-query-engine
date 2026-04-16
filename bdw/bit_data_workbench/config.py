@@ -13,6 +13,10 @@ WORKBENCH_ENVIRONMENT_VARIABLES = (
     "PORT",
     "DUCKDB_DATABASE",
     "DUCKDB_EXTENSION_DIRECTORY",
+    "BDW_SERVICE_CONSUMPTION_DATA_DIR",
+    "BDW_SERVICE_CONSUMPTION_CPU_MEMORY_INTERVAL_SECONDS",
+    "BDW_SERVICE_CONSUMPTION_S3_INTERVAL_SECONDS",
+    "BDW_SERVICE_CONSUMPTION_RETENTION_HOURS",
     "MAX_RESULT_ROWS",
     "S3_ENDPOINT",
     "S3_BUCKET",
@@ -462,6 +466,10 @@ class Settings:
     port: int
     duckdb_database: Path
     duckdb_extension_directory: Path
+    service_consumption_data_dir: Path
+    service_consumption_cpu_memory_interval_seconds: int
+    service_consumption_s3_interval_seconds: int
+    service_consumption_retention_hours: int
     max_result_rows: int
     s3_endpoint: str | None
     s3_bucket: str | None
@@ -503,6 +511,31 @@ class Settings:
             duckdb_database=Path(env("DUCKDB_DATABASE", "/tmp/workspace/workspace.duckdb")),
             duckdb_extension_directory=Path(
                 env("DUCKDB_EXTENSION_DIRECTORY", "/opt/duckdb/extensions")
+            ),
+            service_consumption_data_dir=Path(
+                env("BDW_SERVICE_CONSUMPTION_DATA_DIR", "/workspace/service-consumption")
+            ),
+            service_consumption_cpu_memory_interval_seconds=max(
+                1,
+                int(
+                    env(
+                        "BDW_SERVICE_CONSUMPTION_CPU_MEMORY_INTERVAL_SECONDS",
+                        "3",
+                    )
+                ),
+            ),
+            service_consumption_s3_interval_seconds=max(
+                1,
+                int(
+                    env(
+                        "BDW_SERVICE_CONSUMPTION_S3_INTERVAL_SECONDS",
+                        "3600",
+                    )
+                ),
+            ),
+            service_consumption_retention_hours=max(
+                1,
+                int(env("BDW_SERVICE_CONSUMPTION_RETENTION_HOURS", "48")),
             ),
             max_result_rows=int(env("MAX_RESULT_ROWS", "200")),
             s3_endpoint=env_optional("S3_ENDPOINT"),

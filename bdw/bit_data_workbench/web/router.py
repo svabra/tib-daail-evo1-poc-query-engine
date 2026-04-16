@@ -480,6 +480,12 @@ def shell_context(
     }
 
 
+def service_consumption_page_context() -> dict[str, object]:
+    return {
+        "service_consumption_default_window": "24h",
+    }
+
+
 @router.get("/", response_class=HTMLResponse)
 def index(
     request: Request,
@@ -576,6 +582,38 @@ def query_workbench_data_sources(
                 shell_sidebar_hidden=True,
             ),
             "title": "DAAIFL Data Source Workbench",
+            **context,
+        },
+    )
+
+
+@router.get("/service-consumption", response_class=HTMLResponse)
+def service_consumption_page(
+    request: Request,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> HTMLResponse:
+    context = service_consumption_page_context()
+
+    if is_partial_request(request):
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/service_consumption.html",
+            context=context,
+        )
+
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={
+            **shell_context(
+                request,
+                service,
+                active_notebook=None,
+                workspace_mode="notebook",
+                workspace_partial_template="partials/service_consumption.html",
+                shell_sidebar_hidden=True,
+            ),
+            "title": "DAAIFL Service Consumption",
             **context,
         },
     )

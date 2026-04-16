@@ -51,6 +51,11 @@
       "enabledByDefault": true
     },
     {
+      "id": "service-consumption",
+      "script": "playwright_service_consumption_smoke.py",
+      "enabledByDefault": false
+    },
+    {
       "id": "local-workspace-sidebar-folders",
       "script": "playwright_local_workspace_sidebar_folders.py",
       "enabledByDefault": true

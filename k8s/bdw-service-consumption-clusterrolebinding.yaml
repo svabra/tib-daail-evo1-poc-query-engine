@@ -1,0 +1,12 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: evo1-bdw-service-consumption-reader
+subjects:
+  - kind: ServiceAccount
+    name: evo1-bdw
+    namespace: daai-brs-d
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: evo1-bdw-service-consumption-reader

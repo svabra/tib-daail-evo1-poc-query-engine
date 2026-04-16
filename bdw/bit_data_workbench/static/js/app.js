@@ -76,6 +76,7 @@ import {
   queryWorkbenchDataSourcesPageRoot,
   queryWorkbenchEntryPageRoot,
   runbookFolders,
+  serviceConsumptionPageRoot,
   settingsMenu,
   shellRoot,
   sidebarQueryCounts,
@@ -101,6 +102,7 @@ import {
 } from "./query-job-state.js";
 import { createS3ExplorerLoader, s3ExplorerPath } from "./s3-explorer-loader.js";
 import { createRealtimeController } from "./realtime-controller.js";
+import { createServiceConsumptionUi } from "./service-consumption-ui.js";
 import { createSidebarLayoutManager } from "./sidebar-layout-manager.js";
 import { createSidebarRefreshController } from "./sidebar-refresh-controller.js";
 import { createSidebarSearchFilter } from "./sidebar-search-filter.js";
@@ -144,6 +146,7 @@ let queryJobsSnapshot = [];
 let queryJobsSummary = { runningCount: 0, totalCount: 0 };
 let queryPerformanceState = { recent: [], stats: {} };
 let realtimeEventsEventSource = null;
+let serviceConsumptionStateVersion = null;
 let clientConnectionsStateVersion = 0;
 let clientConnectionsCount = 0;
 let dataGeneratorsCatalog = [];
@@ -313,8 +316,14 @@ const {
   pushNotebookHistory,
   pushQueryWorkbenchDataSourcesHistory,
   pushQueryWorkbenchHistory,
+  pushServiceConsumptionHistory,
   queryWorkbenchDataSourcesUrl,
 } = createNotebookUrlHelpers({ isLocalNotebookId });
+
+const serviceConsumptionUi = createServiceConsumptionUi({
+  fetchJsonOrThrow,
+  formatByteCount,
+});
 
 const {
   localWorkspaceFolderListMarkup,
@@ -613,6 +622,7 @@ const { querySourceInCurrentNotebook, querySourceInNewNotebook, viewSourceData }
   openLoaderWorkbench,
   loadQueryWorkbenchDataSources,
   loadQueryWorkbenchEntry,
+  openServiceConsumptionPage,
   openIngestionWorkbench,
   openQueryWorkbench,
   openQueryWorkbenchDataSources,
@@ -946,6 +956,10 @@ function currentWorkbenchSection() {
     return "home";
   }
 
+  if (serviceConsumptionPageRoot()) {
+    return "service-consumption";
+  }
+
   if (queryWorkbenchDataSourcesPageRoot()) {
     return "data-sources";
   }
@@ -988,6 +1002,10 @@ function workbenchTitle(section = currentWorkbenchSection()) {
 
   if (section === "data-sources") {
     return "DAAIFL Data Source Workbench";
+  }
+
+  if (section === "service-consumption") {
+    return "DAAIFL Service Consumption";
   }
 
   if (section === "loader") {
@@ -1294,6 +1312,7 @@ function openLoaderNavigation(generatorId = "") {
 function syncShellVisibility() {
   if (
     homePageRoot() ||
+    serviceConsumptionPageRoot() ||
     queryWorkbenchEntryPageRoot() ||
     queryWorkbenchDataSourcesPageRoot() ||
     currentWorkspaceMode() === "ingestion"
@@ -3837,6 +3856,16 @@ async function loadNotebookEventsState() {
   applyNotebookEventsState(await response.json());
 }
 
+async function loadServiceConsumptionState({
+  windowRange = "24h",
+} = {}) {
+  const payload = await serviceConsumptionUi.loadState({
+    windowRange,
+  });
+  serviceConsumptionStateVersion = Number(payload?.version || 0);
+  return payload;
+}
+
 function applyRealtimeTopicSnapshot(topic, snapshot) {
   switch (topic) {
     case "query-jobs":
@@ -3847,6 +3876,10 @@ function applyRealtimeTopicSnapshot(topic, snapshot) {
       break;
     case "data-source-events":
       applyDataSourceEventsState(snapshot);
+      break;
+    case "service-consumption":
+      serviceConsumptionStateVersion = Number(snapshot?.version || 0);
+      serviceConsumptionUi.applyRealtimeSnapshot(snapshot);
       break;
     case "notebook-events":
       applyNotebookEventsState(snapshot);
@@ -4044,6 +4077,21 @@ async function loadQueryWorkbenchDataSources(sourceId = "", { pushHistory = true
   }
 }
 
+async function loadServiceConsumptionPage({ pushHistory = true } = {}) {
+  const panel = await loadWorkspacePanelPartial("/service-consumption");
+  if (!panel) {
+    return;
+  }
+
+  syncShellVisibility();
+  activateNotebookLink("");
+  applyWorkbenchTitle("service-consumption");
+  await serviceConsumptionUi.initializeCurrentPage();
+  if (pushHistory) {
+    pushServiceConsumptionHistory();
+  }
+}
+
 async function loadHomePage({ pushHistory = true } = {}) {
   const panel = await loadWorkspacePanelPartial("/");
   if (!panel) {
@@ -4067,6 +4115,10 @@ async function openQueryWorkbenchDataSources() {
   await loadQueryWorkbenchDataSources();
 }
 
+async function openServiceConsumptionPage() {
+  await loadServiceConsumptionPage();
+}
+
 function ensureRealtimeEventsEventSource() {
   if (realtimeEventsEventSource || typeof window.EventSource !== "function") {
     return;
@@ -4083,6 +4135,9 @@ function ensureRealtimeEventsEventSource() {
   if (dataSourceEventsStateVersion !== null) {
     params.set("dataSourceEventsVersion", String(dataSourceEventsStateVersion));
   }
+  if (serviceConsumptionStateVersion !== null) {
+    params.set("serviceConsumptionVersion", String(serviceConsumptionStateVersion));
+  }
   if (notebookEventsStateVersion !== null) {
     params.set("notebookEventsVersion", String(notebookEventsStateVersion));
   }
@@ -4094,7 +4149,14 @@ function ensureRealtimeEventsEventSource() {
     ? `/api/events/stream?${params.toString()}`
     : "/api/events/stream";
   const eventSource = new window.EventSource(streamUrl);
-  ["query-jobs", "data-generation-jobs", "data-source-events", "notebook-events", "client-connections"].forEach((topic) => {
+  [
+    "query-jobs",
+    "data-generation-jobs",
+    "data-source-events",
+    "service-consumption",
+    "notebook-events",
+    "client-connections",
+  ].forEach((topic) => {
     eventSource.addEventListener(topic, (event) => {
       try {
         applyRealtimeTopicSnapshot(topic, JSON.parse(event.data));
@@ -4123,6 +4185,15 @@ function ensureRealtimeEventsEventSource() {
     if (dataSourceEventsStateVersion !== null) {
       refreshTasks.push(
         loadDataSourceEventsState().catch(() => {
+          // Ignore transient reconnect issues.
+        })
+      );
+    }
+    if (serviceConsumptionStateVersion !== null) {
+      refreshTasks.push(
+        loadServiceConsumptionState({
+          windowRange: serviceConsumptionPageRoot() ? serviceConsumptionUi.currentWindow() : "24h",
+        }).catch(() => {
           // Ignore transient reconnect issues.
         })
       );
@@ -6107,6 +6178,10 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  if (await serviceConsumptionUi.handleClick(event)) {
+    return;
+  }
+
   if (handleCsvIngestionClick(event)) {
     return;
   }
@@ -6296,12 +6371,16 @@ document.addEventListener("mouseout", (event) => {
   closePopupMenusForTarget(null);
 });
 
-document.body.addEventListener("change", (event) => {
+document.body.addEventListener("change", async (event) => {
   if (handleCsvIngestionChange(event)) {
     return;
   }
 
   if (handleNotebookWorkspaceChange(event)) {
+    return;
+  }
+
+  if (await serviceConsumptionUi.handleChange(event)) {
     return;
   }
 
@@ -6422,6 +6501,9 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
   renderQueryMonitor();
   syncVisibleQueryCells();
   renderQueryNotificationMenu();
+  serviceConsumptionUi.initializeCurrentPage().catch((error) => {
+    console.error("Failed to initialize the service-consumption page after a partial swap.", error);
+  });
 
   const notebookId =
     event.detail?.requestConfig?.parameters?.notebook_id ??
@@ -6483,6 +6565,17 @@ window.addEventListener("popstate", async () => {
     return;
   }
 
+  if (window.location.pathname === "/service-consumption") {
+    try {
+      await loadServiceConsumptionPage({ pushHistory: false });
+    } catch (error) {
+      if (error?.name !== "AbortError") {
+        console.error("Failed to restore service consumption from browser history.", error);
+      }
+    }
+    return;
+  }
+
   if (window.location.pathname === "/") {
     try {
       await loadHomePage({ pushHistory: false });
@@ -6536,6 +6629,11 @@ const initialLoadTasks = [
   loadNotebookEventsState().catch((error) => {
     console.error("Failed to load notebook events.", error);
   }),
+  loadServiceConsumptionState({
+    windowRange: serviceConsumptionPageRoot() ? serviceConsumptionUi.currentWindow() : "24h",
+  }).catch((error) => {
+    console.error("Failed to load service consumption metrics.", error);
+  }),
 ];
 
 if (initialWorkspaceMode === "loader") {
@@ -6563,6 +6661,14 @@ Promise.allSettled(initialLoadTasks)
 
     if (initialWorkspaceMode === "ingestion") {
       showIngestionLanding();
+      renderQueryNotificationMenu();
+      return;
+    }
+
+    if (serviceConsumptionPageRoot()) {
+      serviceConsumptionUi.initializeCurrentPage().catch((error) => {
+        console.error("Failed to initialize the service-consumption page.", error);
+      });
       renderQueryNotificationMenu();
       return;
     }

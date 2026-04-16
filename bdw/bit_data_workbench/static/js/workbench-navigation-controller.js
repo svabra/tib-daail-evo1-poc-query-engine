@@ -7,6 +7,7 @@ export function createWorkbenchNavigationController(helpers) {
     openLoaderWorkbench,
     loadQueryWorkbenchDataSources,
     loadQueryWorkbenchEntry,
+    openServiceConsumptionPage,
     openIngestionWorkbench,
     openQueryWorkbench,
     openQueryWorkbenchDataSources,
@@ -143,6 +144,17 @@ export function createWorkbenchNavigationController(helpers) {
       event.stopPropagation();
       closeSettingsMenus();
       await showFeatureListDialog();
+      return true;
+    }
+
+    const openServiceConsumptionButton = event.target.closest(
+      "[data-open-service-consumption]"
+    );
+    if (openServiceConsumptionButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeSettingsMenus();
+      await openServiceConsumptionPage();
       return true;
     }
 
