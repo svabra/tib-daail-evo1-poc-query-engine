@@ -90,6 +90,40 @@ class RealtimeConnectionsTests(unittest.TestCase):
             [{"topic": "query-jobs", "snapshot": {"version": 1, "items": []}}],
         )
 
+    def test_wait_for_realtime_updates_supports_service_consumption_topic(
+        self,
+    ) -> None:
+        REALTIME_TOPIC_ORDER, service = build_realtime_service()
+
+        service._set_realtime_snapshot_locked(
+            "service-consumption",
+            {
+                "version": 4,
+                "latest": {"timestampUtc": "2026-04-16T08:00:00+00:00"},
+                "status": {"nodeMetricsAvailable": True},
+            },
+            notify=False,
+        )
+
+        updates = service.wait_for_realtime_updates(
+            {topic: 0 for topic in REALTIME_TOPIC_ORDER},
+            timeout=0,
+        )
+
+        self.assertEqual(
+            updates,
+            [
+                {
+                    "topic": "service-consumption",
+                    "snapshot": {
+                        "version": 4,
+                        "latest": {"timestampUtc": "2026-04-16T08:00:00+00:00"},
+                        "status": {"nodeMetricsAvailable": True},
+                    },
+                }
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

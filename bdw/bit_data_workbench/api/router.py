@@ -191,6 +191,21 @@ def data_source_events_state(service: WorkbenchService = Depends(get_workbench_s
     return JSONResponse(jsonable_encoder(service.data_source_events_state()))
 
 
+@router.get("/api/service-consumption/state")
+def service_consumption_state(
+    window: str = Query(default="24h"),
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        payload = service.service_consumption_state(
+            window=window,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(payload))
+
+
 @router.post("/api/data-sources/{source_id}/connect")
 def connect_data_source(
     source_id: str,
@@ -534,6 +549,10 @@ async def stream_realtime_events(
         default=None,
         alias="dataSourceEventsVersion",
     ),
+    service_consumption_version: int | None = Query(
+        default=None,
+        alias="serviceConsumptionVersion",
+    ),
     notebook_events_version: int | None = Query(
         default=None,
         alias="notebookEventsVersion",
@@ -549,6 +568,7 @@ async def stream_realtime_events(
             "query-jobs": query_jobs_version,
             "data-generation-jobs": data_generation_jobs_version,
             "data-source-events": data_source_events_version,
+            "service-consumption": service_consumption_version,
             "notebook-events": notebook_events_version,
             "client-connections": client_connections_version,
         }

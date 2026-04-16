@@ -54,12 +54,25 @@ export function createNotebookUrlHelpers({ isLocalNotebookId }) {
     window.history.pushState({ mode: "home" }, "", "/");
   }
 
+  function pushServiceConsumptionHistory() {
+    if (window.location.pathname === "/service-consumption") {
+      return;
+    }
+
+    window.history.pushState(
+      { mode: "service-consumption" },
+      "",
+      "/service-consumption"
+    );
+  }
+
   return {
     notebookUrl,
     pushHomeHistory,
     pushNotebookHistory,
     pushQueryWorkbenchDataSourcesHistory,
     pushQueryWorkbenchHistory,
+    pushServiceConsumptionHistory,
     queryWorkbenchDataSourcesUrl,
   };
 }

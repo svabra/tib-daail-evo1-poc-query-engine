@@ -35,6 +35,14 @@ spec:
               value: "false"
             - name: DUCKDB_DATABASE
               value: /tmp/workspace/workspace.duckdb
+            - name: BDW_SERVICE_CONSUMPTION_DATA_DIR
+              value: /workspace/service-consumption
+            - name: BDW_SERVICE_CONSUMPTION_CPU_MEMORY_INTERVAL_SECONDS
+              value: "3"
+            - name: BDW_SERVICE_CONSUMPTION_S3_INTERVAL_SECONDS
+              value: "3600"
+            - name: BDW_SERVICE_CONSUMPTION_RETENTION_HOURS
+              value: "48"
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -54,6 +62,8 @@ spec:
           volumeMounts:
             - name: workspace
               mountPath: /workspace
+            - name: service-consumption
+              mountPath: /workspace/service-consumption
             - name: bit-ros-trusted-certs
               mountPath: /myconfigmap/daai-brs-d/bit-ros-trusted-certs
               readOnly: true
@@ -88,6 +98,9 @@ spec:
       volumes:
         - name: workspace
           emptyDir: {}
+        - name: service-consumption
+          persistentVolumeClaim:
+            claimName: evo1-bdw-service-consumption
         - name: bit-ros-trusted-certs
           configMap:
             name: bit-ros-trusted-certs
