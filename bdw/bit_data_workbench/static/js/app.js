@@ -102,7 +102,7 @@ import {
 } from "./query-job-state.js";
 import { createS3ExplorerLoader, s3ExplorerPath } from "./s3-explorer-loader.js";
 import { createRealtimeController } from "./realtime-controller.js";
-import { createServiceConsumptionUi } from "./service-consumption-ui.js?v=2026-04-17-service-breakdown-5";
+import { createServiceConsumptionUi } from "./service-consumption-ui.js?v=2026-04-17-layout-cleanup-5";
 import { createSidebarLayoutManager } from "./sidebar-layout-manager.js";
 import { createSidebarRefreshController } from "./sidebar-refresh-controller.js";
 import { createSidebarSearchFilter } from "./sidebar-search-filter.js";

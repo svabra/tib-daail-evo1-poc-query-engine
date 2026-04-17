@@ -25,7 +25,7 @@ class FakeWorkbenchService:
     def runtime_info(self) -> dict[str, str]:
         return {
             "service": "bit-data-workbench",
-            "image_version": "0.5.6",
+            "image_version": "0.5.7",
             "hostname": "test-host",
             "pod_name": "bdw-pod",
             "pod_namespace": "bdw-namespace",
@@ -322,6 +322,8 @@ class ServiceConsumptionRouteTests(unittest.TestCase):
         self.assertIn('data-service-consumption-pv-chart', body)
         self.assertIn('data-service-consumption-chart-limit="cpu"', body)
         self.assertIn('data-service-consumption-chart-limit="memory"', body)
+        self.assertIn('service-consumption-summary-grid-compact', body)
+        self.assertIn('service-consumption-panel-diagnostic', body)
         self.assertNotIn('data-service-consumption-year-select', body)
         self.assertIn(
             "Query nodes will scale out automatically under higher query pressure once DAAIFL goes live.",

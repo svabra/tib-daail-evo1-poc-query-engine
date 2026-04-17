@@ -9,54 +9,56 @@
         <span class="workspace-kicker">Service Consumption</span>
         <h2>Annual budget burn for the running workbench</h2>
         <p>
-          Track the shared annual PoC budget, review estimated CHF burn, and use the infrastructure charts below as supporting diagnostics.
+          Track the shared annual PoC budget and review the estimated CHF burn for the running workbench.
         </p>
         <p class="service-consumption-sampled-at" data-service-consumption-sampled-at>
           No samples yet.
         </p>
       </div>
 
-      <article class="service-consumption-panel service-consumption-panel-hero-financial">
-        <div class="service-consumption-panel-header">
-          <div>
-            <h3>Year-to-date burn and forecast</h3>
-            <p>
-              Estimated CHF year-to-date against the shared annual budget, with a month-by-month forecast for the remainder of the year.
-            </p>
+      <div class="service-consumption-hero-financial-row">
+        <article class="service-consumption-panel service-consumption-panel-hero-financial">
+          <div class="service-consumption-panel-header">
+            <div>
+              <h3>Year-to-date burn and forecast</h3>
+              <p>
+                Estimated CHF year-to-date against the shared annual budget, with a forecast for the remainder of the year.
+              </p>
+            </div>
           </div>
-        </div>
-        <div class="service-consumption-chart-shell service-consumption-chart-shell-financial-hero">
-          <canvas data-service-consumption-financial-chart aria-label="Annual budget burn and forecast chart"></canvas>
-        </div>
-        <div
-          class="service-consumption-chart-legend"
-          data-service-consumption-financial-legend
-          aria-label="Annual budget burn and forecast legend"
-        ></div>
-      </article>
-    </div>
+          <div class="service-consumption-chart-shell service-consumption-chart-shell-financial-hero">
+            <canvas data-service-consumption-financial-chart aria-label="Annual budget burn and forecast chart"></canvas>
+          </div>
+          <div
+            class="service-consumption-chart-legend"
+            data-service-consumption-financial-legend
+            aria-label="Annual budget burn and forecast legend"
+          ></div>
+        </article>
 
-    <article class="service-consumption-panel service-consumption-panel-hero-service-mix">
-      <div class="service-consumption-panel-header">
-        <div>
-          <h3>Service spend YTD</h3>
-          <p>
-            Current estimated service mix across the categories that make up the total spend year-to-date.
-          </p>
-        </div>
+        <article class="service-consumption-panel service-consumption-panel-hero-service-mix">
+          <div class="service-consumption-panel-header">
+            <div>
+              <h3>Service spend YTD</h3>
+              <p>
+                Current estimated mix across the services that make up total spend year-to-date.
+              </p>
+            </div>
+          </div>
+          <div class="service-consumption-chart-shell service-consumption-chart-shell-financial-mix">
+            <canvas
+              data-service-consumption-financial-service-mix-chart
+              aria-label="Service spend year-to-date pie chart"
+            ></canvas>
+          </div>
+          <div
+            class="service-consumption-chart-legend service-consumption-chart-legend-stack"
+            data-service-consumption-financial-service-mix-legend
+            aria-label="Service spend year-to-date legend"
+          ></div>
+        </article>
       </div>
-      <div class="service-consumption-chart-shell service-consumption-chart-shell-financial-mix">
-        <canvas
-          data-service-consumption-financial-service-mix-chart
-          aria-label="Service spend year-to-date pie chart"
-        ></canvas>
-      </div>
-      <div
-        class="service-consumption-chart-legend service-consumption-chart-legend-stack"
-        data-service-consumption-financial-service-mix-legend
-        aria-label="Service spend year-to-date legend"
-      ></div>
-    </article>
+    </div>
 
     <aside class="service-consumption-budget-panel">
       <span class="workspace-kicker">Shared budget</span>
@@ -128,7 +130,7 @@
       <span class="workspace-kicker">Service cost breakdown</span>
       <h3>Estimated services that aggregate to the total spend</h3>
       <p>
-        Expand each service to review the cost drivers behind the shared annual burn. These categories add up to the total estimated CHF shown above.
+        Expand each service to review the main cost drivers behind the shared annual burn.
       </p>
     </div>
     <div class="service-consumption-service-list" data-service-consumption-services></div>
@@ -143,7 +145,7 @@
       <span class="workspace-kicker">Operational detail</span>
       <h3>Supporting infrastructure diagnostics</h3>
       <p>
-        Use these smaller charts to understand why the workbench burn estimate is moving. They are secondary to the financial view above.
+        Use these diagnostics to explain the main cost movements. They are secondary to the financial view above.
       </p>
     </div>
 
@@ -160,7 +162,7 @@
       </div>
     </div>
 
-    <div class="service-consumption-summary-grid">
+    <div class="service-consumption-summary-grid service-consumption-summary-grid-compact">
       <article class="service-consumption-summary-card" data-service-consumption-summary="cpu-service">
         <span class="service-consumption-summary-label">Workbench CPU</span>
         <strong data-summary-value>Awaiting sample</strong>
@@ -200,7 +202,7 @@
     </div>
 
     <div class="service-consumption-chart-grid">
-      <article class="service-consumption-panel">
+      <article class="service-consumption-panel service-consumption-panel-diagnostic">
         <div class="service-consumption-panel-header">
           <div>
             <div class="service-consumption-panel-title-row">
@@ -210,7 +212,7 @@
                 data-service-consumption-chart-limit="cpu"
               ></span>
             </div>
-            <p>Recent operational history for the workbench service and the current node.</p>
+            <p>Workbench service and current node.</p>
           </div>
         </div>
         <div class="service-consumption-chart-shell service-consumption-chart-shell-compact">
@@ -223,7 +225,7 @@
         ></div>
       </article>
 
-      <article class="service-consumption-panel">
+      <article class="service-consumption-panel service-consumption-panel-diagnostic">
         <div class="service-consumption-panel-header">
           <div>
             <div class="service-consumption-panel-title-row">
@@ -233,7 +235,7 @@
                 data-service-consumption-chart-limit="memory"
               ></span>
             </div>
-            <p>Recent operational history for the workbench service and the current node.</p>
+            <p>Workbench service and current node.</p>
           </div>
         </div>
         <div class="service-consumption-chart-shell service-consumption-chart-shell-compact">
@@ -246,11 +248,11 @@
         ></div>
       </article>
 
-      <article class="service-consumption-panel">
+      <article class="service-consumption-panel service-consumption-panel-diagnostic">
         <div class="service-consumption-panel-header">
           <div>
             <h3>S3 usage</h3>
-            <p>Recent S3 storage history using the latest hourly aggregate across all visible buckets.</p>
+            <p>Latest hourly aggregate across all visible buckets.</p>
           </div>
         </div>
         <div class="service-consumption-chart-shell service-consumption-chart-shell-compact">
@@ -263,11 +265,11 @@
         ></div>
       </article>
 
-      <article class="service-consumption-panel">
+      <article class="service-consumption-panel service-consumption-panel-diagnostic">
         <div class="service-consumption-panel-header">
           <div>
             <h3>Persistent volume usage</h3>
-            <p>Recent occupied storage on the mounted service-consumption persistent volume.</p>
+            <p>Occupied storage on the mounted service-consumption persistent volume.</p>
           </div>
         </div>
         <div class="service-consumption-chart-shell service-consumption-chart-shell-compact">

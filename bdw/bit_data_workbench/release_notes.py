@@ -1,9 +1,27 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.5.6. Keep entries concise and
+# Derived from git history through version 0.5.7. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.5.7",
+        "releasedAt": "2026-04-17T16:45:00+02:00",
+        "features": [
+            (
+                "Service Consumption now presents a finance-first annual budget dashboard "
+                "with service mix, expandable cost drivers, and current-vs-forecast burn tracking."
+            ),
+            (
+                "The monitoring page now blends fixed DAAIFL and PostgreSQL fees with "
+                "usage-based container, S3, and filesystem costs in one client-facing view."
+            ),
+            (
+                "Operational diagnostics now stay secondary and denser, with smaller "
+                "resource charts, preserved service-row state during refreshes, and clearer chart labeling."
+            ),
+        ],
+    },
     {
         "version": "0.5.6",
         "releasedAt": "2026-04-17T11:30:00+02:00",

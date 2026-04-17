@@ -27,7 +27,7 @@ def make_settings(database_path: Path) -> Settings:
     return Settings(
         service_name="bit-data-workbench",
         ui_title="DAAIFL Workbench",
-        image_version="0.5.6",
+        image_version="0.5.7",
         port=8000,
         duckdb_database=database_path,
         duckdb_extension_directory=database_path.parent / "duckdb-ext",

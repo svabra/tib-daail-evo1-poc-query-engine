@@ -50,6 +50,54 @@ const LEGEND_TOOLTIPS = {
   },
 };
 
+const serviceMixCenterTextPlugin = {
+  id: "serviceMixCenterText",
+  afterDraw(chart, _args, options) {
+    if (!chart || chart.config?.type !== "doughnut") {
+      return;
+    }
+
+    const labels = Array.isArray(options?.lines) ? options.lines.filter(Boolean) : [];
+    if (!labels.length) {
+      return;
+    }
+
+    const datasetMeta = chart.getDatasetMeta(0);
+    const firstArc = datasetMeta?.data?.[0];
+    const chartArea = chart.chartArea;
+    const ctx = chart.ctx;
+    if (!ctx || !chartArea) {
+      return;
+    }
+
+    const centerX =
+      typeof firstArc?.x === "number"
+        ? firstArc.x
+        : (chartArea.left + chartArea.right) / 2;
+    const centerY =
+      typeof firstArc?.y === "number"
+        ? firstArc.y
+        : (chartArea.top + chartArea.bottom) / 2;
+    const innerRadius =
+      typeof firstArc?.innerRadius === "number"
+        ? firstArc.innerRadius
+        : Math.min(chartArea.right - chartArea.left, chartArea.bottom - chartArea.top) * 0.28;
+    const fontSize = Math.max(14, Math.min(28, innerRadius / 3.2));
+    const lineHeight = fontSize * 1.15;
+    const startY = centerY - ((labels.length - 1) * lineHeight) / 2;
+
+    ctx.save();
+    ctx.fillStyle = options?.color || "#0b1f3a";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `700 ${fontSize}px "Segoe UI", sans-serif`;
+    labels.forEach((label, index) => {
+      ctx.fillText(label, centerX, startY + index * lineHeight);
+    });
+    ctx.restore();
+  },
+};
+
 function financialLegendTooltips(currentYear, comparisonYear) {
   const tooltips = {
     [`Actual Spend ${currentYear}`]:
@@ -270,6 +318,36 @@ function formatTimestampLabel(value, { short = false } = {}) {
     minute: short ? undefined : "2-digit",
     timeZone: "UTC",
   }).format(date);
+}
+
+function isSameUtcDay(a, b) {
+  return (
+    a.getUTCFullYear() === b.getUTCFullYear() &&
+    a.getUTCMonth() === b.getUTCMonth() &&
+    a.getUTCDate() === b.getUTCDate()
+  );
+}
+
+function formatCompactTimestampLabel(value, previousValue = null) {
+  const date = new Date(value || "");
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  const previous = previousValue ? new Date(previousValue) : null;
+  const timeLabel = new Intl.DateTimeFormat("en-CH", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "UTC",
+  }).format(date);
+  if (previous instanceof Date && !Number.isNaN(previous.getTime()) && isSameUtcDay(date, previous)) {
+    return timeLabel;
+  }
+  const dayLabel = new Intl.DateTimeFormat("en-CH", {
+    month: "short",
+    day: "2-digit",
+    timeZone: "UTC",
+  }).format(date);
+  return [dayLabel, timeLabel];
 }
 
 function formatSampledAt(value, prefix = "Latest sample") {
@@ -732,6 +810,40 @@ function timeAxisOptions(maxTicksLimit = 8) {
       maxTicksLimit,
       minRotation: 0,
       maxRotation: 0,
+    },
+  };
+}
+
+function compactTimeAxisOptions(maxTicksLimit = 3) {
+  return {
+    ticks: {
+      autoSkip: true,
+      maxTicksLimit,
+      minRotation: 0,
+      maxRotation: 0,
+      font: {
+        size: 9,
+      },
+      padding: 4,
+    },
+    grid: {
+      drawTicks: false,
+    },
+  };
+}
+
+function compactValueAxisOptions(callback, beginAtZero = true) {
+  return {
+    beginAtZero,
+    ticks: {
+      maxTicksLimit: 4,
+      font: {
+        size: 10,
+      },
+      callback,
+    },
+    grid: {
+      drawTicks: false,
     },
   };
 }
@@ -1248,6 +1360,7 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
         canvas: financialServiceMixChartCanvas(),
         configFactory: () => ({
           type: "doughnut",
+          plugins: [serviceMixCenterTextPlugin],
           data: {
             labels,
             datasets: [
@@ -1267,6 +1380,9 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
             cutout: "58%",
             plugins: {
               legend: { display: false },
+              serviceMixCenterText: {
+                lines: ["Costs by", "Service"],
+              },
               tooltip: {
                 callbacks: {
                   label: (context) => {
@@ -1306,8 +1422,9 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
   async function renderRecentCharts(payload) {
     await ensureChartJs();
 
-    const cpuLabels = (payload?.cpuHistory?.timestamps || []).map((timestamp) =>
-      formatTimestampLabel(timestamp)
+    const cpuTimestamps = payload?.cpuHistory?.timestamps || [];
+    const cpuLabels = cpuTimestamps.map((timestamp, index) =>
+      formatCompactTimestampLabel(timestamp, index > 0 ? cpuTimestamps[index - 1] : null)
     );
     const cpuService = normalizeNumericSeries(payload?.cpuHistory?.service || []);
     const cpuNode = normalizeNumericSeries(payload?.cpuHistory?.node || []);
@@ -1327,7 +1444,7 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
                 backgroundColor: "transparent",
                 tension: 0.25,
                 pointRadius: 0,
-                borderWidth: 2,
+                borderWidth: 1.75,
                 spanGaps: true,
               },
               {
@@ -1337,7 +1454,7 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
                 backgroundColor: "transparent",
                 tension: 0.25,
                 pointRadius: 0,
-                borderWidth: 2,
+                borderWidth: 1.75,
                 spanGaps: true,
               },
             ],
@@ -1356,8 +1473,8 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
               },
             },
             scales: {
-              x: timeAxisOptions(8),
-              y: { beginAtZero: true },
+              x: compactTimeAxisOptions(3),
+              y: compactValueAxisOptions(undefined, true),
             },
           },
         }),
@@ -1373,8 +1490,9 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
       renderLegend(cpuLegendContainer(), cpuChart.data.datasets, LEGEND_TOOLTIPS.cpu);
     }
 
-    const memoryLabels = (payload?.memoryHistory?.timestamps || []).map((timestamp) =>
-      formatTimestampLabel(timestamp)
+    const memoryTimestamps = payload?.memoryHistory?.timestamps || [];
+    const memoryLabels = memoryTimestamps.map((timestamp, index) =>
+      formatCompactTimestampLabel(timestamp, index > 0 ? memoryTimestamps[index - 1] : null)
     );
     const memoryService = normalizeNumericSeries(payload?.memoryHistory?.service || []);
     const memoryNode = normalizeNumericSeries(payload?.memoryHistory?.node || []);
@@ -1394,7 +1512,7 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
                 backgroundColor: "transparent",
                 tension: 0.25,
                 pointRadius: 0,
-                borderWidth: 2,
+                borderWidth: 1.75,
                 spanGaps: true,
               },
               {
@@ -1404,7 +1522,7 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
                 backgroundColor: "transparent",
                 tension: 0.25,
                 pointRadius: 0,
-                borderWidth: 2,
+                borderWidth: 1.75,
                 spanGaps: true,
               },
             ],
@@ -1423,13 +1541,8 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
               },
             },
             scales: {
-              x: timeAxisOptions(8),
-              y: {
-                beginAtZero: true,
-                ticks: {
-                  callback: (value) => formatByteCount(Number(value)),
-                },
-              },
+              x: compactTimeAxisOptions(3),
+              y: compactValueAxisOptions((value) => formatByteCount(Number(value)), true),
             },
           },
         }),
@@ -1448,8 +1561,9 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
 
   async function renderS3History(payload) {
     await ensureChartJs();
-    const labels = (payload?.s3History?.timestamps || []).map((timestamp) =>
-      formatTimestampLabel(timestamp)
+    const s3Timestamps = payload?.s3History?.timestamps || [];
+    const labels = s3Timestamps.map((timestamp, index) =>
+      formatCompactTimestampLabel(timestamp, index > 0 ? s3Timestamps[index - 1] : null)
     );
     const values = normalizeNumericSeries(payload?.s3History?.values || []);
     const chart =
@@ -1467,9 +1581,9 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
                 borderColor: METRIC_COLORS.s3,
                 backgroundColor: "transparent",
                 tension: 0.18,
-                pointRadius: 2,
+                pointRadius: 1.5,
                 pointHoverRadius: 3,
-                borderWidth: 2,
+                borderWidth: 1.75,
                 spanGaps: true,
               },
             ],
@@ -1488,13 +1602,8 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
               },
             },
             scales: {
-              x: timeAxisOptions(7),
-              y: {
-                beginAtZero: true,
-                ticks: {
-                  callback: (value) => formatByteCount(Number(value)),
-                },
-              },
+              x: compactTimeAxisOptions(3),
+              y: compactValueAxisOptions((value) => formatByteCount(Number(value)), true),
             },
           },
         }),
@@ -1510,8 +1619,12 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
 
   async function renderPersistentVolumeHistory(payload) {
     await ensureChartJs();
-    const labels = (payload?.persistentVolumeHistory?.timestamps || []).map((timestamp) =>
-      formatTimestampLabel(timestamp)
+    const persistentVolumeTimestamps = payload?.persistentVolumeHistory?.timestamps || [];
+    const labels = persistentVolumeTimestamps.map((timestamp, index) =>
+      formatCompactTimestampLabel(
+        timestamp,
+        index > 0 ? persistentVolumeTimestamps[index - 1] : null
+      )
     );
     const values = normalizeNumericSeries(payload?.persistentVolumeHistory?.values || []);
     const chart =
@@ -1529,9 +1642,9 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
                 borderColor: METRIC_COLORS.pv,
                 backgroundColor: "transparent",
                 tension: 0.18,
-                pointRadius: 2,
+                pointRadius: 1.5,
                 pointHoverRadius: 3,
-                borderWidth: 2,
+                borderWidth: 1.75,
                 spanGaps: true,
               },
             ],
@@ -1550,13 +1663,8 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
               },
             },
             scales: {
-              x: timeAxisOptions(7),
-              y: {
-                beginAtZero: true,
-                ticks: {
-                  callback: (value) => formatByteCount(Number(value)),
-                },
-              },
+              x: compactTimeAxisOptions(3),
+              y: compactValueAxisOptions((value) => formatByteCount(Number(value)), true),
             },
           },
         }),
