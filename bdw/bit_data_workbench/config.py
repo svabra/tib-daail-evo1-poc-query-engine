@@ -17,6 +17,14 @@ WORKBENCH_ENVIRONMENT_VARIABLES = (
     "BDW_SERVICE_CONSUMPTION_CPU_MEMORY_INTERVAL_SECONDS",
     "BDW_SERVICE_CONSUMPTION_S3_INTERVAL_SECONDS",
     "BDW_SERVICE_CONSUMPTION_RETENTION_HOURS",
+    "BDW_SERVICE_CONSUMPTION_COST_NODE_CHF_PER_HOUR",
+    "BDW_SERVICE_CONSUMPTION_COST_APP_CHF_PER_MONTH",
+    "BDW_SERVICE_CONSUMPTION_COST_S3_CHF_PER_GB_MONTH",
+    "BDW_SERVICE_CONSUMPTION_COST_PV_CHF_PER_GB_MONTH",
+    "BDW_SERVICE_CONSUMPTION_COST_PG_CHF_PER_GB_MONTH",
+    "BDW_SERVICE_CONSUMPTION_COST_CPU_WEIGHT",
+    "BDW_SERVICE_CONSUMPTION_COST_RAM_WEIGHT",
+    "BDW_APP_STORAGE_PVC_NAME",
     "MAX_RESULT_ROWS",
     "S3_ENDPOINT",
     "S3_BUCKET",
@@ -125,6 +133,16 @@ def env_bool(name: str, default: bool) -> bool:
         return False
 
     raise ValueError(f"Unsupported boolean value for {name}: {raw}")
+
+
+def env_float_optional(name: str) -> float | None:
+    raw = env_optional(name)
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ValueError(f"Unsupported float value for {name}: {raw}") from exc
 
 
 def read_secret_file(path: Path, *, variable_name: str) -> str:
@@ -495,6 +513,14 @@ class Settings:
     pod_namespace: str | None
     pod_ip: str | None
     node_name: str | None
+    service_consumption_cost_node_chf_per_hour: float | None = None
+    service_consumption_cost_app_chf_per_month: float | None = None
+    service_consumption_cost_s3_chf_per_gb_month: float | None = None
+    service_consumption_cost_pv_chf_per_gb_month: float | None = None
+    service_consumption_cost_pg_chf_per_gb_month: float | None = None
+    service_consumption_cost_cpu_weight: float = 0.5
+    service_consumption_cost_ram_weight: float = 0.5
+    app_storage_pvc_name: str | None = None
     _generated_s3_ca_cert_file: Path | None = field(init=False, default=None, repr=False)
 
     @classmethod
@@ -537,6 +563,32 @@ class Settings:
                 1,
                 int(env("BDW_SERVICE_CONSUMPTION_RETENTION_HOURS", "48")),
             ),
+            service_consumption_cost_node_chf_per_hour=env_float_optional(
+                "BDW_SERVICE_CONSUMPTION_COST_NODE_CHF_PER_HOUR"
+            ),
+            service_consumption_cost_app_chf_per_month=env_float_optional(
+                "BDW_SERVICE_CONSUMPTION_COST_APP_CHF_PER_MONTH"
+            ),
+            service_consumption_cost_s3_chf_per_gb_month=env_float_optional(
+                "BDW_SERVICE_CONSUMPTION_COST_S3_CHF_PER_GB_MONTH"
+            ),
+            service_consumption_cost_pv_chf_per_gb_month=env_float_optional(
+                "BDW_SERVICE_CONSUMPTION_COST_PV_CHF_PER_GB_MONTH"
+            ),
+            service_consumption_cost_pg_chf_per_gb_month=env_float_optional(
+                "BDW_SERVICE_CONSUMPTION_COST_PG_CHF_PER_GB_MONTH"
+            ),
+            service_consumption_cost_cpu_weight=max(
+                0.0,
+                env_float_optional("BDW_SERVICE_CONSUMPTION_COST_CPU_WEIGHT")
+                or 0.5,
+            ),
+            service_consumption_cost_ram_weight=max(
+                0.0,
+                env_float_optional("BDW_SERVICE_CONSUMPTION_COST_RAM_WEIGHT")
+                or 0.5,
+            ),
+            app_storage_pvc_name=env_optional("BDW_APP_STORAGE_PVC_NAME"),
             max_result_rows=int(env("MAX_RESULT_ROWS", "200")),
             s3_endpoint=env_optional("S3_ENDPOINT"),
             s3_bucket=env_optional("S3_BUCKET"),

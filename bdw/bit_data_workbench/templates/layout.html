@@ -6,7 +6,7 @@
     <title>{{ title }}</title>
     <link rel="icon" type="image/png" href="/static/img/favicon.png">
     <link rel="shortcut icon" href="/static/img/favicon.ico">
-    <link rel="stylesheet" href="/static/css/app.css">
+    <link rel="stylesheet" href="/static/css/app.css?v={{ runtime.timestamp_utc | urlencode }}">
   </head>
   <body>
     {% block body %}{% endblock %}

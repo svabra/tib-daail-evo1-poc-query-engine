@@ -16,15 +16,18 @@ Use this path to validate the service-consumption deployment outside RHOS.
 
 ## Apply
 
-1. Apply the shared service account and service:
+1. Apply the shared config, service account, and service:
+   - `kubectl apply -f k8s/duckdb-configmap.yaml`
    - `kubectl apply -f k8s/bdw-serviceaccount.yaml`
    - `kubectl apply -f k8s/bdw-service.yaml`
-2. Apply the new monitoring storage and RBAC:
-   - `kubectl apply -f k8s/bdw-service-consumption-pvc.yaml`
-   - `kubectl apply -f k8s/bdw-service-consumption-clusterrole.yaml`
-   - `kubectl apply -f k8s/bdw-service-consumption-clusterrolebinding.yaml`
+2. Apply the app storage and node-metrics RBAC:
+   - `kubectl apply -f k8s/bdw-storage-pvc.yaml`
+   - `kubectl apply -f k8s/bdw-node-reader-clusterrole.yaml`
+   - `kubectl apply -f k8s/bdw-node-reader-clusterrolebinding.yaml`
 3. Apply the updated deployment:
    - `kubectl apply -f k8s/bdw-deployment.yaml`
+
+Set the CHF rate-card values in the ConfigMap before testing the financial view. The shared annual budget itself is entered through the service-consumption page and persisted on the PVC.
 
 Do not apply `k8s/bdw-route.yaml` in kind. Access the app with `kubectl port-forward`.
 

@@ -101,6 +101,7 @@ class RealtimeConnectionsTests(unittest.TestCase):
                 "version": 4,
                 "latest": {"timestampUtc": "2026-04-16T08:00:00+00:00"},
                 "status": {"nodeMetricsAvailable": True},
+                "financialSummary": {"annualBudgetChf": 120000.0},
             },
             notify=False,
         )
@@ -119,6 +120,7 @@ class RealtimeConnectionsTests(unittest.TestCase):
                         "version": 4,
                         "latest": {"timestampUtc": "2026-04-16T08:00:00+00:00"},
                         "status": {"nodeMetricsAvailable": True},
+                        "financialSummary": {"annualBudgetChf": 120000.0},
                     },
                 }
             ],

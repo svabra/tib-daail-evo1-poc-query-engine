@@ -75,6 +75,37 @@ async def assert_page_surface(page, timeout_ms: int) -> None:
     )
 
 
+async def assert_budget_tiles_no_overlap(page) -> None:
+    for width in (1440, 2048):
+        await page.set_viewport_size({"width": width, "height": 1200})
+        await page.wait_for_timeout(250)
+        tiles = page.locator(".service-consumption-budget-tile")
+        count = await tiles.count()
+        if count < 3:
+            raise RuntimeError("Expected at least three annual budget tiles.")
+        for index in range(count):
+            tile = tiles.nth(index)
+            value = tile.locator("strong").first
+            tile_box = await tile.bounding_box()
+            value_box = await value.bounding_box()
+            if tile_box is None or value_box is None:
+                raise RuntimeError("Budget tile boxes could not be measured.")
+            horizontal_padding = 14
+            vertical_padding = 14
+            if value_box["x"] < tile_box["x"] + horizontal_padding:
+                raise RuntimeError(f"Budget tile value overlaps the left border at viewport {width}.")
+            if (value_box["x"] + value_box["width"]) > (
+                tile_box["x"] + tile_box["width"] - horizontal_padding
+            ):
+                raise RuntimeError(f"Budget tile value overlaps the right border at viewport {width}.")
+            if value_box["y"] < tile_box["y"] + vertical_padding:
+                raise RuntimeError(f"Budget tile value overlaps the top border at viewport {width}.")
+            if (value_box["y"] + value_box["height"]) > (
+                tile_box["y"] + tile_box["height"] - vertical_padding
+            ):
+                raise RuntimeError(f"Budget tile value overlaps the bottom border at viewport {width}.")
+
+
 async def run_smoke(args: argparse.Namespace) -> int:
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=args.headless)
@@ -96,6 +127,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
             await open_home(page, args)
             await open_service_consumption_from_settings(page, args.timeout_ms)
             await assert_page_surface(page, args.timeout_ms)
+            await assert_budget_tiles_no_overlap(page)
         except (PlaywrightTimeoutError, RuntimeError) as exc:
             print(str(exc), file=sys.stderr)
             for message in console_messages:

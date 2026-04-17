@@ -35,6 +35,14 @@ def build_settings(data_dir: Path, *, retention_hours: int = 48) -> Settings:
         service_consumption_cpu_memory_interval_seconds=3,
         service_consumption_s3_interval_seconds=3600,
         service_consumption_retention_hours=retention_hours,
+        service_consumption_cost_node_chf_per_hour=None,
+        service_consumption_cost_app_chf_per_month=None,
+        service_consumption_cost_s3_chf_per_gb_month=None,
+        service_consumption_cost_pv_chf_per_gb_month=None,
+        service_consumption_cost_pg_chf_per_gb_month=None,
+        service_consumption_cost_cpu_weight=0.5,
+        service_consumption_cost_ram_weight=0.5,
+        app_storage_pvc_name="evo1-bdw-storage",
         max_result_rows=200,
         s3_endpoint=None,
         s3_bucket=None,
@@ -67,9 +75,13 @@ def build_sample(
     timestamp: datetime,
     *,
     cpu_value: float = 1.25,
+    cpu_capacity_cores: float = 12.0,
+    memory_bytes_used: int = 2_000_000_000,
+    memory_capacity_bytes: int = 24_000_000_000,
     s3_bytes: int = 0,
     s3_sampled_at: datetime | None = None,
     persistent_volume_bytes: int = 0,
+    persistent_volume_capacity_bytes: int = 10_737_418_240,
 ) -> dict[str, object]:
     s3_observed_at = (s3_sampled_at or timestamp).astimezone(UTC).replace(microsecond=0)
     return {
@@ -83,19 +95,19 @@ def build_sample(
             "node": {
                 "coresUsed": cpu_value * 2,
                 "percentOfCapacity": 22.5,
-                "capacityCores": 12.0,
+                "capacityCores": cpu_capacity_cores,
             },
         },
         "memory": {
             "app": {
-                "bytesUsed": 2_000_000_000,
+                "bytesUsed": memory_bytes_used,
                 "percentOfLimit": 40.0,
                 "limitBytes": 5_000_000_000,
             },
             "node": {
                 "bytesUsed": 8_000_000_000,
                 "percentOfCapacity": 33.0,
-                "capacityBytes": 24_000_000_000,
+                "capacityBytes": memory_capacity_bytes,
             },
         },
         "s3": {
@@ -105,7 +117,8 @@ def build_sample(
         },
         "persistentVolume": {
             "bytesUsed": persistent_volume_bytes,
-            "bytesCapacity": 10_737_418_240,
+            "bytesCapacity": persistent_volume_capacity_bytes,
+            "bytesProvisioned": persistent_volume_capacity_bytes,
             "percentOfCapacity": 25.0,
             "mountPath": "/workspace/service-consumption",
         },
@@ -182,6 +195,140 @@ class ServiceConsumptionMonitorTests(unittest.TestCase):
             self.assertTrue(payload["status"]["persistentVolumeMetricsAvailable"])
             self.assertNotIn("internal", payload["latest"])
 
+    def test_state_payload_builds_financial_year_to_date_and_forecast(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            settings = build_settings(Path(tmp_dir))
+            settings.service_consumption_cost_node_chf_per_hour = 10.0
+            settings.service_consumption_cost_s3_chf_per_gb_month = 73.0
+            settings.service_consumption_cost_pv_chf_per_gb_month = 7.3
+            settings.service_consumption_cost_cpu_weight = 0.5
+            settings.service_consumption_cost_ram_weight = 0.5
+            monitor = ServiceConsumptionMonitor(
+                settings,
+                state_change_callback=lambda snapshot: None,
+            )
+            now = datetime.now(UTC).replace(microsecond=0)
+
+            monitor.update_budget(year=now.year, annual_budget_chf=120_000.0)
+            monitor._store_sample(
+                build_sample(
+                    now - timedelta(hours=2),
+                    cpu_value=1.0,
+                    cpu_capacity_cores=10.0,
+                    memory_bytes_used=2_000_000_000,
+                    memory_capacity_bytes=10_000_000_000,
+                    s3_bytes=1_000_000_000,
+                    s3_sampled_at=now - timedelta(hours=2),
+                    persistent_volume_bytes=512_000_000,
+                    persistent_volume_capacity_bytes=10_000_000_000,
+                )
+            )
+            monitor._store_sample(
+                build_sample(
+                    now - timedelta(hours=1),
+                    cpu_value=1.0,
+                    cpu_capacity_cores=10.0,
+                    memory_bytes_used=2_000_000_000,
+                    memory_capacity_bytes=10_000_000_000,
+                    s3_bytes=1_000_000_000,
+                    s3_sampled_at=now - timedelta(hours=1),
+                    persistent_volume_bytes=768_000_000,
+                    persistent_volume_capacity_bytes=10_000_000_000,
+                )
+            )
+
+            payload = monitor.state_payload(window="24h")
+            elapsed_days = (
+                now.date() - datetime(now.year, 1, 1, tzinfo=UTC).date()
+            ).days + 1
+            assumed_dynamic_end = min(
+                datetime(now.year, 3, 31, tzinfo=UTC).date(),
+                now.date(),
+            )
+            assumed_dynamic_days = (
+                (assumed_dynamic_end - datetime(now.year, 1, 1, tzinfo=UTC).date()).days
+                + 1
+                if assumed_dynamic_end >= datetime(now.year, 1, 1, tzinfo=UTC).date()
+                else 0
+            )
+            days_in_year = (
+                datetime(now.year + 1, 1, 1, tzinfo=UTC).date()
+                - datetime(now.year, 1, 1, tzinfo=UTC).date()
+            ).days
+            expected_compute_ytd = round((36.0 * assumed_dynamic_days) + 1.5, 2)
+            expected_s3_ytd = round((2.4 * assumed_dynamic_days) + 0.1, 2)
+            expected_pv_ytd = round((2.4 * assumed_dynamic_days) + 0.1, 2)
+            expected_container_cpu_ytd = round((12.0 * assumed_dynamic_days) + 0.5, 2)
+            expected_container_ram_ytd = round((24.0 * assumed_dynamic_days) + 1.0, 2)
+            expected_application_ytd = round(500.0 * (elapsed_days / days_in_year), 2)
+            expected_pg_ytd = round(2 * 15.14 * elapsed_days, 2)
+            expected_total_ytd = round(
+                expected_compute_ytd
+                + expected_s3_ytd
+                + expected_pv_ytd
+                + expected_application_ytd
+                + expected_pg_ytd,
+                2,
+            )
+
+            self.assertEqual(payload["financial"]["currency"], "CHF")
+            self.assertEqual(payload["financial"]["annualBudgetChf"], 120_000.0)
+            self.assertAlmostEqual(payload["financial"]["spentYearToDateChf"], expected_total_ytd, places=2)
+            self.assertAlmostEqual(
+                payload["financial"]["breakdownYearToDate"]["computeChf"],
+                expected_compute_ytd,
+                places=2,
+            )
+            self.assertAlmostEqual(
+                payload["financial"]["breakdownYearToDate"]["applicationChf"],
+                expected_application_ytd,
+                places=2,
+            )
+            self.assertAlmostEqual(
+                payload["financial"]["breakdownYearToDate"]["s3Chf"],
+                expected_s3_ytd,
+                places=2,
+            )
+            self.assertAlmostEqual(
+                payload["financial"]["breakdownYearToDate"]["persistentVolumeChf"],
+                expected_pv_ytd,
+                places=2,
+            )
+            self.assertAlmostEqual(
+                payload["financial"]["breakdownYearToDate"]["pgChf"],
+                expected_pg_ytd,
+                places=2,
+            )
+            self.assertTrue(payload["financial"]["status"]["budgetConfigured"])
+            self.assertEqual(len(payload["financial"]["monthly"]["labels"]), 12)
+            self.assertEqual(payload["financial"]["monthly"]["comparisonYear"], now.year - 1)
+            services = payload["financial"]["services"]
+            self.assertEqual(
+                [service["key"] for service in services],
+                ["container", "application", "filesystem", "s3", "pg"],
+            )
+            self.assertAlmostEqual(
+                services[0]["details"]["cpuChf"],
+                expected_container_cpu_ytd,
+                places=2,
+            )
+            self.assertAlmostEqual(
+                services[0]["details"]["ramChf"],
+                expected_container_ram_ytd,
+                places=2,
+            )
+            self.assertAlmostEqual(services[1]["costYtdChf"], expected_application_ytd, places=2)
+            self.assertEqual(services[1]["details"]["annualFeeChf"], 500.0)
+            self.assertAlmostEqual(services[4]["costYtdChf"], expected_pg_ytd, places=2)
+            self.assertEqual(services[4]["details"]["instances"][0]["label"], "OLTP")
+            self.assertEqual(services[4]["details"]["instances"][1]["label"], "OLAP")
+            self.assertEqual(services[4]["details"]["instances"][0]["sizeGb"], 80.0)
+            self.assertEqual(services[4]["details"]["instances"][1]["sizeGb"], 80.0)
+            self.assertEqual(
+                services[4]["details"]["annualFeePerInstanceChf"],
+                round(15.14 * days_in_year, 2),
+            )
+
     def test_prune_history_removes_samples_older_than_retention_hours(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             settings = build_settings(Path(tmp_dir), retention_hours=48)
@@ -210,6 +357,24 @@ class ServiceConsumptionMonitorTests(unittest.TestCase):
             else:
                 self.assertFalse(stale_path.exists())
             self.assertTrue(fresh_path.exists())
+
+    def test_budget_persists_to_shared_financial_store(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            settings = build_settings(Path(tmp_dir))
+            monitor = ServiceConsumptionMonitor(
+                settings,
+                state_change_callback=lambda snapshot: None,
+            )
+            current_year = datetime.now(UTC).year
+
+            payload = monitor.update_budget(year=current_year, annual_budget_chf=42_500.0)
+
+            self.assertEqual(payload["year"], current_year)
+            self.assertTrue((settings.service_consumption_data_dir / "financial" / "budgets.json").is_file())
+            self.assertEqual(
+                monitor.state_payload(window="24h")["financial"]["annualBudgetChf"],
+                42_500.0,
+            )
 
 
 if __name__ == "__main__":

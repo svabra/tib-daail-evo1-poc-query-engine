@@ -549,6 +549,17 @@ class WorkbenchService:
             window=window,
         )
 
+    def update_service_consumption_budget(
+        self,
+        *,
+        year: int,
+        annual_budget_chf: float,
+    ) -> dict[str, object]:
+        return self._service_consumption.update_budget(
+            year=year,
+            annual_budget_chf=annual_budget_chf,
+        )
+
     def connect_data_source(self, source_id: str) -> dict[str, object]:
         return self._data_source_discovery.connect_source(source_id)
 

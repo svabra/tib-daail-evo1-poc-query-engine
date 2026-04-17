@@ -1,7 +1,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: evo1-bdw-service-consumption-reader
+  name: evo1-bdw-node-reader
 subjects:
   - kind: ServiceAccount
     name: evo1-bdw
@@ -9,4 +9,4 @@ subjects:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: evo1-bdw-service-consumption-reader
+  name: evo1-bdw-node-reader

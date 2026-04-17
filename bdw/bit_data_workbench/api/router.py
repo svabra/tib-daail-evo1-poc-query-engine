@@ -4,7 +4,7 @@ import asyncio
 import json
 import shutil
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from botocore.exceptions import BotoCoreError
@@ -36,6 +36,14 @@ class NotebookVersionPayload(BaseModel):
     summary: str = ""
     tags: list[str] = Field(default_factory=list)
     cells: list[NotebookCellPayload] = Field(default_factory=list)
+
+
+class ServiceConsumptionBudgetPayload(BaseModel):
+    year: int
+    annual_budget_chf: float = Field(
+        validation_alias="annualBudgetChf",
+        serialization_alias="annualBudgetChf",
+    )
 
 
 class SharedNotebookUpsertPayload(BaseModel):
@@ -204,6 +212,22 @@ def service_consumption_state(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return JSONResponse(jsonable_encoder(payload))
+
+
+@router.put("/api/service-consumption/budget")
+def update_service_consumption_budget(
+    payload: ServiceConsumptionBudgetPayload = Body(...),
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        updated = service.update_service_consumption_budget(
+            year=payload.year,
+            annual_budget_chf=payload.annual_budget_chf,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(updated))
 
 
 @router.post("/api/data-sources/{source_id}/connect")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from calendar import month_abbr
 import json
 import logging
 import math
@@ -7,7 +8,7 @@ import shutil
 import ssl
 import threading
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 from urllib import error as urllib_error
@@ -59,6 +60,26 @@ SERVICE_ACCOUNT_CA_CERT_PATH = Path(
 KUBERNETES_API_BASE_URL = "https://kubernetes.default.svc"
 KUBERNETES_REQUEST_TIMEOUT_SECONDS = 3.0
 PRUNE_INTERVAL = timedelta(minutes=15)
+COST_EVENT_RETENTION_MONTHS = 13
+COST_CURRENCY = "CHF"
+HOURS_PER_MONTH_FOR_COSTING = 730.0
+FORECAST_WINDOW_DAYS = 30
+POC_CLIENT_START_YEAR = 2025
+APPLICATION_SERVICE_ANNUAL_CHF = 500.0
+PG_SERVICE_DAILY_CHF_PER_INSTANCE = 15.14
+PG_INSTANCE_SIZE_GB = 80.0
+PG_INSTANCE_SIZE_BYTES = int(PG_INSTANCE_SIZE_GB * 1_000_000_000)
+PG_STATIC_INSTANCES: tuple[tuple[str, int], ...] = (
+    ("OLTP", PG_INSTANCE_SIZE_BYTES),
+    ("OLAP", PG_INSTANCE_SIZE_BYTES),
+)
+SERVICE_COST_CATEGORY_ORDER: tuple[str, ...] = (
+    "container",
+    "application",
+    "filesystem",
+    "s3",
+    "pg",
+)
 
 
 def _parse_iso_datetime(value: object) -> datetime | None:
@@ -87,6 +108,23 @@ def _normalized_percent(
     if numerator is None or denominator is None or denominator <= 0:
         return None
     return _normalized_float((numerator / denominator) * 100.0, digits=2)
+
+
+def _normalized_currency(value: float | None) -> float | None:
+    return _normalized_float(value, digits=2)
+
+
+def _normalized_cost_value(value: float | None) -> float | None:
+    return _normalized_float(value, digits=8)
+
+
+def _decimal_gb_from_bytes(value: int | float | None) -> float | None:
+    if value is None:
+        return None
+    normalized = float(value)
+    if math.isnan(normalized) or math.isinf(normalized) or normalized < 0:
+        return None
+    return normalized / 1_000_000_000.0
 
 
 def parse_kubernetes_cpu_quantity(value: object) -> float:
@@ -219,6 +257,15 @@ class CachedS3Reading:
     sampled_at: datetime
 
 
+@dataclass(slots=True)
+class FinancialYearCache:
+    year: int
+    annual_budget_chf: float | None
+    budget_updated_at: datetime | None
+    breakdown_year_to_date: dict[str, float]
+    daily_totals: dict[str, float]
+
+
 class KubernetesApiClient:
     def __init__(self) -> None:
         self._token: str | None = None
@@ -297,14 +344,28 @@ class ServiceConsumptionMonitor:
         self._last_app_metrics_reading: AppMetricsReading | None = None
         self._last_s3_reading: CachedS3Reading | None = None
         self._last_pruned_at: datetime | None = None
+        self._financial_cache: FinancialYearCache | None = None
         self._kubernetes_client = KubernetesApiClient()
 
     @property
     def history_root(self) -> Path:
         return self._settings.service_consumption_data_dir / "history"
 
+    @property
+    def financial_root(self) -> Path:
+        return self._settings.service_consumption_data_dir / "financial"
+
+    @property
+    def financial_cost_events_root(self) -> Path:
+        return self.financial_root / "cost-events"
+
+    @property
+    def financial_budgets_path(self) -> Path:
+        return self.financial_root / "budgets.json"
+
     def start(self) -> None:
         self.history_root.mkdir(parents=True, exist_ok=True)
+        self.financial_root.mkdir(parents=True, exist_ok=True)
         snapshot_to_publish: dict[str, Any] | None = None
         now = datetime.now(UTC)
         with self._lock:
@@ -343,6 +404,44 @@ class ServiceConsumptionMonitor:
         with self._lock:
             return self._build_realtime_payload_locked()
 
+    def update_budget(
+        self,
+        *,
+        year: int,
+        annual_budget_chf: float,
+    ) -> dict[str, object]:
+        normalized_budget = _normalized_currency(float(annual_budget_chf))
+        current_year = datetime.now(UTC).year
+        if year != current_year:
+            raise ValueError(
+                f"Budget updates only support the current UTC year ({current_year})."
+            )
+        if normalized_budget is None or normalized_budget < 0:
+            raise ValueError("Annual budget must be a non-negative CHF amount.")
+
+        budget_updated_at = datetime.now(UTC).replace(microsecond=0)
+        snapshot_to_publish: dict[str, Any]
+        with self._lock:
+            self._write_budget_locked(
+                year=year,
+                annual_budget_chf=normalized_budget,
+                updated_at=budget_updated_at,
+            )
+            if self._financial_cache is None or self._financial_cache.year != year:
+                self._financial_cache = self._rebuild_financial_cache_locked(year)
+            self._financial_cache.annual_budget_chf = normalized_budget
+            self._financial_cache.budget_updated_at = budget_updated_at
+            self._version += 1
+            snapshot_to_publish = self._build_realtime_payload_locked()
+
+        self._state_change_callback(snapshot_to_publish)
+        return {
+            "year": year,
+            "annualBudgetChf": normalized_budget,
+            "savedAtUtc": budget_updated_at.isoformat(),
+            "version": snapshot_to_publish.get("version"),
+        }
+
     def state_payload(
         self,
         *,
@@ -359,6 +458,7 @@ class ServiceConsumptionMonitor:
             topology = self._topology_payload_locked()
             version = self._version
             samples = self._load_samples_since_locked(cutoff)
+            financial = self._financial_payload_locked()
 
         return {
             "version": version,
@@ -388,6 +488,7 @@ class ServiceConsumptionMonitor:
             "persistentVolumeHistory": self._build_persistent_volume_history(
                 samples,
             ),
+            "financial": financial,
         }
 
     def _normalize_window(self, value: str) -> str:
@@ -433,7 +534,12 @@ class ServiceConsumptionMonitor:
             UTC
         )
         with self._lock:
+            previous_sample = self._latest_sample
             self._append_sample_locked(sample)
+            cost_event = self._build_cost_event(previous_sample, sample)
+            if cost_event is not None:
+                self._append_cost_event_locked(cost_event)
+                self._update_financial_cache_with_cost_event_locked(cost_event)
             self._latest_sample = sample
             self._latest_sample_timestamp = sample_timestamp
             self._restore_s3_cache_locked(sample)
@@ -527,6 +633,11 @@ class ServiceConsumptionMonitor:
                 else None,
                 "bytesCapacity": int(persistent_volume_metrics.get("bytesCapacity"))
                 if persistent_volume_metrics.get("bytesCapacity") is not None
+                else None,
+                "bytesProvisioned": int(
+                    persistent_volume_metrics.get("bytesProvisioned")
+                )
+                if persistent_volume_metrics.get("bytesProvisioned") is not None
                 else None,
                 "percentOfCapacity": _normalized_percent(
                     float(persistent_volume_metrics.get("bytesUsed"))
@@ -808,20 +919,64 @@ class ServiceConsumptionMonitor:
             return {
                 "bytesUsed": None,
                 "bytesCapacity": None,
+                "bytesProvisioned": None,
                 "mountPath": mount_path.as_posix(),
             }, {
                 "available": False,
                 "detail": str(exc),
             }
 
+        provisioned_bytes, pvc_name = self._collect_persistent_volume_capacity_bytes()
+        display_capacity_bytes = provisioned_bytes if provisioned_bytes is not None else int(
+            usage.total
+        )
+        detail = f"Persistent volume usage is available from {mount_path.as_posix()}."
+        if provisioned_bytes is not None and pvc_name:
+            detail = (
+                f"Persistent volume usage is available from {mount_path.as_posix()} "
+                f"with PVC {pvc_name} capacity."
+            )
+
         return {
             "bytesUsed": int(directory_usage_bytes),
-            "bytesCapacity": int(usage.total),
+            "bytesCapacity": display_capacity_bytes,
+            "bytesProvisioned": provisioned_bytes,
             "mountPath": mount_path.as_posix(),
         }, {
             "available": True,
-            "detail": f"Persistent volume usage is available from {mount_path.as_posix()}.",
+            "detail": detail,
         }
+
+    def _collect_persistent_volume_capacity_bytes(self) -> tuple[int | None, str | None]:
+        pvc_name = str(self._settings.app_storage_pvc_name or "").strip() or None
+        pod_namespace = str(self._settings.pod_namespace or "").strip()
+        if pvc_name is None or not pod_namespace or not self._kubernetes_client.available():
+            return None, pvc_name
+
+        try:
+            pvc_payload = self._kubernetes_client.get_json(
+                f"/api/v1/namespaces/{pod_namespace}/persistentvolumeclaims/{pvc_name}"
+            )
+            status_capacity = (
+                ((pvc_payload.get("status") or {}).get("capacity") or {}).get("storage")
+                if isinstance(pvc_payload, dict)
+                else None
+            )
+            requested_capacity = (
+                (
+                    ((pvc_payload.get("spec") or {}).get("resources") or {}).get("requests")
+                    or {}
+                ).get("storage")
+                if isinstance(pvc_payload, dict)
+                else None
+            )
+            raw_capacity = status_capacity or requested_capacity
+            if raw_capacity is None:
+                return None, pvc_name
+            return parse_kubernetes_memory_quantity(raw_capacity), pvc_name
+        except Exception as exc:
+            logger.warning("Failed to collect PVC capacity for %s: %s", pvc_name, exc)
+            return None, pvc_name
 
     def _directory_usage_bytes(self, root: Path) -> int:
         total_bytes = 0
@@ -840,6 +995,7 @@ class ServiceConsumptionMonitor:
             "latest": self._public_sample(self._latest_sample),
             "status": self._status_payload_locked(),
             "topology": self._topology_payload_locked(),
+            "financialSummary": self._financial_summary_locked(),
         }
 
     def _status_payload_locked(self) -> dict[str, object]:
@@ -897,6 +1053,1058 @@ class ServiceConsumptionMonitor:
                 or ""
             ).strip(),
         }
+
+    def _financial_summary_locked(self) -> dict[str, object]:
+        financial = self._financial_payload_locked()
+        return {
+            "currency": financial.get("currency"),
+            "yearUtc": financial.get("yearUtc"),
+            "annualBudgetChf": financial.get("annualBudgetChf"),
+            "spentYearToDateChf": financial.get("spentYearToDateChf"),
+            "remainingBudgetChf": financial.get("remainingBudgetChf"),
+            "forecastYearEndChf": financial.get("forecastYearEndChf"),
+            "status": financial.get("status"),
+            "budgetUpdatedAtUtc": financial.get("budgetUpdatedAtUtc"),
+        }
+
+    def _days_in_year(self, year: int) -> int:
+        return (
+            datetime(year + 1, 1, 1, tzinfo=UTC).date()
+            - datetime(year, 1, 1, tzinfo=UTC).date()
+        ).days
+
+    def _application_monthly_fee_chf(self) -> float:
+        return APPLICATION_SERVICE_ANNUAL_CHF / 12.0
+
+    def _pg_annual_fee_chf(self, year: int) -> float:
+        return len(PG_STATIC_INSTANCES) * PG_SERVICE_DAILY_CHF_PER_INSTANCE * self._days_in_year(year)
+
+    def _pg_monthly_fee_chf(self, year: int) -> float:
+        return self._pg_annual_fee_chf(year) / 12.0
+
+    def _pg_daily_fee_per_instance_chf(self, year: int) -> float:
+        _ = year
+        return PG_SERVICE_DAILY_CHF_PER_INSTANCE
+
+    def _annual_fee_ytd_chf(
+        self,
+        *,
+        year: int,
+        annual_fee_chf: float,
+        as_of_date: date | None = None,
+    ) -> float:
+        effective_date = as_of_date or datetime.now(UTC).date()
+        year_start = datetime(year, 1, 1, tzinfo=UTC).date()
+        year_end = datetime(year + 1, 1, 1, tzinfo=UTC).date() - timedelta(days=1)
+        if effective_date < year_start:
+            return 0.0
+        capped_date = min(effective_date, year_end)
+        elapsed_days = (capped_date - year_start).days + 1
+        return annual_fee_chf * (elapsed_days / self._days_in_year(year))
+
+    def _application_ytd_chf(self, year: int, *, as_of_date: date | None = None) -> float:
+        return self._annual_fee_ytd_chf(
+            year=year,
+            annual_fee_chf=APPLICATION_SERVICE_ANNUAL_CHF,
+            as_of_date=as_of_date,
+        )
+
+    def _pg_ytd_chf(self, year: int, *, as_of_date: date | None = None) -> float:
+        return self._annual_fee_ytd_chf(
+            year=year,
+            annual_fee_chf=self._pg_annual_fee_chf(year),
+            as_of_date=as_of_date,
+        )
+
+    def _assumed_dynamic_daily_components_locked(
+        self,
+        latest_sample: dict[str, Any],
+    ) -> dict[str, float]:
+        container_costs = (
+            self._interval_container_cost_components_chf(latest_sample, 24.0) or {}
+        )
+        return {
+            "container": float(container_costs.get("totalChf") or 0.0),
+            "containerCpu": float(container_costs.get("cpuChf") or 0.0),
+            "containerRam": float(container_costs.get("ramChf") or 0.0),
+            "s3": float(self._interval_s3_cost_chf(latest_sample, 24.0) or 0.0),
+            "filesystem": float(
+                self._interval_persistent_volume_cost_chf(latest_sample, 24.0) or 0.0
+            ),
+        }
+
+    def _assumed_dynamic_backfill_locked(
+        self,
+        cache: FinancialYearCache,
+        latest_sample: dict[str, Any],
+    ) -> dict[str, Any]:
+        effective_daily_totals = dict(cache.daily_totals)
+        added_breakdown = {
+            "container": 0.0,
+            "containerCpu": 0.0,
+            "containerRam": 0.0,
+            "s3": 0.0,
+            "filesystem": 0.0,
+        }
+        if cache.year < POC_CLIENT_START_YEAR or not latest_sample:
+            return {
+                "effectiveDailyTotals": effective_daily_totals,
+                "addedBreakdown": added_breakdown,
+            }
+
+        today = datetime.now(UTC).date()
+        start_date = datetime(cache.year, 1, 1, tzinfo=UTC).date()
+        end_date = min(self._month_end_date(cache.year, 3), today)
+        if end_date < start_date:
+            return {
+                "effectiveDailyTotals": effective_daily_totals,
+                "addedBreakdown": added_breakdown,
+            }
+
+        daily_components = self._assumed_dynamic_daily_components_locked(latest_sample)
+        daily_total = (
+            daily_components["container"]
+            + daily_components["s3"]
+            + daily_components["filesystem"]
+        )
+        cursor = start_date
+        while cursor <= end_date:
+            day_key = cursor.isoformat()
+            if day_key not in effective_daily_totals:
+                effective_daily_totals[day_key] = daily_total
+                for component_key, value in daily_components.items():
+                    added_breakdown[component_key] += value
+            cursor += timedelta(days=1)
+
+        return {
+            "effectiveDailyTotals": effective_daily_totals,
+            "addedBreakdown": added_breakdown,
+        }
+
+    def _fixed_daily_burn_chf(self, year: int) -> float:
+        return (APPLICATION_SERVICE_ANNUAL_CHF + self._pg_annual_fee_chf(year)) / self._days_in_year(year)
+
+    def _financial_payload_locked(self) -> dict[str, object]:
+        year = datetime.now(UTC).year
+        cache = self._ensure_financial_cache_locked(year)
+        latest_sample = self._latest_sample if isinstance(self._latest_sample, dict) else {}
+        assumed_dynamic = self._assumed_dynamic_backfill_locked(cache, latest_sample)
+        effective_dynamic_daily_totals = assumed_dynamic["effectiveDailyTotals"]
+        dynamic_breakdown = {
+            "container": cache.breakdown_year_to_date.get("container", 0.0)
+            + assumed_dynamic["addedBreakdown"]["container"],
+            "containerCpu": cache.breakdown_year_to_date.get("containerCpu", 0.0)
+            + assumed_dynamic["addedBreakdown"]["containerCpu"],
+            "containerRam": cache.breakdown_year_to_date.get("containerRam", 0.0)
+            + assumed_dynamic["addedBreakdown"]["containerRam"],
+            "s3": cache.breakdown_year_to_date.get("s3", 0.0)
+            + assumed_dynamic["addedBreakdown"]["s3"],
+            "filesystem": cache.breakdown_year_to_date.get("filesystem", 0.0)
+            + assumed_dynamic["addedBreakdown"]["filesystem"],
+        }
+        status = self._financial_status_locked(cache, latest_sample)
+        has_live_or_historic_cost = bool(effective_dynamic_daily_totals) or bool(status.get("available"))
+        application_ytd_chf = _normalized_currency(self._application_ytd_chf(year))
+        pg_ytd_chf = _normalized_currency(self._pg_ytd_chf(year))
+        dynamic_year_to_date = _normalized_currency(sum(effective_dynamic_daily_totals.values()))
+
+        spent_year_to_date = (
+            _normalized_currency(
+                float(dynamic_year_to_date or 0.0)
+                + float(application_ytd_chf or 0.0)
+                + float(pg_ytd_chf or 0.0)
+            )
+            if has_live_or_historic_cost
+            else None
+        )
+        if has_live_or_historic_cost and spent_year_to_date is None:
+            spent_year_to_date = 0.0
+
+        annual_budget_chf = _normalized_currency(cache.annual_budget_chf)
+        remaining_budget_chf = None
+        if annual_budget_chf is not None and spent_year_to_date is not None:
+            remaining_budget_chf = _normalized_currency(
+                annual_budget_chf - spent_year_to_date
+            )
+
+        forecast_daily_chf = self._forecast_daily_spend_locked(
+            cache,
+            enabled=has_live_or_historic_cost,
+        )
+        forecast_year_end_chf = None
+        if spent_year_to_date is not None and forecast_daily_chf is not None:
+            today = datetime.now(UTC).date()
+            year_end = datetime(year + 1, 1, 1, tzinfo=UTC).date() - timedelta(days=1)
+            remaining_days = max((year_end - today).days, 0)
+            forecast_year_end_chf = _normalized_currency(
+                spent_year_to_date + (forecast_daily_chf * remaining_days)
+            )
+
+        breakdown_year_to_date = {
+            "computeChf": (
+                _normalized_currency(dynamic_breakdown.get("container", 0.0))
+                if has_live_or_historic_cost
+                else None
+            ),
+            "applicationChf": (
+                application_ytd_chf
+                if has_live_or_historic_cost
+                else None
+            ),
+            "s3Chf": (
+                _normalized_currency(dynamic_breakdown.get("s3", 0.0))
+                if has_live_or_historic_cost
+                else None
+            ),
+            "persistentVolumeChf": (
+                _normalized_currency(dynamic_breakdown.get("filesystem", 0.0))
+                if has_live_or_historic_cost
+                else None
+            ),
+            "pgChf": (
+                pg_ytd_chf
+                if has_live_or_historic_cost
+                else None
+            ),
+        }
+
+        monthly_payload = self._financial_monthly_payload_locked(
+            cache=cache,
+            latest_sample=latest_sample,
+            annual_budget_chf=annual_budget_chf,
+            spent_year_to_date_chf=spent_year_to_date,
+            forecast_daily_chf=forecast_daily_chf,
+            effective_daily_totals=effective_dynamic_daily_totals,
+            enabled=has_live_or_historic_cost,
+        )
+
+        return {
+            "currency": COST_CURRENCY,
+            "yearUtc": year,
+            "annualBudgetChf": annual_budget_chf,
+            "budgetUpdatedAtUtc": cache.budget_updated_at.isoformat()
+            if cache.budget_updated_at is not None
+            else None,
+            "spentYearToDateChf": spent_year_to_date,
+            "remainingBudgetChf": remaining_budget_chf,
+            "forecastYearEndChf": forecast_year_end_chf,
+            "breakdownYearToDate": breakdown_year_to_date,
+            "servicesTotalChf": spent_year_to_date,
+            "services": self._financial_services_payload_locked(
+                cache=cache,
+                latest_sample=latest_sample,
+                spent_year_to_date_chf=spent_year_to_date,
+                dynamic_breakdown=dynamic_breakdown,
+            ),
+            "monthly": monthly_payload,
+            "status": status,
+        }
+
+    def _financial_status_locked(
+        self,
+        cache: FinancialYearCache,
+        latest_sample: dict[str, Any],
+    ) -> dict[str, object]:
+        component_labels = {
+            "container": "container service",
+            "application": "DAAIFL application service",
+            "s3": "S3",
+            "filesystem": "file system service",
+            "pg": "PG service",
+        }
+        configured_components = {
+            "container": self._settings.service_consumption_cost_node_chf_per_hour
+            is not None,
+            "application": True,
+            "s3": self._settings.service_consumption_cost_s3_chf_per_gb_month is not None,
+            "filesystem": self._settings.service_consumption_cost_pv_chf_per_gb_month
+            is not None,
+            "pg": True,
+        }
+        component_availability = {
+            "container": configured_components["container"]
+            and self._compute_cost_component_available(latest_sample),
+            "application": configured_components["application"]
+            and self._application_cost_component_available(),
+            "s3": configured_components["s3"]
+            and self._s3_cost_component_available(latest_sample),
+            "filesystem": configured_components["filesystem"]
+            and self._persistent_volume_cost_component_available(latest_sample),
+            "pg": configured_components["pg"] and self._pg_cost_component_available(),
+        }
+        configured_labels = [
+            label
+            for label in SERVICE_COST_CATEGORY_ORDER
+            if configured_components.get(label)
+        ]
+        available_labels = [
+            label
+            for label in SERVICE_COST_CATEGORY_ORDER
+            if component_availability.get(label)
+        ]
+        missing_labels = [
+            component_labels[label]
+            for label in configured_labels
+            if label not in available_labels
+        ]
+
+        if not configured_labels:
+            detail = (
+                "Estimated CHF is unavailable. Configure cost-rate inputs in the app ConfigMap."
+            )
+        elif available_labels and not missing_labels:
+            configured_names = [component_labels[label] for label in configured_labels]
+            detail = (
+                "Estimated CHF is available from the configured "
+                f"{', '.join(configured_names)} rates."
+            )
+        elif available_labels:
+            detail = (
+                "Estimated CHF is partially available. Waiting for current metrics from "
+                f"{', '.join(missing_labels)}."
+            )
+        else:
+            detail = (
+                "Estimated CHF is not yet available from the configured cost inputs."
+            )
+
+        return {
+            "available": bool(available_labels or cache.daily_totals),
+            "detail": detail,
+            "budgetConfigured": cache.annual_budget_chf is not None,
+            "budgetUpdatedAtUtc": cache.budget_updated_at.isoformat()
+            if cache.budget_updated_at is not None
+            else None,
+            "computeAvailable": component_availability["container"],
+            "applicationAvailable": component_availability["application"],
+            "s3Available": component_availability["s3"],
+            "persistentVolumeAvailable": component_availability["filesystem"],
+            "pgAvailable": component_availability["pg"],
+        }
+
+    def _compute_cost_component_available(self, sample: dict[str, Any]) -> bool:
+        cpu_app = ((sample.get("cpu") or {}).get("app") or {}).get("coresUsed")
+        cpu_capacity = ((sample.get("cpu") or {}).get("node") or {}).get(
+            "capacityCores"
+        )
+        memory_app = ((sample.get("memory") or {}).get("app") or {}).get("bytesUsed")
+        memory_capacity = ((sample.get("memory") or {}).get("node") or {}).get(
+            "capacityBytes"
+        )
+        return all(
+            value is not None
+            for value in (cpu_app, cpu_capacity, memory_app, memory_capacity)
+        )
+
+    def _application_cost_component_available(self) -> bool:
+        return self._application_monthly_fee_chf() >= 0
+
+    def _s3_cost_component_available(self, sample: dict[str, Any]) -> bool:
+        return ((sample.get("s3") or {}).get("totalBytes")) is not None
+
+    def _persistent_volume_cost_component_available(
+        self,
+        sample: dict[str, Any],
+    ) -> bool:
+        return ((sample.get("persistentVolume") or {}).get("bytesProvisioned")) is not None
+
+    def _pg_cost_component_available(self) -> bool:
+        current_year = datetime.now(UTC).year
+        return self._pg_monthly_fee_chf(current_year) >= 0
+
+    def _financial_services_payload_locked(
+        self,
+        *,
+        cache: FinancialYearCache,
+        latest_sample: dict[str, Any],
+        spent_year_to_date_chf: float | None,
+        dynamic_breakdown: dict[str, float],
+    ) -> list[dict[str, object]]:
+        total_spend = (
+            float(spent_year_to_date_chf)
+            if spent_year_to_date_chf is not None and spent_year_to_date_chf > 0
+            else 0.0
+        )
+        breakdown = dynamic_breakdown
+        container_total = _normalized_currency(dynamic_breakdown.get("container", 0.0))
+        application_total = _normalized_currency(self._application_ytd_chf(cache.year))
+        filesystem_total = _normalized_currency(dynamic_breakdown.get("filesystem", 0.0))
+        s3_total = _normalized_currency(dynamic_breakdown.get("s3", 0.0))
+        pg_total = _normalized_currency(self._pg_ytd_chf(cache.year))
+        services = [
+            {
+                "key": "container",
+                "label": "Container Service",
+                "subtitle": "CPU and RAM share on the active node",
+                "costYtdChf": container_total,
+                "shareOfTotalPercent": self._service_share_percent(
+                    container_total,
+                    total_spend,
+                ),
+                "status": self._service_status(
+                    configured=self._settings.service_consumption_cost_node_chf_per_hour
+                    is not None,
+                    available=self._compute_cost_component_available(latest_sample),
+                    has_cost=bool(container_total),
+                ),
+                "details": {
+                    "cpuChf": _normalized_currency(
+                        breakdown.get("containerCpu", 0.0)
+                    ),
+                    "ramChf": _normalized_currency(
+                        breakdown.get("containerRam", 0.0)
+                    ),
+                    "nodeChfPerHour": _normalized_currency(
+                        self._settings.service_consumption_cost_node_chf_per_hour
+                    ),
+                    "cpuWeight": _normalized_float(
+                        self._settings.service_consumption_cost_cpu_weight,
+                        digits=2,
+                    ),
+                    "ramWeight": _normalized_float(
+                        self._settings.service_consumption_cost_ram_weight,
+                        digits=2,
+                    ),
+                },
+            },
+            {
+                "key": "application",
+                "label": "DAAIFL Application Service",
+                "subtitle": "Shared application fee prorated across the year",
+                "costYtdChf": application_total,
+                "shareOfTotalPercent": self._service_share_percent(
+                    application_total,
+                    total_spend,
+                ),
+                "status": self._service_status(
+                    configured=True,
+                    available=self._application_cost_component_available(),
+                    has_cost=bool(application_total),
+                ),
+                "details": {
+                    "annualFeeChf": _normalized_currency(APPLICATION_SERVICE_ANNUAL_CHF),
+                    "monthlyFeeChf": _normalized_currency(
+                        self._application_monthly_fee_chf()
+                    ),
+                },
+            },
+            {
+                "key": "filesystem",
+                "label": "FileSystem Service",
+                "subtitle": "Provisioned PVC capacity allocated to the app",
+                "costYtdChf": filesystem_total,
+                "shareOfTotalPercent": self._service_share_percent(
+                    filesystem_total,
+                    total_spend,
+                ),
+                "status": self._service_status(
+                    configured=self._settings.service_consumption_cost_pv_chf_per_gb_month
+                    is not None,
+                    available=self._persistent_volume_cost_component_available(
+                        latest_sample
+                    ),
+                    has_cost=bool(filesystem_total),
+                ),
+                "details": {
+                    "provisionedBytes": (
+                        (latest_sample.get("persistentVolume") or {}).get(
+                            "bytesProvisioned"
+                        )
+                    ),
+                    "rateChfPerGbMonth": _normalized_currency(
+                        self._settings.service_consumption_cost_pv_chf_per_gb_month
+                    ),
+                },
+            },
+            {
+                "key": "s3",
+                "label": "S3 Service",
+                "subtitle": "Visible shared workspace object storage",
+                "costYtdChf": s3_total,
+                "shareOfTotalPercent": self._service_share_percent(
+                    s3_total,
+                    total_spend,
+                ),
+                "status": self._service_status(
+                    configured=self._settings.service_consumption_cost_s3_chf_per_gb_month
+                    is not None,
+                    available=self._s3_cost_component_available(latest_sample),
+                    has_cost=bool(s3_total),
+                ),
+                "details": {
+                    "totalBytes": ((latest_sample.get("s3") or {}).get("totalBytes")),
+                    "bucketCount": ((latest_sample.get("s3") or {}).get("bucketCount")),
+                    "rateChfPerGbMonth": _normalized_currency(
+                        self._settings.service_consumption_cost_s3_chf_per_gb_month
+                    ),
+                },
+            },
+            {
+                "key": "pg",
+                "label": "PG Service",
+                "subtitle": "Static OLTP and OLAP database capacity placeholders",
+                "costYtdChf": pg_total,
+                "shareOfTotalPercent": self._service_share_percent(pg_total, total_spend),
+                "status": self._service_status(
+                    configured=True,
+                    available=self._pg_cost_component_available(),
+                    has_cost=bool(pg_total),
+                ),
+                "details": {
+                    "instances": [
+                        {
+                            "label": label,
+                            "sizeBytes": size_bytes,
+                            "sizeGb": _normalized_float(
+                                _decimal_gb_from_bytes(size_bytes),
+                                digits=1,
+                            ),
+                        }
+                        for label, size_bytes in PG_STATIC_INSTANCES
+                    ],
+                    "annualFeePerInstanceChf": _normalized_currency(
+                        PG_SERVICE_DAILY_CHF_PER_INSTANCE
+                        * self._days_in_year(cache.year)
+                    ),
+                    "dailyFeePerInstanceChf": _normalized_currency(
+                        self._pg_daily_fee_per_instance_chf(cache.year)
+                    ),
+                    "monthlyFeeChf": _normalized_currency(
+                        self._pg_monthly_fee_chf(cache.year)
+                    ),
+                    "totalBytes": self._pg_total_bytes(),
+                    "totalGb": _normalized_float(
+                        _decimal_gb_from_bytes(self._pg_total_bytes()),
+                        digits=1,
+                    ),
+                },
+            },
+        ]
+        for service in services:
+            cost_ytd = service.get("costYtdChf")
+            details = service.get("details")
+            if isinstance(details, dict):
+                details["costYtdChf"] = cost_ytd
+        return services
+
+    def _service_share_percent(
+        self,
+        cost_ytd_chf: float | None,
+        total_spend_chf: float,
+    ) -> float:
+        if cost_ytd_chf is None or total_spend_chf <= 0:
+            return 0.0
+        return _normalized_percent(cost_ytd_chf, total_spend_chf) or 0.0
+
+    def _service_status(
+        self,
+        *,
+        configured: bool,
+        available: bool,
+        has_cost: bool,
+    ) -> dict[str, str]:
+        if not configured:
+            return {"state": "not-configured", "label": "Not configured"}
+        if available or has_cost:
+            return {"state": "available", "label": "Available"}
+        return {"state": "waiting", "label": "Waiting for metrics"}
+
+    def _financial_monthly_payload_locked(
+        self,
+        *,
+        cache: FinancialYearCache,
+        latest_sample: dict[str, Any],
+        annual_budget_chf: float | None,
+        spent_year_to_date_chf: float | None,
+        forecast_daily_chf: float | None,
+        effective_daily_totals: dict[str, float],
+        enabled: bool,
+    ) -> dict[str, list[object]]:
+        year = cache.year
+        today = datetime.now(UTC).date()
+        current_month = today.month
+        labels = [month_abbr[index] for index in range(1, 13)]
+
+        cumulative_actual_by_month: dict[int, float] = {}
+        running_total = 0.0
+        for month in range(1, 13):
+            for day_text in sorted(effective_daily_totals):
+                day = datetime.fromisoformat(day_text).date()
+                if day.month != month or day.year != year:
+                    continue
+                running_total += effective_daily_totals.get(day_text, 0.0)
+            cumulative_actual_by_month[month] = running_total
+
+        total_days_in_year = (
+            datetime(year + 1, 1, 1, tzinfo=UTC).date()
+            - datetime(year, 1, 1, tzinfo=UTC).date()
+        ).days
+        actual_cumulative: list[object] = []
+        plan_cumulative: list[object] = []
+        forecast_cumulative: list[object] = []
+
+        for month in range(1, 13):
+            month_end = self._month_end_date(year, month)
+            if enabled:
+                if month < current_month:
+                    actual_cumulative.append(
+                        _normalized_currency(
+                            cumulative_actual_by_month.get(month, 0.0)
+                            + self._application_ytd_chf(year, as_of_date=month_end)
+                            + self._pg_ytd_chf(year, as_of_date=month_end)
+                        )
+                    )
+                elif month == current_month:
+                    actual_cumulative.append(spent_year_to_date_chf)
+                else:
+                    actual_cumulative.append(None)
+            else:
+                actual_cumulative.append(None)
+
+            if annual_budget_chf is None:
+                plan_cumulative.append(None)
+            else:
+                elapsed_days = (
+                    month_end - datetime(year, 1, 1, tzinfo=UTC).date()
+                ).days + 1
+                plan_cumulative.append(
+                    _normalized_currency(
+                        annual_budget_chf * (elapsed_days / total_days_in_year)
+                    )
+                )
+
+            if not enabled or spent_year_to_date_chf is None:
+                forecast_cumulative.append(None)
+            elif month < current_month:
+                forecast_cumulative.append(
+                    _normalized_currency(
+                        cumulative_actual_by_month.get(month, 0.0)
+                        + self._application_ytd_chf(year, as_of_date=month_end)
+                        + self._pg_ytd_chf(year, as_of_date=month_end)
+                    )
+                )
+            elif forecast_daily_chf is None:
+                forecast_cumulative.append(None)
+            elif month == current_month:
+                forecast_cumulative.append(spent_year_to_date_chf)
+            else:
+                remaining_days = max((month_end - today).days, 0)
+                forecast_cumulative.append(
+                    _normalized_currency(
+                        spent_year_to_date_chf + (forecast_daily_chf * remaining_days)
+                    )
+                )
+
+        return {
+            "labels": labels,
+            "currentYear": year,
+            "comparisonYear": year - 1 if (year - 1) >= POC_CLIENT_START_YEAR else None,
+            "comparisonActualCumulativeChf": self._mock_previous_year_actual_cumulative_locked(
+                comparison_year=year - 1,
+                latest_sample=latest_sample,
+            )
+            if (year - 1) >= POC_CLIENT_START_YEAR
+            else [None] * 12,
+            "actualCumulativeChf": actual_cumulative,
+            "planCumulativeChf": plan_cumulative,
+            "forecastCumulativeChf": forecast_cumulative,
+        }
+
+    def _mock_previous_year_actual_cumulative_locked(
+        self,
+        *,
+        comparison_year: int,
+        latest_sample: dict[str, Any],
+    ) -> list[object]:
+        if comparison_year < POC_CLIENT_START_YEAR:
+            return [None] * 12
+        days_in_year = self._days_in_year(comparison_year)
+        daily_total = 0.0
+        compute_daily = self._interval_compute_cost_chf(latest_sample, 24.0) or 0.0
+        application_daily = self._interval_application_cost_chf(24.0) or 0.0
+        s3_daily = self._interval_s3_cost_chf(latest_sample, 24.0) or 0.0
+        filesystem_daily = (
+            self._interval_persistent_volume_cost_chf(latest_sample, 24.0) or 0.0
+        )
+        pg_daily = self._interval_pg_cost_chf(24.0) or 0.0
+        daily_total = compute_daily + application_daily + s3_daily + filesystem_daily + pg_daily
+        cumulative: list[object] = []
+        year_start = datetime(comparison_year, 1, 1, tzinfo=UTC).date()
+        for month in range(1, 13):
+            month_end = self._month_end_date(comparison_year, month)
+            elapsed_days = (month_end - year_start).days + 1
+            ratio = elapsed_days / days_in_year
+            cumulative.append(
+                _normalized_currency(
+                    daily_total * ratio * days_in_year
+                )
+            )
+        return cumulative
+
+    def _forecast_daily_spend_locked(
+        self,
+        cache: FinancialYearCache,
+        *,
+        enabled: bool,
+    ) -> float | None:
+        if not enabled:
+            return None
+        today = datetime.now(UTC).date()
+        start_day = max(
+            datetime(cache.year, 1, 1, tzinfo=UTC).date(),
+            today - timedelta(days=FORECAST_WINDOW_DAYS - 1),
+        )
+        window_days = max((today - start_day).days + 1, 1)
+        total = 0.0
+        day = start_day
+        while day <= today:
+            total += cache.daily_totals.get(day.isoformat(), 0.0)
+            total += self._fixed_daily_burn_chf(cache.year)
+            day += timedelta(days=1)
+        return total / window_days
+
+    def _ensure_financial_cache_locked(self, year: int) -> FinancialYearCache:
+        if self._financial_cache is not None and self._financial_cache.year == year:
+            return self._financial_cache
+        self._financial_cache = self._rebuild_financial_cache_locked(year)
+        return self._financial_cache
+
+    def _rebuild_financial_cache_locked(self, year: int) -> FinancialYearCache:
+        budget_entry = self._read_budget_locked(year)
+        cache = FinancialYearCache(
+            year=year,
+            annual_budget_chf=budget_entry.get("annualBudgetChf")
+            if isinstance(budget_entry, dict)
+            else None,
+            budget_updated_at=_parse_iso_datetime(
+                budget_entry.get("updatedAtUtc") if isinstance(budget_entry, dict) else None
+            ),
+            breakdown_year_to_date={
+                "container": 0.0,
+                "containerCpu": 0.0,
+                "containerRam": 0.0,
+                "application": 0.0,
+                "s3": 0.0,
+                "filesystem": 0.0,
+                "pg": 0.0,
+            },
+            daily_totals={},
+        )
+        for cost_event in self._load_cost_events_for_year_locked(year):
+            self._register_cost_event_in_cache(cache, cost_event)
+        return cache
+
+    def _update_financial_cache_with_cost_event_locked(
+        self,
+        cost_event: dict[str, Any],
+    ) -> None:
+        observed_at = _parse_iso_datetime(cost_event.get("endAtUtc"))
+        if observed_at is None:
+            return
+        cache = self._ensure_financial_cache_locked(observed_at.year)
+        self._register_cost_event_in_cache(cache, cost_event)
+
+    def _register_cost_event_in_cache(
+        self,
+        cache: FinancialYearCache,
+        cost_event: dict[str, Any],
+    ) -> None:
+        observed_at = _parse_iso_datetime(cost_event.get("endAtUtc"))
+        if observed_at is None or observed_at.year != cache.year:
+            return
+        component_costs = cost_event.get("components") or {}
+        interval_hours = float(cost_event.get("intervalHours") or 0.0)
+        container_cpu_chf = float(component_costs.get("containerCpuChf") or 0.0)
+        container_ram_chf = float(component_costs.get("containerRamChf") or 0.0)
+        container_total_chf = float(
+            component_costs.get("containerTotalChf")
+            or component_costs.get("computeChf")
+            or 0.0
+        )
+        if container_total_chf and not (container_cpu_chf or container_ram_chf):
+            total_weight = (
+                self._settings.service_consumption_cost_cpu_weight
+                + self._settings.service_consumption_cost_ram_weight
+            )
+            if total_weight > 0:
+                container_cpu_chf = container_total_chf * (
+                    self._settings.service_consumption_cost_cpu_weight / total_weight
+                )
+                container_ram_chf = container_total_chf * (
+                    self._settings.service_consumption_cost_ram_weight / total_weight
+                )
+        s3_chf = float(component_costs.get("s3Chf") or 0.0)
+        filesystem_chf = float(
+            component_costs.get("filesystemChf")
+            or component_costs.get("persistentVolumeChf")
+            or 0.0
+        )
+        cache.breakdown_year_to_date["container"] += container_total_chf
+        cache.breakdown_year_to_date["containerCpu"] += container_cpu_chf
+        cache.breakdown_year_to_date["containerRam"] += container_ram_chf
+        cache.breakdown_year_to_date["s3"] += s3_chf
+        cache.breakdown_year_to_date["filesystem"] += filesystem_chf
+        day_key = observed_at.date().isoformat()
+        cache.daily_totals[day_key] = cache.daily_totals.get(day_key, 0.0) + (
+            container_total_chf + s3_chf + filesystem_chf
+        )
+
+    def _build_cost_event(
+        self,
+        previous_sample: dict[str, Any] | None,
+        current_sample: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        previous_observed_at = _parse_iso_datetime(
+            (previous_sample or {}).get("timestampUtc")
+        )
+        current_observed_at = _parse_iso_datetime(current_sample.get("timestampUtc"))
+        if previous_observed_at is None or current_observed_at is None:
+            return None
+        if current_observed_at <= previous_observed_at:
+            return None
+
+        interval_hours = (
+            current_observed_at - previous_observed_at
+        ).total_seconds() / 3600.0
+        if interval_hours <= 0:
+            return None
+
+        container_costs = self._interval_container_cost_components_chf(
+            current_sample,
+            interval_hours,
+        )
+        compute_chf = (
+            container_costs.get("totalChf") if isinstance(container_costs, dict) else None
+        )
+        application_chf = self._interval_application_cost_chf(interval_hours)
+        s3_chf = self._interval_s3_cost_chf(current_sample, interval_hours)
+        persistent_volume_chf = self._interval_persistent_volume_cost_chf(
+            current_sample,
+            interval_hours,
+        )
+        pg_chf = self._interval_pg_cost_chf(interval_hours)
+        if all(
+            value is None
+            for value in (compute_chf, application_chf, s3_chf, persistent_volume_chf, pg_chf)
+        ):
+            return None
+
+        total_chf = sum(
+            value
+            for value in (compute_chf, application_chf, s3_chf, persistent_volume_chf, pg_chf)
+            if value is not None
+        )
+        return {
+            "startAtUtc": previous_observed_at.replace(microsecond=0).isoformat(),
+            "endAtUtc": current_observed_at.replace(microsecond=0).isoformat(),
+            "intervalHours": _normalized_cost_value(interval_hours),
+            "components": {
+                "computeChf": _normalized_cost_value(compute_chf),
+                "containerCpuChf": _normalized_cost_value(
+                    (container_costs or {}).get("cpuChf")
+                ),
+                "containerRamChf": _normalized_cost_value(
+                    (container_costs or {}).get("ramChf")
+                ),
+                "containerTotalChf": _normalized_cost_value(
+                    (container_costs or {}).get("totalChf")
+                ),
+                "applicationChf": _normalized_cost_value(application_chf),
+                "s3Chf": _normalized_cost_value(s3_chf),
+                "persistentVolumeChf": _normalized_cost_value(
+                    persistent_volume_chf
+                ),
+                "filesystemChf": _normalized_cost_value(persistent_volume_chf),
+                "pgChf": _normalized_cost_value(pg_chf),
+            },
+            "totalChf": _normalized_cost_value(total_chf),
+        }
+
+    def _interval_container_cost_components_chf(
+        self,
+        sample: dict[str, Any],
+        interval_hours: float,
+    ) -> dict[str, float] | None:
+        node_hourly_rate = self._settings.service_consumption_cost_node_chf_per_hour
+        if node_hourly_rate is None or node_hourly_rate < 0:
+            return None
+        cpu_used = ((sample.get("cpu") or {}).get("app") or {}).get("coresUsed")
+        cpu_capacity = ((sample.get("cpu") or {}).get("node") or {}).get(
+            "capacityCores"
+        )
+        memory_used = ((sample.get("memory") or {}).get("app") or {}).get("bytesUsed")
+        memory_capacity = ((sample.get("memory") or {}).get("node") or {}).get(
+            "capacityBytes"
+        )
+        if any(
+            value in (None, 0)
+            for value in (cpu_used, cpu_capacity, memory_used, memory_capacity)
+        ):
+            return None
+
+        cpu_share = max(0.0, min(float(cpu_used) / float(cpu_capacity), 1.0))
+        ram_share = max(0.0, min(float(memory_used) / float(memory_capacity), 1.0))
+        cpu_weight = self._settings.service_consumption_cost_cpu_weight
+        ram_weight = self._settings.service_consumption_cost_ram_weight
+        total_weight = cpu_weight + ram_weight
+        if total_weight <= 0:
+            return None
+
+        base_cost = float(node_hourly_rate) * interval_hours
+        cpu_cost = (cpu_weight / total_weight) * cpu_share * base_cost
+        ram_cost = (ram_weight / total_weight) * ram_share * base_cost
+        return {
+            "cpuChf": cpu_cost,
+            "ramChf": ram_cost,
+            "totalChf": cpu_cost + ram_cost,
+        }
+
+    def _interval_compute_cost_chf(
+        self,
+        sample: dict[str, Any],
+        interval_hours: float,
+    ) -> float | None:
+        cost_components = self._interval_container_cost_components_chf(
+            sample,
+            interval_hours,
+        )
+        if cost_components is None:
+            return None
+        return cost_components.get("totalChf")
+
+    def _interval_application_cost_chf(
+        self,
+        interval_hours: float,
+    ) -> float | None:
+        app_fee = self._application_monthly_fee_chf()
+        return float(app_fee) * interval_hours / HOURS_PER_MONTH_FOR_COSTING
+
+    def _interval_s3_cost_chf(
+        self,
+        sample: dict[str, Any],
+        interval_hours: float,
+    ) -> float | None:
+        s3_rate = self._settings.service_consumption_cost_s3_chf_per_gb_month
+        if s3_rate is None or s3_rate < 0:
+            return None
+        total_bytes = ((sample.get("s3") or {}).get("totalBytes"))
+        total_gb = _decimal_gb_from_bytes(total_bytes)
+        if total_gb is None:
+            return None
+        return total_gb * float(s3_rate) * interval_hours / HOURS_PER_MONTH_FOR_COSTING
+
+    def _interval_persistent_volume_cost_chf(
+        self,
+        sample: dict[str, Any],
+        interval_hours: float,
+    ) -> float | None:
+        pv_rate = self._settings.service_consumption_cost_pv_chf_per_gb_month
+        if pv_rate is None or pv_rate < 0:
+            return None
+        bytes_capacity = ((sample.get("persistentVolume") or {}).get("bytesProvisioned"))
+        capacity_gb = _decimal_gb_from_bytes(bytes_capacity)
+        if capacity_gb is None:
+            return None
+        return (
+            capacity_gb * float(pv_rate) * interval_hours / HOURS_PER_MONTH_FOR_COSTING
+        )
+
+    def _interval_pg_cost_chf(
+        self,
+        interval_hours: float,
+    ) -> float | None:
+        current_year = datetime.now(UTC).year
+        pg_fee = self._pg_monthly_fee_chf(current_year)
+        return float(pg_fee) * interval_hours / HOURS_PER_MONTH_FOR_COSTING
+
+    def _pg_total_bytes(self) -> int:
+        return sum(size_bytes for _label, size_bytes in PG_STATIC_INSTANCES)
+
+    def _append_cost_event_locked(self, cost_event: dict[str, Any]) -> None:
+        observed_at = _parse_iso_datetime(cost_event.get("endAtUtc"))
+        if observed_at is None:
+            raise ValueError("Cost event endAtUtc is required.")
+        path = self._cost_event_path_for(observed_at)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(_json_line(cost_event))
+            handle.write("\n")
+
+    def _cost_event_path_for(self, observed_at: datetime) -> Path:
+        return (
+            self.financial_cost_events_root
+            / f"{observed_at.year:04d}"
+            / f"{observed_at.month:02d}"
+            / f"{observed_at.day:02d}.jsonl"
+        )
+
+    def _load_cost_events_for_year_locked(self, year: int) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+        root = self.financial_cost_events_root / f"{year:04d}"
+        if not root.exists():
+            return events
+        for path in sorted(root.rglob("*.jsonl")):
+            try:
+                raw_lines = path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                continue
+            for raw_line in raw_lines:
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    cost_event = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+                observed_at = _parse_iso_datetime(cost_event.get("endAtUtc"))
+                if observed_at is None or observed_at.year != year:
+                    continue
+                events.append(cost_event)
+        return events
+
+    def _read_budget_locked(self, year: int) -> dict[str, Any]:
+        path = self.financial_budgets_path
+        if not path.is_file():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        entry = payload.get(str(year))
+        return entry if isinstance(entry, dict) else {}
+
+    def _write_budget_locked(
+        self,
+        *,
+        year: int,
+        annual_budget_chf: float,
+        updated_at: datetime,
+    ) -> None:
+        path = self.financial_budgets_path
+        budgets: dict[str, object] = {}
+        if path.is_file():
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                existing = {}
+            if isinstance(existing, dict):
+                budgets = existing
+        path.parent.mkdir(parents=True, exist_ok=True)
+        budgets[str(year)] = {
+            "annualBudgetChf": _normalized_currency(annual_budget_chf),
+            "updatedAtUtc": updated_at.isoformat(),
+        }
+        path.write_text(
+            json.dumps(budgets, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    def _month_end_date(self, year: int, month: int) -> date:
+        if month >= 12:
+            return datetime(year + 1, 1, 1, tzinfo=UTC).date() - timedelta(days=1)
+        return datetime(year, month + 1, 1, tzinfo=UTC).date() - timedelta(days=1)
 
     def _build_recent_metric_history(
         self,
@@ -1132,6 +2340,7 @@ class ServiceConsumptionMonitor:
         )
         history_root = self.history_root
         if not history_root.exists():
+            self._prune_financial_cost_events_locked(reference_time)
             self._last_pruned_at = reference_time
             return
 
@@ -1184,7 +2393,73 @@ class ServiceConsumptionMonitor:
             except OSError:
                 continue
 
+        self._prune_financial_cost_events_locked(reference_time)
         self._last_pruned_at = reference_time
+
+    def _prune_financial_cost_events_locked(self, reference_time: datetime) -> None:
+        cost_events_root = self.financial_cost_events_root
+        if not cost_events_root.exists():
+            return
+
+        cutoff = self._financial_cost_event_cutoff(reference_time)
+        for path in sorted(cost_events_root.rglob("*.jsonl")):
+            try:
+                raw_lines = path.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                continue
+
+            kept_lines: list[str] = []
+            for raw_line in raw_lines:
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    cost_event = json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+                observed_at = _parse_iso_datetime(cost_event.get("endAtUtc"))
+                if observed_at is None or observed_at < cutoff:
+                    continue
+                kept_lines.append(_json_line(cost_event))
+
+            if not kept_lines:
+                try:
+                    path.unlink()
+                except OSError:
+                    continue
+                continue
+
+            rewritten = "\n".join(kept_lines) + "\n"
+            original = "\n".join(line.strip() for line in raw_lines if line.strip())
+            if rewritten.rstrip("\n") == original:
+                continue
+            try:
+                path.write_text(rewritten, encoding="utf-8")
+            except OSError:
+                continue
+
+        for directory in sorted(cost_events_root.rglob("*"), reverse=True):
+            if not directory.is_dir():
+                continue
+            try:
+                next(directory.iterdir())
+            except StopIteration:
+                try:
+                    directory.rmdir()
+                except OSError:
+                    pass
+            except OSError:
+                continue
+
+    def _financial_cost_event_cutoff(self, reference_time: datetime) -> datetime:
+        year = reference_time.year
+        month = reference_time.month
+        for _index in range(max(COST_EVENT_RETENTION_MONTHS - 1, 0)):
+            month -= 1
+            if month <= 0:
+                month = 12
+                year -= 1
+        return datetime(year, month, 1, tzinfo=UTC)
 
     def _restore_s3_cache_locked(self, sample: dict[str, Any]) -> None:
         s3_payload = sample.get("s3") or {}
