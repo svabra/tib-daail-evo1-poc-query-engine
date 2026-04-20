@@ -223,6 +223,11 @@ In Kubernetes/OpenShift:
 - `tib-daail-evo1-poc-query-engine-secret` for PostgreSQL and S3 credentials
 - `/myconfigmap/daai-brs-d/bit-ros-trusted-certs/*` for the mounted trusted CA material
 
+The current manifest files for those shared objects are `k8s/bdw-configmap.yaml`
+and `k8s/bdw-secret.example.yaml`. The legacy standalone `duckdb-*.yaml`
+deployment, service, and route manifests are obsolete because the `evo1-bdw`
+container already embeds DuckDB in-process.
+
 The deployment uses `envFrom` for the ConfigMap and Secret, so RHOS currently supplies
 `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` directly as environment variables.
 
@@ -343,7 +348,7 @@ Use this model in the cluster:
 
 1. Put `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY` into `tib-daail-evo1-poc-query-engine-secret`.
 2. Mount the namespace ConfigMap `bit-ros-trusted-certs` into the pod at `/myconfigmap/daai-brs-d/bit-ros-trusted-certs`.
-3. Set `S3_CA_CERT_FILE=/myconfigmap/daai-brs-d/bit-ros-trusted-certs/ca-bundle.crt` in `k8s/duckdb-configmap.yaml`.
+3. Set `S3_CA_CERT_FILE=/myconfigmap/daai-brs-d/bit-ros-trusted-certs/ca-bundle.crt` in `k8s/bdw-configmap.yaml`.
 4. Keep `S3_ENDPOINT=https://...` and `S3_VERIFY_SSL=true`.
 5. If `ca-bundle.crt` is not the real file name, use the startup logs to see which files actually exist in the mounted directory.
 

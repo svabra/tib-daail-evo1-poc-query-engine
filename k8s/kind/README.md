@@ -17,7 +17,7 @@ Use this path to validate the service-consumption deployment outside RHOS.
 ## Apply
 
 1. Apply the shared config, service account, and service:
-   - `kubectl apply -f k8s/duckdb-configmap.yaml`
+   - `kubectl apply -f k8s/bdw-configmap.yaml`
    - `kubectl apply -f k8s/bdw-serviceaccount.yaml`
    - `kubectl apply -f k8s/bdw-service.yaml`
 2. Apply the app storage and node-metrics RBAC:
@@ -28,6 +28,8 @@ Use this path to validate the service-consumption deployment outside RHOS.
    - `kubectl apply -f k8s/bdw-deployment.yaml`
 
 Set the CHF rate-card values in the ConfigMap before testing the financial view. The shared annual budget itself is entered through the service-consumption page and persisted on the PVC.
+
+Do not apply the legacy `duckdb-*.yaml` deployment manifests in kind. The current validation path is the `evo1-bdw` deployment only.
 
 Do not apply `k8s/bdw-route.yaml` in kind. Access the app with `kubectl port-forward`.
 

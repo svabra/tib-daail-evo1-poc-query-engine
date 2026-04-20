@@ -1,3 +1,5 @@
+# Shared runtime configuration for the BDW application.
+# The ConfigMap object name stays stable to avoid breaking existing clusters.
 apiVersion: v1
 kind: ConfigMap
 metadata:

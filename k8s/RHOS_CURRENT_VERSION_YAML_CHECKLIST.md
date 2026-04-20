@@ -6,6 +6,7 @@ Important context:
 
 - The immediate previous release commit `e1f2b61` only changed the image tag from `0.5.6` to `0.5.7`.
 - The YAML changes that matter for the service-consumption page were introduced earlier with the service-consumption rollout and are now represented by the current files in `k8s/`.
+- The standalone `duckdb-deployment.yaml`, `duckdb-service.yaml`, and `duckdb-route.yaml` manifests are legacy and are not required for the current `evo1-bdw` deployment.
 - If your RHOS cluster is still using older manifests, apply the YAML changes below before expecting the current service-consumption page to be fully populated.
 
 ## 1. Deployment changes you need in `k8s/bdw-deployment.yaml`
@@ -146,7 +147,7 @@ If you deploy into a namespace other than `daai-brs-d`, change:
 - the `subjects[].namespace` in the ClusterRoleBinding
 - the Deployment namespace
 
-## 4. ConfigMap values you need in `k8s/duckdb-configmap.yaml`
+## 4. ConfigMap values you need in `k8s/bdw-configmap.yaml`
 
 The service-consumption financial view depends on the following cost-rate keys:
 
@@ -225,7 +226,7 @@ If S3 credentials or TLS trust are broken:
 ## 7. Recommended RHOS apply order
 
 ```bash
-oc apply -f k8s/duckdb-configmap.yaml
+oc apply -f k8s/bdw-configmap.yaml
 oc apply -f k8s/bdw-serviceaccount.yaml
 oc apply -f k8s/bdw-storage-pvc.yaml
 oc apply -f k8s/bdw-node-reader-clusterrole.yaml
