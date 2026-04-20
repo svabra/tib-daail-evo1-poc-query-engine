@@ -27,6 +27,10 @@ const SERVICE_CATEGORY_COLORS = {
   pg: "#6b7f93",
   fallback: "#7a8c9e",
 };
+const BUDGET_PROGRESS_BLUE_RGB = [11, 68, 121];
+const BUDGET_PROGRESS_RED_RGB = [213, 43, 30];
+const COMPACT_USAGE_CHART_LINE_WIDTH = 1;
+const COMPACT_USAGE_CHART_POINT_RADIUS = 0;
 const LEGEND_TOOLTIPS = {
   cpu: {
     "Workbench service":
@@ -98,6 +102,174 @@ const serviceMixCenterTextPlugin = {
   },
 };
 
+function compactServiceMixLabel(label) {
+  const words = String(label || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!words.length) {
+    return "Svc";
+  }
+  if (words.length === 1) {
+    return words[0].slice(0, 4);
+  }
+  return words
+    .map((word) => word.charAt(0).toUpperCase())
+    .join("")
+    .slice(0, 4);
+}
+
+function serviceMixSectorLabelConfig(service) {
+  const key = String(service?.key || "").trim().toLowerCase();
+  switch (key) {
+    case "container":
+      return { primary: "Container", short: "Ctr" };
+    case "application":
+      return { primary: "Application", short: "App" };
+    case "filesystem":
+      return { primary: "File System", short: "FS" };
+    case "s3":
+      return { primary: "S3", short: "S3" };
+    case "pg":
+      return { primary: "Postgres", short: "PG" };
+    default: {
+      const label = String(service?.label || "Service")
+        .trim()
+        .replace(/^DAAIFL\s+/i, "")
+        .replace(/\s+Service$/i, "")
+        .replace(/\s+/g, " ");
+      return {
+        primary: label || "Service",
+        short: compactServiceMixLabel(label || "Service"),
+      };
+    }
+  }
+}
+
+function wrapWordsIntoLines(ctx, text, maxWidth, maxLines) {
+  const words = String(text || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  if (!words.length) {
+    return null;
+  }
+  const lines = [];
+  let currentLine = words[0];
+  for (let index = 1; index < words.length; index += 1) {
+    const candidate = `${currentLine} ${words[index]}`;
+    if (ctx.measureText(candidate).width <= maxWidth) {
+      currentLine = candidate;
+      continue;
+    }
+    lines.push(currentLine);
+    currentLine = words[index];
+    if (lines.length >= maxLines) {
+      return null;
+    }
+  }
+  lines.push(currentLine);
+  return lines.length <= maxLines &&
+    lines.every((line) => ctx.measureText(line).width <= maxWidth)
+    ? lines
+    : null;
+}
+
+function fitServiceMixSectorLabel(ctx, arc, primaryLabel, shortLabel, options = {}) {
+  const innerRadius = Number(arc?.innerRadius || 0);
+  const outerRadius = Number(arc?.outerRadius || 0);
+  const midRadius = (innerRadius + outerRadius) / 2;
+  const sectorAngle = Number(arc?.circumference || arc?.endAngle - arc?.startAngle || 0);
+  const maxWidth = Math.max(18, 2 * midRadius * Math.sin(sectorAngle / 2) - 8);
+  const maxHeight = Math.max(14, outerRadius - innerRadius - 10);
+  const maxFontSize = Number(options?.maxFontSize || 14);
+  const minFontSize = Number(options?.minFontSize || 8);
+  const maxLinesCap = Math.max(1, Number(options?.maxLines || 2));
+  const candidates = [primaryLabel, shortLabel].filter(Boolean);
+
+  for (const candidate of candidates) {
+    for (let fontSize = maxFontSize; fontSize >= minFontSize; fontSize -= 1) {
+      const lineHeight = fontSize * 1.05;
+      const allowedLines = Math.max(
+        1,
+        Math.min(maxLinesCap, Math.floor(maxHeight / lineHeight))
+      );
+      if (!allowedLines) {
+        continue;
+      }
+      ctx.font = `700 ${fontSize}px "Segoe UI", sans-serif`;
+      const lines =
+        ctx.measureText(candidate).width <= maxWidth
+          ? [candidate]
+          : wrapWordsIntoLines(ctx, candidate, maxWidth, allowedLines);
+      if (!lines) {
+        continue;
+      }
+      const blockHeight = lines.length * lineHeight;
+      if (blockHeight <= maxHeight) {
+        return { fontSize, lineHeight, lines };
+      }
+    }
+  }
+
+  return null;
+}
+
+const serviceMixSliceLabelPlugin = {
+  id: "serviceMixSliceLabels",
+  afterDatasetsDraw(chart, _args, options) {
+    if (!chart || chart.config?.type !== "doughnut") {
+      return;
+    }
+
+    const ctx = chart.ctx;
+    const arcs = chart.getDatasetMeta(0)?.data || [];
+    const dataset = chart.data?.datasets?.[0];
+    const values = Array.isArray(dataset?.data) ? dataset.data : [];
+    const labels = Array.isArray(options?.labels) ? options.labels : [];
+    const shortLabels = Array.isArray(options?.shortLabels) ? options.shortLabels : [];
+    if (!ctx || !arcs.length || !labels.length) {
+      return;
+    }
+
+    ctx.save();
+    ctx.fillStyle = options?.color || "#ffffff";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.shadowColor = options?.shadowColor || "rgba(11, 31, 58, 0.16)";
+    ctx.shadowBlur = Number(options?.shadowBlur || 2);
+
+    arcs.forEach((arc, index) => {
+      const value = Number(values[index] || 0);
+      if (!Number.isFinite(value) || value <= 0) {
+        return;
+      }
+
+      const labelFit = fitServiceMixSectorLabel(
+        ctx,
+        arc,
+        labels[index],
+        shortLabels[index],
+        options
+      );
+      if (!labelFit) {
+        return;
+      }
+
+      const x = Number(arc?.x || 0) + Math.cos((arc.startAngle + arc.endAngle) / 2) * ((arc.innerRadius + arc.outerRadius) / 2);
+      const y = Number(arc?.y || 0) + Math.sin((arc.startAngle + arc.endAngle) / 2) * ((arc.innerRadius + arc.outerRadius) / 2);
+      const startY = y - ((labelFit.lines.length - 1) * labelFit.lineHeight) / 2;
+
+      ctx.font = `700 ${labelFit.fontSize}px "Segoe UI", sans-serif`;
+      labelFit.lines.forEach((line, lineIndex) => {
+        ctx.fillText(line, x, startY + lineIndex * labelFit.lineHeight);
+      });
+    });
+
+    ctx.restore();
+  },
+};
+
 function financialLegendTooltips(currentYear, comparisonYear) {
   const tooltips = {
     [`Actual Spend ${currentYear}`]:
@@ -126,6 +298,23 @@ function serviceMixLegendTooltips(services) {
       "Estimated spend year-to-date for this service category.";
   });
   return tooltips;
+}
+
+function serviceMixTooltipCallbacks({ labelsSource, sectorLabelConfigs, total }) {
+  return {
+    title: (items) => {
+      const item = Array.isArray(items) ? items[0] : null;
+      return item ? sectorLabelConfigs[item.dataIndex]?.primary || item.label || "" : "";
+    },
+    label: (context) => {
+      const value = Number(context.raw || 0);
+      const percent = total > 0 ? (value / total) * 100 : 0;
+      return `${formatChfValue(value)} (${percent.toFixed(1)}% of YTD)`;
+    },
+    afterLabel: (context) =>
+      labelsSource[context.dataIndex]?.subtitle ||
+      "Estimated spend year-to-date for this service category.",
+  };
 }
 
 function pageRoot() {
@@ -528,6 +717,37 @@ function setInputValue(node, value) {
   }
 }
 
+function clampNumber(value, min, max) {
+  return Math.max(min, Math.min(value, max));
+}
+
+function rgbaString(rgb, alpha) {
+  return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha})`;
+}
+
+function mixRgb(start, end, ratio) {
+  const weight = clampNumber(ratio, 0, 1);
+  return start.map((channel, index) =>
+    Math.round(channel + (end[index] - channel) * weight)
+  );
+}
+
+function budgetProgressGradient({ percentUsed, forecastPercentUsed }) {
+  if (percentUsed !== null && percentUsed > 100) {
+    return `linear-gradient(90deg, ${rgbaString(BUDGET_PROGRESS_RED_RGB, 0.94)} 0%, ${rgbaString(BUDGET_PROGRESS_RED_RGB, 0.86)} 100%)`;
+  }
+
+  if (!Number.isFinite(forecastPercentUsed)) {
+    return `linear-gradient(90deg, ${rgbaString(BUDGET_PROGRESS_BLUE_RGB, 0.94)} 0%, ${rgbaString(BUDGET_PROGRESS_BLUE_RGB, 0.88)} 100%)`;
+  }
+
+  const riskLevel = clampNumber((forecastPercentUsed - 70) / 30, 0, 1);
+  const gradientStart = clampNumber(96 - riskLevel * 44, 52, 96).toFixed(1);
+  const riskColor = mixRgb(BUDGET_PROGRESS_BLUE_RGB, BUDGET_PROGRESS_RED_RGB, riskLevel);
+
+  return `linear-gradient(90deg, ${rgbaString(BUDGET_PROGRESS_BLUE_RGB, 0.94)} 0%, ${rgbaString(BUDGET_PROGRESS_BLUE_RGB, 0.88)} ${gradientStart}%, ${rgbaString(riskColor, 0.92)} 100%)`;
+}
+
 function formatBudgetInputValue(value) {
   if (value === null || value === undefined) {
     return "";
@@ -912,6 +1132,10 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
       Number(annualBudgetChf) > 0 && Number.isFinite(Number(spentYearToDateChf))
         ? (Number(spentYearToDateChf) / Number(annualBudgetChf)) * 100
         : null;
+    const forecastPercentUsed =
+      Number(annualBudgetChf) > 0 && Number.isFinite(Number(forecastYearEndChf))
+        ? (Number(forecastYearEndChf) / Number(annualBudgetChf)) * 100
+        : null;
     const normalizedPercentUsed =
       percentUsed === null ? null : Math.max(0, Math.min(percentUsed, 100));
 
@@ -957,10 +1181,10 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
     if (progressBar) {
       progressBar.style.width =
         normalizedPercentUsed === null ? "0%" : `${normalizedPercentUsed.toFixed(1)}%`;
-      progressBar.style.background =
-        percentUsed !== null && percentUsed > 100
-          ? "linear-gradient(90deg, rgba(213, 43, 30, 0.92), rgba(185, 107, 0, 0.88))"
-          : "linear-gradient(90deg, rgba(28, 106, 72, 0.95), rgba(11, 68, 121, 0.88))";
+      progressBar.style.background = budgetProgressGradient({
+        percentUsed,
+        forecastPercentUsed,
+      });
     }
     setText(
       budgetProgressCopyNode(),
@@ -1350,17 +1574,23 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
       : [{ key: "fallback", label: "No YTD spend yet", costYtdChf: 1, subtitle: "" }];
     const labels = labelsSource.map((service) => service.label || "Service");
     const values = labelsSource.map((service) => Number(service.costYtdChf || 0));
+    const sectorLabelConfigs = labelsSource.map((service) => serviceMixSectorLabelConfig(service));
     const colors = labelsSource.map(
       (service) => SERVICE_CATEGORY_COLORS[String(service?.key || "")] || SERVICE_CATEGORY_COLORS.fallback
     );
     const total = values.reduce((sum, value) => sum + value, 0);
+    const mixLegend = financialServiceMixLegendContainer();
+    if (mixLegend) {
+      mixLegend.hidden = true;
+      mixLegend.replaceChildren();
+    }
     const chart =
       updateLineChart({
         key: "financialServiceMix",
         canvas: financialServiceMixChartCanvas(),
         configFactory: () => ({
           type: "doughnut",
-          plugins: [serviceMixCenterTextPlugin],
+          plugins: [serviceMixCenterTextPlugin, serviceMixSliceLabelPlugin],
           data: {
             labels,
             datasets: [
@@ -1377,20 +1607,25 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
             animation: false,
             maintainAspectRatio: false,
             responsive: true,
-            cutout: "58%",
+            cutout: "46%",
             plugins: {
               legend: { display: false },
               serviceMixCenterText: {
                 lines: ["Costs by", "Service"],
               },
+              serviceMixSliceLabels: {
+                labels: sectorLabelConfigs.map((config) => config.primary),
+                shortLabels: sectorLabelConfigs.map((config) => config.short),
+                maxFontSize: 14,
+                minFontSize: 8,
+                maxLines: 2,
+              },
               tooltip: {
-                callbacks: {
-                  label: (context) => {
-                    const value = Number(context.raw || 0);
-                    const percent = total > 0 ? (value / total) * 100 : 0;
-                    return `${context.label}: ${formatChfValue(value)} (${percent.toFixed(1)}% of YTD)`;
-                  },
-                },
+                callbacks: serviceMixTooltipCallbacks({
+                  labelsSource,
+                  sectorLabelConfigs,
+                  total,
+                }),
               },
             },
           },
@@ -1407,15 +1642,20 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
           hoverOffset: 4,
         },
       ];
+      chart.options.cutout = "46%";
+      chart.options.plugins.serviceMixSliceLabels = {
+        labels: sectorLabelConfigs.map((config) => config.primary),
+        shortLabels: sectorLabelConfigs.map((config) => config.short),
+        maxFontSize: 14,
+        minFontSize: 8,
+        maxLines: 2,
+      };
+      chart.options.plugins.tooltip.callbacks = serviceMixTooltipCallbacks({
+        labelsSource,
+        sectorLabelConfigs,
+        total,
+      });
       chart.update("none");
-      renderLegend(
-        financialServiceMixLegendContainer(),
-        labelsSource.map((service, index) => ({
-          label: service.label || "Service",
-          borderColor: colors[index],
-        })),
-        serviceMixLegendTooltips(activeServices.length ? activeServices : [])
-      );
     }
   }
 
@@ -1443,8 +1683,8 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
                 borderColor: METRIC_COLORS.cpu,
                 backgroundColor: "transparent",
                 tension: 0.25,
-                pointRadius: 0,
-                borderWidth: 1.75,
+                pointRadius: COMPACT_USAGE_CHART_POINT_RADIUS,
+                borderWidth: COMPACT_USAGE_CHART_LINE_WIDTH,
                 spanGaps: true,
               },
               {
@@ -1453,8 +1693,8 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
                 borderColor: METRIC_COLORS.node,
                 backgroundColor: "transparent",
                 tension: 0.25,
-                pointRadius: 0,
-                borderWidth: 1.75,
+                pointRadius: COMPACT_USAGE_CHART_POINT_RADIUS,
+                borderWidth: COMPACT_USAGE_CHART_LINE_WIDTH,
                 spanGaps: true,
               },
             ],
@@ -1511,8 +1751,8 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
                 borderColor: METRIC_COLORS.memory,
                 backgroundColor: "transparent",
                 tension: 0.25,
-                pointRadius: 0,
-                borderWidth: 1.75,
+                pointRadius: COMPACT_USAGE_CHART_POINT_RADIUS,
+                borderWidth: COMPACT_USAGE_CHART_LINE_WIDTH,
                 spanGaps: true,
               },
               {
@@ -1521,8 +1761,8 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
                 borderColor: METRIC_COLORS.node,
                 backgroundColor: "transparent",
                 tension: 0.25,
-                pointRadius: 0,
-                borderWidth: 1.75,
+                pointRadius: COMPACT_USAGE_CHART_POINT_RADIUS,
+                borderWidth: COMPACT_USAGE_CHART_LINE_WIDTH,
                 spanGaps: true,
               },
             ],
@@ -1581,9 +1821,9 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
                 borderColor: METRIC_COLORS.s3,
                 backgroundColor: "transparent",
                 tension: 0.18,
-                pointRadius: 1.5,
+                pointRadius: COMPACT_USAGE_CHART_POINT_RADIUS,
                 pointHoverRadius: 3,
-                borderWidth: 1.75,
+                borderWidth: COMPACT_USAGE_CHART_LINE_WIDTH,
                 spanGaps: true,
               },
             ],
@@ -1642,9 +1882,9 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
                 borderColor: METRIC_COLORS.pv,
                 backgroundColor: "transparent",
                 tension: 0.18,
-                pointRadius: 1.5,
+                pointRadius: COMPACT_USAGE_CHART_POINT_RADIUS,
                 pointHoverRadius: 3,
-                borderWidth: 1.75,
+                borderWidth: COMPACT_USAGE_CHART_LINE_WIDTH,
                 spanGaps: true,
               },
             ],

@@ -1710,11 +1710,25 @@ details:not([open]) > .source-schema > summary::before {
 }
 
 .topbar-actions {
+  display: grid;
+  gap: 12px;
+  justify-items: end;
+}
+
+.topbar-actions-primary,
+.topbar-actions-secondary {
   display: inline-flex;
   align-items: center;
   gap: 12px;
-  flex-wrap: wrap;
   justify-content: flex-end;
+}
+
+.topbar-actions-primary {
+  flex-wrap: wrap;
+}
+
+.topbar-actions-secondary {
+  justify-self: end;
 }
 
 .brand {
@@ -2151,17 +2165,18 @@ details:not([open]) > .source-schema > summary::before {
 
 .service-consumption-hero-primary {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
   gap: 14px;
-  align-content: stretch;
+  align-content: start;
   min-width: 0;
-  height: 100%;
+  align-self: start;
 }
 
 .service-consumption-hero-financial-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
+  --service-consumption-hero-chart-height: clamp(220px, 16vw, 300px);
   align-items: stretch;
   min-width: 0;
 }
@@ -2177,7 +2192,7 @@ details:not([open]) > .source-schema > summary::before {
   min-height: 0;
   height: 100%;
   align-self: stretch;
-  align-content: stretch;
+  align-content: start;
 }
 
 .service-consumption-hero h2 {
@@ -2348,8 +2363,8 @@ details:not([open]) > .source-schema > summary::before {
   width: 0;
   height: 100%;
   border-radius: inherit;
-  background: linear-gradient(90deg, rgba(28, 106, 72, 0.95), rgba(11, 68, 121, 0.88));
-  transition: width 180ms ease-in-out;
+  background: linear-gradient(90deg, rgba(11, 68, 121, 0.94), rgba(11, 68, 121, 0.88));
+  transition: width 180ms ease-in-out, background 180ms ease-in-out;
 }
 
 .service-consumption-budget-progress-copy {
@@ -2530,17 +2545,18 @@ details:not([open]) > .source-schema > summary::before {
   height: 100%;
   min-height: 0;
   grid-template-rows: auto minmax(0, 1fr) auto;
-  align-content: stretch;
+  align-content: start;
+  align-self: stretch;
 }
 
 .service-consumption-chart-shell-financial-hero {
-  height: 100%;
-  min-height: 210px;
+  min-height: var(--service-consumption-hero-chart-height);
 }
 
 .service-consumption-chart-shell-financial-mix {
-  height: 100%;
-  min-height: 210px;
+  height: var(--service-consumption-hero-chart-height);
+  min-height: var(--service-consumption-hero-chart-height);
+  max-height: var(--service-consumption-hero-chart-height);
 }
 
 .service-consumption-chart-shell-compact {
@@ -2595,7 +2611,23 @@ details:not([open]) > .source-schema > summary::before {
   display: grid;
   align-items: start;
   justify-items: start;
-  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 8px;
+}
+
+.service-consumption-panel-hero-service-mix .service-consumption-chart-legend-stack {
+  align-self: start;
+}
+
+.service-consumption-panel-hero-service-mix .service-consumption-legend-item {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 0.7rem;
+}
+
+.service-consumption-panel-hero-service-mix .service-consumption-legend-label {
+  white-space: normal;
 }
 
 .service-consumption-legend-item {
@@ -6198,6 +6230,15 @@ details:not([open]) > .source-schema > summary::before {
   .result-header {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .topbar-actions {
+    justify-items: start;
+  }
+
+  .topbar-actions-primary,
+  .topbar-actions-secondary {
+    justify-content: flex-start;
   }
 
   .workspace-meta-grid {

@@ -35,138 +35,142 @@
           </div>
         </div>
         <div class="topbar-actions">
-          <button
-            type="button"
-            class="topbar-action-button topbar-action-button-icon-only"
-            data-open-query-workbench
-            data-open-query-workbench-navigation="true"
-            aria-label="Query Workbench"
-            title="Query Workbench"
-          >
-            <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
-              <rect x="2.1" y="2.4" width="11.8" height="11.2" rx="1.2"></rect>
-              <path d="M2.8 6.2h10.4"></path>
-              <path d="M5.4 9.1 7 10.7 10.6 7.1"></path>
-            </svg>
-          </button>
-          <button
-            type="button"
-            class="topbar-action-button topbar-action-button-icon-only"
-            data-open-query-data-sources
-            aria-label="Data Source Workbench"
-            title="Data Source Workbench"
-          >
-            <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
-              <ellipse cx="5.2" cy="4.2" rx="3.1" ry="1.35"></ellipse>
-              <path d="M2.1 4.2v4.5c0 .76 1.39 1.35 3.1 1.35s3.1-.59 3.1-1.35V4.2"></path>
-              <path d="M2.1 6.45c0 .75 1.39 1.35 3.1 1.35s3.1-.6 3.1-1.35"></path>
-              <path d="M9.2 2.8h3.35l1.35 1.35v6.15H9.2z"></path>
-              <path d="M12.55 2.8v1.35h1.35"></path>
-              <path d="M10.05 10.55h4"></path>
-              <path d="M10.05 12.15h2.55"></path>
-            </svg>
-          </button>
-          <button
-            type="button"
-            class="topbar-action-button topbar-action-button-icon-only"
-            data-open-ingestion-workbench
-            aria-label="Ingestion Workbench"
-            title="Ingestion Workbench"
-          >
-            <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
-              <path d="M8 1.1v4.9"></path>
-              <path d="M5.5 4.2 8 6.7l2.5-2.5"></path>
-              <ellipse cx="8" cy="8.6" rx="4" ry="1.7"></ellipse>
-              <path d="M4 8.6v3.6c0 .9 1.8 1.7 4 1.7s4-.8 4-1.7V8.6"></path>
-              <path d="M4 10.5c0 .9 1.8 1.7 4 1.7s4-.8 4-1.7"></path>
-            </svg>
-          </button>
-          <button
-            type="button"
-            class="topbar-action-button topbar-action-button-icon-only"
-            data-open-loader-workbench
-            aria-label="Loader Workbench"
-            title="Loader Workbench"
-          >
-            <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
-              <rect x="2.4" y="2.2" width="11.2" height="11.6" rx="1.1"></rect>
-              <path d="M4.5 5.1h7"></path>
-              <path d="M4.5 8h7"></path>
-              <path d="M4.5 10.9h4.2"></path>
-            </svg>
-          </button>
-          <details class="topbar-notification-menu" data-query-notifications>
-            <summary
+          <div class="topbar-actions-primary">
+            <button
+              type="button"
               class="topbar-action-button topbar-action-button-icon-only"
-              aria-label="Notifications"
-              title="Notifications"
-            >
-              <span class="topbar-notification-badge" data-query-notification-count hidden>0</span>
-              <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
-                <path d="M3.2 11.6h9.6l-1.1-1.6V6.8a3.7 3.7 0 0 0-7.4 0V10z"></path>
-                <path d="M6.2 12.1a1.9 1.9 0 0 0 3.6 0"></path>
-              </svg>
-            </summary>
-            <div class="topbar-notification-panel">
-              <div class="topbar-notification-header">
-                <strong>Messages</strong>
-                <button type="button" class="topbar-notification-clear" data-clear-notifications hidden>
-                  Clear
-                </button>
-              </div>
-              <div class="topbar-notification-list" data-query-notification-list>
-                <p class="topbar-notification-empty">No notifications yet.</p>
-              </div>
-            </div>
-          </details>
-          <details class="topbar-notification-menu topbar-settings-menu" data-settings-menu data-runtime-version="{{ runtime.image_version }}">
-            <summary
-              class="topbar-action-button topbar-action-button-icon-only"
-              aria-label="Settings"
-              title="Settings"
+              data-open-query-workbench
+              data-open-query-workbench-navigation="true"
+              aria-label="Query Workbench"
+              title="Query Workbench"
             >
               <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
-                <path d="M6.7 1.9h2.6l.4 1.4c.36.1.7.25 1.02.43l1.31-.69 1.84 1.84-.69 1.31c.18.32.33.66.43 1.02l1.4.4v2.6l-1.4.4c-.1.36-.25.7-.43 1.02l.69 1.31-1.84 1.84-1.31-.69c-.32.18-.66.33-1.02.43l-.4 1.4H6.7l-.4-1.4a4.2 4.2 0 0 1-1.02-.43l-1.31.69-1.84-1.84.69-1.31a4.2 4.2 0 0 1-.43-1.02l-1.4-.4v-2.6l1.4-.4c.1-.36.25-.7.43-1.02l-.69-1.31 1.84-1.84 1.31.69c.32-.18.66-.33 1.02-.43z"></path>
-                <circle cx="8" cy="8" r="2.05"></circle>
+                <rect x="2.1" y="2.4" width="11.8" height="11.2" rx="1.2"></rect>
+                <path d="M2.8 6.2h10.4"></path>
+                <path d="M5.4 9.1 7 10.7 10.6 7.1"></path>
               </svg>
-            </summary>
-            <div class="topbar-notification-panel topbar-settings-panel">
-              <div class="topbar-notification-header">
-                <strong>Settings</strong>
+            </button>
+            <button
+              type="button"
+              class="topbar-action-button topbar-action-button-icon-only"
+              data-open-query-data-sources
+              aria-label="Data Source Workbench"
+              title="Data Source Workbench"
+            >
+              <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <ellipse cx="5.2" cy="4.2" rx="3.1" ry="1.35"></ellipse>
+                <path d="M2.1 4.2v4.5c0 .76 1.39 1.35 3.1 1.35s3.1-.59 3.1-1.35V4.2"></path>
+                <path d="M2.1 6.45c0 .75 1.39 1.35 3.1 1.35s3.1-.6 3.1-1.35"></path>
+                <path d="M9.2 2.8h3.35l1.35 1.35v6.15H9.2z"></path>
+                <path d="M12.55 2.8v1.35h1.35"></path>
+                <path d="M10.05 10.55h4"></path>
+                <path d="M10.05 12.15h2.55"></path>
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="topbar-action-button topbar-action-button-icon-only"
+              data-open-ingestion-workbench
+              aria-label="Ingestion Workbench"
+              title="Ingestion Workbench"
+            >
+              <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M8 1.1v4.9"></path>
+                <path d="M5.5 4.2 8 6.7l2.5-2.5"></path>
+                <ellipse cx="8" cy="8.6" rx="4" ry="1.7"></ellipse>
+                <path d="M4 8.6v3.6c0 .9 1.8 1.7 4 1.7s4-.8 4-1.7V8.6"></path>
+                <path d="M4 10.5c0 .9 1.8 1.7 4 1.7s4-.8 4-1.7"></path>
+              </svg>
+            </button>
+            <button
+              type="button"
+              class="topbar-action-button topbar-action-button-icon-only"
+              data-open-loader-workbench
+              aria-label="Loader Workbench"
+              title="Loader Workbench"
+            >
+              <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <rect x="2.4" y="2.2" width="11.2" height="11.6" rx="1.1"></rect>
+                <path d="M4.5 5.1h7"></path>
+                <path d="M4.5 8h7"></path>
+                <path d="M4.5 10.9h4.2"></path>
+              </svg>
+            </button>
+          </div>
+          <div class="topbar-actions-secondary">
+            <details class="topbar-notification-menu" data-query-notifications>
+              <summary
+                class="topbar-action-button topbar-action-button-icon-only"
+                aria-label="Notifications"
+                title="Notifications"
+              >
+                <span class="topbar-notification-badge" data-query-notification-count hidden>0</span>
+                <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M3.2 11.6h9.6l-1.1-1.6V6.8a3.7 3.7 0 0 0-7.4 0V10z"></path>
+                  <path d="M6.2 12.1a1.9 1.9 0 0 0 3.6 0"></path>
+                </svg>
+              </summary>
+              <div class="topbar-notification-panel">
+                <div class="topbar-notification-header">
+                  <strong>Messages</strong>
+                  <button type="button" class="topbar-notification-clear" data-clear-notifications hidden>
+                    Clear
+                  </button>
+                </div>
+                <div class="topbar-notification-list" data-query-notification-list>
+                  <p class="topbar-notification-empty">No notifications yet.</p>
+                </div>
               </div>
-              <div class="topbar-settings-actions">
-                <button type="button" class="topbar-settings-action" data-open-service-consumption>
-                  <span class="topbar-settings-action-title">Service Consumption</span>
-                  <span class="topbar-settings-action-copy">
-                    Open the dedicated CPU, RAM, S3, and persistent-volume monitoring page with live and recent-history charts.
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  class="topbar-settings-action"
-                  data-clear-local-workspace
-                  title="Deletes all browser-local Local Workspace data for this workbench."
-                >
-                  <span class="topbar-settings-action-title">Clear Local Workspace</span>
-                  <span class="topbar-settings-action-copy">
-                    Delete all browser-local notebooks, drafts, versions, and Local Workspace state after a caution prompt.
-                  </span>
-                </button>
-                <button type="button" class="topbar-settings-action" data-open-about>
-                  <span class="topbar-settings-action-title">About</span>
-                  <span class="topbar-settings-action-copy">
-                    Show the running version and the purpose of this prototype.
-                  </span>
-                </button>
-                <button type="button" class="topbar-settings-action" data-open-feature-list>
-                  <span class="topbar-settings-action-title">Feature list</span>
-                  <span class="topbar-settings-action-copy">
-                    Review user-facing changes and major fixes by version.
-                  </span>
-                </button>
+            </details>
+            <details class="topbar-notification-menu topbar-settings-menu" data-settings-menu data-runtime-version="{{ runtime.image_version }}">
+              <summary
+                class="topbar-action-button topbar-action-button-icon-only"
+                aria-label="Settings"
+                title="Settings"
+              >
+                <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M6.7 1.9h2.6l.4 1.4c.36.1.7.25 1.02.43l1.31-.69 1.84 1.84-.69 1.31c.18.32.33.66.43 1.02l1.4.4v2.6l-1.4.4c-.1.36-.25.7-.43 1.02l.69 1.31-1.84 1.84-1.31-.69c-.32.18-.66.33-1.02.43l-.4 1.4H6.7l-.4-1.4a4.2 4.2 0 0 1-1.02-.43l-1.31.69-1.84-1.84.69-1.31a4.2 4.2 0 0 1-.43-1.02l-1.4-.4v-2.6l1.4-.4c.1-.36.25-.7.43-1.02l-.69-1.31 1.84-1.84 1.31.69c.32-.18.66-.33 1.02-.43z"></path>
+                  <circle cx="8" cy="8" r="2.05"></circle>
+                </svg>
+              </summary>
+              <div class="topbar-notification-panel topbar-settings-panel">
+                <div class="topbar-notification-header">
+                  <strong>Settings</strong>
+                </div>
+                <div class="topbar-settings-actions">
+                  <button type="button" class="topbar-settings-action" data-open-service-consumption>
+                    <span class="topbar-settings-action-title">Service Consumption</span>
+                    <span class="topbar-settings-action-copy">
+                      Open the dedicated CPU, RAM, S3, and persistent-volume monitoring page with live and recent-history charts.
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    class="topbar-settings-action"
+                    data-clear-local-workspace
+                    title="Deletes all browser-local Local Workspace data for this workbench."
+                  >
+                    <span class="topbar-settings-action-title">Clear Local Workspace</span>
+                    <span class="topbar-settings-action-copy">
+                      Delete all browser-local notebooks, drafts, versions, and Local Workspace state after a caution prompt.
+                    </span>
+                  </button>
+                  <button type="button" class="topbar-settings-action" data-open-about>
+                    <span class="topbar-settings-action-title">About</span>
+                    <span class="topbar-settings-action-copy">
+                      Show the running version and the purpose of this prototype.
+                    </span>
+                  </button>
+                  <button type="button" class="topbar-settings-action" data-open-feature-list>
+                    <span class="topbar-settings-action-title">Feature list</span>
+                    <span class="topbar-settings-action-copy">
+                      Review user-facing changes and major fixes by version.
+                    </span>
+                  </button>
+                </div>
               </div>
-            </div>
-          </details>
+            </details>
+          </div>
         </div>
       </header>
 
