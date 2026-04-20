@@ -38,11 +38,14 @@ jobs:
             artifact_name: bit-data-workbench-image
             include_latest: false
             include_ref_tag: false
-            include_sha: false
+            include_sha: true
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Check version consistency
+        run: python scripts/versioning.py check
 
       - name: Read image version
         id: version
@@ -55,13 +58,35 @@ jobs:
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
+      - name: Determine release version publishing
+        id: release_policy
+        shell: bash
+        run: |
+          publish_release=false
+          base_ref="${{ github.event.before }}"
+          head_ref="${{ github.sha }}"
+
+          if [ -n "$base_ref" ] && [ "$base_ref" != "0000000000000000000000000000000000000000" ]; then
+            if ! git diff --quiet "$base_ref" "$head_ref" -- VERSION; then
+              publish_release=true
+            fi
+          elif git rev-parse "${head_ref}^" >/dev/null 2>&1; then
+            if ! git diff --quiet "${head_ref}^" "$head_ref" -- VERSION; then
+              publish_release=true
+            fi
+          else
+            publish_release=true
+          fi
+
+          echo "publish_release=$publish_release" >> "$GITHUB_OUTPUT"
+
       - name: Prepare Docker tag rules
         id: tag_rules
         shell: bash
         run: |
           {
             echo 'rules<<EOF'
-            echo "type=raw,value=${{ steps.version.outputs.version }}"
+            echo "type=raw,value=${{ steps.version.outputs.version }},enable=${{ steps.release_policy.outputs.publish_release }}"
             if [ "${{ matrix.image.include_latest }}" = "true" ]; then
               echo "type=raw,value=latest,enable={{is_default_branch}}"
             fi
@@ -133,6 +158,12 @@ jobs:
             artifact_name: bit-data-workbench-image
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check version consistency before publish
+        run: python scripts/versioning.py check
+
       - name: Download Docker image artifact
         uses: actions/download-artifact@v8
         with:

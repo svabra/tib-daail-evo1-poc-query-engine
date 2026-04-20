@@ -13,6 +13,12 @@ if str(BDW_ROOT) not in sys.path:
     sys.path.insert(0, str(BDW_ROOT))
 
 
+from bit_data_workbench.version_info import current_repo_version  # noqa: E402
+
+
+CURRENT_VERSION = current_repo_version(REPO_ROOT)
+
+
 def import_s3_storage():
     from bit_data_workbench.backend import s3_storage
 
@@ -30,10 +36,14 @@ def build_settings():
     return settings_type(
         service_name="bit-data-workbench",
         ui_title="DAAIFL Workbench",
-        image_version="0.5.7",
+        image_version=CURRENT_VERSION,
         port=8000,
         duckdb_database=Path("/tmp/workspace/workspace.duckdb"),
         duckdb_extension_directory=Path("/opt/duckdb/extensions"),
+        service_consumption_data_dir=Path("/tmp/service-consumption"),
+        service_consumption_cpu_memory_interval_seconds=3,
+        service_consumption_s3_interval_seconds=3600,
+        service_consumption_retention_hours=48,
         max_result_rows=200,
         s3_endpoint="ecspr01.sz.admin.ch:9021",
         s3_bucket="vat-smoke-test",

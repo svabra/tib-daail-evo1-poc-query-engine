@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .version_info import runtime_image_version
+
 
 WORKBENCH_ENVIRONMENT_VARIABLES = (
     "BDW_ENABLE_FILE_LOGGING",
@@ -463,17 +465,7 @@ def build_s3_ca_bundle(
 
 
 def default_image_version() -> str:
-    value = env_optional("IMAGE_VERSION")
-    if value is not None:
-        return value
-
-    version_file = Path(__file__).resolve().parents[2] / "VERSION"
-    try:
-        raw_value = version_file.read_text(encoding="utf-8").strip()
-    except OSError:
-        raw_value = ""
-
-    return raw_value or "dev"
+    return runtime_image_version(Path(__file__).resolve(), Path.cwd())
 
 
 @dataclass(slots=True)

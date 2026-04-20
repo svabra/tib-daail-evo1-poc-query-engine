@@ -17,13 +17,17 @@ from bit_data_workbench.web.router import (  # noqa: E402
     ingestion_workbench_partial,
     loader_workbench_partial,
 )
+from bit_data_workbench.version_info import current_repo_version  # noqa: E402
+
+
+CURRENT_VERSION = current_repo_version(REPO_ROOT)
 
 
 class FakeWorkbenchService:
     def runtime_info(self) -> dict[str, str]:
         return {
             "service": "bit-data-workbench",
-            "image_version": "0.5.7",
+            "image_version": CURRENT_VERSION,
             "hostname": "test-host",
             "pod_name": "unknown",
             "pod_namespace": "unknown",

@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 
 ARG DUCKDB_VERSION=1.4.4
-ARG IMAGE_VERSION=0.5.4
+ARG IMAGE_VERSION=""
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -47,6 +47,7 @@ PY
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY docker/start_duckdb_ui.py /usr/local/bin/start_duckdb_ui.py
+COPY VERSION /workspace/VERSION
 
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh /usr/local/bin/start_duckdb_ui.py
 

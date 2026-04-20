@@ -16,7 +16,6 @@ services:
         condition: service_completed_successfully
     environment:
       BDW_ENABLE_FILE_LOGGING: "true"
-      IMAGE_VERSION: "0.5.1"
       PORT: "8000"
       MAX_RESULT_ROWS: "200"
       DUCKDB_DATABASE: /workspace/bit-data-workbench.duckdb

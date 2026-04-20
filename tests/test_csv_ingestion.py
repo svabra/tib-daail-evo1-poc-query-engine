@@ -30,6 +30,10 @@ from bit_data_workbench.backend.ingestion_types.csv.validation import (  # noqa:
     validate_csv_file,
 )
 from bit_data_workbench.config import Settings  # noqa: E402
+from bit_data_workbench.version_info import current_repo_version  # noqa: E402
+
+
+CURRENT_VERSION = current_repo_version(REPO_ROOT)
 
 
 class FakeUpload:
@@ -101,10 +105,14 @@ def make_settings() -> Settings:
     return Settings(
         service_name="bit-data-workbench",
         ui_title="DAAIFL Workbench",
-        image_version="0.5.7",
+        image_version=CURRENT_VERSION,
         port=8000,
         duckdb_database=Path("/tmp/workspace.duckdb"),
         duckdb_extension_directory=Path("/tmp/duckdb-ext"),
+        service_consumption_data_dir=Path("/tmp/service-consumption"),
+        service_consumption_cpu_memory_interval_seconds=3,
+        service_consumption_s3_interval_seconds=3600,
+        service_consumption_retention_hours=48,
         max_result_rows=200,
         s3_endpoint="http://127.0.0.1:9000",
         s3_bucket="workspace",

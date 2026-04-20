@@ -18,14 +18,18 @@ if str(BDW_ROOT) not in sys.path:
 from bit_data_workbench.api.router import service_consumption_state as api_service_consumption_state  # noqa: E402
 from bit_data_workbench.api.router import update_service_consumption_budget as api_update_service_consumption_budget  # noqa: E402
 from bit_data_workbench.api.router import ServiceConsumptionBudgetPayload  # noqa: E402
+from bit_data_workbench.version_info import current_repo_version  # noqa: E402
 from bit_data_workbench.web.router import service_consumption_page  # noqa: E402
+
+
+CURRENT_VERSION = current_repo_version(REPO_ROOT)
 
 
 class FakeWorkbenchService:
     def runtime_info(self) -> dict[str, str]:
         return {
             "service": "bit-data-workbench",
-            "image_version": "0.5.7",
+            "image_version": CURRENT_VERSION,
             "hostname": "test-host",
             "pod_name": "bdw-pod",
             "pod_namespace": "bdw-namespace",

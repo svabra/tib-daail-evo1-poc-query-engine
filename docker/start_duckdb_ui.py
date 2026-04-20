@@ -16,6 +16,8 @@ import duckdb
 VALID_EXTENSION = re.compile(r"^[A-Za-z0-9_]+$")
 SUPPORTED_S3_VIEW_FORMATS = {"parquet", "csv", "json"}
 STOP = False
+DEFAULT_VERSION = "dev"
+VERSION_FILE_NAME = "VERSION"
 
 
 def env(name: str, default: str) -> str:
@@ -28,6 +30,44 @@ def read_text_file(path: Path) -> str | None:
         return path.read_text(encoding="utf-8").strip()
     except OSError:
         return None
+
+
+def _normalize_anchor(anchor: Path) -> Path:
+    expanded = anchor.expanduser()
+    try:
+        resolved = expanded.resolve()
+    except OSError:
+        resolved = expanded.absolute()
+    return resolved if resolved.is_dir() else resolved.parent
+
+
+def discover_version_file(*anchors: Path) -> Path | None:
+    effective_anchors = anchors or (Path(__file__).resolve(), Path.cwd())
+    seen: set[str] = set()
+    for anchor in effective_anchors:
+        directory = _normalize_anchor(anchor)
+        for candidate_dir in (directory, *directory.parents):
+            candidate = candidate_dir / VERSION_FILE_NAME
+            key = candidate.as_posix().lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            try:
+                if candidate.is_file():
+                    return candidate
+            except OSError:
+                continue
+    return None
+
+
+def runtime_image_version() -> str:
+    raw_value = os.getenv("IMAGE_VERSION")
+    if raw_value is not None:
+        normalized = raw_value.strip()
+        if normalized:
+            return normalized
+    embedded_version = read_text_file(discover_version_file(Path(__file__).resolve(), Path.cwd()))
+    return embedded_version or DEFAULT_VERSION
 
 
 def format_bytes(value: int | None) -> str:
@@ -93,7 +133,7 @@ def print_runtime_diagnostics(
     pod_ip = env_optional("POD_IP")
     node_name = env_optional("NODE_NAME")
 
-    print(f"Image version: {env('IMAGE_VERSION', 'dev')}", flush=True)
+    print(f"Image version: {runtime_image_version()}", flush=True)
     print(f"DuckDB version: {duckdb.__version__}", flush=True)
     print(f"Hostname: {socket.gethostname()}", flush=True)
     if pod_name is not None:

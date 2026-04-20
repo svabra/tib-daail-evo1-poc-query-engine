@@ -19,6 +19,10 @@ from bit_data_workbench.web.template_filters import (  # noqa: E402
     format_byte_count,
     truncate_source_navigation_label,
 )
+from bit_data_workbench.version_info import current_repo_version  # noqa: E402
+
+
+CURRENT_VERSION = current_repo_version(REPO_ROOT)
 
 
 def build_request(path: str) -> Request:
@@ -36,7 +40,7 @@ class FakeWorkbenchService:
     def runtime_info(self) -> dict[str, str]:
         return {
             "service": "bit-data-workbench",
-            "image_version": "0.5.7",
+            "image_version": CURRENT_VERSION,
             "hostname": "test-host",
             "pod_name": "unknown",
             "pod_namespace": "unknown",

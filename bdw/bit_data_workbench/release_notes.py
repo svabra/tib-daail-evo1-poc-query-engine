@@ -1,9 +1,27 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.5.7. Keep entries concise and
+# Derived from git history through version 0.5.8. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.5.8",
+        "releasedAt": "2026-04-20T12:00:00+02:00",
+        "features": [
+            (
+                "Runtime version reporting now stays consistent across local source runs, Docker-built app runs, "
+                "and Compose-based launches by resolving from the canonical repo VERSION file."
+            ),
+            (
+                "Docker publishing now avoids reusing the current semver release tag on ordinary main pushes "
+                "unless the committed VERSION value actually changed."
+            ),
+            (
+                "Service Consumption keeps its recent layout cleanup, slimmer diagnostics, and true 1px "
+                "chart lines while release metadata stays aligned with the displayed runtime version."
+            ),
+        ],
+    },
     {
         "version": "0.5.7",
         "releasedAt": "2026-04-17T16:45:00+02:00",
