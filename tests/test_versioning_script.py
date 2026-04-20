@@ -111,13 +111,18 @@ class VersioningScriptTests(TestCase):
     def test_sync_release_surfaces_updates_pinned_release_targets(self) -> None:
         with TemporaryDirectory() as temp_dir:
             repo_root = Path(temp_dir)
-            build_repo_fixture(repo_root, version="1.2.2", release_notes_version="1.2.4")
+            build_repo_fixture(repo_root, version="1.2.2", release_notes_version="1.2.1")
+            release_notes_path = repo_root / "bdw" / "bit_data_workbench" / "release_notes.py"
 
             changed_paths = versioning.sync_release_surfaces("1.2.4", repo_root=repo_root)
 
             self.assertIn(repo_root / "VERSION", changed_paths)
             self.assertIn(repo_root / "README.md", changed_paths)
             self.assertIn(repo_root / "k8s" / "bdw-deployment.yaml", changed_paths)
+            self.assertIn(release_notes_path, changed_paths)
+            release_notes_content = release_notes_path.read_text(encoding="utf-8")
+            self.assertIn("through version 1.2.4", release_notes_content)
+            self.assertIn('"version": "1.2.4"', release_notes_content)
             self.assertEqual(versioning.check_repository(repo_root), [])
 
     def test_version_changed_in_range_only_tracks_version_file_changes(self) -> None:

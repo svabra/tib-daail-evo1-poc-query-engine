@@ -1,24 +1,16 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.5.9. Keep entries concise and
+# Derived from git history through version 0.5.11. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
     {
-        "version": "0.5.9",
+        "version": "0.5.11",
         "releasedAt": "2026-04-20T14:30:00+02:00",
         "features": [
             (
-                "Version handling is now consolidated around the repo-root VERSION file so local source runs, "
-                "Docker images, manifests, and runtime reporting resolve the same release string."
-            ),
-            (
-                "The new versioning maintenance script validates release-facing version surfaces and can rewrite "
-                "the tracked README and deployment pins from one canonical semver."
-            ),
-            (
-                "Docker publishing now runs version consistency checks in CI and only republishes the plain semver "
-                "image tag when the committed VERSION file actually changed."
+                "Workbench version reporting now stays consistent across local runs, "
+                "Docker images, and deployed environments."
             ),
         ],
     },
@@ -27,16 +19,8 @@ RELEASE_NOTES: list[dict[str, object]] = [
         "releasedAt": "2026-04-20T12:00:00+02:00",
         "features": [
             (
-                "Runtime version reporting now stays consistent across local source runs, Docker-built app runs, "
-                "and Compose-based launches by resolving from the canonical repo VERSION file."
-            ),
-            (
-                "Docker publishing now avoids reusing the current semver release tag on ordinary main pushes "
-                "unless the committed VERSION value actually changed."
-            ),
-            (
-                "Service Consumption keeps its recent layout cleanup, slimmer diagnostics, and true 1px "
-                "chart lines while release metadata stays aligned with the displayed runtime version."
+                "Service Consumption keeps its recent layout cleanup, slimmer diagnostics, "
+                "and true 1px chart lines."
             ),
         ],
     },
@@ -107,8 +91,8 @@ RELEASE_NOTES: list[dict[str, object]] = [
                 "instead of expanding unrelated branches."
             ),
             (
-                "Home-page workbench navigation is now protected by stronger browser regressions "
-                "that fail on startup JavaScript errors and verify every workbench tile stays clickable."
+                "Home-page workbench navigation is reliable again, "
+                "and every workbench tile stays clickable."
             ),
         ],
     },
@@ -199,34 +183,12 @@ RELEASE_NOTES: list[dict[str, object]] = [
         ],
     },
     {
-        "version": "0.4.6",
-        "releasedAt": "2026-04-13T20:53:03.2246641+02:00",
-        "features": [
-            (
-                "S3 explorer delete failures now log the exact failing S3 "
-                "operation, bucket, key or prefix, version id, and backend "
-                "error details so RHOS permission denials are visible in pod logs."
-            ),
-            (
-                "A focused S3 bootstrap lifecycle regression now covers "
-                "create bucket, upload object, recursive object cleanup, and "
-                "final bucket deletion in one storage-level test."
-            ),
-        ],
-    },
-    {
         "version": "0.4.5",
         "releasedAt": "2026-04-13T20:27:59.5688530+02:00",
         "features": [
             (
-                "RHOS S3 cleanup now strips the null version id before bulk "
-                "or single-object deletes are sent, preventing recursive "
-                "bucket cleanup from retrying forbidden versioned deletes."
-            ),
-            (
-                "API request payload models now use explicit validation and "
-                "serialization aliases, removing the Pydantic field-alias "
-                "warning emitted during S3 explorer delete requests."
+                "Shared Workspace S3 cleanup now handles null version ids more reliably, "
+                "so recursive bucket deletion fails less often on stricter object stores."
             ),
         ],
     },
@@ -235,13 +197,8 @@ RELEASE_NOTES: list[dict[str, object]] = [
         "releasedAt": "2026-04-13T20:12:33.2787759+02:00",
         "features": [
             (
-                "RHOS S3 explorer deletes now handle object entries reported "
-                "with the null version id more reliably, retrying a plain "
-                "delete when the object store rejects the versioned request."
-            ),
-            (
-                "Focused S3 storage regression coverage now protects the RHOS "
-                "delete fallback path used during recursive bucket cleanup."
+                "Shared Workspace S3 explorer deletes now retry more reliably "
+                "when object stores reject versioned deletes for null-version objects."
             ),
         ],
     },
@@ -261,8 +218,7 @@ RELEASE_NOTES: list[dict[str, object]] = [
             ),
             (
                 "Saved Local Workspace files can now be moved or renamed "
-                "from the sidebar, and the new folder-management flows are "
-                "covered by focused Playwright smoke scripts."
+                "from the sidebar."
             ),
         ],
     },
@@ -311,8 +267,7 @@ RELEASE_NOTES: list[dict[str, object]] = [
             (
                 "Cell, result, source, and S3 action popups no longer "
                 "collapse while the pointer moves from the trigger into the "
-                "menu panel, and the query-cell ellipsis behavior is covered "
-                "by a Playwright smoke test."
+                "menu panel."
             ),
             (
                 "Shared Workspace S3 bucket deletion now retries transient "
@@ -332,14 +287,8 @@ RELEASE_NOTES: list[dict[str, object]] = [
         "releasedAt": "2026-04-06T23:40:12+02:00",
         "features": [
             (
-                "RHOS ECS-backed S3 bucket cleanup now sends the required "
-                "Content-MD5 header for DeleteObjects requests, so contest "
-                "and loader jobs can recreate their S3 buckets reliably."
-            ),
-            (
-                "A focused S3 regression test now verifies the DeleteObjects "
-                "Content-MD5 handling and client hook registration used by "
-                "shared S3 storage operations."
+                "Shared Workspace S3 bucket cleanup is more reliable on ECS-backed object stores, "
+                "so contest and loader jobs can recreate their buckets reliably."
             ),
         ],
     },
@@ -347,21 +296,6 @@ RELEASE_NOTES: list[dict[str, object]] = [
         "version": "0.3.35",
         "releasedAt": "2026-04-06T23:19:27+02:00",
         "features": [
-            (
-                "Production container runs now default to console logging, "
-                "so Kubernetes or OpenShift can collect stdout and stderr "
-                "without requiring writable in-container log files."
-            ),
-            (
-                "Local development can still opt into file logging through "
-                "an explicit launcher setting, preserving the existing "
-                "logs/bdw/server.log workflow for developers."
-            ),
-            (
-                "A launcher test suite now verifies that file logging stays "
-                "disabled by default and is only enabled when explicitly "
-                "requested."
-            ),
             (
                 "Sidebar source status icons now stay vertically aligned on "
                 "the far right even when only some data sources expose "
@@ -408,18 +342,12 @@ RELEASE_NOTES: list[dict[str, object]] = [
             ),
             (
                 "The S3 explorer delete flow now exposes clearer success and "
-                "failure feedback, and the sidebar bucket create/delete path "
-                "is covered by a Playwright smoke test."
+                "failure feedback."
             ),
             (
                 "Settings and notification popups no longer collapse while "
                 "moving the pointer from the topbar button into the popup "
                 "panel."
-            ),
-            (
-                "Local F5 startup now waits for MinIO and PostgreSQL "
-                "readiness and normalizes localhost S3 and PostgreSQL "
-                "endpoints more reliably for local runs."
             ),
         ],
     },
@@ -486,12 +414,7 @@ RELEASE_NOTES: list[dict[str, object]] = [
         "releasedAt": "2026-04-02T22:01:16+02:00",
         "features": [
             (
-                "Pinned DuckDB to 1.4.4 for a more stable and predictable "
-                "runtime."
-            ),
-            (
-                "Aligned S3 integration with the pinned DuckDB version to "
-                "reduce storage compatibility issues."
+                "S3-backed workflows are now more stable and predictable."
             ),
         ],
     },
@@ -500,8 +423,8 @@ RELEASE_NOTES: list[dict[str, object]] = [
         "releasedAt": "2026-04-02T17:52:27+02:00",
         "features": [
             (
-                "Adjusted S3 checksum handling to avoid compatibility "
-                "failures on stricter object-storage endpoints."
+                "S3 connections are now more compatible with stricter "
+                "object-storage endpoints."
             ),
         ],
     },
@@ -510,12 +433,12 @@ RELEASE_NOTES: list[dict[str, object]] = [
         "releasedAt": "2026-04-02T17:26:38+02:00",
         "features": [
             (
-                "S3 loaders now upload through boto3, improving reliability "
-                "when generated files are written to object storage."
+                "S3 loaders now upload more reliably when generated files "
+                "are written to object storage."
             ),
             (
-                "Loader write and cleanup flow was hardened for S3-backed "
-                "test data."
+                "Loader write and cleanup flow is more reliable for "
+                "S3-backed generated data."
             ),
         ],
     },
@@ -524,8 +447,7 @@ RELEASE_NOTES: list[dict[str, object]] = [
         "releasedAt": "2026-04-02T17:02:20+02:00",
         "features": [
             (
-                "Fixed cluster S3 URL-style handling to restore loader "
-                "compatibility in RHOS/OpenShift environments."
+                "Loader compatibility is restored for cluster S3 environments."
             ),
         ],
     },
@@ -554,27 +476,13 @@ RELEASE_NOTES: list[dict[str, object]] = [
         ],
     },
     {
-        "version": "0.3.23",
-        "releasedAt": "2026-04-02T15:21:56+02:00",
-        "features": [
-            (
-                "Startup diagnostics now print environment, config mounts, "
-                "and certificate mapping more clearly."
-            ),
-            (
-                "Deployment issues around S3 certificates and mounted config "
-                "are easier to troubleshoot."
-            ),
-        ],
-    },
-    {
         "version": "0.3.22",
         "releasedAt": "2026-04-02T15:17:53+02:00",
         "features": [
-            "Empty S3 startup storage is seeded automatically when needed.",
+            "Empty Shared Workspace S3 storage is seeded automatically when needed.",
             (
-                "S3 Smoke and PG vs S3 Contest loaders now use separate "
-                "buckets, so cleanup stays isolated."
+                "S3 Smoke and PG vs S3 Contest loaders now keep their data "
+                "in separate buckets, so cleaning up one loader no longer wipes another."
             ),
         ],
     },
@@ -583,12 +491,7 @@ RELEASE_NOTES: list[dict[str, object]] = [
         "releasedAt": "2026-04-02T14:35:10+02:00",
         "features": [
             (
-                "Improved RHOS/OpenShift S3 connectivity with mounted "
-                "trust-store support and secret-backed credentials."
-            ),
-            (
-                "Safer HTTPS and transport defaults reduce cluster S3 setup "
-                "issues."
+                "S3 connectivity is more reliable in RHOS/OpenShift environments."
             ),
         ],
     },

@@ -10,9 +10,18 @@ import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VERSION_FILE = REPO_ROOT / "VERSION"
+RELEASE_NOTES_PATH = Path("bdw/bit_data_workbench/release_notes.py")
 SEMVER_PATTERN = re.compile(r"^\d+\.\d+\.\d+$")
 FIRST_RELEASE_NOTE_VERSION = re.compile(r'"version": "(?P<version>\d+\.\d+\.\d+)"')
 RELEASE_NOTES_HEADER_VERSION = re.compile(r"through version (?P<version>\d+\.\d+\.\d+)")
+RELEASE_NOTES_HEADER_RULE = re.compile(
+    r"(?m)^(?P<prefix># Derived from git history through version )"
+    r"(?P<version>\d+\.\d+\.\d+)"
+    r"(?P<suffix>\. Keep entries concise and)$"
+)
+FIRST_RELEASE_NOTE_VERSION_RULE = re.compile(
+    r'(?P<prefix>"version": ")(?P<version>\d+\.\d+\.\d+)(?P<suffix>")'
+)
 DOCKERFILE_IMAGE_ARG = re.compile(r'(?m)^ARG IMAGE_VERSION=(?P<value>.*)$')
 COMPOSE_IMAGE_VERSION = re.compile(r'(?m)^\s+IMAGE_VERSION:\s+"?(?P<value>[^"\r\n]+)"?\s*$')
 
@@ -65,6 +74,19 @@ RELEASE_PIN_RULES = (
     ),
 )
 
+RELEASE_NOTE_RULES = (
+    VersionRule(
+        relative_path=RELEASE_NOTES_PATH,
+        description="release notes header",
+        pattern=RELEASE_NOTES_HEADER_RULE,
+    ),
+    VersionRule(
+        relative_path=RELEASE_NOTES_PATH,
+        description="release notes top version entry",
+        pattern=FIRST_RELEASE_NOTE_VERSION_RULE,
+    ),
+)
+
 
 def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8")
@@ -112,7 +134,7 @@ def sync_release_surfaces(version: str, *, repo_root: Path = REPO_ROOT) -> list[
         write_text(version_file, f"{version}\n")
         changed_paths.append(version_file)
 
-    for rule in RELEASE_PIN_RULES:
+    for rule in (*RELEASE_PIN_RULES, *RELEASE_NOTE_RULES):
         rule_path = resolve_rule_path(rule, repo_root=repo_root)
         content = read_text(rule_path)
         updated, changed = update_rule_version(
@@ -153,7 +175,7 @@ def version_changed_in_range(
 
 
 def _first_release_note_version_errors(version: str, *, repo_root: Path) -> list[str]:
-    release_notes_path = repo_root / "bdw" / "bit_data_workbench" / "release_notes.py"
+    release_notes_path = repo_root / RELEASE_NOTES_PATH
     content = read_text(release_notes_path)
     first_entry = FIRST_RELEASE_NOTE_VERSION.search(content)
     if first_entry is None:
