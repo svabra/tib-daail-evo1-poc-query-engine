@@ -1,16 +1,26 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.5.11. Keep entries concise and
+# Derived from git history through version 0.6.0. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
     {
-        "version": "0.5.11",
-        "releasedAt": "2026-04-20T14:30:00+02:00",
+        "version": "0.6.0",
+        "releasedAt": "2026-04-21T11:30:00+02:00",
         "features": [
             (
-                "Workbench version reporting now stays consistent across local runs, "
-                "Docker images, and deployed environments."
+                "The new Data Products Workbench lets users publish PostgreSQL tables/views "
+                "and Shared Workspace buckets or objects as stable read-only data products, "
+                "then manage titles, descriptions, ownership, and access metadata in one place."
+            ),
+            (
+                "Published data products now have dedicated catalog and product pages under "
+                "/dataproducts/, including request parameters, response schema, an OpenAPI excerpt, "
+                "sample responses, and direct links to the live endpoint."
+            ),
+            (
+                "Creating and browsing data products is now faster through sidebar publication entry points, "
+                "data-source-type filtering in the publish flow, and a denser tile-based workbench layout."
             ),
         ],
     },

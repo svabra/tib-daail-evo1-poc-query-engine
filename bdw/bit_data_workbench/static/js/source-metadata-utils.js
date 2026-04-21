@@ -218,6 +218,21 @@ export function sourceSchemaS3BucketDescriptor(sourceSchemaRoot) {
   };
 }
 
+export function dataProductSourceDescriptorFromSourceSchema(sourceSchemaRoot) {
+  const descriptor = sourceSchemaS3BucketDescriptor(sourceSchemaRoot);
+  if (!descriptor) {
+    return null;
+  }
+
+  return {
+    sourceKind: "bucket",
+    sourceId: "workspace.s3",
+    bucket: descriptor.bucket,
+    sourceDisplayName: descriptor.name,
+    sourcePlatform: "s3",
+  };
+}
+
 function sqlQueryIdentifier(name) {
   if (/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
     return name;
@@ -278,5 +293,63 @@ export function sourceQueryDescriptor(sourceObjectRoot) {
     name: sourceObjectDisplayName(sourceObjectRoot),
     relation,
     sourceId: sourceObjectRoot.dataset.sourceOptionId?.trim() || "",
+  };
+}
+
+export function dataProductSourceDescriptorFromSourceObject(sourceObjectRoot) {
+  if (!(sourceObjectRoot instanceof Element)) {
+    return null;
+  }
+
+  const sourceId =
+    sourceObjectRoot.dataset.sourceOptionId?.trim() ||
+    sourceIdFromLegacyTargetLabel(sourceObjectRoot.dataset.sourceOptionId?.trim()) ||
+    "";
+  const relation = sourceObjectRoot.dataset.sourceObjectRelation?.trim() || "";
+  const sourceDisplayName = sourceObjectDisplayName(sourceObjectRoot);
+  const s3Bucket = sourceObjectRoot.dataset.s3Bucket?.trim() || "";
+  const s3Key = sourceObjectRoot.dataset.s3Key?.trim() || "";
+  const s3Downloadable =
+    String(sourceObjectRoot.dataset.s3Downloadable || "").trim().toLowerCase() === "true";
+
+  if (sourceId === "workspace.local") {
+    return {
+      sourceKind: "local-object",
+      sourceId: "workspace.local",
+      relation,
+      sourceDisplayName,
+      sourcePlatform: "indexeddb",
+      unsupportedReason:
+        "Live publication requires a server-visible source; move this file to Shared Workspace first.",
+    };
+  }
+
+  if (sourceId === "workspace.s3" && s3Downloadable && s3Bucket && s3Key) {
+    return {
+      sourceKind: "object",
+      sourceId: "workspace.s3",
+      bucket: s3Bucket,
+      key: s3Key,
+      sourceDisplayName,
+      sourcePlatform: "s3",
+    };
+  }
+
+  if (!relation) {
+    return null;
+  }
+
+  return {
+    sourceKind: "relation",
+    sourceId:
+      sourceId ||
+      (relation.startsWith("pg_oltp.")
+        ? "pg_oltp"
+        : relation.startsWith("pg_olap.")
+          ? "pg_olap"
+          : "workspace.s3"),
+    relation,
+    sourceDisplayName,
+    sourcePlatform: sourceId === "workspace.s3" ? "s3" : "postgres",
   };
 }

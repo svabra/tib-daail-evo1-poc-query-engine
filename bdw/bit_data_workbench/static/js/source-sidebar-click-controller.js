@@ -22,6 +22,7 @@ export function createSourceSidebarClickController(helpers) {
     downloadSourceS3Object,
     loadS3ExplorerNode,
     openLocalWorkspaceMoveDialog,
+    openDataProductPublishDialog,
     openLocalWorkspaceSaveDialog,
     openNotebookForQueryJob,
     openResultDownloadDialog,
@@ -515,6 +516,28 @@ export function createSourceSidebarClickController(helpers) {
       } catch (error) {
         console.error("Failed to load source object fields.", error);
       }
+      return true;
+    }
+
+    const createDataProductButton = event.target.closest("[data-create-data-product]");
+    if (createDataProductButton) {
+      event.preventDefault();
+      closeSourceActionMenus();
+      await openDataProductPublishDialog({
+        sourceObjectRoot: createDataProductButton.closest("[data-source-object]"),
+      });
+      return true;
+    }
+
+    const createDataProductBucketButton = event.target.closest(
+      "[data-create-data-product-bucket]"
+    );
+    if (createDataProductBucketButton) {
+      event.preventDefault();
+      closeSourceActionMenus();
+      await openDataProductPublishDialog({
+        sourceSchemaRoot: createDataProductBucketButton.closest("[data-source-schema]"),
+      });
       return true;
     }
 

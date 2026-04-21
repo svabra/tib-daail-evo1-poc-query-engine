@@ -7,3 +7,5 @@
 - Keep this layer focused on page assembly.
 - Do not duplicate backend state logic or API payload shaping here.
 - Preserve route names and fragment boundaries used by sidebar/workbench refreshes.
+- Follow the existing full-page plus partial pattern for workbench pages.
+- If a feature needs substantial page-specific context assembly, split it into a dedicated web module instead of making `router.py` keep growing.

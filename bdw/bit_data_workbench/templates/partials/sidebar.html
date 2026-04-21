@@ -327,6 +327,15 @@
                         <div class="workspace-action-menu-panel">
                           <button
                             type="button"
+                            class="workspace-action-menu-item"
+                            data-create-data-product-bucket
+                            title="Publish this bucket as a managed data product"
+                          >
+                            Create data product
+                          </button>
+                          <div class="workspace-action-menu-separator" aria-hidden="true"></div>
+                          <button
+                            type="button"
                             class="workspace-action-menu-item workspace-action-menu-item-danger"
                             data-delete-source-s3-bucket
                             title="Delete bucket"
@@ -436,6 +445,14 @@
                               title="Create a new notebook with this query"
                             >
                               Query in new notebook
+                            </button>
+                            <button
+                              type="button"
+                              class="workspace-action-menu-item"
+                              data-create-data-product
+                              title="Publish this source as a managed data product"
+                            >
+                              Create data product
                             </button>
                             {% if source_object.s3_downloadable %}
                               <div class="workspace-action-menu-separator" aria-hidden="true"></div>

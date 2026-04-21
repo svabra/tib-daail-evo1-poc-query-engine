@@ -20,6 +20,9 @@ import { createIngestionController } from "./ingestion-controller.js";
 import { createIngestionUi } from "./ingestion-ui.js";
 import { createHomeUi } from "./home-ui.js";
 import { createCsvIngestionController } from "./ingestion-types/csv/index.js";
+import { createDataProductsController } from "./data-products-controller.js";
+import { createDataProductsSampleContracts } from "./data-products-sample-contracts.js";
+import { createDataProductsUi } from "./data-products-ui.js";
 import { createEditorAutosizeManager } from "./editor-autosize-manager.js";
 import { createLocalWorkspaceDialogController } from "./local-workspace-dialog-controller.js";
 import { createLocalWorkspaceExportManager } from "./local-workspace-export-manager.js";
@@ -117,6 +120,8 @@ import {
   sourceClassificationDisplayText,
   sourceComputationModeDisplayText,
   sourceComputationModeTooltipText,
+  dataProductSourceDescriptorFromSourceObject,
+  dataProductSourceDescriptorFromSourceSchema,
   sourceIdFromLegacyTargetLabel,
   sourceLabelsForIds,
   sourceObjectDisplayKind,
@@ -312,6 +317,7 @@ const {
 
 const {
   notebookUrl,
+  pushDataProductsHistory,
   pushHomeHistory,
   pushNotebookHistory,
   pushQueryWorkbenchDataSourcesHistory,
@@ -324,6 +330,20 @@ const serviceConsumptionUi = createServiceConsumptionUi({
   fetchJsonOrThrow,
   formatByteCount,
 });
+
+const { previewContractMarkup } = createDataProductsSampleContracts({
+  escapeHtml,
+});
+
+const {
+  dataProductCardNodes,
+  dataProductSearchEmpty,
+  dataProductSearchInput,
+  dataProductsPageRoot,
+  ensureEditDialog,
+  ensurePublicationDialog,
+  readDataProductSourceOptions,
+} = createDataProductsUi();
 
 const {
   localWorkspaceFolderListMarkup,
@@ -612,13 +632,29 @@ const { querySourceInCurrentNotebook, querySourceInNewNotebook, viewSourceData }
     setNotebookCells,
   });
 
-  const {
+const dataProductsController = createDataProductsController({
+  ensureEditDialog,
+  ensurePublicationDialog,
+  fetchJsonOrThrow,
+  getCardNodes: dataProductCardNodes,
+  getPageRoot: dataProductsPageRoot,
+  getSearchEmpty: dataProductSearchEmpty,
+  getSearchInput: dataProductSearchInput,
+  loadDataProductsPage,
+  previewContractMarkup,
+  readSourceOptions: readDataProductSourceOptions,
+  showConfirmDialog,
+  showMessageDialog,
+});
+
+const {
   handleClick: handleWorkbenchNavigationClick,
 } = createWorkbenchNavigationController({
   applySidebarCollapsedState,
   closeSettingsMenus,
   getClearVisibleNotifications: () => clearVisibleNotifications,
   getQueryNotificationMenu: queryNotificationMenu,
+  openDataProductsWorkbench,
   openLoaderWorkbench,
   loadQueryWorkbenchDataSources,
   loadQueryWorkbenchEntry,
@@ -722,6 +758,7 @@ const {
   downloadS3ExplorerObject,
   downloadSourceS3Object,
   loadS3ExplorerNode,
+  openDataProductPublishDialog,
   openLocalWorkspaceMoveDialog,
   openLocalWorkspaceSaveDialog,
   openNotebookForQueryJob,
@@ -956,6 +993,10 @@ function currentWorkbenchSection() {
     return "home";
   }
 
+  if (dataProductsPageRoot()) {
+    return "data-products";
+  }
+
   if (serviceConsumptionPageRoot()) {
     return "service-consumption";
   }
@@ -1002,6 +1043,10 @@ function workbenchTitle(section = currentWorkbenchSection()) {
 
   if (section === "data-sources") {
     return "DAAIFL Data Source Workbench";
+  }
+
+  if (section === "data-products") {
+    return "DAAIFL Data Products Workbench";
   }
 
   if (section === "service-consumption") {
@@ -1312,6 +1357,7 @@ function openLoaderNavigation(generatorId = "") {
 function syncShellVisibility() {
   if (
     homePageRoot() ||
+    dataProductsPageRoot() ||
     serviceConsumptionPageRoot() ||
     queryWorkbenchEntryPageRoot() ||
     queryWorkbenchDataSourcesPageRoot() ||
@@ -4092,6 +4138,21 @@ async function loadServiceConsumptionPage({ pushHistory = true } = {}) {
   }
 }
 
+async function loadDataProductsPage({ pushHistory = true } = {}) {
+  const panel = await loadWorkspacePanelPartial("/data-products");
+  if (!panel) {
+    return;
+  }
+
+  syncShellVisibility();
+  activateNotebookLink("");
+  applyWorkbenchTitle("data-products");
+  dataProductsController.initializeCurrentPage();
+  if (pushHistory) {
+    pushDataProductsHistory();
+  }
+}
+
 async function loadHomePage({ pushHistory = true } = {}) {
   const panel = await loadWorkspacePanelPartial("/");
   if (!panel) {
@@ -4115,8 +4176,39 @@ async function openQueryWorkbenchDataSources() {
   await loadQueryWorkbenchDataSources();
 }
 
+async function openDataProductsWorkbench() {
+  if (currentSidebarMode() !== "notebook") {
+    await refreshSidebar("notebook");
+  }
+
+  await loadDataProductsPage();
+}
+
 async function openServiceConsumptionPage() {
   await loadServiceConsumptionPage();
+}
+
+async function openDataProductPublishDialog({
+  sourceObjectRoot = null,
+  sourceSchemaRoot = null,
+} = {}) {
+  const source =
+    dataProductSourceDescriptorFromSourceObject(sourceObjectRoot) ||
+    dataProductSourceDescriptorFromSourceSchema(sourceSchemaRoot);
+
+  if (!source) {
+    await showMessageDialog({
+      title: "Data product source unavailable",
+      copy: "This source cannot be used to start managed publication.",
+    });
+    return;
+  }
+
+  await dataProductsController.openPublishDialog({
+    source,
+    lockSource: true,
+    startStep: 2,
+  });
 }
 
 function ensureRealtimeEventsEventSource() {
@@ -5999,6 +6091,10 @@ async function restoreLastNotebook() {
 document.body.addEventListener(
   "submit",
   async (event) => {
+    if (await dataProductsController.handleSubmit(event)) {
+      return;
+    }
+
     const csvIngestionForm = event.target.closest("[data-csv-ingestion-form]");
     if (csvIngestionForm) {
       event.preventDefault();
@@ -6178,6 +6274,10 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  if (await dataProductsController.handleClick(event)) {
+    return;
+  }
+
   if (await serviceConsumptionUi.handleClick(event)) {
     return;
   }
@@ -6275,6 +6375,10 @@ document.body.addEventListener("focusin", (event) => {
 });
 
 document.body.addEventListener("input", (event) => {
+  if (dataProductsController.handleInput(event)) {
+    return;
+  }
+
   if (handleCsvIngestionInput(event)) {
     return;
   }
@@ -6372,6 +6476,10 @@ document.addEventListener("mouseout", (event) => {
 });
 
 document.body.addEventListener("change", async (event) => {
+  if (dataProductsController.handleChange(event)) {
+    return;
+  }
+
   if (handleCsvIngestionChange(event)) {
     return;
   }
@@ -6501,6 +6609,7 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
   renderQueryMonitor();
   syncVisibleQueryCells();
   renderQueryNotificationMenu();
+  dataProductsController.initializeCurrentPage();
   serviceConsumptionUi.initializeCurrentPage().catch((error) => {
     console.error("Failed to initialize the service-consumption page after a partial swap.", error);
   });
@@ -6518,6 +6627,17 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
 });
 
 window.addEventListener("popstate", async () => {
+  if (window.location.pathname === "/data-products") {
+    try {
+      await loadDataProductsPage({ pushHistory: false });
+    } catch (error) {
+      if (error?.name !== "AbortError") {
+        console.error("Failed to restore data products from browser history.", error);
+      }
+    }
+    return;
+  }
+
   if (window.location.pathname === "/query-workbench/data-sources") {
     try {
       await loadQueryWorkbenchDataSources(
@@ -6669,6 +6789,12 @@ Promise.allSettled(initialLoadTasks)
       serviceConsumptionUi.initializeCurrentPage().catch((error) => {
         console.error("Failed to initialize the service-consumption page.", error);
       });
+      renderQueryNotificationMenu();
+      return;
+    }
+
+    if (dataProductsPageRoot()) {
+      dataProductsController.initializeCurrentPage();
       renderQueryNotificationMenu();
       return;
     }

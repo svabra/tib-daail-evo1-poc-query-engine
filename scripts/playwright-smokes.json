@@ -11,6 +11,11 @@
       "enabledByDefault": true
     },
     {
+      "id": "home-workbench-card-sizes",
+      "script": "playwright_home_workbench_card_sizes.py",
+      "enabledByDefault": true
+    },
+    {
       "id": "query-source-new-notebook",
       "script": "playwright_query_source_new_notebook_smoke.py",
       "enabledByDefault": true
@@ -78,6 +83,11 @@
     {
       "id": "s3-sidebar",
       "script": "playwright_s3_sidebar_smoke.py",
+      "enabledByDefault": false
+    },
+    {
+      "id": "data-products",
+      "script": "playwright_data_products_smoke.py",
       "enabledByDefault": false
     }
   ]

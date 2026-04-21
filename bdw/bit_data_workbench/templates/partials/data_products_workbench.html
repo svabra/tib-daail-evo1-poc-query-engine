@@ -1,0 +1,222 @@
+{% macro data_product_icon(source_kind) -%}
+  {% if source_kind == "bucket" %}
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <ellipse cx="10" cy="7" rx="5.8" ry="2.2"></ellipse>
+      <path d="M4.2 7v6.4c0 1.2 2.6 2.2 5.8 2.2s5.8-1 5.8-2.2V7"></path>
+      <path d="M4.2 10.2c0 1.2 2.6 2.2 5.8 2.2s5.8-1 5.8-2.2"></path>
+      <path d="M15.5 4.6h4.1l1.7 1.7v5.8h-5.8z"></path>
+      <path d="M19.6 4.6v1.7h1.7"></path>
+    </svg>
+  {% elif source_kind == "object" %}
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6 3.6h8.3l3.7 3.7v13H6z"></path>
+      <path d="M14.3 3.6v3.7H18"></path>
+      <path d="M9 11h6"></path>
+      <path d="M9 14h6"></path>
+    </svg>
+  {% else %}
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3.1" y="4.1" width="17.8" height="15.8" rx="1.8"></rect>
+      <path d="M3.8 9h16.4"></path>
+      <path d="M7.3 12.7h9.4"></path>
+      <path d="M7.3 15.8h6.4"></path>
+    </svg>
+  {% endif %}
+{%- endmacro %}
+
+<section class="data-products-page" data-data-products-page>
+  <script id="data-product-sources-json" type="application/json">{{ data_product_sources_json | safe }}</script>
+
+  <div class="home-hero data-products-hero">
+    <div class="home-hero-copy">
+      <span class="home-eyebrow">Managed Publication</span>
+      <h2>Publish live data products from one place</h2>
+      <p>
+        Publish server-visible sources as stable, read-only endpoints, then manage titles, descriptions, and consumer-facing metadata here.
+      </p>
+    </div>
+    <div class="data-products-hero-panel">
+      <h3>How to create a data product</h3>
+      <ol class="data-products-guide-list">
+        <li>Select a source from this page or from a source menu in the sidebar.</li>
+        <li>Review compatibility and the live read-only behavior.</li>
+        <li>Choose the title, slug, and optional metadata.</li>
+        <li>Review the generated endpoint and publish.</li>
+      </ol>
+      <button
+        type="button"
+        class="home-workbench-card data-products-cta-card"
+        data-open-data-product-dialog
+      >
+        <span class="home-workbench-title">Start Guided Publication</span>
+        <span class="home-workbench-copy">Create a managed data product from a PostgreSQL relation or Shared Workspace bucket/object.</span>
+      </button>
+    </div>
+  </div>
+
+  <div class="data-products-toolbar">
+    <label class="sidebar-label" for="data-product-search-input">Search published data products</label>
+    <div class="data-products-toolbar-row">
+      <input
+        id="data-product-search-input"
+        class="search-input"
+        type="search"
+        placeholder="Search title, slug, description, source, owner, domain, endpoint path"
+        data-data-product-search
+      >
+      <button
+        type="button"
+        class="topbar-settings-action data-products-toolbar-button"
+        data-open-data-product-dialog
+      >
+        Create Data Product
+      </button>
+    </div>
+  </div>
+
+  <div class="data-products-list" data-data-product-list>
+    {% if data_products %}
+      {% for product in data_products %}
+        <article
+          class="data-product-card data-product-card-tile"
+          data-data-product-card
+          data-data-product-id="{{ product.productId }}"
+          data-data-product-slug="{{ product.slug }}"
+          data-data-product-title="{{ product.title }}"
+          data-data-product-description="{{ product.description }}"
+          data-data-product-owner="{{ product.owner }}"
+          data-data-product-domain="{{ product.domain }}"
+          data-data-product-tags="{{ product.tags | join('||') }}"
+          data-data-product-access-level="{{ product.accessLevel }}"
+          data-data-product-access-note="{{ product.accessNote }}"
+          data-data-product-request-access-contact="{{ product.requestAccessContact }}"
+          data-data-product-public-path="{{ product.publicPath }}"
+          data-data-product-published-url="{{ product.publishedUrl }}"
+          data-data-product-documentation-path="{{ product.documentationPath }}"
+          data-data-product-documentation-url="{{ product.documentationUrl }}"
+          data-data-product-source-kind="{{ product.sourceKind }}"
+          data-data-product-source-id="{{ product.sourceId }}"
+          data-data-product-relation="{{ product.relation }}"
+          data-data-product-bucket="{{ product.bucket }}"
+          data-data-product-key="{{ product.key }}"
+          data-data-product-source-display-name="{{ product.sourceDisplayName }}"
+          data-data-product-source-platform="{{ product.sourcePlatform }}"
+          data-data-product-search-text="{{ (product.title ~ ' ' ~ product.slug ~ ' ' ~ product.description ~ ' ' ~ product.sourceDisplayName ~ ' ' ~ product.publicPath ~ ' ' ~ product.documentationPath ~ ' ' ~ product.owner ~ ' ' ~ product.domain ~ ' ' ~ (product.tags | join(' '))) | lower }}"
+        >
+          <div class="data-product-card-topbar">
+            <span class="data-product-card-icon" aria-hidden="true">
+              {{ data_product_icon(product.sourceKind) }}
+            </span>
+            <span class="data-product-badge">{{ product.accessLevel | upper }}</span>
+            <details class="workspace-action-menu data-product-card-menu" data-workspace-action-menu data-data-product-card-menu>
+              <summary
+                class="workspace-action-menu-toggle data-product-card-menu-toggle"
+                aria-label="Manage data product"
+                title="Manage data product"
+                data-data-product-card-menu-toggle
+              >
+                <span class="data-product-card-menu-label">Manage</span>
+                <span class="workspace-action-menu-dots" aria-hidden="true">•••</span>
+              </summary>
+              <div class="workspace-action-menu-panel data-product-card-menu-panel">
+                <button type="button" class="workspace-action-menu-item" data-copy-data-product-url>
+                  Copy URL
+                </button>
+                <a
+                  href="{{ product.documentationPath }}"
+                  target="_blank"
+                  rel="noreferrer"
+                  class="workspace-action-menu-item data-product-link-button"
+                  data-open-data-product-page
+                >
+                  Open Data Product Page
+                </a>
+                <a
+                  href="{{ product.publicPath }}"
+                  target="_blank"
+                  rel="noreferrer"
+                  class="workspace-action-menu-item data-product-link-button"
+                  data-open-data-product-endpoint
+                >
+                  Open Endpoint
+                </a>
+                <div class="workspace-action-menu-separator" aria-hidden="true"></div>
+                <button type="button" class="workspace-action-menu-item" data-edit-data-product>
+                  Edit Metadata
+                </button>
+                <button
+                  type="button"
+                  class="workspace-action-menu-item workspace-action-menu-item-danger"
+                  data-delete-data-product
+                >
+                  Unpublish
+                </button>
+              </div>
+            </details>
+          </div>
+          <div class="data-product-card-copy">
+            <div class="data-product-card-title-row">
+              <h3>
+                <a
+                  href="{{ product.documentationPath }}"
+                  target="_blank"
+                  rel="noreferrer"
+                  class="data-product-link-title"
+                >
+                  {{ product.title }}
+                </a>
+              </h3>
+            </div>
+            <p class="data-product-card-slug">
+              <a
+                href="{{ product.documentationPath }}"
+                target="_blank"
+                rel="noreferrer"
+                class="data-product-link-title"
+              >
+                /{{ product.slug }}
+              </a>
+            </p>
+            <p class="data-product-card-description">
+              {{ product.description or "No description yet." }}
+            </p>
+          </div>
+          <div class="data-product-card-detail-grid">
+            <div>
+              <span class="data-product-card-detail-label">Source</span>
+              <span class="data-product-card-detail-value">{{ product.sourceDisplayName or product.relation or product.bucket or product.key }}</span>
+            </div>
+            <div>
+              <span class="data-product-card-detail-label">Endpoint</span>
+              <span class="data-product-card-detail-value data-product-card-detail-value-mono">{{ product.publicPath }}</span>
+            </div>
+          </div>
+          {% if product.owner or product.domain or product.tags %}
+            <div class="data-product-card-chip-row">
+              {% if product.owner %}
+                <span class="data-product-card-chip">Owner: {{ product.owner }}</span>
+              {% endif %}
+              {% if product.domain %}
+                <span class="data-product-card-chip">Domain: {{ product.domain }}</span>
+              {% endif %}
+              {% for tag in product.tags %}
+                <span class="data-product-tag">{{ tag }}</span>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </article>
+      {% endfor %}
+    {% else %}
+      <article class="data-product-empty-state" data-data-product-empty-state>
+        <h3>No data products published yet</h3>
+        <p>
+          Start from the guided publication flow here, or publish directly from a PostgreSQL or Shared Workspace source menu.
+        </p>
+      </article>
+    {% endif %}
+  </div>
+
+  <p class="home-empty data-products-search-empty" data-data-product-search-empty hidden>
+    No data products match the current search.
+  </p>
+</section>
