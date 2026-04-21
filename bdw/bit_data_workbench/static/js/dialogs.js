@@ -417,17 +417,39 @@ export function ensureLocalWorkspaceMoveDialog() {
           <div class="result-export-dialog-copy">
             <h2 class="modal-title" data-local-workspace-move-title>Move Local Workspace file</h2>
             <p class="modal-copy" data-local-workspace-move-copy>
-              Choose the destination folder in this browser and optionally rename the file.
+              Choose whether to move the file within this browser or to Shared Workspace (S3), then optionally rename it.
             </p>
           </div>
           <div class="result-export-dialog-toolbar">
-            <button type="button" class="modal-button modal-button-secondary" data-local-workspace-move-create-folder>
-              New folder
-            </button>
+            <div class="local-workspace-move-toolbar-group" data-local-workspace-move-local-toolbar>
+              <button
+                type="button"
+                class="modal-button modal-button-secondary"
+                data-local-workspace-move-create-folder
+              >
+                New folder
+              </button>
+            </div>
+            <div class="local-workspace-move-toolbar-group" data-local-workspace-move-s3-toolbar hidden>
+              <button
+                type="button"
+                class="modal-button modal-button-secondary"
+                data-local-workspace-move-s3-create-bucket
+              >
+                New bucket
+              </button>
+              <button
+                type="button"
+                class="modal-button modal-button-secondary"
+                data-local-workspace-move-s3-create-folder
+              >
+                New folder
+              </button>
+            </div>
           </div>
         </div>
         <div class="result-export-dialog-body">
-          <section class="result-export-explorer-panel">
+          <section class="result-export-explorer-panel" data-local-workspace-move-local-panel>
             <div class="result-export-explorer-header">
               <span
                 class="workspace-tags-label"
@@ -439,14 +461,33 @@ export function ensureLocalWorkspaceMoveDialog() {
               <div class="local-workspace-folder-list" data-local-workspace-move-folder-list></div>
             </div>
           </section>
+          <section class="result-export-explorer-panel" data-local-workspace-move-s3-panel hidden>
+            <div class="result-export-explorer-header">
+              <span
+                class="workspace-tags-label"
+                title="Shared Workspace data is stored in the configured MinIO / S3 bucket."
+              >Shared Workspace Explorer</span>
+              <div class="result-export-breadcrumbs" data-local-workspace-move-s3-breadcrumbs></div>
+            </div>
+            <div class="result-export-explorer-shell">
+              <div class="result-export-explorer-tree" data-local-workspace-move-s3-tree></div>
+            </div>
+          </section>
           <aside class="result-export-target-panel">
+            <label class="result-export-field">
+              <span class="result-export-field-label">Move to</span>
+              <select class="modal-input" data-local-workspace-move-destination>
+                <option value="local">Local Workspace (IndexDB)</option>
+                <option value="s3">Shared Workspace (S3)</option>
+              </select>
+            </label>
             <div class="result-export-target-card">
-              <span class="workspace-tags-label">Destination</span>
+              <span class="workspace-tags-label" data-local-workspace-move-selected-label>Destination</span>
               <p class="result-export-target-path" data-local-workspace-move-selected-path>
                 Local Workspace /
               </p>
             </div>
-            <label class="result-export-field">
+            <label class="result-export-field" data-local-workspace-move-folder-field>
               <span class="result-export-field-label">Folder path</span>
               <input
                 class="modal-input"
@@ -468,7 +509,9 @@ export function ensureLocalWorkspaceMoveDialog() {
             </label>
             <div class="result-export-target-card">
               <span class="workspace-tags-label">Action</span>
-              <p class="result-export-target-path">Move the stored file within this browser's Local Workspace.</p>
+              <p class="result-export-target-path" data-local-workspace-move-action-copy>
+                Move the stored file within this browser's Local Workspace.
+              </p>
             </div>
           </aside>
         </div>

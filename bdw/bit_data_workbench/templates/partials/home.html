@@ -80,18 +80,6 @@
         <span class="home-workbench-title">Data Source Workbench</span>
         <span class="home-workbench-copy">Manage available data sources for shared and local tinkering workflows.</span>
       </button>
-      <a href="/dataproducts/" class="home-workbench-card home-workbench-card-compact">
-        <span class="home-workbench-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24">
-            <path d="M5.2 5.1h13.6v13.8H5.2z"></path>
-            <path d="M8.2 9.1h7.6"></path>
-            <path d="M8.2 12.4h7.6"></path>
-            <path d="M8.2 15.7h4.9"></path>
-          </svg>
-        </span>
-        <span class="home-workbench-title">Published Catalog</span>
-        <span class="home-workbench-copy">Browse the consumer-facing list of data products and open each product page directly.</span>
-      </a>
       <button
         type="button"
         class="home-workbench-card home-workbench-card-compact"
@@ -125,6 +113,18 @@
         <span class="home-workbench-title">Loader Workbench</span>
         <span class="home-workbench-copy">Run the existing server-side loader modules and monitor their job output separately from user ingestion.</span>
       </button>
+      <a href="/dataproducts/" class="home-workbench-card home-workbench-card-compact">
+        <span class="home-workbench-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M5.2 5.1h13.6v13.8H5.2z"></path>
+            <path d="M8.2 9.1h7.6"></path>
+            <path d="M8.2 12.4h7.6"></path>
+            <path d="M8.2 15.7h4.9"></path>
+          </svg>
+        </span>
+        <span class="home-workbench-title">Published Catalog</span>
+        <span class="home-workbench-copy">Browse the consumer-facing list of data products and open each product page directly.</span>
+      </a>
     </div>
   </div>
 
@@ -147,8 +147,11 @@
       <div class="home-data-source-list" aria-label="Available data sources">
         {% if home_data_sources %}
           {% for source in home_data_sources %}
-            <span
+            <a
+              href="{{ source.management_path }}"
               class="home-data-source-item"
+              data-home-data-source-link
+              data-open-query-data-source="{{ source.source_id }}"
               {% if source.storage_tooltip %}title="{{ source.storage_tooltip }}"{% endif %}
             >
               <span class="home-data-source-item-icon" aria-hidden="true">
@@ -158,7 +161,7 @@
                 <span class="home-data-source-item-name">{{ source.name }}</span>
                 <span class="home-data-source-item-label">{{ source.label }}</span>
               </span>
-            </span>
+            </a>
           {% endfor %}
         {% else %}
           <span class="home-data-source-empty">No data sources are available yet.</span>

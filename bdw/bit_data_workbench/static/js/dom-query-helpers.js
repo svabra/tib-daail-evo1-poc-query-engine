@@ -78,6 +78,10 @@ export function queryWorkbenchDataSourcesPageRoot() {
   return document.querySelector("[data-data-source-management-page]");
 }
 
+export function dataSourceExplorerPageRoot() {
+  return document.querySelector("[data-data-source-explorer-page]");
+}
+
 export function serviceConsumptionPageRoot() {
   return document.querySelector("[data-service-consumption-page]");
 }

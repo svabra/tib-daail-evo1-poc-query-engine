@@ -44,6 +44,7 @@ function normalizeS3ExplorerSnapshot(snapshot) {
 
 export function createS3ExplorerLoader({
   fetchJsonOrThrow,
+  getQueryRoot,
   getResultExportTreeRoot,
   nodeRequests,
   renderChildrenMarkup,
@@ -76,7 +77,9 @@ export function createS3ExplorerLoader({
       return null;
     }
 
-    return document.querySelector(
+    const rootCandidate = typeof getQueryRoot === "function" ? getQueryRoot() : null;
+    const queryRoot = rootCandidate instanceof Element ? rootCandidate : document;
+    return queryRoot.querySelector(
       `[data-s3-explorer-node][data-s3-explorer-kind="${CSS.escape(normalizedKind)}"][data-s3-explorer-bucket="${CSS.escape(
         normalizedBucket
       )}"][data-s3-explorer-prefix="${CSS.escape(normalizedPrefix)}"]`

@@ -23,6 +23,7 @@ import { createCsvIngestionController } from "./ingestion-types/csv/index.js";
 import { createDataProductsController } from "./data-products-controller.js";
 import { createDataProductsSampleContracts } from "./data-products-sample-contracts.js";
 import { createDataProductsUi } from "./data-products-ui.js";
+import { createDataSourceExplorerController } from "./data-source-explorers/controller.js";
 import { createEditorAutosizeManager } from "./editor-autosize-manager.js";
 import { createLocalWorkspaceDialogController } from "./local-workspace-dialog-controller.js";
 import { createLocalWorkspaceExportManager } from "./local-workspace-export-manager.js";
@@ -51,6 +52,7 @@ import { createPopupMenuManager } from "./popup-menu-manager.js";
 import {
   dataGenerationMonitorCount,
   dataGenerationMonitorList,
+  dataSourceExplorerPageRoot,
   dataSourceNodes,
   dataSourcesSection,
   homePageRoot,
@@ -196,10 +198,17 @@ const resultDownloadDialogState = {
 };
 const localWorkspaceMoveDialogState = {
   entryId: "",
+  operationKind: "move",
   fileName: "",
   folderPath: "",
   moving: false,
   createdFolderPaths: [],
+  destinationKind: "local",
+  selectedBucket: "",
+  selectedPrefix: "",
+  s3Loaded: false,
+  loadingSharedWorkspace: false,
+  sharedWorkspaceLoadError: "",
 };
 
 const notebookTreeStorageKey = "bdw.notebookTree.v2";
@@ -303,8 +312,10 @@ const {
 const {
   clearLocalWorkspaceQuerySourceCache,
   clearLocalWorkspaceQuerySources,
+  copyLocalWorkspaceEntryToS3,
   deleteLocalWorkspaceQuerySource,
   loadLocalWorkspaceSourceFields,
+  moveLocalWorkspaceEntryToS3,
   prepareQuerySql: prepareLocalWorkspaceQuerySql,
 } = createLocalWorkspaceQueryBridge({
   getLocalWorkspaceExport,
@@ -320,9 +331,11 @@ const {
   pushDataProductsHistory,
   pushHomeHistory,
   pushNotebookHistory,
+  pushQueryWorkbenchDataSourceExplorerHistory,
   pushQueryWorkbenchDataSourcesHistory,
   pushQueryWorkbenchHistory,
   pushServiceConsumptionHistory,
+  queryWorkbenchDataSourceExplorerUrl,
   queryWorkbenchDataSourcesUrl,
 } = createNotebookUrlHelpers({ isLocalNotebookId });
 
@@ -365,18 +378,25 @@ const {
 const {
   createLocalWorkspaceFolderFromDialog,
   createLocalWorkspaceFolderFromMoveDialog,
+  createSharedWorkspaceBucketFromMoveDialog,
+  createSharedWorkspaceFolderFromMoveDialog,
+  loadLocalWorkspaceMoveS3ExplorerNode,
+  openLocalWorkspaceCopyDialog,
   openLocalWorkspaceMoveDialog,
   openLocalWorkspaceSaveDialog,
   renderLocalWorkspaceMoveFolderList,
   renderLocalWorkspaceSaveFolderList,
+  revealLocalWorkspaceMoveS3Location,
   setLocalWorkspaceMoveDialogBusy,
   setLocalWorkspaceSaveDialogBusy,
   syncLocalWorkspaceMoveDialogState,
   syncLocalWorkspaceSaveDialogState,
   syncOpenLocalWorkspaceMoveDialog,
   syncOpenLocalWorkspaceSaveDialog,
+  updateLocalWorkspaceMoveDestinationKind,
   updateLocalWorkspaceMoveFileName,
   updateLocalWorkspaceMoveFolderPath,
+  updateLocalWorkspaceMoveS3Location,
   updateLocalWorkspaceSaveExportFormat,
   updateLocalWorkspaceSaveExportSettingsFromDialog,
   updateLocalWorkspaceSaveFileName,
@@ -385,7 +405,9 @@ const {
   allLocalWorkspaceFolderPaths,
   closestExistingLocalWorkspaceFolderPath,
   createLocalWorkspaceFolder,
+  currentWorkspaceMode,
   defaultQueryResultExportFilename,
+  fetchJsonOrThrow,
   getEntryIdFromSourceObject: localWorkspaceEntryIdFromSourceObject,
   getLocalWorkspaceExport,
   getMoveState: () => localWorkspaceMoveDialogState,
@@ -397,6 +419,10 @@ const {
   normalizeLocalWorkspaceFolderPath,
   renderLocalWorkspaceMoveBreadcrumbs,
   renderLocalWorkspaceSaveBreadcrumbs,
+  renderS3ExplorerChildrenMarkup: s3ExplorerPickerChildrenMarkup,
+  refreshSidebar: (mode) => refreshSidebar(mode),
+  showConfirmDialog,
+  showFolderNameDialog,
 });
 
 const { localWorkspaceSchemaMarkup } = createLocalWorkspaceSidebarUi({
@@ -476,6 +502,7 @@ const {
   s3ExplorerNodeForLocation,
 } = createS3ExplorerLoader({
   fetchJsonOrThrow,
+  getQueryRoot: resultExportDialog,
   getResultExportTreeRoot: resultExportTreeRoot,
   nodeRequests: s3ExplorerNodeRequests,
   renderChildrenMarkup: s3ExplorerChildrenMarkup,
@@ -647,6 +674,26 @@ const dataProductsController = createDataProductsController({
   showMessageDialog,
 });
 
+const dataSourceExplorerController = createDataSourceExplorerController({
+  allLocalWorkspaceFolderPaths,
+  downloadLocalWorkspaceExportFromSource,
+  downloadSourceS3Object,
+  escapeHtml,
+  fetchJsonOrThrow,
+  formatByteCount,
+  getPageRoot: dataSourceExplorerPageRoot,
+  listLocalWorkspaceExports,
+  localWorkspaceDisplayPath,
+  localWorkspaceFolderName,
+  localWorkspaceRelation,
+  normalizeLocalWorkspaceFolderPath,
+  openDataProductPublishDialog,
+  querySourceInCurrentNotebook,
+  querySourceInNewNotebook,
+  showMessageDialog,
+  viewSourceData,
+});
+
 const {
   handleClick: handleWorkbenchNavigationClick,
 } = createWorkbenchNavigationController({
@@ -656,6 +703,7 @@ const {
   getQueryNotificationMenu: queryNotificationMenu,
   openDataProductsWorkbench,
   openLoaderWorkbench,
+  loadQueryWorkbenchDataSourceExplorer,
   loadQueryWorkbenchDataSources,
   loadQueryWorkbenchEntry,
   openServiceConsumptionPage,
@@ -746,6 +794,8 @@ const {
   createLocalWorkspaceFolder,
   createLocalWorkspaceFolderFromDialog,
   createLocalWorkspaceFolderFromMoveDialog,
+  createSharedWorkspaceBucketFromMoveDialog,
+  createSharedWorkspaceFolderFromMoveDialog,
   createS3ExplorerBucket,
   createS3ExplorerFolder,
   createSidebarS3Bucket,
@@ -758,7 +808,9 @@ const {
   downloadS3ExplorerObject,
   downloadSourceS3Object,
   loadS3ExplorerNode,
+  loadLocalWorkspaceMoveS3ExplorerNode,
   openDataProductPublishDialog,
+  openLocalWorkspaceCopyDialog,
   openLocalWorkspaceMoveDialog,
   openLocalWorkspaceSaveDialog,
   openNotebookForQueryJob,
@@ -769,6 +821,7 @@ const {
   querySourceInCurrentNotebook,
   querySourceInNewNotebook,
   revealS3ExplorerLocation,
+  revealLocalWorkspaceMoveS3Location,
   selectResultExportLocation,
   selectSourceObject,
   setDataSourceConnectionState,
@@ -782,6 +835,7 @@ const {
   startDataGenerationJob,
   syncSourceActionMenu,
   updateLocalWorkspaceMoveFolderPath,
+  updateLocalWorkspaceMoveS3Location,
   updateLocalWorkspaceSaveFolderPath,
   viewSourceData,
 });
@@ -1005,6 +1059,10 @@ function currentWorkbenchSection() {
     return "data-sources";
   }
 
+  if (dataSourceExplorerPageRoot()) {
+    return "data-sources";
+  }
+
   const mode = currentWorkspaceMode();
   if (mode === "loader") {
     return "loader";
@@ -1127,6 +1185,10 @@ function isSharedNotebookId(notebookId) {
 
 function createCellId() {
   return `${localCellPrefix}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+function createLocalWorkspaceEntryId() {
+  return `local-workspace-entry-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
 function currentQueryState() {
@@ -1361,6 +1423,7 @@ function syncShellVisibility() {
     serviceConsumptionPageRoot() ||
     queryWorkbenchEntryPageRoot() ||
     queryWorkbenchDataSourcesPageRoot() ||
+    dataSourceExplorerPageRoot() ||
     currentWorkspaceMode() === "ingestion"
   ) {
     setShellSidebarHidden(true);
@@ -4048,7 +4111,8 @@ async function openQueryWorkbenchNavigation() {
       currentActiveNotebookId() === preferredNotebookId &&
       !homePageRoot() &&
       !queryWorkbenchEntryPageRoot() &&
-      !queryWorkbenchDataSourcesPageRoot()
+      !queryWorkbenchDataSourcesPageRoot() &&
+      !dataSourceExplorerPageRoot()
     ) {
       if (isLocalNotebookId(preferredNotebookId)) {
         pushQueryWorkbenchHistory();
@@ -4120,6 +4184,25 @@ async function loadQueryWorkbenchDataSources(sourceId = "", { pushHistory = true
   applyWorkbenchTitle("data-sources");
   if (pushHistory) {
     pushQueryWorkbenchDataSourcesHistory(sourceId);
+  }
+}
+
+async function loadQueryWorkbenchDataSourceExplorer(sourceId = "", { pushHistory = true } = {}) {
+  if (currentSidebarMode() !== "notebook") {
+    await refreshSidebar("notebook");
+  }
+
+  const panel = await loadWorkspacePanelPartial(queryWorkbenchDataSourceExplorerUrl(sourceId));
+  if (!panel) {
+    return;
+  }
+
+  syncShellVisibility();
+  activateNotebookLink("");
+  applyWorkbenchTitle("data-sources");
+  await dataSourceExplorerController.initializeCurrentPage();
+  if (pushHistory) {
+    pushQueryWorkbenchDataSourceExplorerHistory(sourceId);
   }
 }
 
@@ -5093,6 +5176,61 @@ async function moveLocalWorkspaceExport(entryId, options = {}) {
   return updatedEntry;
 }
 
+async function copyLocalWorkspaceExport(entryId, options = {}) {
+  const normalizedEntryId = String(entryId || "").trim();
+  if (!normalizedEntryId) {
+    return null;
+  }
+
+  const entry = await getLocalWorkspaceExport(normalizedEntryId);
+  if (!entry) {
+    return null;
+  }
+
+  const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(options.folderPath);
+  const normalizedFileName = String(options.fileName || "").trim();
+  if (!normalizedFileName) {
+    throw new Error("Provide a file name before copying the Local Workspace file.");
+  }
+
+  const allEntries = await listLocalWorkspaceExports();
+  const duplicateEntry = allEntries.find(
+    (candidate) =>
+      normalizeLocalWorkspaceFolderPath(candidate.folderPath) === normalizedFolderPath &&
+      String(candidate.fileName || "").trim().localeCompare(normalizedFileName, undefined, {
+        sensitivity: "base",
+      }) === 0
+  );
+  if (duplicateEntry) {
+    throw new Error(
+      `A Local Workspace file named "${normalizedFileName}" already exists in ${localWorkspaceDisplayPath(normalizedFolderPath)}.`
+    );
+  }
+
+  ensureLocalWorkspaceFolderPath(normalizedFolderPath);
+  const timestamp = new Date().toISOString();
+  const copiedEntry = await saveLocalWorkspaceExport({
+    ...entry,
+    id: createLocalWorkspaceEntryId(),
+    fileName: normalizedFileName,
+    folderPath: normalizedFolderPath,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+  });
+
+  await renderLocalWorkspaceSidebarEntries();
+  await revealLocalWorkspaceFolderPath(normalizedFolderPath);
+
+  const copiedNode = localWorkspaceEntryNode(copiedEntry.id);
+  if (copiedNode instanceof Element) {
+    setSelectedSourceObjectState(copiedNode);
+    renderSourceInspectorMarkup(localWorkspaceInspectorMarkup(copiedNode));
+    copiedNode.scrollIntoView({ block: "nearest" });
+  }
+
+  return copiedEntry;
+}
+
 async function deleteLocalWorkspaceExportFromSource(sourceObjectRoot) {
   const entryId = localWorkspaceEntryIdFromSourceObject(sourceObjectRoot);
   if (!entryId) {
@@ -5613,6 +5751,59 @@ function s3ExplorerChildrenMarkup(snapshot) {
     return `<p class="s3-explorer-empty">${escapeHtml(snapshot.emptyMessage || "This location is empty.")}</p>`;
   }
   return snapshot.entries.map((entry) => s3ExplorerEntryMarkup(entry)).join("");
+}
+
+function s3ExplorerPickerEntryMarkup(entry) {
+  if (entry.entryKind === "file") {
+    return `
+      <div
+        class="s3-explorer-file s3-explorer-file-readonly"
+        data-s3-explorer-entry
+        data-s3-explorer-file
+        data-s3-explorer-kind="${escapeHtml(entry.entryKind)}"
+        data-s3-explorer-name="${escapeHtml(entry.name)}"
+        data-s3-explorer-bucket="${escapeHtml(entry.bucket)}"
+        data-s3-explorer-prefix="${escapeHtml(entry.prefix)}"
+        data-s3-explorer-path="${escapeHtml(entry.path)}"
+        data-s3-explorer-file-format="${escapeHtml(entry.fileFormat)}"
+      >
+        <span class="s3-explorer-file-name">${escapeHtml(entry.name)}</span>
+        <span class="s3-explorer-entry-tools">
+          <span class="s3-explorer-file-meta">${escapeHtml((entry.fileFormat || "file").toUpperCase())}</span>
+        </span>
+      </div>
+    `;
+  }
+
+  const entryLabel = entry.entryKind === "bucket" ? "bucket" : "folder";
+  return `
+    <details
+      class="tree-folder s3-explorer-node"
+      data-s3-explorer-entry
+      data-s3-explorer-node
+      data-s3-explorer-kind="${escapeHtml(entry.entryKind)}"
+      data-s3-explorer-name="${escapeHtml(entry.name)}"
+      data-s3-explorer-bucket="${escapeHtml(entry.bucket)}"
+      data-s3-explorer-prefix="${escapeHtml(entry.prefix)}"
+      data-s3-explorer-path="${escapeHtml(entry.path)}"
+      data-s3-explorer-node-key="${escapeHtml(s3ExplorerNodeKey(entry.entryKind, entry.bucket, entry.prefix))}"
+    >
+      <summary class="tree-folder-summary s3-explorer-node-summary" data-searchable-item="${escapeHtml(entry.name)}">
+        <span class="tree-folder-label">${escapeHtml(entry.name)}</span>
+        <div class="tree-folder-tools s3-explorer-entry-tools">
+          <span class="tree-folder-count">${escapeHtml(entryLabel)}</span>
+        </div>
+      </summary>
+      <div class="tree-children s3-explorer-children" data-s3-explorer-children></div>
+    </details>
+  `;
+}
+
+function s3ExplorerPickerChildrenMarkup(snapshot) {
+  if (!snapshot.entries.length) {
+    return `<p class="s3-explorer-empty">${escapeHtml(snapshot.emptyMessage || "This location is empty.")}</p>`;
+  }
+  return snapshot.entries.map((entry) => s3ExplorerPickerEntryMarkup(entry)).join("");
 }
 
 function syncResultExportSelectionState() {
@@ -6211,25 +6402,90 @@ document.body.addEventListener(
 
       try {
         setLocalWorkspaceMoveDialogBusy(true);
-        const movedEntry = await moveLocalWorkspaceExport(localWorkspaceMoveDialogState.entryId, {
-          fileName: localWorkspaceMoveDialogState.fileName,
-          folderPath: localWorkspaceMoveDialogState.folderPath,
-        });
+        const copyingFile = localWorkspaceMoveDialogState.operationKind === "copy";
+        const transferringToSharedWorkspace =
+          localWorkspaceMoveDialogState.destinationKind === "s3";
+        let localCleanupFailed = false;
+        const movedEntry = transferringToSharedWorkspace
+          ? copyingFile
+            ? await copyLocalWorkspaceEntryToS3(localWorkspaceMoveDialogState.entryId, {
+                bucket: localWorkspaceMoveDialogState.selectedBucket,
+                prefix: localWorkspaceMoveDialogState.selectedPrefix,
+                fileName: localWorkspaceMoveDialogState.fileName,
+              })
+            : await moveLocalWorkspaceEntryToS3(localWorkspaceMoveDialogState.entryId, {
+                bucket: localWorkspaceMoveDialogState.selectedBucket,
+                prefix: localWorkspaceMoveDialogState.selectedPrefix,
+                fileName: localWorkspaceMoveDialogState.fileName,
+              })
+          : copyingFile
+            ? await copyLocalWorkspaceExport(localWorkspaceMoveDialogState.entryId, {
+                fileName: localWorkspaceMoveDialogState.fileName,
+                folderPath: localWorkspaceMoveDialogState.folderPath,
+              })
+            : await moveLocalWorkspaceExport(localWorkspaceMoveDialogState.entryId, {
+                fileName: localWorkspaceMoveDialogState.fileName,
+                folderPath: localWorkspaceMoveDialogState.folderPath,
+              });
+
+        if (transferringToSharedWorkspace && !copyingFile) {
+          try {
+            await deleteLocalWorkspaceExport(localWorkspaceMoveDialogState.entryId);
+            clearLocalWorkspaceQuerySourceCache(localWorkspaceMoveDialogState.entryId);
+            clearSourceObjectFieldCacheForRelations([
+              localWorkspaceRelation(localWorkspaceMoveDialogState.entryId),
+            ]);
+            if (
+              getActiveSourceObjectRelation() ===
+              localWorkspaceRelation(localWorkspaceMoveDialogState.entryId)
+            ) {
+              setSelectedSourceObjectState(null);
+              renderSourceInspectorMarkup("", true);
+            }
+          } catch (cleanupError) {
+            localCleanupFailed = true;
+            console.error("Shared Workspace upload succeeded but the Local Workspace cleanup failed.", cleanupError);
+          }
+        }
+
+        if (transferringToSharedWorkspace) {
+          await refreshSidebar(currentWorkspaceMode());
+        }
+
         closeDialog(localWorkspaceMoveDialog(), "confirm");
+        if (!transferringToSharedWorkspace && movedEntry) {
+          await revealLocalWorkspaceFolderPath(movedEntry.folderPath);
+        }
         if (movedEntry) {
           await showMessageDialog({
-            title: "Local Workspace file moved",
-            copy: `${movedEntry.fileName} was moved to ${localWorkspaceDisplayPath(movedEntry.folderPath)} in this browser.`,
+            title: copyingFile ? "Local Workspace file copied" : "Local Workspace file moved",
+            copy: transferringToSharedWorkspace
+              ? copyingFile
+                ? `${movedEntry.fileName} was copied to ${movedEntry.path}. The Local Workspace copy was kept in this browser.`
+                : localCleanupFailed
+                  ? `${movedEntry.fileName} was uploaded to ${movedEntry.path}, but the browser-local copy could not be removed automatically.`
+                  : `${movedEntry.fileName} was moved to ${movedEntry.path}.`
+              : copyingFile
+                ? `${movedEntry.fileName} was copied to ${localWorkspaceDisplayPath(movedEntry.folderPath)} in this browser.`
+                : `${movedEntry.fileName} was moved to ${localWorkspaceDisplayPath(movedEntry.folderPath)} in this browser.`,
           });
         }
       } catch (error) {
-        console.error("Failed to move the Local Workspace file.", error);
+        console.error(
+          `Failed to ${localWorkspaceMoveDialogState.operationKind === "copy" ? "copy" : "move"} the Local Workspace file.`,
+          error
+        );
         await showMessageDialog({
-          title: "Local Workspace move failed",
+          title:
+            localWorkspaceMoveDialogState.operationKind === "copy"
+              ? "Local Workspace copy failed"
+              : "Local Workspace move failed",
           copy:
             error instanceof Error
               ? error.message
-              : "The Local Workspace file could not be moved.",
+              : localWorkspaceMoveDialogState.operationKind === "copy"
+                ? "The Local Workspace file could not be copied."
+                : "The Local Workspace file could not be moved.",
         });
       } finally {
         setLocalWorkspaceMoveDialogBusy(false);
@@ -6455,6 +6711,26 @@ document.body.addEventListener("input", (event) => {
   }
 });
 
+document.body.addEventListener("change", async (event) => {
+  const localWorkspaceMoveDestinationSelect = event.target.closest(
+    "[data-local-workspace-move-destination]"
+  );
+  if (localWorkspaceMoveDestinationSelect instanceof HTMLSelectElement) {
+    try {
+      await updateLocalWorkspaceMoveDestinationKind(localWorkspaceMoveDestinationSelect.value);
+    } catch (error) {
+      console.error("Failed to load Shared Workspace locations for the Local Workspace move dialog.", error);
+      await showMessageDialog({
+        title: "Shared Workspace unavailable",
+        copy:
+          error instanceof Error
+            ? error.message
+            : "The Shared Workspace explorer could not be loaded.",
+      });
+    }
+  }
+});
+
 document.body.addEventListener("click", (event) => {
   handleNotebookWorkspaceSharedToggleClick(event);
 });
@@ -6647,6 +6923,20 @@ window.addEventListener("popstate", async () => {
     } catch (error) {
       if (error?.name !== "AbortError") {
         console.error("Failed to restore managed data sources from browser history.", error);
+      }
+    }
+    return;
+  }
+
+  if (window.location.pathname === "/query-workbench/data-sources/explorer") {
+    try {
+      await loadQueryWorkbenchDataSourceExplorer(
+        new URLSearchParams(window.location.search).get("source_id") || "",
+        { pushHistory: false }
+      );
+    } catch (error) {
+      if (error?.name !== "AbortError") {
+        console.error("Failed to restore the data source explorer from browser history.", error);
       }
     }
     return;

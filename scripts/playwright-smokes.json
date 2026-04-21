@@ -81,6 +81,11 @@
       "enabledByDefault": false
     },
     {
+      "id": "local-workspace-move-to-s3",
+      "script": "playwright_local_workspace_move_to_s3.py",
+      "enabledByDefault": false
+    },
+    {
       "id": "s3-sidebar",
       "script": "playwright_s3_sidebar_smoke.py",
       "enabledByDefault": false

@@ -44,6 +44,8 @@ from .s3_storage import (
     upload_s3_file,
 )
 from .data_sources import DataSourceCreateRequest, DataSourceDeleteRequest, DataSourcePlugin
+from .data_sources.explorer_payloads import build_data_source_explorer_payload
+from .data_sources.publication_links import annotate_catalogs_with_published_products
 from .data_sources.postgres import PostgresDataSourcePlugin
 from .data_sources.s3 import S3DataSourcePlugin
 from .data_products import DataProductManager, DataProductStore
@@ -53,6 +55,7 @@ from .ingestion_types.csv import (
     attach_query_sources_to_csv_imports,
 )
 from .local_workspace_query_sources import LocalWorkspaceQuerySourceManager
+from .local_workspace_transfers import LocalWorkspaceTransferManager
 from .query_analysis import analyze_query_touches, build_relation_index
 from .query_jobs import QueryJobManager
 from .query_result_exports import QueryResultExportManager
@@ -194,6 +197,9 @@ class WorkbenchService:
             postgres_connection_factory=self._create_postgres_native_connection,
         )
         self._local_workspace_query_sources = LocalWorkspaceQuerySourceManager(
+            settings=settings,
+        )
+        self._local_workspace_transfers = LocalWorkspaceTransferManager(
             settings=settings,
         )
         self._data_source_discovery = DataSourceDiscoveryManager(
@@ -372,7 +378,13 @@ class WorkbenchService:
 
     def catalogs(self) -> list[SourceCatalog]:
         with self._lock:
-            return list(self._catalogs)
+            catalogs = list(self._catalogs)
+        return annotate_catalogs_with_published_products(
+            catalogs,
+            publication_links_for_source=lambda source: self._data_products.published_products_for_source(
+                source=source
+            ),
+        )
 
     def completion_schema(self) -> dict[str, object]:
         with self._lock:
@@ -535,6 +547,17 @@ class WorkbenchService:
 
     def data_product_by_slug(self, slug: str):
         return self._data_products.product_by_slug(slug)
+
+    def published_data_products_for_source(
+        self,
+        *,
+        source: dict[str, object],
+        base_url: str | None = None,
+    ) -> list[dict[str, object]]:
+        return self._data_products.published_products_for_source(
+            source=source,
+            base_url=base_url,
+        )
 
     def data_product_documentation(
         self,
@@ -763,6 +786,20 @@ class WorkbenchService:
     def s3_explorer_snapshot(self, *, bucket: str = "", prefix: str = "") -> dict[str, object]:
         return self._s3_plugin.snapshot(bucket=bucket, prefix=prefix).payload
 
+    def data_source_explorer_payload(
+        self,
+        *,
+        source_id: str,
+        bucket: str = "",
+        prefix: str = "",
+    ) -> dict[str, object]:
+        return build_data_source_explorer_payload(
+            self,
+            source_id=source_id,
+            bucket=bucket,
+            prefix=prefix,
+        )
+
     def create_s3_bucket(self, bucket_name: str) -> dict[str, object]:
         result = self._s3_plugin.create(
             DataSourceCreateRequest(kind="bucket", name=bucket_name)
@@ -930,6 +967,71 @@ class WorkbenchService:
                 conn=self._require_connection(),
                 client_id=client_id,
             )
+
+    def move_local_workspace_export_to_s3(
+        self,
+        *,
+        client_id: str,
+        entry_id: str,
+        file_name: str,
+        mime_type: str = "",
+        file_bytes: bytes,
+        bucket: str,
+        prefix: str = "",
+    ) -> dict[str, str]:
+        result = self._local_workspace_transfers.move_to_s3(
+            entry_id=entry_id,
+            file_name=file_name,
+            fallback_file_name=file_name,
+            mime_type=mime_type,
+            file_bytes=file_bytes,
+            bucket=bucket,
+            prefix=prefix,
+        )
+
+        normalized_client_id = str(client_id or "").strip()
+        normalized_entry_id = str(entry_id or "").strip()
+        if normalized_client_id and normalized_entry_id:
+            try:
+                with self._lock:
+                    self._local_workspace_query_sources.delete_source(
+                        conn=self._require_connection(),
+                        client_id=normalized_client_id,
+                        entry_id=normalized_entry_id,
+                    )
+            except Exception:
+                logger.warning(
+                    "Local Workspace move cleanup failed for client_id=%r entry_id=%r after upload to %s",
+                    normalized_client_id,
+                    normalized_entry_id,
+                    result.path,
+                    exc_info=True,
+                )
+
+        self._data_source_discovery.sync_source("workspace.s3", emit_event=True)
+        return result.payload
+
+    def copy_local_workspace_export_to_s3(
+        self,
+        *,
+        entry_id: str,
+        file_name: str,
+        mime_type: str = "",
+        file_bytes: bytes,
+        bucket: str,
+        prefix: str = "",
+    ) -> dict[str, str]:
+        result = self._local_workspace_transfers.copy_to_s3(
+            entry_id=entry_id,
+            file_name=file_name,
+            fallback_file_name=file_name,
+            mime_type=mime_type,
+            file_bytes=file_bytes,
+            bucket=bucket,
+            prefix=prefix,
+        )
+        self._data_source_discovery.sync_source("workspace.s3", emit_event=True)
+        return result.payload
 
     def source_object_fields(self, relation: str) -> list[SourceField]:
         normalized_relation = relation.strip()

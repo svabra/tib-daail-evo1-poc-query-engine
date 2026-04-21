@@ -32,20 +32,32 @@
   {% endif %}
 {%- endmacro %}
 
-<section class="data-source-management-page" data-data-source-management-page>
+<section
+  class="data-source-explorer-page"
+  data-data-source-explorer-page
+  data-selected-source-id="{{ selected_data_source.source_id if selected_data_source else '' }}"
+  data-explorer-kind="{{ selected_data_source.explorer_kind if selected_data_source else '' }}"
+  data-browse-source-id="{{ selected_data_source.explorer_source_id if selected_data_source else '' }}"
+>
   <div class="home-hero data-source-management-hero">
     <div class="home-hero-copy">
-      <span class="home-eyebrow">Managed Data Sources</span>
-      <h2>Inspect source configurations in one place</h2>
+      <span class="home-eyebrow">Data Source Explorer</span>
+      <h2>Browse each data source in its native shape</h2>
       <p>
-        This prototype stays read-only for data source management. Select a source card to inspect its current connection settings, discovered catalog footprint, and runtime status.
+        Navigate relations, workspace files, buckets, prefixes, and objects directly from the Data Source Workbench.
       </p>
     </div>
     <div class="data-source-management-note">
-      <span class="data-source-readonly-pill">Read-only PoC</span>
-      <p>Creating, editing, and deleting sources is intentionally disabled in this prototype.</p>
-      <a href="/query-workbench" class="data-source-management-back-link" data-open-query-workbench-entry>
-        Back to Query Workbench
+      <span class="data-source-readonly-pill">Browse-first PoC</span>
+      <p>
+        Query actions stay available, but browsing is split by source type so PostgreSQL, Shared Workspace, and Local Workspace each get their own explorer flow.
+      </p>
+      <a
+        href="{{ selected_data_source.management_path if selected_data_source else '/query-workbench/data-sources' }}"
+        class="data-source-management-back-link"
+        data-open-query-data-source="{{ selected_data_source.source_id if selected_data_source else '' }}"
+      >
+        Back to Source Details
       </a>
     </div>
   </div>
@@ -54,14 +66,14 @@
     <section class="home-section data-source-management-section">
       <div class="home-section-header">
         <h3>Source Types</h3>
-        <p>Choose a source to review the current configuration and availability.</p>
+        <p>Switch explorers without leaving the workbench.</p>
       </div>
       <div class="data-source-card-grid">
         {% for source in data_sources %}
           <a
-            href="{{ source.management_path }}"
+            href="{{ source.explorer_path }}"
             class="data-source-card{% if selected_data_source and source.source_id == selected_data_source.source_id %} is-active{% endif %}"
-            data-open-query-data-source="{{ source.source_id }}"
+            data-open-data-source-explorer="{{ source.source_id }}"
             aria-current="{% if selected_data_source and source.source_id == selected_data_source.source_id %}page{% else %}false{% endif %}"
             {% if source.storage_tooltip %}title="{{ source.storage_tooltip }}"{% endif %}
           >
@@ -96,28 +108,28 @@
             <div class="data-source-detail-copy">
               <span class="home-eyebrow">{{ selected_data_source.source_type }} • {{ selected_data_source.family }}</span>
               <h3{% if selected_data_source.storage_tooltip %} title="{{ selected_data_source.storage_tooltip }}"{% endif %}>{{ selected_data_source.name }}</h3>
-              <p>{{ selected_data_source.summary }}</p>
+              <p>{{ selected_data_source.explorer_cta_copy }}</p>
             </div>
           </div>
           <div class="data-source-detail-action-cluster">
             <a
-              href="{{ selected_data_source.explorer_path }}"
-              class="data-source-explorer-launcher"
-              data-open-data-source-explorer="{{ selected_data_source.source_id }}"
-              aria-label="Browse data for {{ selected_data_source.name }}"
+              href="{{ selected_data_source.management_path }}"
+              class="data-source-explorer-launcher is-detail-toggle"
+              data-open-query-data-source="{{ selected_data_source.source_id }}"
+              aria-label="Open source details for {{ selected_data_source.name }}"
             >
               <span class="data-source-explorer-launcher-icon" aria-hidden="true">
                 <svg viewBox="0 0 64 64">
                   <rect x="11" y="11" width="42" height="42" rx="10"></rect>
-                  <path d="M21 23h22"></path>
-                  <path d="M21 32h22"></path>
-                  <path d="M21 41h14"></path>
-                  <path d="M41 19l6 6-6 6"></path>
+                  <path d="M22 23h20"></path>
+                  <path d="M22 32h20"></path>
+                  <path d="M22 41h12"></path>
+                  <path d="M44 18v28"></path>
                 </svg>
               </span>
               <span class="data-source-explorer-launcher-copy">
-                <strong>Browse Data</strong>
-                <span>{{ selected_data_source.explorer_cta_copy }}</span>
+                <strong>View Source Details</strong>
+                <span>Switch back to the configuration, catalog footprint, and runtime status view for this source.</span>
               </span>
             </a>
             <div class="data-source-detail-status-panel">
@@ -129,25 +141,25 @@
           </div>
         </div>
 
-        <div class="data-source-detail-metric-grid">
-          {% for metric in selected_data_source.summary_metrics %}
-            <article class="data-source-metric-card">
-              <span class="data-source-metric-label">{{ metric.label }}</span>
-              <strong class="data-source-metric-value">{{ metric.value }}</strong>
-            </article>
-          {% endfor %}
-        </div>
-
-        <div class="data-source-settings-grid">
-          {% for setting in selected_data_source.settings %}
-            <article class="data-source-setting-card">
-              <span class="data-source-setting-label">{{ setting.label }}</span>
-              <strong class="data-source-setting-value">{{ setting.value }}</strong>
-              {% if setting.hint %}
-                <p class="data-source-setting-hint">{{ setting.hint }}</p>
-              {% endif %}
-            </article>
-          {% endfor %}
+        <div class="data-source-explorer-shell">
+          <section class="data-source-explorer-browser-panel">
+            <div class="data-source-explorer-panel-header">
+              <h4>Browse {{ selected_data_source.name }}</h4>
+              <p>Objects appear here using the explorer flow for this source type.</p>
+            </div>
+            <div class="data-source-explorer-browser" data-data-source-explorer-navigation>
+              <p class="home-empty">Loading explorer...</p>
+            </div>
+          </section>
+          <aside class="data-source-explorer-detail-panel">
+            <div class="data-source-explorer-panel-header">
+              <h4>Selection</h4>
+              <p>Inspect the currently selected object, file, bucket, or prefix here.</p>
+            </div>
+            <div class="data-source-explorer-detail" data-data-source-explorer-detail>
+              <p class="home-empty">Select something from the explorer to inspect it.</p>
+            </div>
+          </aside>
         </div>
       {% else %}
         <p class="home-empty">No data sources are available in the current runtime.</p>

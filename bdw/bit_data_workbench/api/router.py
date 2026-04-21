@@ -401,6 +401,58 @@ def clear_local_workspace_query_sources(
     return JSONResponse({"ok": True})
 
 
+@router.post("/api/local-workspace/exports/move-to-s3")
+async def move_local_workspace_export_to_s3(
+    file: UploadFile = File(...),
+    entry_id: str = Form("", alias="entryId"),
+    bucket: str = Form(""),
+    prefix: str = Form(""),
+    file_name: str = Form("", alias="fileName"),
+    mime_type: str = Form("", alias="mimeType"),
+    service: WorkbenchService = Depends(get_workbench_service),
+    workbench_client_id: str | None = Header(default=None, alias="X-Workbench-Client-Id"),
+) -> JSONResponse:
+    try:
+        payload = service.move_local_workspace_export_to_s3(
+            client_id=str(workbench_client_id or "").strip(),
+            entry_id=entry_id,
+            file_name=file_name or file.filename or "",
+            mime_type=mime_type or file.content_type or "",
+            file_bytes=await file.read(),
+            bucket=bucket,
+            prefix=prefix,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(payload))
+
+
+@router.post("/api/local-workspace/exports/copy-to-s3")
+async def copy_local_workspace_export_to_s3(
+    file: UploadFile = File(...),
+    entry_id: str = Form("", alias="entryId"),
+    bucket: str = Form(""),
+    prefix: str = Form(""),
+    file_name: str = Form("", alias="fileName"),
+    mime_type: str = Form("", alias="mimeType"),
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        payload = service.copy_local_workspace_export_to_s3(
+            entry_id=entry_id,
+            file_name=file_name or file.filename or "",
+            mime_type=mime_type or file.content_type or "",
+            file_bytes=await file.read(),
+            bucket=bucket,
+            prefix=prefix,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(payload))
+
+
 @router.get("/api/query-jobs")
 def query_jobs_state(service: WorkbenchService = Depends(get_workbench_service)) -> JSONResponse:
     return JSONResponse(jsonable_encoder(service.query_jobs_state()))
@@ -639,6 +691,8 @@ async def stream_realtime_events(
 
 
 from .data_products import router as data_products_router
+from .data_source_explorer import router as data_source_explorer_router
 
 
+router.include_router(data_source_explorer_router)
 router.include_router(data_products_router)

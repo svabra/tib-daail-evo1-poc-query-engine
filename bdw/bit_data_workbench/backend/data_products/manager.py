@@ -107,6 +107,30 @@ class DataProductManager:
         )
         return [product.payload(base_url=base_url) for product in products]
 
+    def published_products_for_source(
+        self,
+        *,
+        source: dict[str, object],
+        base_url: str | None = None,
+    ) -> list[dict[str, object]]:
+        normalized_source = self._normalized_match_source(source)
+        if not normalized_source:
+            return []
+
+        products = sorted(
+            (
+                product
+                for product in self._store.list_products()
+                if self._product_matches_source(product, normalized_source)
+            ),
+            key=lambda item: (item.updated_at, item.title.lower(), item.product_id),
+            reverse=True,
+        )
+        return [
+            self._publication_link_payload(product, base_url=base_url)
+            for product in products
+        ]
+
     def source_options(self) -> list[dict[str, object]]:
         options: list[dict[str, object]] = []
         for catalog in self._catalog_provider():
@@ -543,6 +567,103 @@ class DataProductManager:
         if normalized_fallback:
             return normalized_fallback
         raise ValueError("Provide a title for the data product.")
+
+    def _publication_link_payload(
+        self,
+        product: DataProductDefinition,
+        *,
+        base_url: str | None = None,
+    ) -> dict[str, object]:
+        return {
+            "productId": product.product_id,
+            "slug": product.slug,
+            "title": product.title,
+            "documentationPath": product.documentation_path(),
+            "documentationUrl": product.documentation_url(base_url),
+            "publicPath": product.public_path,
+            "publishedUrl": product.published_url(base_url),
+        }
+
+    def _normalized_match_source(
+        self,
+        source: dict[str, object] | None,
+    ) -> dict[str, str] | None:
+        if not isinstance(source, dict):
+            return None
+
+        source_kind = str(
+            source.get("sourceKind") or source.get("source_kind") or ""
+        ).strip()
+        source_id = str(
+            source.get("sourceId") or source.get("source_id") or ""
+        ).strip()
+        relation = str(source.get("relation") or "").strip()
+        bucket = str(source.get("bucket") or "").strip()
+        key = str(source.get("key") or "").strip()
+
+        if not source_kind:
+            if bucket and key:
+                source_kind = "object"
+            elif bucket and source_id == "workspace.s3":
+                source_kind = "bucket"
+            elif relation:
+                source_kind = "relation"
+
+        if source_kind == "local-object" or source_id == "workspace.local":
+            return None
+        if source_kind == "relation" and relation:
+            return {
+                "sourceKind": "relation",
+                "sourceId": source_id,
+                "relation": relation,
+                "bucket": "",
+                "key": "",
+            }
+        if source_kind == "bucket" and bucket:
+            return {
+                "sourceKind": "bucket",
+                "sourceId": source_id,
+                "relation": "",
+                "bucket": bucket,
+                "key": "",
+            }
+        if source_kind == "object" and bucket and key:
+            return {
+                "sourceKind": "object",
+                "sourceId": source_id,
+                "relation": "",
+                "bucket": bucket,
+                "key": key,
+            }
+        return None
+
+    def _product_matches_source(
+        self,
+        product: DataProductDefinition,
+        source: dict[str, str],
+    ) -> bool:
+        source_kind = str(source.get("sourceKind") or "").strip()
+        if source_kind == "relation":
+            return (
+                product.source.source_kind == "relation"
+                and str(product.source.relation).strip()
+                == str(source.get("relation") or "").strip()
+            )
+        if source_kind == "bucket":
+            return (
+                product.source.source_kind == "bucket"
+                and str(product.source.bucket).strip()
+                == str(source.get("bucket") or "").strip()
+            )
+        if source_kind == "object":
+            return (
+                product.source.source_kind == "object"
+                and str(product.source.bucket).strip()
+                == str(source.get("bucket") or "").strip()
+                and str(product.source.key).strip()
+                == str(source.get("key") or "").strip()
+            )
+        return False
 
     def _resolve_source_descriptor(
         self,

@@ -1,9 +1,28 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.6.0. Keep entries concise and
+# Derived from git history through version 0.6.1. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.6.1",
+        "releasedAt": "2026-04-21T13:46:00+02:00",
+        "features": [
+            (
+                "The Data Source Workbench now opens directly to the selected source from the home page "
+                "and adds dedicated browse flows for PostgreSQL, Shared Workspace, and Local Workspace "
+                "sources, with quick switching between source details and explorer mode."
+            ),
+            (
+                "Local Workspace files can now be copied or moved into Shared Workspace S3 from the object menu, "
+                "so users can promote browser-local data without losing the original unless they choose to move it."
+            ),
+            (
+                "Relations, buckets, and files that are already published as Data Products are now clearly flagged "
+                "while browsing data sources and link directly to the corresponding Data Product page."
+            ),
+        ],
+    },
     {
         "version": "0.6.0",
         "releasedAt": "2026-04-21T11:30:00+02:00",

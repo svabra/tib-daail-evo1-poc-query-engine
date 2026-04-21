@@ -146,6 +146,49 @@ export function createSourceInspectorUi(helpers) {
     }
   }
 
+  function publishedDataProductsForSourceObject(sourceObjectRoot) {
+    if (!(sourceObjectRoot instanceof Element)) {
+      return [];
+    }
+
+    try {
+      const payload = JSON.parse(sourceObjectRoot.dataset.publishedDataProducts || "[]");
+      return Array.isArray(payload) ? payload : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function publicationMarkup(sourceObjectRoot) {
+    const publishedProducts = publishedDataProductsForSourceObject(sourceObjectRoot);
+    if (!publishedProducts.length) {
+      return "";
+    }
+
+    return `
+      <section class="sidebar-source-publication-panel">
+        <div class="sidebar-source-publication-header">
+          <span class="source-publication-pill">Data Product${publishedProducts.length === 1 ? "" : "s"}</span>
+          <p class="sidebar-source-publication-copy">This source object is already published as a managed Data Product.</p>
+        </div>
+        <div class="sidebar-source-publication-links">
+          ${publishedProducts
+            .map(
+              (product) => `
+                <a
+                  href="${escapeHtml(product.documentationPath || "")}"
+                  class="sidebar-source-publication-link"
+                >
+                  ${escapeHtml(product.title || product.slug || "Open Data Product")}
+                </a>
+              `
+            )
+            .join("")}
+        </div>
+      </section>
+    `;
+  }
+
   function sourceInspectorMarkup(sourceObjectRoot, fields) {
     const objectName = sourceObjectDisplayName(sourceObjectRoot);
     const objectKind = sourceObjectDisplayKind(sourceObjectRoot);
@@ -179,6 +222,7 @@ export function createSourceInspectorUi(helpers) {
         </div>
       </header>
       <div class="sidebar-source-inspector-body">
+        ${publicationMarkup(sourceObjectRoot)}
         ${fieldsMarkup}
       </div>
     `;
@@ -287,6 +331,7 @@ export function createSourceInspectorUi(helpers) {
         </div>
       </header>
       <div class="sidebar-source-inspector-body">
+        ${publicationMarkup(sourceObjectRoot)}
         <ul class="sidebar-source-field-list">
           <li class="sidebar-source-field">
             <span class="sidebar-source-field-name"><span class="sidebar-source-field-name-text">Folder path</span></span>

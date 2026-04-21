@@ -6,6 +6,7 @@ export function createWorkbenchNavigationController(helpers) {
     openDataProductsWorkbench,
     getQueryNotificationMenu,
     openLoaderWorkbench,
+    loadQueryWorkbenchDataSourceExplorer,
     loadQueryWorkbenchDataSources,
     loadQueryWorkbenchEntry,
     openServiceConsumptionPage,
@@ -91,6 +92,17 @@ export function createWorkbenchNavigationController(helpers) {
       event.stopPropagation();
       closeNotificationMenu();
       await loadQueryWorkbenchDataSources(openQueryDataSourceButton.dataset.openQueryDataSource || "");
+      return true;
+    }
+
+    const openDataSourceExplorerButton = event.target.closest("[data-open-data-source-explorer]");
+    if (openDataSourceExplorerButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeNotificationMenu();
+      await loadQueryWorkbenchDataSourceExplorer(
+        openDataSourceExplorerButton.dataset.openDataSourceExplorer || ""
+      );
       return true;
     }
 

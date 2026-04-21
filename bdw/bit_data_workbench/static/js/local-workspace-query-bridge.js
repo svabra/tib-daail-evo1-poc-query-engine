@@ -206,13 +206,95 @@ export function createLocalWorkspaceQueryBridge(helpers) {
     }
   }
 
+  async function moveLocalWorkspaceEntryToS3(
+    entryId,
+    { bucket = "", prefix = "", fileName = "" } = {}
+  ) {
+    return transferLocalWorkspaceEntryToS3(
+      "/api/local-workspace/exports/move-to-s3",
+      "The Local Workspace file could not be moved to Shared Workspace.",
+      entryId,
+      {
+        bucket,
+        prefix,
+        fileName,
+      }
+    );
+  }
+
+  async function copyLocalWorkspaceEntryToS3(
+    entryId,
+    { bucket = "", prefix = "", fileName = "" } = {}
+  ) {
+    return transferLocalWorkspaceEntryToS3(
+      "/api/local-workspace/exports/copy-to-s3",
+      "The Local Workspace file could not be copied to Shared Workspace.",
+      entryId,
+      {
+        bucket,
+        prefix,
+        fileName,
+      }
+    );
+  }
+
+  async function transferLocalWorkspaceEntryToS3(
+    endpoint,
+    fallbackError,
+    entryId,
+    { bucket = "", prefix = "", fileName = "" } = {}
+  ) {
+    const normalizedEntryId = String(entryId || "").trim();
+    if (!normalizedEntryId) {
+      throw new Error("The Local Workspace file is missing its entry id.");
+    }
+
+    const entry = await getLocalWorkspaceExport(normalizedEntryId);
+    if (!entry || !(entry.blob instanceof Blob)) {
+      throw new Error("The Local Workspace file is not available in this browser anymore.");
+    }
+
+    const resolvedName = String(fileName || "").trim() || resolvedFileName(entry);
+    const formData = new FormData();
+    formData.set("entryId", normalizedEntryId);
+    formData.set("bucket", String(bucket || "").trim());
+    formData.set("prefix", String(prefix || "").trim());
+    formData.set("fileName", resolvedName);
+    formData.set("mimeType", String(entry.mimeType || "").trim());
+    formData.append("file", entry.blob, resolvedName);
+
+    const response = await window.fetch(endpoint, {
+      method: "POST",
+      body: formData,
+      headers: {
+        Accept: "application/json",
+        "X-Workbench-Client-Id": workbenchClientId(),
+      },
+    });
+    if (!response.ok) {
+      let message = fallbackError;
+      try {
+        const payload = await response.json();
+        message = payload?.detail || message;
+      } catch (_error) {
+        // Ignore invalid JSON bodies.
+      }
+      throw new Error(message);
+    }
+
+    clearLocalWorkspaceQuerySourceCache(normalizedEntryId);
+    return response.json();
+  }
+
   return {
     clearLocalWorkspaceQuerySourceCache,
     clearLocalWorkspaceQuerySources,
+    copyLocalWorkspaceEntryToS3,
     deleteLocalWorkspaceQuerySource,
     loadLocalWorkspaceSourceFields,
     localWorkspaceEntryIdFromSourceObject,
     localWorkspaceRelationsInSql,
+    moveLocalWorkspaceEntryToS3,
     prepareQuerySql,
     syncLocalWorkspaceEntry,
   };

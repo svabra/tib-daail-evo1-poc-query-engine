@@ -33,6 +33,15 @@ export function createNotebookUrlHelpers({ isLocalNotebookId }) {
     return `/query-workbench/data-sources?source_id=${encodeURIComponent(normalizedSourceId)}`;
   }
 
+  function queryWorkbenchDataSourceExplorerUrl(sourceId = "") {
+    const normalizedSourceId = String(sourceId || "").trim();
+    if (!normalizedSourceId) {
+      return "/query-workbench/data-sources/explorer";
+    }
+
+    return `/query-workbench/data-sources/explorer?source_id=${encodeURIComponent(normalizedSourceId)}`;
+  }
+
   function pushQueryWorkbenchDataSourcesHistory(sourceId = "") {
     const nextUrl = queryWorkbenchDataSourcesUrl(sourceId);
     if (`${window.location.pathname}${window.location.search}` === nextUrl) {
@@ -41,6 +50,19 @@ export function createNotebookUrlHelpers({ isLocalNotebookId }) {
 
     window.history.pushState(
       { mode: "query-workbench-data-sources", sourceId: String(sourceId || "").trim() },
+      "",
+      nextUrl
+    );
+  }
+
+  function pushQueryWorkbenchDataSourceExplorerHistory(sourceId = "") {
+    const nextUrl = queryWorkbenchDataSourceExplorerUrl(sourceId);
+    if (`${window.location.pathname}${window.location.search}` === nextUrl) {
+      return;
+    }
+
+    window.history.pushState(
+      { mode: "query-workbench-data-source-explorer", sourceId: String(sourceId || "").trim() },
       "",
       nextUrl
     );
@@ -79,9 +101,11 @@ export function createNotebookUrlHelpers({ isLocalNotebookId }) {
     notebookUrl,
     pushHomeHistory,
     pushNotebookHistory,
+    pushQueryWorkbenchDataSourceExplorerHistory,
     pushQueryWorkbenchDataSourcesHistory,
     pushQueryWorkbenchHistory,
     pushServiceConsumptionHistory,
+    queryWorkbenchDataSourceExplorerUrl,
     queryWorkbenchDataSourcesUrl,
   };
 }

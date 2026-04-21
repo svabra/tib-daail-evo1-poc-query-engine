@@ -315,6 +315,14 @@
                   </span>
                   {% if catalog.name == "workspace" %}
                     <span class="source-schema-meta">
+                      {% if schema.published_data_products %}
+                        <span
+                          class="source-publication-pill"
+                          title="Published as a managed Data Product"
+                        >
+                          Data Product{% if schema.published_data_products | length != 1 %}s{% endif %}
+                        </span>
+                      {% endif %}
                       <details class="workspace-action-menu source-action-menu" data-source-action-menu>
                         <summary
                           class="workspace-action-menu-toggle"
@@ -325,13 +333,25 @@
                           <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
                         </summary>
                         <div class="workspace-action-menu-panel">
+                          {% if schema.published_data_products %}
+                            {% for published_product in schema.published_data_products %}
+                              <a
+                                href="{{ published_product.documentationPath }}"
+                                class="workspace-action-menu-item"
+                                title="Open the published Data Product page"
+                              >
+                                Open Data Product{% if schema.published_data_products | length != 1 %} · {{ published_product.title }}{% endif %}
+                              </a>
+                            {% endfor %}
+                            <div class="workspace-action-menu-separator" aria-hidden="true"></div>
+                          {% endif %}
                           <button
                             type="button"
                             class="workspace-action-menu-item"
                             data-create-data-product-bucket
                             title="Publish this bucket as a managed data product"
                           >
-                            Create data product
+                            Create data product ...
                           </button>
                           <div class="workspace-action-menu-separator" aria-hidden="true"></div>
                           <button
@@ -355,6 +375,7 @@
                       {% set source_option_id = catalog.name %}
                     {% endif %}
                     {% set source_object_display_name = source_object.display_name or source_object.name %}
+                    {% set source_object_published_products = source_object.published_data_products | default([], true) %}
                     <li
                       class="source-object source-object-{{ source_object.kind | replace(' ', '-') }}"
                       data-searchable-item="{{ source_object_display_name }} {{ source_object.name }} {{ source_object.relation }}"
@@ -370,6 +391,7 @@
                       data-s3-file-format="{{ source_object.s3_file_format }}"
                       data-s3-downloadable="{{ 'true' if source_object.s3_downloadable else 'false' }}"
                       data-s3-size-bytes="{{ source_object.size_bytes }}"
+                      data-published-data-products='{{ source_object_published_products | tojson }}'
                     >
                       <span class="source-node-label">
                         {% if source_object.kind in ("view", "materialized view") %}
@@ -396,6 +418,14 @@
                         <span title="{{ source_object_display_name }}">{{ source_object_display_name | truncate_source_navigation_label }}</span>
                       </span>
                       <span class="source-object-meta">
+                        {% if source_object_published_products %}
+                          <span
+                            class="source-publication-pill"
+                            title="Published as a managed Data Product"
+                          >
+                            Data Product{% if source_object_published_products | length != 1 %}s{% endif %}
+                          </span>
+                        {% endif %}
                         {% if source_object.s3_file_format %}
                           <small>{{ source_object.s3_file_format | upper }}</small>
                           <small>{{ source_object.size_bytes | format_byte_count }}</small>
@@ -412,6 +442,18 @@
                             <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
                           </summary>
                           <div class="workspace-action-menu-panel">
+                            {% if source_object_published_products %}
+                              {% for published_product in source_object_published_products %}
+                                <a
+                                  href="{{ published_product.documentationPath }}"
+                                  class="workspace-action-menu-item"
+                                  title="Open the published Data Product page"
+                                >
+                                  Open Data Product{% if source_object.published_data_products | length != 1 %} · {{ published_product.title }}{% endif %}
+                                </a>
+                              {% endfor %}
+                              <div class="workspace-action-menu-separator" aria-hidden="true"></div>
+                            {% endif %}
                             {% if source_object.s3_downloadable %}
                               <button
                                 type="button"
@@ -452,7 +494,7 @@
                               data-create-data-product
                               title="Publish this source as a managed data product"
                             >
-                              Create data product
+                              Create data product ...
                             </button>
                             {% if source_object.s3_downloadable %}
                               <div class="workspace-action-menu-separator" aria-hidden="true"></div>

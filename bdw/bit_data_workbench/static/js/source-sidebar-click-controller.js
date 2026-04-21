@@ -9,6 +9,8 @@ export function createSourceSidebarClickController(helpers) {
     createLocalWorkspaceFolder,
     createLocalWorkspaceFolderFromDialog,
     createLocalWorkspaceFolderFromMoveDialog,
+    createSharedWorkspaceBucketFromMoveDialog,
+    createSharedWorkspaceFolderFromMoveDialog,
     createS3ExplorerBucket,
     createS3ExplorerFolder,
     createSidebarS3Bucket,
@@ -21,8 +23,10 @@ export function createSourceSidebarClickController(helpers) {
     downloadS3ExplorerObject,
     downloadSourceS3Object,
     loadS3ExplorerNode,
+    loadLocalWorkspaceMoveS3ExplorerNode,
     openLocalWorkspaceMoveDialog,
     openDataProductPublishDialog,
+    openLocalWorkspaceCopyDialog,
     openLocalWorkspaceSaveDialog,
     openNotebookForQueryJob,
     openResultDownloadDialog,
@@ -32,6 +36,7 @@ export function createSourceSidebarClickController(helpers) {
     querySourceInCurrentNotebook,
     querySourceInNewNotebook,
     revealS3ExplorerLocation,
+    revealLocalWorkspaceMoveS3Location,
     selectResultExportLocation,
     selectSourceObject,
     setDataSourceConnectionState,
@@ -45,6 +50,7 @@ export function createSourceSidebarClickController(helpers) {
     startDataGenerationJob,
     syncSourceActionMenu,
     updateLocalWorkspaceMoveFolderPath,
+    updateLocalWorkspaceMoveS3Location,
     updateLocalWorkspaceSaveFolderPath,
     viewSourceData,
   } = helpers;
@@ -287,6 +293,40 @@ export function createSourceSidebarClickController(helpers) {
       return true;
     }
 
+    const createLocalWorkspaceMoveS3BucketButton = event.target.closest(
+      "[data-local-workspace-move-s3-create-bucket]"
+    );
+    if (createLocalWorkspaceMoveS3BucketButton) {
+      event.preventDefault();
+      try {
+        await createSharedWorkspaceBucketFromMoveDialog();
+      } catch (error) {
+        console.error("Failed to create a Shared Workspace bucket from the move dialog.", error);
+        await showMessageDialog({
+          title: "Shared Workspace error",
+          copy: error instanceof Error ? error.message : "The bucket could not be created.",
+        });
+      }
+      return true;
+    }
+
+    const createLocalWorkspaceMoveS3FolderButton = event.target.closest(
+      "[data-local-workspace-move-s3-create-folder]"
+    );
+    if (createLocalWorkspaceMoveS3FolderButton) {
+      event.preventDefault();
+      try {
+        await createSharedWorkspaceFolderFromMoveDialog();
+      } catch (error) {
+        console.error("Failed to create a Shared Workspace folder from the move dialog.", error);
+        await showMessageDialog({
+          title: "Shared Workspace error",
+          copy: error instanceof Error ? error.message : "The folder could not be created.",
+        });
+      }
+      return true;
+    }
+
     const localWorkspaceFolderOptionButton = event.target.closest(
       "[data-local-workspace-folder-option]"
     );
@@ -328,6 +368,29 @@ export function createSourceSidebarClickController(helpers) {
       updateLocalWorkspaceMoveFolderPath(
         localWorkspaceMoveBreadcrumbButton.dataset.localWorkspaceFolderPath || ""
       );
+      return true;
+    }
+
+    const localWorkspaceMoveS3BreadcrumbButton = event.target.closest(
+      "[data-local-workspace-move-s3-breadcrumb]"
+    );
+    if (localWorkspaceMoveS3BreadcrumbButton) {
+      event.preventDefault();
+      try {
+        await revealLocalWorkspaceMoveS3Location(
+          localWorkspaceMoveS3BreadcrumbButton.dataset.localWorkspaceMoveS3Bucket || "",
+          localWorkspaceMoveS3BreadcrumbButton.dataset.localWorkspaceMoveS3Prefix || ""
+        );
+      } catch (error) {
+        console.error("Failed to navigate the Shared Workspace explorer in the move dialog.", error);
+        await showMessageDialog({
+          title: "Shared Workspace error",
+          copy:
+            error instanceof Error
+              ? error.message
+              : "The selected Shared Workspace location could not be opened.",
+        });
+      }
       return true;
     }
 
@@ -428,19 +491,44 @@ export function createSourceSidebarClickController(helpers) {
     if (s3ExplorerNodeSummary) {
       const node = s3ExplorerNodeSummary.closest("[data-s3-explorer-node]");
       if (node instanceof HTMLElement) {
-        selectResultExportLocation(node.dataset.s3ExplorerBucket || "", node.dataset.s3ExplorerPrefix || "");
-        window.setTimeout(() => {
-          if (!node.open) {
-            return;
-          }
-          loadS3ExplorerNode(node).catch(async (error) => {
-            console.error("Failed to expand the S3 explorer node.", error);
-            await showMessageDialog({
-              title: "S3 explorer error",
-              copy: error instanceof Error ? error.message : "The S3 location could not be loaded.",
+        const inLocalWorkspaceMoveDialog = Boolean(
+          s3ExplorerNodeSummary.closest("[data-local-workspace-move-dialog]")
+        );
+        if (inLocalWorkspaceMoveDialog) {
+          updateLocalWorkspaceMoveS3Location(
+            node.dataset.s3ExplorerBucket || "",
+            node.dataset.s3ExplorerPrefix || ""
+          );
+          window.setTimeout(() => {
+            if (!node.open) {
+              return;
+            }
+            loadLocalWorkspaceMoveS3ExplorerNode(node).catch(async (error) => {
+              console.error("Failed to expand the Shared Workspace node in the move dialog.", error);
+              await showMessageDialog({
+                title: "Shared Workspace error",
+                copy:
+                  error instanceof Error
+                    ? error.message
+                    : "The Shared Workspace location could not be loaded.",
+              });
             });
-          });
-        }, 0);
+          }, 0);
+        } else {
+          selectResultExportLocation(node.dataset.s3ExplorerBucket || "", node.dataset.s3ExplorerPrefix || "");
+          window.setTimeout(() => {
+            if (!node.open) {
+              return;
+            }
+            loadS3ExplorerNode(node).catch(async (error) => {
+              console.error("Failed to expand the S3 explorer node.", error);
+              await showMessageDialog({
+                title: "S3 explorer error",
+                copy: error instanceof Error ? error.message : "The S3 location could not be loaded.",
+              });
+            });
+          }, 0);
+        }
       }
       return true;
     }
@@ -602,6 +690,25 @@ export function createSourceSidebarClickController(helpers) {
         await showMessageDialog({
           title: "Local Workspace move unavailable",
           copy: "This Local Workspace file could not be loaded for moving.",
+        });
+      }
+      return true;
+    }
+
+    const copyLocalWorkspaceObjectButton = event.target.closest(
+      "[data-copy-local-workspace-object]"
+    );
+    if (copyLocalWorkspaceObjectButton) {
+      event.preventDefault();
+      closeSourceActionMenus();
+
+      const opened = await openLocalWorkspaceCopyDialog(
+        copyLocalWorkspaceObjectButton.closest("[data-source-object]")
+      );
+      if (opened === false) {
+        await showMessageDialog({
+          title: "Local Workspace copy unavailable",
+          copy: "This Local Workspace file could not be loaded for copying.",
         });
       }
       return true;

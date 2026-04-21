@@ -12,6 +12,11 @@ from ..backend.service import WorkbenchService
 from ..dependencies import get_workbench_service
 from ..models import SourceCatalog
 from ..release_notes import release_notes
+from .data_sources import (
+    data_source_explorer_context as build_data_source_explorer_context,
+    data_source_management_context as build_data_source_management_context,
+    home_data_source_context as build_home_data_source_context,
+)
 from .template_filters import register_template_filters
 router = APIRouter(include_in_schema=False)
 templates = Jinja2Templates(
@@ -497,7 +502,7 @@ def index(
         return templates.TemplateResponse(
             request=request,
             name="partials/home.html",
-            context=home_data_source_context(service),
+            context=build_home_data_source_context(service),
         )
 
     return templates.TemplateResponse(
@@ -513,7 +518,7 @@ def index(
                 shell_sidebar_hidden=True,
             ),
             "title": "DAAIFL Workbench",
-            **home_data_source_context(service),
+            **build_home_data_source_context(service),
         },
     )
 
@@ -560,7 +565,7 @@ def query_workbench_data_sources(
     source_id: str | None = Query(default=None),
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> HTMLResponse:
-    context = data_source_management_context(service, source_id)
+    context = build_data_source_management_context(service, source_id)
 
     if is_partial_request(request):
         return templates.TemplateResponse(
@@ -580,6 +585,41 @@ def query_workbench_data_sources(
                 workspace_mode="notebook",
                 workspace_partial_template=(
                     "partials/data_source_management.html"
+                ),
+                shell_sidebar_hidden=True,
+            ),
+            "title": "DAAIFL Data Source Workbench",
+            **context,
+        },
+    )
+
+
+@router.get("/query-workbench/data-sources/explorer", response_class=HTMLResponse)
+def query_workbench_data_source_explorer(
+    request: Request,
+    source_id: str | None = Query(default=None),
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> HTMLResponse:
+    context = build_data_source_explorer_context(service, source_id)
+
+    if is_partial_request(request):
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/data_source_explorer.html",
+            context=context,
+        )
+
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={
+            **shell_context(
+                request,
+                service,
+                active_notebook=None,
+                workspace_mode="notebook",
+                workspace_partial_template=(
+                    "partials/data_source_explorer.html"
                 ),
                 shell_sidebar_hidden=True,
             ),

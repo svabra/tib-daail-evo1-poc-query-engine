@@ -495,6 +495,41 @@ class DataProductsRouteTests(unittest.TestCase):
         body = response.body.decode("utf-8")
         self.assertIn("Published Catalog", body)
         self.assertIn('href="/dataproducts/"', body)
+        self.assertLess(
+            body.index("Data Source Workbench"),
+            body.index("Ingestion Workbench"),
+        )
+        self.assertLess(
+            body.index("Ingestion Workbench"),
+            body.index("Loader Workbench"),
+        )
+        self.assertLess(
+            body.index("Loader Workbench"),
+            body.index("Published Catalog"),
+        )
+
+    def test_full_shell_renders_workbench_descriptions_in_topbar(self) -> None:
+        response = index(
+            request=build_request("/", partial=False),
+            service=FakeWorkbenchService(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.body.decode("utf-8")
+        self.assertIn("topbar-workbench-tooltip-title", body)
+        self.assertIn("Query Workbench", body)
+        self.assertIn(
+            "Open notebooks, run SQL, and compare execution behavior.",
+            body,
+        )
+        self.assertIn(
+            "Manage available data sources for shared and local tinkering workflows.",
+            body,
+        )
+        self.assertIn(
+            "Publish live read-only endpoints from Shared Workspace and PostgreSQL sources.",
+            body,
+        )
 
     def test_public_catalog_page_lists_published_products(self) -> None:
         response = public_data_products_page(

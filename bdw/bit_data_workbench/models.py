@@ -30,6 +30,7 @@ class SourceObject:
     s3_file_format: str = ""
     s3_downloadable: bool = False
     size_bytes: int = 0
+    published_data_products: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -37,6 +38,7 @@ class SourceSchema:
     name: str
     label: str | None = None
     objects: list[SourceObject] = field(default_factory=list)
+    published_data_products: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -387,6 +389,7 @@ class S3ExplorerEntry:
     size_bytes: int = 0
     has_children: bool = False
     selectable: bool = False
+    published_data_products: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def payload(self) -> dict[str, Any]:
@@ -400,6 +403,7 @@ class S3ExplorerEntry:
             "sizeBytes": self.size_bytes,
             "hasChildren": self.has_children,
             "selectable": self.selectable,
+            "publishedDataProducts": list(self.published_data_products),
         }
 
 
@@ -427,6 +431,7 @@ class S3ExplorerSnapshot:
     path: str = ""
     entries: list[S3ExplorerEntry] = field(default_factory=list)
     breadcrumbs: list[S3ExplorerBreadcrumb] = field(default_factory=list)
+    published_data_products: list[dict[str, Any]] = field(default_factory=list)
     can_create_bucket: bool = True
     can_create_folder: bool = False
     empty_message: str = ""
@@ -439,6 +444,7 @@ class S3ExplorerSnapshot:
             "path": self.path,
             "entries": [entry.payload for entry in self.entries],
             "breadcrumbs": [breadcrumb.payload for breadcrumb in self.breadcrumbs],
+            "publishedDataProducts": list(self.published_data_products),
             "canCreateBucket": self.can_create_bucket,
             "canCreateFolder": self.can_create_folder,
             "emptyMessage": self.empty_message,

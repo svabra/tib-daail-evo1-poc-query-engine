@@ -136,9 +136,17 @@ export function createLocalWorkspaceSidebarUi(helpers) {
                 data-create-data-product
                 title="Start the managed publication flow for this file"
               >
-                Create data product
+                Create data product ...
               </button>
               <div class="workspace-action-menu-separator" aria-hidden="true"></div>
+              <button
+                type="button"
+                class="workspace-action-menu-item"
+                data-copy-local-workspace-object
+                title="Copy the Local Workspace file"
+              >
+                Copy ...
+              </button>
               <button
                 type="button"
                 class="workspace-action-menu-item"

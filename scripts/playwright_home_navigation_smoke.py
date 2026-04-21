@@ -95,6 +95,58 @@ async def open_data_source_management(page, timeout_ms: int) -> None:
     )
 
 
+async def open_focused_data_source_and_explorer_from_home(page, timeout_ms: int) -> None:
+    link = page.locator(
+        "[data-home-data-source-link][data-open-query-data-source='workspace.local']"
+    ).first
+    await link.wait_for(state="visible", timeout=timeout_ms)
+    await link.click()
+    await page.wait_for_url(
+        "**/query-workbench/data-sources?source_id=workspace.local",
+        timeout=timeout_ms,
+    )
+    await page.locator("[data-data-source-management-page]").wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
+    await page.locator(
+        "[data-data-source-management-page] [data-open-query-data-source='workspace.local'][aria-current='page']"
+    ).wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
+    browse_button = page.locator(
+        "[data-data-source-management-page] [data-open-data-source-explorer='workspace.local']"
+    ).first
+    await browse_button.wait_for(state="visible", timeout=timeout_ms)
+    await browse_button.click()
+    await page.wait_for_url(
+        "**/query-workbench/data-sources/explorer?source_id=workspace.local",
+        timeout=timeout_ms,
+    )
+    await page.locator(
+        "[data-data-source-explorer-page][data-selected-source-id='workspace.local'][data-explorer-kind='local-workspace']"
+    ).wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
+    detail_button = page.locator(
+        "[data-data-source-explorer-page] .data-source-detail-action-cluster [data-open-query-data-source='workspace.local']"
+    ).first
+    await detail_button.wait_for(state="visible", timeout=timeout_ms)
+    await detail_button.click(force=True)
+    await page.wait_for_url(
+        "**/query-workbench/data-sources?source_id=workspace.local",
+        timeout=timeout_ms,
+    )
+    await page.locator(
+        "[data-data-source-management-page] [data-open-query-data-source='workspace.local'][aria-current='page']"
+    ).wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
+
+
 async def open_query_navigation_from_topbar(page, timeout_ms: int) -> None:
     button = page.locator(
         "[data-open-query-workbench][data-open-query-workbench-navigation='true']"
@@ -160,6 +212,11 @@ async def run_smoke(args: argparse.Namespace) -> int:
         )
 
         try:
+            await open_home(page, args)
+            await open_focused_data_source_and_explorer_from_home(
+                page,
+                args.timeout_ms,
+            )
             await open_home(page, args)
             await open_query_workbench_from_home(page, args.timeout_ms)
             await open_home(page, args)
