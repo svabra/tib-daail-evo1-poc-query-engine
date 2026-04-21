@@ -123,6 +123,8 @@ class SidebarLabelTests(unittest.TestCase):
         self.assertIn('title="abcdefghijklmnopqrstuvwxabcdefghijklmnop.csv"', body)
         self.assertIn("CSV", body)
         self.assertIn("1.5 KB", body)
+        self.assertIn("Create data product", body)
+        self.assertIn("data-create-data-product", body)
 
     def test_local_workspace_sidebar_action_labels_match_prompting_behavior(self) -> None:
         sidebar_renderer = (
@@ -137,6 +139,7 @@ class SidebarLabelTests(unittest.TestCase):
         self.assertIn("Move ...", sidebar_renderer)
         self.assertIn("Delete ...", sidebar_renderer)
         self.assertIn("Download", sidebar_renderer)
+        self.assertIn("Create data product", sidebar_renderer)
         self.assertNotIn("Move local file", sidebar_renderer)
         self.assertNotIn("Delete local file", sidebar_renderer)
         self.assertNotIn("Download local file", sidebar_renderer)

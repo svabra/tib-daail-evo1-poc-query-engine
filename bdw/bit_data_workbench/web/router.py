@@ -732,3 +732,9 @@ def loader_workbench_partial(
             "runbook_tree": service.runbook_tree(),
         },
     )
+
+
+from .data_products import router as data_products_router
+
+
+router.include_router(data_products_router)

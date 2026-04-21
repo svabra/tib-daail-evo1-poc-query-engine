@@ -46,6 +46,7 @@ from .s3_storage import (
 from .data_sources import DataSourceCreateRequest, DataSourceDeleteRequest, DataSourcePlugin
 from .data_sources.postgres import PostgresDataSourcePlugin
 from .data_sources.s3 import S3DataSourcePlugin
+from .data_products import DataProductManager, DataProductStore
 from .data_generation_jobs import DataGenerationJobManager
 from .ingestion_types.csv import (
     CsvIngestionManager,
@@ -131,6 +132,9 @@ class WorkbenchService:
         self._shared_notebook_store = SharedNotebookStore(
             self._shared_notebook_store_path()
         )
+        self._data_product_store = DataProductStore(
+            self._data_product_store_path()
+        )
         self._notebook_events: list[NotebookEventDefinition] = []
         self._notebook_events_version = 0
         self._realtime_facade().initialize_state()
@@ -214,6 +218,14 @@ class WorkbenchService:
                 ),
                 S3DataSourceDiscoverer(settings),
             ],
+        )
+        self._data_products = DataProductManager(
+            settings=settings,
+            store=self._data_product_store,
+            create_worker_connection=self._create_worker_connection,
+            relation_fields_provider=self.source_object_fields,
+            catalog_provider=self.catalogs,
+            s3_bucket_snapshot_provider=self.s3_explorer_snapshot,
         )
         self._service_consumption = ServiceConsumptionMonitor(
             settings,
@@ -377,6 +389,163 @@ class WorkbenchService:
     def notebook_events_state(self) -> dict[str, object]:
         with self._condition:
             return self._notebook_events_state_locked()
+
+    def data_product_source_options(self) -> list[dict[str, object]]:
+        return self._data_products.source_options()
+
+    def list_data_products(
+        self,
+        *,
+        base_url: str | None = None,
+    ) -> list[dict[str, object]]:
+        return self._data_products.list_products(base_url=base_url)
+
+    def preview_data_product(
+        self,
+        *,
+        source: dict[str, object],
+        title: str = "",
+        slug: str = "",
+        description: str = "",
+        owner: str = "",
+        domain: str = "",
+        tags: list[str] | None = None,
+        access_level: str = "internal",
+        access_note: str = "",
+        request_access_contact: str = "",
+        custom_properties: dict[str, str] | None = None,
+        base_url: str | None = None,
+    ) -> dict[str, object]:
+        return self._data_products.preview_product(
+            source=source,
+            title=title,
+            slug=slug,
+            description=description,
+            owner=owner,
+            domain=domain,
+            tags=tags,
+            access_level=access_level,
+            access_note=access_note,
+            request_access_contact=request_access_contact,
+            custom_properties=custom_properties,
+            base_url=base_url,
+        )
+
+    def create_data_product(
+        self,
+        *,
+        source: dict[str, object],
+        title: str,
+        slug: str = "",
+        description: str = "",
+        owner: str = "",
+        domain: str = "",
+        tags: list[str] | None = None,
+        access_level: str = "internal",
+        access_note: str = "",
+        request_access_contact: str = "",
+        custom_properties: dict[str, str] | None = None,
+        base_url: str | None = None,
+    ) -> dict[str, object]:
+        return self._data_products.create_product(
+            source=source,
+            title=title,
+            slug=slug,
+            description=description,
+            owner=owner,
+            domain=domain,
+            tags=tags,
+            access_level=access_level,
+            access_note=access_note,
+            request_access_contact=request_access_contact,
+            custom_properties=custom_properties,
+            base_url=base_url,
+        )
+
+    def update_data_product_metadata(
+        self,
+        *,
+        product_id: str,
+        title: str,
+        description: str = "",
+        owner: str = "",
+        domain: str = "",
+        tags: list[str] | None = None,
+        access_level: str = "internal",
+        access_note: str = "",
+        request_access_contact: str = "",
+        custom_properties: dict[str, str] | None = None,
+        base_url: str | None = None,
+    ) -> dict[str, object]:
+        return self._data_products.update_product_metadata(
+            product_id=product_id,
+            title=title,
+            description=description,
+            owner=owner,
+            domain=domain,
+            tags=tags,
+            access_level=access_level,
+            access_note=access_note,
+            request_access_contact=request_access_contact,
+            custom_properties=custom_properties,
+            base_url=base_url,
+        )
+
+    def delete_data_product(
+        self,
+        *,
+        product_id: str,
+        base_url: str | None = None,
+    ) -> dict[str, object]:
+        return self._data_products.delete_product(
+            product_id=product_id,
+            base_url=base_url,
+        )
+
+    def public_data_product_relation(
+        self,
+        *,
+        slug: str,
+        limit: int,
+        offset: int,
+        base_url: str | None = None,
+    ) -> dict[str, object]:
+        return self._data_products.public_relation_payload(
+            slug=slug,
+            limit=limit,
+            offset=offset,
+            base_url=base_url,
+        )
+
+    def public_data_product_bucket(
+        self,
+        *,
+        slug: str,
+        prefix: str = "",
+        base_url: str | None = None,
+    ) -> dict[str, object]:
+        return self._data_products.public_bucket_payload(
+            slug=slug,
+            prefix=prefix,
+            base_url=base_url,
+        )
+
+    def public_data_product_stream(self, *, slug: str):
+        return self._data_products.public_object_stream(slug=slug)
+
+    def data_product_by_slug(self, slug: str):
+        return self._data_products.product_by_slug(slug)
+
+    def data_product_documentation(
+        self,
+        *,
+        slug: str,
+        base_url: str | None = None,
+    ) -> dict[str, object]:
+        return self._data_products.documentation_payload(
+            slug=slug,
+            base_url=base_url,
+        )
 
     def client_connections_state(self) -> dict[str, object]:
         return self._realtime_facade().client_connections_state()
@@ -997,6 +1166,9 @@ class WorkbenchService:
 
     def _shared_notebook_store_path(self) -> Path:
         return self.settings.duckdb_database.parent / "shared-notebooks.json"
+
+    def _data_product_store_path(self) -> Path:
+        return self.settings.duckdb_database.parent / "data-products.json"
 
     def _combined_notebooks(self, catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         return [*build_notebooks(catalogs), *self._shared_notebook_store.list_notebooks()]

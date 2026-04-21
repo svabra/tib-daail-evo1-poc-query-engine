@@ -92,7 +92,13 @@ async def lifespan(app: FastAPI):
         _log_startup("FastAPI lifespan shutdown complete")
 
 
-app = FastAPI(title="DAAIFL Workbench", lifespan=lifespan)
+app = FastAPI(
+    title="DAAIFL Workbench",
+    lifespan=lifespan,
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None,
+)
 app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
 app.mount("/node", StaticFiles(directory=BASE_DIR / "static" / "vendor" / "node"), name="node")
 app.include_router(api_router)

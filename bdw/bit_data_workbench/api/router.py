@@ -636,3 +636,9 @@ async def stream_realtime_events(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+from .data_products import router as data_products_router
+
+
+router.include_router(data_products_router)

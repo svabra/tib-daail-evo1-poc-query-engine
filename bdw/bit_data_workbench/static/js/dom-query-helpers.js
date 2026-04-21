@@ -82,6 +82,10 @@ export function serviceConsumptionPageRoot() {
   return document.querySelector("[data-service-consumption-page]");
 }
 
+export function dataProductsPageRoot() {
+  return document.querySelector("[data-data-products-page]");
+}
+
 export function notebookSection() {
   return document.querySelector("[data-notebook-section]");
 }

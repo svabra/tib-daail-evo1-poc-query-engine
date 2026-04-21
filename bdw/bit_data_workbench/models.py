@@ -70,6 +70,89 @@ class SourceCatalog:
 
 
 @dataclass(slots=True)
+class DataProductSourceDescriptor:
+    source_kind: str
+    source_id: str
+    relation: str = ""
+    bucket: str = ""
+    key: str = ""
+    source_display_name: str = ""
+    source_platform: str = ""
+    unsupported_reason: str = ""
+
+    @property
+    def payload(self) -> dict[str, str]:
+        return {
+            "sourceKind": self.source_kind,
+            "sourceId": self.source_id,
+            "relation": self.relation,
+            "bucket": self.bucket,
+            "key": self.key,
+            "sourceDisplayName": self.source_display_name,
+            "sourcePlatform": self.source_platform,
+            "unsupportedReason": self.unsupported_reason,
+        }
+
+
+@dataclass(slots=True)
+class DataProductDefinition:
+    product_id: str
+    slug: str
+    title: str
+    description: str
+    source: DataProductSourceDescriptor
+    public_path: str
+    publication_mode: str = "live"
+    owner: str = ""
+    domain: str = ""
+    tags: list[str] = field(default_factory=list)
+    access_level: str = "internal"
+    access_note: str = ""
+    request_access_contact: str = ""
+    custom_properties: dict[str, str] = field(default_factory=dict)
+    created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+    def published_url(self, base_url: str | None = None) -> str:
+        normalized_base_url = str(base_url or "").strip().rstrip("/")
+        if not normalized_base_url:
+            return self.public_path
+        return f"{normalized_base_url}{self.public_path}"
+
+    def documentation_path(self) -> str:
+        return f"/dataproducts/{self.slug}"
+
+    def documentation_url(self, base_url: str | None = None) -> str:
+        normalized_base_url = str(base_url or "").strip().rstrip("/")
+        if not normalized_base_url:
+            return self.documentation_path()
+        return f"{normalized_base_url}{self.documentation_path()}"
+
+    def payload(self, *, base_url: str | None = None) -> dict[str, Any]:
+        return {
+            "productId": self.product_id,
+            "slug": self.slug,
+            "title": self.title,
+            "description": self.description,
+            **self.source.payload,
+            "publicPath": self.public_path,
+            "publishedUrl": self.published_url(base_url),
+            "documentationPath": self.documentation_path(),
+            "documentationUrl": self.documentation_url(base_url),
+            "publicationMode": self.publication_mode,
+            "owner": self.owner,
+            "domain": self.domain,
+            "tags": list(self.tags),
+            "accessLevel": self.access_level,
+            "accessNote": self.access_note,
+            "requestAccessContact": self.request_access_contact,
+            "customProperties": dict(self.custom_properties),
+            "createdAt": self.created_at,
+            "updatedAt": self.updated_at,
+        }
+
+
+@dataclass(slots=True)
 class DataSourceDiscoveryEventDefinition:
     event_id: str
     source_type: str

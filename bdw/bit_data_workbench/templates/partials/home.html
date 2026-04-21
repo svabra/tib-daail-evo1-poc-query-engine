@@ -30,7 +30,11 @@
       </p>
     </div>
     <div class="home-workbench-grid">
-      <button type="button" class="home-workbench-card" data-open-query-workbench>
+      <button
+        type="button"
+        class="home-workbench-card home-workbench-card-featured"
+        data-open-query-workbench
+      >
         <span class="home-workbench-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24">
             <rect x="3.2" y="4.2" width="17.6" height="15.6" rx="2"></rect>
@@ -41,7 +45,27 @@
         <span class="home-workbench-title">Query Workbench</span>
         <span class="home-workbench-copy">Open notebooks, run SQL, and compare execution behavior.</span>
       </button>
-      <button type="button" class="home-workbench-card home-workbench-card-data-sources" data-open-query-data-sources>
+      <button
+        type="button"
+        class="home-workbench-card home-workbench-card-featured"
+        data-open-data-products-workbench
+      >
+        <span class="home-workbench-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <rect x="3.2" y="4.2" width="17.6" height="15.6" rx="2"></rect>
+            <path d="M4.7 9h14.6"></path>
+            <path d="M8.1 13.1h7.8"></path>
+            <path d="M8.1 16.1h5.2"></path>
+          </svg>
+        </span>
+        <span class="home-workbench-title">Data Products Workbench</span>
+        <span class="home-workbench-copy">Publish live read-only endpoints from Shared Workspace and PostgreSQL sources.</span>
+      </button>
+      <button
+        type="button"
+        class="home-workbench-card home-workbench-card-compact home-workbench-card-data-sources"
+        data-open-query-data-sources
+      >
         <span class="home-workbench-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24">
             <ellipse cx="8.8" cy="7" rx="4.8" ry="1.9"></ellipse>
@@ -56,7 +80,23 @@
         <span class="home-workbench-title">Data Source Workbench</span>
         <span class="home-workbench-copy">Manage available data sources for shared and local tinkering workflows.</span>
       </button>
-      <button type="button" class="home-workbench-card" data-open-ingestion-workbench>
+      <a href="/dataproducts/" class="home-workbench-card home-workbench-card-compact">
+        <span class="home-workbench-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M5.2 5.1h13.6v13.8H5.2z"></path>
+            <path d="M8.2 9.1h7.6"></path>
+            <path d="M8.2 12.4h7.6"></path>
+            <path d="M8.2 15.7h4.9"></path>
+          </svg>
+        </span>
+        <span class="home-workbench-title">Published Catalog</span>
+        <span class="home-workbench-copy">Browse the consumer-facing list of data products and open each product page directly.</span>
+      </a>
+      <button
+        type="button"
+        class="home-workbench-card home-workbench-card-compact"
+        data-open-ingestion-workbench
+      >
         <span class="home-workbench-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24">
             <path d="M12 1.8v7"></path>
@@ -69,7 +109,11 @@
         <span class="home-workbench-title">Ingestion Workbench</span>
         <span class="home-workbench-copy">Start user-driven ingestion flows such as drag-and-drop CSV imports into your data sources.</span>
       </button>
-      <button type="button" class="home-workbench-card" data-open-loader-workbench>
+      <button
+        type="button"
+        class="home-workbench-card home-workbench-card-compact"
+        data-open-loader-workbench
+      >
         <span class="home-workbench-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24">
             <path d="M5.3 6.2h13.4"></path>

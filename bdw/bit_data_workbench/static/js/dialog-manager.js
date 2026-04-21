@@ -122,16 +122,41 @@ export function showConfirmDialog({ title, copy, confirmLabel, option = null, co
   });
 }
 
-export function showMessageDialog({ title, copy, actionLabel = "OK" }) {
+export function showMessageDialog({
+  title,
+  copy,
+  actionLabel = "OK",
+  links = [],
+}) {
   const dialog = ensureMessageDialog();
   const titleNode = dialog.querySelector("[data-message-title]");
   const copyNode = dialog.querySelector("[data-message-copy]");
+  const linksNode = dialog.querySelector("[data-message-links]");
   const form = dialog.querySelector("[data-message-form]");
   const submit = dialog.querySelector("[data-message-submit]");
 
   titleNode.textContent = title;
   copyNode.textContent = copy;
   submit.textContent = actionLabel;
+  if (linksNode) {
+    linksNode.replaceChildren();
+    linksNode.hidden = !Array.isArray(links) || links.length === 0;
+    for (const link of Array.isArray(links) ? links : []) {
+      if (!link || !link.href || !link.label) {
+        continue;
+      }
+      const anchor = document.createElement("a");
+      anchor.className = "modal-link-item";
+      anchor.href = String(link.href);
+      anchor.textContent = String(link.label);
+      if (link.external) {
+        anchor.target = "_blank";
+        anchor.rel = "noreferrer";
+      }
+      linksNode.appendChild(anchor);
+    }
+    linksNode.hidden = linksNode.childElementCount === 0;
+  }
 
   return new Promise((resolve) => {
     const onSubmit = (event) => {
@@ -141,6 +166,10 @@ export function showMessageDialog({ title, copy, actionLabel = "OK" }) {
 
     const onClose = () => {
       form.removeEventListener("submit", onSubmit);
+      if (linksNode) {
+        linksNode.replaceChildren();
+        linksNode.hidden = true;
+      }
       resolve();
     };
 

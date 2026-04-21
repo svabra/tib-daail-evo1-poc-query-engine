@@ -130,6 +130,14 @@ export function createLocalWorkspaceSidebarUi(helpers) {
               >
                 Query in new notebook
               </button>
+              <button
+                type="button"
+                class="workspace-action-menu-item"
+                data-create-data-product
+                title="Start the managed publication flow for this file"
+              >
+                Create data product
+              </button>
               <div class="workspace-action-menu-separator" aria-hidden="true"></div>
               <button
                 type="button"

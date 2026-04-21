@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Published Data Products</title>
+    <link rel="icon" type="image/png" href="/static/img/favicon.png">
+    <link rel="shortcut icon" href="/static/img/favicon.ico">
+    <link rel="stylesheet" href="/static/css/app.css?v={{ runtime.timestamp_utc | urlencode }}">
+  </head>
+  <body class="dataproducts-site">
+    <main class="dataproducts-shell">
+      <section class="dataproducts-hero">
+        <div class="dataproducts-hero-copy">
+          <span class="home-eyebrow">Published Catalog</span>
+          <h1>Data products</h1>
+          <p>
+            Browse the published data products available in this deployment and open the product page for endpoint details.
+          </p>
+        </div>
+        <div class="dataproducts-hero-panel">
+          <span class="workspace-tags-label">Managed publication</span>
+          <p class="modal-copy">
+            Each product page documents the stable read-only endpoint, supported request parameters, and a sample response contract.
+          </p>
+          <a href="/data-products" class="workspace-action-menu-item data-product-link-button">
+            Open Data Products Workbench
+          </a>
+        </div>
+      </section>
+
+      <section class="dataproducts-section">
+        <div class="dataproducts-section-header">
+          <h2>Published products</h2>
+          <p>{{ data_products | length }} currently available</p>
+        </div>
+
+        {% if data_products %}
+          <div class="dataproducts-catalog-grid">
+            {% for product in data_products %}
+              <a href="{{ product.documentationPath }}" class="data-product-card dataproducts-catalog-card">
+                <div class="data-product-card-copy">
+                  <div class="data-product-card-title-row">
+                    <h3>{{ product.title }}</h3>
+                    <span class="data-product-badge">{{ product.accessLevel | upper }}</span>
+                  </div>
+                  <p class="data-product-card-slug">{{ product.documentationPath }}</p>
+                  <p class="data-product-card-description">
+                    {{ product.description or "No description yet." }}
+                  </p>
+                </div>
+                <dl class="data-product-card-meta">
+                  <div>
+                    <dt>Endpoint</dt>
+                    <dd>{{ product.publicPath }}</dd>
+                  </div>
+                  <div>
+                    <dt>Source</dt>
+                    <dd>{{ product.sourceDisplayName or product.relation or product.bucket or product.key }}</dd>
+                  </div>
+                  <div>
+                    <dt>Owner</dt>
+                    <dd>{{ product.owner or "Not set" }}</dd>
+                  </div>
+                  <div>
+                    <dt>Domain</dt>
+                    <dd>{{ product.domain or "Not set" }}</dd>
+                  </div>
+                </dl>
+                {% if product.tags %}
+                  <div class="data-product-tag-row">
+                    {% for tag in product.tags %}
+                      <span class="data-product-tag">{{ tag }}</span>
+                    {% endfor %}
+                  </div>
+                {% endif %}
+              </a>
+            {% endfor %}
+          </div>
+        {% else %}
+          <article class="data-product-empty-state">
+            <h3>No data products published yet</h3>
+            <p>
+              The catalog is empty. Publish a product from the Data Products Workbench to make it appear here.
+            </p>
+          </article>
+        {% endif %}
+      </section>
+    </main>
+  </body>
+</html>

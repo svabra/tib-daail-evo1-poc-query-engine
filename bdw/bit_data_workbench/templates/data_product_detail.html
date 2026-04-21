@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ product.title }} | Data Product</title>
+    <link rel="icon" type="image/png" href="/static/img/favicon.png">
+    <link rel="shortcut icon" href="/static/img/favicon.ico">
+    <link rel="stylesheet" href="/static/css/app.css?v={{ runtime.timestamp_utc | urlencode }}">
+  </head>
+  <body class="dataproducts-site">
+    <main class="dataproducts-shell">
+      <nav class="dataproducts-breadcrumbs" aria-label="Breadcrumb">
+        <a href="/dataproducts/" class="data-product-inline-link">Data products</a>
+        <span>/</span>
+        <span>{{ product.slug }}</span>
+      </nav>
+
+      <section class="dataproducts-detail-hero">
+        <div class="dataproducts-hero-copy">
+          <div class="data-product-card-title-row">
+            <h1>{{ product.title }}</h1>
+            <span class="data-product-badge">{{ product.accessLevel | upper }}</span>
+          </div>
+          <p class="data-product-card-slug">{{ product.documentationPath }}</p>
+          <p class="data-product-card-description">
+            {{ product.description or "No description yet." }}
+          </p>
+          {% if product.tags %}
+            <div class="data-product-tag-row">
+              {% for tag in product.tags %}
+                <span class="data-product-tag">{{ tag }}</span>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+        <div class="dataproducts-hero-panel">
+          <span class="workspace-tags-label">Published endpoint</span>
+          <p class="modal-copy">{{ documentation.liveReadOnlyCopy }}</p>
+          <a
+            href="{{ product.publicPath }}"
+            target="_blank"
+            rel="noreferrer"
+            class="workspace-action-menu-item data-product-link-button"
+          >
+            Open Endpoint
+          </a>
+        </div>
+      </section>
+
+      <section class="dataproducts-detail-grid">
+        <article class="data-product-preview-summary-card">
+          <span class="data-product-preview-summary-label">Endpoint path</span>
+          <strong>{{ product.publicPath }}</strong>
+          <p>{{ product.publishedUrl }}</p>
+        </article>
+        <article class="data-product-preview-summary-card">
+          <span class="data-product-preview-summary-label">Source</span>
+          <strong>{{ product.sourceDisplayName or product.relation or product.bucket or product.key }}</strong>
+          <p>{{ documentation.sourceSummary }}</p>
+        </article>
+        <article class="data-product-preview-summary-card">
+          <span class="data-product-preview-summary-label">Publication mode</span>
+          <strong>{{ product.publicationMode }}</strong>
+          <p>Stable, read-only exposure managed in the workbench.</p>
+        </article>
+        <article class="data-product-preview-summary-card">
+          <span class="data-product-preview-summary-label">Ownership</span>
+          <strong>{{ product.owner or "Not set" }}</strong>
+          <p>{{ product.domain or "No domain assigned." }}</p>
+        </article>
+      </section>
+
+      <section class="dataproducts-detail-columns">
+        <article class="data-product-contract-panel">
+          <div class="data-product-contract-copy">
+            <h2>Request contract</h2>
+            <p>
+              Response kind: <strong>{{ documentation.responseKind }}</strong>
+            </p>
+          </div>
+          {% if request_parameters %}
+            <div class="dataproducts-parameter-list">
+              {% for parameter in request_parameters %}
+                <article class="dataproducts-parameter-card">
+                  <div class="dataproducts-parameter-heading">
+                    <strong>{{ parameter.name }}</strong>
+                    <span>{{ parameter.type }}</span>
+                  </div>
+                  <p>{{ parameter.description }}</p>
+                  <p class="dataproducts-parameter-meta">
+                    Required: {{ "yes" if parameter.required else "no" }}
+                    {% if parameter.default is not none %} | Default: {{ parameter.default }}{% endif %}
+                  </p>
+                </article>
+              {% endfor %}
+            </div>
+          {% else %}
+            <p class="modal-copy">
+              This endpoint does not accept product-specific query parameters.
+            </p>
+          {% endif %}
+        </article>
+
+        <article class="data-product-contract-panel">
+          <div class="data-product-contract-copy">
+            <h2>Response schema</h2>
+            <p>The schema below describes the `200` response returned by this published endpoint.</p>
+          </div>
+          <pre class="data-product-contract-pre">{{ documentation.responseSchema | tojson(indent=2) }}</pre>
+        </article>
+      </section>
+
+      <section class="dataproducts-detail-stack">
+        <article class="data-product-contract-panel">
+          <div class="data-product-contract-copy">
+            <h2>OpenAPI excerpt</h2>
+            <p>This per-product OpenAPI fragment documents the published endpoint without exposing the application-wide spec.</p>
+          </div>
+          <pre class="data-product-contract-pre">{{ documentation.openApiDocument | tojson(indent=2) }}</pre>
+        </article>
+
+        <article class="data-product-contract-panel">
+          <div class="data-product-contract-copy">
+            <h2>Sample response</h2>
+            <p>The structure below shows an example payload for this published data product.</p>
+          </div>
+          <pre class="data-product-contract-pre">{{ documentation.sampleResponse | tojson(indent=2) }}</pre>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

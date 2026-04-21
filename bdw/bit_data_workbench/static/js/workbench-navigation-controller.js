@@ -3,6 +3,7 @@ export function createWorkbenchNavigationController(helpers) {
     applySidebarCollapsedState,
     closeSettingsMenus,
     getClearVisibleNotifications,
+    openDataProductsWorkbench,
     getQueryNotificationMenu,
     openLoaderWorkbench,
     loadQueryWorkbenchDataSources,
@@ -72,6 +73,15 @@ export function createWorkbenchNavigationController(helpers) {
       event.stopPropagation();
       closeNotificationMenu();
       await openQueryWorkbenchDataSources();
+      return true;
+    }
+
+    const openDataProductsButton = event.target.closest("[data-open-data-products-workbench]");
+    if (openDataProductsButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeNotificationMenu();
+      await openDataProductsWorkbench();
       return true;
     }
 
