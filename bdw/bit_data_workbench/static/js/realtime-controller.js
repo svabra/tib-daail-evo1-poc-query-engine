@@ -284,6 +284,18 @@ export function createRealtimeController(helpers) {
       return;
     }
 
+    const cellLanguage = String(
+      cellRoot.dataset.defaultCellLanguage ||
+      cellRoot.querySelector("[data-editor-root]")?.dataset.editorLanguage ||
+      cellRoot.querySelector("[data-editor-source]")?.dataset.editorLanguage ||
+      "sql"
+    )
+      .trim()
+      .toLowerCase();
+    if (cellLanguage === "python") {
+      return;
+    }
+
     const workspaceRoot = cellRoot.closest("[data-workspace-notebook]");
     const notebookId = workspaceNotebookId(workspaceRoot);
     const cellId = cellRoot.dataset.cellId;
@@ -310,6 +322,7 @@ export function createRealtimeController(helpers) {
     if (cancelButton) {
       cancelButton.hidden = !queryJobIsRunning(job);
       cancelButton.dataset.jobId = job?.jobId || "";
+      cancelButton.dataset.jobKind = "query";
       cancelButton.disabled = !queryJobIsRunning(job);
     }
 

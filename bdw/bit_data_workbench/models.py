@@ -190,6 +190,7 @@ class DataSourceDiscoveryEventDefinition:
 class NotebookCellDefinition:
     cell_id: str
     sql: str
+    language: str = "sql"
     data_sources: list[str] = field(default_factory=list)
 
     @property
@@ -207,6 +208,7 @@ class NotebookCellDefinition:
         return {
             "cellId": self.cell_id,
             "sql": self.sql,
+            "language": self.language,
             "dataSources": list(self.data_sources),
         }
 
@@ -598,6 +600,80 @@ class QueryJobDefinition:
             "sourceTypes": list(self.source_types),
             "touchedRelations": list(self.touched_relations),
             "touchedBuckets": list(self.touched_buckets),
+            "backendName": self.backend_name,
+            "canCancel": self.can_cancel,
+        }
+
+
+@dataclass(slots=True)
+class PythonJobOutputDefinition:
+    output_type: str
+    text: str = ""
+    name: str = ""
+    html: str = ""
+    data: Any = None
+    mime_type: str = ""
+    traceback: list[str] = field(default_factory=list)
+    error_name: str = ""
+    error_value: str = ""
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {
+            "type": self.output_type,
+            "text": self.text,
+            "name": self.name,
+            "html": self.html,
+            "data": self.data,
+            "mimeType": self.mime_type,
+            "traceback": list(self.traceback),
+            "errorName": self.error_name,
+            "errorValue": self.error_value,
+        }
+
+
+@dataclass(slots=True)
+class PythonJobDefinition:
+    job_id: str
+    notebook_id: str
+    notebook_title: str
+    cell_id: str
+    code: str
+    language: str
+    status: str
+    started_at: str
+    updated_at: str
+    completed_at: str | None = None
+    duration_ms: float = 0.0
+    progress_label: str = "Queued"
+    message: str | None = None
+    error: str | None = None
+    outputs: list[PythonJobOutputDefinition] = field(default_factory=list)
+    data_sources: list[str] = field(default_factory=list)
+    source_types: list[str] = field(default_factory=list)
+    backend_name: str = "Headless Jupyter Kernel"
+    can_cancel: bool = False
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {
+            "jobId": self.job_id,
+            "notebookId": self.notebook_id,
+            "notebookTitle": self.notebook_title,
+            "cellId": self.cell_id,
+            "code": self.code,
+            "language": self.language,
+            "status": self.status,
+            "startedAt": self.started_at,
+            "updatedAt": self.updated_at,
+            "completedAt": self.completed_at,
+            "durationMs": self.duration_ms,
+            "progressLabel": self.progress_label,
+            "message": self.message,
+            "error": self.error,
+            "outputs": [output.payload for output in self.outputs],
+            "dataSources": list(self.data_sources),
+            "sourceTypes": list(self.source_types),
             "backendName": self.backend_name,
             "canCancel": self.can_cancel,
         }

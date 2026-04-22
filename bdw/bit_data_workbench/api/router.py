@@ -22,6 +22,7 @@ router = APIRouter(tags=["api"])
 class NotebookCellPayload(BaseModel):
     cell_id: str = Field(validation_alias="cellId", serialization_alias="cellId")
     sql: str = ""
+    language: str = "sql"
     data_sources: list[str] = Field(
         default_factory=list,
         validation_alias="dataSources",
@@ -458,6 +459,11 @@ def query_jobs_state(service: WorkbenchService = Depends(get_workbench_service))
     return JSONResponse(jsonable_encoder(service.query_jobs_state()))
 
 
+@router.get("/api/python-jobs")
+def python_jobs_state(service: WorkbenchService = Depends(get_workbench_service)) -> JSONResponse:
+    return JSONResponse(jsonable_encoder(service.python_jobs_state()))
+
+
 @router.post("/api/query-jobs")
 def start_query_job(
     sql: str = Form(""),
@@ -481,6 +487,45 @@ def start_query_job(
     return JSONResponse(jsonable_encoder(snapshot))
 
 
+@router.post("/api/python-jobs")
+def start_python_job(
+    code: str = Form(""),
+    sql: str = Form(""),
+    notebook_id: str = Form(""),
+    notebook_title: str = Form(""),
+    cell_id: str = Form(""),
+    data_sources: str = Form(""),
+    local_relations: str = Form(default="{}", alias="localRelations"),
+    service: WorkbenchService = Depends(get_workbench_service),
+    workbench_client_id: str | None = Header(default=None, alias="X-Workbench-Client-Id"),
+) -> JSONResponse:
+    try:
+        try:
+            local_relation_map = json.loads(local_relations or "{}")
+        except json.JSONDecodeError as exc:
+            raise ValueError("The Local Workspace relation map is not valid JSON.") from exc
+        if not isinstance(local_relation_map, dict):
+            raise ValueError("The Local Workspace relation map must be a JSON object.")
+
+        snapshot = service.start_python_job(
+            client_id=str(workbench_client_id or "").strip(),
+            code=code or sql,
+            notebook_id=notebook_id,
+            notebook_title=notebook_title,
+            cell_id=cell_id,
+            data_sources=[source for source in data_sources.split("||") if source.strip()],
+            local_relation_map={
+                str(key): str(value)
+                for key, value in local_relation_map.items()
+                if str(key).strip() and str(value).strip()
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(snapshot))
+
+
 @router.post("/api/query-jobs/{job_id}/cancel")
 def cancel_query_job(
     job_id: str,
@@ -492,6 +537,36 @@ def cancel_query_job(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return JSONResponse(jsonable_encoder(snapshot))
+
+
+@router.post("/api/python-jobs/{job_id}/cancel")
+def cancel_python_job(
+    job_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        snapshot = service.cancel_python_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(snapshot))
+
+
+@router.post("/api/python-kernels/{notebook_id}/restart")
+def restart_python_kernel(
+    notebook_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+    workbench_client_id: str | None = Header(default=None, alias="X-Workbench-Client-Id"),
+) -> JSONResponse:
+    try:
+        payload = service.restart_python_kernel(
+            client_id=str(workbench_client_id or "").strip(),
+            notebook_id=notebook_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(payload))
 
 
 @router.get("/api/query-jobs/{job_id}/export/download")
@@ -617,6 +692,7 @@ async def stream_realtime_events(
     request: Request,
     service: WorkbenchService = Depends(get_workbench_service),
     query_jobs_version: int | None = Query(default=None, alias="queryJobsVersion"),
+    python_jobs_version: int | None = Query(default=None, alias="pythonJobsVersion"),
     data_generation_jobs_version: int | None = Query(
         default=None,
         alias="dataGenerationJobsVersion",
@@ -642,6 +718,7 @@ async def stream_realtime_events(
         service.register_realtime_client()
         last_versions = {
             "query-jobs": query_jobs_version,
+            "python-jobs": python_jobs_version,
             "data-generation-jobs": data_generation_jobs_version,
             "data-source-events": data_source_events_version,
             "service-consumption": service_consumption_version,

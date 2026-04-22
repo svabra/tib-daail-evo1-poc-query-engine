@@ -21,12 +21,17 @@ function cellSourceSummaryText(dataSources) {
   return `${labels.length} sources`;
 }
 
+function normalizeCellLanguage(value) {
+  return String(value || "").trim().toLowerCase() === "python" ? "python" : "sql";
+}
+
 export function createNotebookWorkspaceMarkup(helpers) {
   const {
     escapeHtml,
     formatVersionTimestamp,
     normalizeNotebookCells,
     normalizeTags,
+    pythonResultPanelMarkup,
     preferredSqlEditorRows,
     queryResultPanelMarkup,
     truncateWords,
@@ -51,10 +56,13 @@ export function createNotebookWorkspaceMarkup(helpers) {
 
   function buildCellMarkup(notebookId, cell, index, canEdit, totalCells, activeCellId) {
     const selectedSources = normalizeDataSources(cell.dataSources);
+    const cellLanguage = normalizeCellLanguage(cell.language);
     const canMoveUp = canEdit && index > 0;
     const canMoveDown = canEdit && index < totalCells - 1;
+    const canFormatSql = canEdit && cellLanguage === "sql";
     const sovereigntyHint =
       "Your data is exclusivly stored and processed in Swiss Government facilities. Hybrid or 3rd-party storage will be available with the Swiss Government Cloud for insensitive data.";
+    const languageBadge = cellLanguage === "python" ? "Python / Headless Jupyter Kernel" : "SQL / Query Engine";
     const sourceOptionsMarkup =
       readSourceOptions()
         .map((option) => {
@@ -83,6 +91,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
         class="workspace-cell${cell.cellId === activeCellId ? " is-active" : ""}"
         data-query-cell
         data-cell-id="${escapeHtml(cell.cellId)}"
+        data-default-cell-language="${escapeHtml(cellLanguage)}"
         data-default-cell-sources="${escapeHtml(selectedSources.join("||"))}"
       >
         <form class="query-form query-form-cell" data-query-form>
@@ -91,6 +100,21 @@ export function createNotebookWorkspaceMarkup(helpers) {
           <div class="cell-toolbar">
             <div class="cell-heading">
               <span class="cell-label">Cell ${index + 1}</span>
+              <div class="cell-language-toggle" data-cell-language-toggle>
+                <button
+                  type="button"
+                  class="cell-language-toggle-button${cellLanguage === "sql" ? " is-active" : ""}"
+                  data-set-cell-language="sql"
+                  ${canEdit ? "" : "disabled"}
+                >SQL</button>
+                <button
+                  type="button"
+                  class="cell-language-toggle-button${cellLanguage === "python" ? " is-active" : ""}"
+                  data-set-cell-language="python"
+                  ${canEdit ? "" : "disabled"}
+                >Python</button>
+              </div>
+              <span class="workspace-access-badge workspace-access-badge-small workspace-access-badge-language" data-cell-language-badge>${escapeHtml(languageBadge)}</span>
               <span class="workspace-access-badge workspace-access-badge-small" data-cell-access-badge title="${escapeHtml(accessModeHintForDataSources(selectedSources))}">${escapeHtml(accessModeForDataSources(selectedSources))}</span>
               <span class="workspace-access-badge workspace-access-badge-small workspace-access-badge-static" title="${escapeHtml(sovereigntyHint)}">CHE Data Souvereignity</span>
               <details class="cell-source-picker" data-cell-source-picker>
@@ -110,7 +134,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
                   <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
                 </summary>
                 <div class="workspace-action-menu-panel">
-                  <button type="button" class="workspace-action-menu-item${canEdit ? "" : " is-action-disabled"}" data-format-cell-sql ${canEdit ? "" : "disabled"} title="${canEdit ? "Format SQL" : "This notebook cannot be edited."}">Format SQL</button>
+                  <button type="button" class="workspace-action-menu-item${canFormatSql ? "" : " is-action-disabled"}" data-format-cell-sql ${canFormatSql ? "" : "disabled"} title="${canEdit ? (cellLanguage === "sql" ? "Format SQL" : "Available in SQL cells only.") : "This notebook cannot be edited."}">Format SQL</button>
                   <button type="button" class="workspace-action-menu-item workspace-action-menu-item-placeholder is-action-disabled" disabled title="disabled.">Optimize SQL</button>
                   <button type="button" class="workspace-action-menu-item workspace-action-menu-item-placeholder is-action-disabled" disabled title="disabled.">Explain SQL Execution Plan</button>
                   <button type="button" class="workspace-action-menu-item workspace-action-menu-item-placeholder is-action-disabled" disabled title="disabled.">Explain Semantics of this Query</button>
@@ -137,11 +161,11 @@ export function createNotebookWorkspaceMarkup(helpers) {
               </details>
             </div>
           </div>
-          <div class="editor-frame" data-editor-root data-editor-name="sql-${escapeHtml(cell.cellId)}">
-            <textarea name="sql" data-editor-source data-default-sql="${escapeHtml(cell.sql)}" rows="${preferredSqlEditorRows(cell.sql)}" spellcheck="false">${escapeHtml(cell.sql)}</textarea>
+          <div class="editor-frame" data-editor-root data-editor-name="sql-${escapeHtml(cell.cellId)}" data-editor-language="${escapeHtml(cellLanguage)}">
+            <textarea name="sql" data-editor-source data-default-sql="${escapeHtml(cell.sql)}" data-editor-language="${escapeHtml(cellLanguage)}" rows="${preferredSqlEditorRows(cell.sql)}" spellcheck="false">${escapeHtml(cell.sql)}</textarea>
           </div>
         </form>
-        ${queryResultPanelMarkup(cell.cellId, null)}
+        ${cellLanguage === "python" ? pythonResultPanelMarkup(cell.cellId, null) : queryResultPanelMarkup(cell.cellId, null)}
       </article>
     `;
   }
@@ -189,6 +213,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
         data-linked-generator-id="${escapeHtml(metadata.linkedGeneratorId || "")}" 
         data-default-cells='${escapeHtml(JSON.stringify((metadata.cells ?? []).map((cell) => ({
           cellId: cell.cellId,
+          language: normalizeCellLanguage(cell.language),
           dataSources: normalizeDataSources(cell.dataSources),
           sql: cell.sql,
         }))))}'
@@ -200,6 +225,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
           tags: normalizeTags(version.tags),
           cells: normalizeNotebookCells(version.cells).map((cell) => ({
             cellId: cell.cellId,
+            language: normalizeCellLanguage(cell.language),
             dataSources: normalizeDataSources(cell.dataSources),
             sql: cell.sql,
           })),
@@ -249,6 +275,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
               <div class="workspace-action-menu-panel">
                 <button type="button" class="workspace-action-menu-item" data-rename-notebook title="Rename notebook">Rename</button>
                 <button type="button" class="workspace-action-menu-item" data-edit-notebook title="Edit notebook metadata">Edit</button>
+                <button type="button" class="workspace-action-menu-item" data-restart-python-kernel title="Restart this notebook's Python kernel">Restart Python Kernel</button>
                 <button type="button" class="workspace-action-menu-item" data-copy-notebook title="Create a copy of this notebook">Copy notebook</button>
                 <button type="button" class="workspace-action-menu-item workspace-action-menu-item-danger" data-delete-notebook title="Delete notebook">Delete notebook</button>
               </div>

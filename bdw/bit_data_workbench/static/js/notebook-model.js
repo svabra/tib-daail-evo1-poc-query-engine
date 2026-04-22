@@ -7,6 +7,14 @@ import {
 export function createNotebookModel(helpers) {
   const { createCellId, normalizeTags, notebookLinks, parseBooleanDatasetValue } = helpers;
 
+  function normalizeCellLanguage(value, fallback = "sql") {
+    const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+    if (normalized === "python") {
+      return "python";
+    }
+    return fallback === "python" ? "python" : "sql";
+  }
+
   function parseDefaultTags(value) {
     if (!value) {
       return [];
@@ -62,6 +70,7 @@ export function createNotebookModel(helpers) {
 
     return {
       cellId,
+      language: normalizeCellLanguage(cell.language ?? cell.cell_language, fallback.language ?? "sql"),
       dataSources: Array.isArray(cell.dataSources)
         ? normalizeDataSources(cell.dataSources)
         : Array.isArray(cell.data_sources)
@@ -95,6 +104,7 @@ export function createNotebookModel(helpers) {
         },
         {
           cellId: createCellId(),
+          language: normalizeCellLanguage(fallback.language ?? "sql"),
           dataSources: fallback.dataSources ?? [],
           sql: fallback.sql ?? "",
         }
@@ -189,6 +199,7 @@ export function createNotebookModel(helpers) {
       tags: normalizeTags(metadata.tags),
       cells: (metadata.cells ?? []).map((cell) => ({
         cellId: cell.cellId,
+        language: normalizeCellLanguage(cell.language, "sql"),
         dataSources: normalizeDataSources(cell.dataSources),
         sql: cell.sql,
       })),
@@ -248,6 +259,7 @@ export function createNotebookModel(helpers) {
         new Date().toISOString(),
       linkedGeneratorId: metaRoot?.dataset.linkedGeneratorId ?? "",
       cells: normalizeNotebookCells(metaCells.length ? metaCells : linkCells, {
+        language: "sql",
         dataSources: fallbackDataSources,
         sql: legacySql,
       }),
@@ -294,6 +306,7 @@ export function createNotebookModel(helpers) {
                   : typeof storedState.targetLabel === "string"
                     ? normalizeDataSources([sourceIdFromLegacyTargetLabel(storedState.targetLabel)].filter(Boolean))
                     : [],
+                language: "sql",
                 sql: typeof storedState.sql === "string" ? storedState.sql : "",
               })
             : undefined,
@@ -313,6 +326,7 @@ export function createNotebookModel(helpers) {
   return {
     activeWorkspaceMetaRoot,
     createInitialNotebookVersion,
+    normalizeCellLanguage,
     normalizeCellEntry,
     normalizeNotebookCells,
     normalizeNotebookSummaryValue,

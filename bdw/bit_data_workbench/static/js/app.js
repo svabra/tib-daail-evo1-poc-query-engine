@@ -48,6 +48,17 @@ import { createNotebookUrlHelpers } from "./notebook-url-helpers.js";
 import { createNotebookTreeController } from "./notebook-tree-controller.js";
 import { createNotebookTreeState } from "./notebook-tree-state.js";
 import { createNotebookTreeUi } from "./notebook-tree-ui.js";
+import { pythonLanguageSupport } from "./python-editor-language.js";
+import {
+  applyOptimisticPythonJobSnapshot,
+  createPythonJobState,
+  loadPythonJobsState as requestPythonJobsState,
+  normalizePythonJob,
+  pythonJobElapsedMs,
+  pythonJobIsRunning,
+  pythonJobStatusCopy,
+} from "./python-job-state.js";
+import { createPythonUi } from "./python-ui.js";
 import { createPopupMenuManager } from "./popup-menu-manager.js";
 import {
   dataGenerationMonitorCount,
@@ -152,6 +163,10 @@ let queryJobsStateVersion = null;
 let queryJobsSnapshot = [];
 let queryJobsSummary = { runningCount: 0, totalCount: 0 };
 let queryPerformanceState = { recent: [], stats: {} };
+let pythonJobsStateVersion = null;
+let pythonJobsSnapshot = [];
+let pythonJobsSummary = { runningCount: 0, totalCount: 0 };
+let pythonJobsClockHandle = null;
 let realtimeEventsEventSource = null;
 let serviceConsumptionStateVersion = null;
 let clientConnectionsStateVersion = 0;
@@ -316,6 +331,7 @@ const {
   deleteLocalWorkspaceQuerySource,
   loadLocalWorkspaceSourceFields,
   moveLocalWorkspaceEntryToS3,
+  preparePythonExecution: prepareLocalWorkspacePythonExecution,
   prepareQuerySql: prepareLocalWorkspaceQuerySql,
 } = createLocalWorkspaceQueryBridge({
   getLocalWorkspaceExport,
@@ -479,6 +495,11 @@ const { queryJobById, queryJobForCell, queryJobForResultActionTarget } = createQ
   workspaceNotebookId,
 });
 
+const { pythonJobById, pythonJobForCell, pythonJobForResultActionTarget } = createPythonJobState({
+  getPythonJobsSnapshot: () => pythonJobsSnapshot,
+  workspaceNotebookId,
+});
+
 const { decorateQueryJobsWithInsights } = createQueryInsights({
   compareQueryJobsByCompletedAt,
   formatQueryDuration,
@@ -527,6 +548,14 @@ const {
   queryJobEventDateTimeCopy,
   queryJobIsRunning,
   queryJobStatusCopy,
+});
+
+const { pythonResultPanelMarkup } = createPythonUi({
+  escapeHtml,
+  formatQueryDuration,
+  pythonJobElapsedMs,
+  pythonJobIsRunning,
+  pythonJobStatusCopy,
 });
 
 const { renderHomePage } = createHomeUi({
@@ -844,6 +873,7 @@ const {
   activeWorkspaceMetaRoot,
   createInitialNotebookVersion,
   normalizeCellEntry,
+  normalizeCellLanguage,
   normalizeNotebookCells,
   normalizeNotebookSummaryValue,
   normalizeNotebookTitleValue,
@@ -866,6 +896,7 @@ const { buildWorkspaceMarkup, cellSourceSummaryMarkup } = createNotebookWorkspac
   formatVersionTimestamp,
   normalizeNotebookCells,
   normalizeTags,
+  pythonResultPanelMarkup,
   preferredSqlEditorRows,
   queryResultPanelMarkup,
   truncateWords,
@@ -899,10 +930,12 @@ const {
   moveCell,
   notebookMetadata,
   renameNotebook,
+  restartPythonKernel,
   revealNotebookLink,
   saveNotebookVersion,
   setActiveCell,
   setCellDataSources,
+  setCellLanguage,
   setCellSql,
   setNotebookSummary,
   setNotebookTags,
@@ -1197,6 +1230,14 @@ function currentQueryState() {
     snapshot: queryJobsSnapshot,
     summary: queryJobsSummary,
     performance: queryPerformanceState,
+  };
+}
+
+function currentPythonState() {
+  return {
+    version: pythonJobsStateVersion,
+    snapshot: pythonJobsSnapshot,
+    summary: pythonJobsSummary,
   };
 }
 
@@ -1710,6 +1751,23 @@ function currentWorkspaceNotebookId() {
   return workspaceNotebookId(document.querySelector("[data-workspace-notebook]"));
 }
 
+function cellLanguageForCellRoot(cellRoot) {
+  if (!(cellRoot instanceof Element)) {
+    return "sql";
+  }
+
+  return normalizeCellLanguage(
+    cellRoot.dataset.defaultCellLanguage ||
+      cellRoot.querySelector("[data-editor-root]")?.dataset.editorLanguage ||
+      cellRoot.querySelector("[data-editor-source]")?.dataset.editorLanguage ||
+      "sql"
+  );
+}
+
+function formCellLanguage(form) {
+  return cellLanguageForCellRoot(form?.closest("[data-query-cell]") ?? null);
+}
+
 function selectedDataSourcesForCell(cellRoot) {
   if (!(cellRoot instanceof Element)) {
     return [];
@@ -1983,6 +2041,21 @@ function compareDataGenerationJobsByStartedAt(left, right) {
 }
 
 function compareQueryJobsByStartedAt(left, right) {
+  const leftStartedAt = Date.parse(left?.startedAt || left?.updatedAt || "");
+  const rightStartedAt = Date.parse(right?.startedAt || right?.updatedAt || "");
+
+  if (!Number.isNaN(leftStartedAt) || !Number.isNaN(rightStartedAt)) {
+    const normalizedLeft = Number.isNaN(leftStartedAt) ? 0 : leftStartedAt;
+    const normalizedRight = Number.isNaN(rightStartedAt) ? 0 : rightStartedAt;
+    if (normalizedLeft !== normalizedRight) {
+      return normalizedRight - normalizedLeft;
+    }
+  }
+
+  return String(right?.jobId || "").localeCompare(String(left?.jobId || ""));
+}
+
+function comparePythonJobsByStartedAt(left, right) {
   const leftStartedAt = Date.parse(left?.startedAt || left?.updatedAt || "");
   const rightStartedAt = Date.parse(right?.startedAt || right?.updatedAt || "");
 
@@ -2308,6 +2381,7 @@ function createNotebookVersionSnapshot(metadata) {
     tags: normalizeTags(metadata.tags),
     cells: (metadata.cells ?? []).map((cell) => ({
       cellId: cell.cellId,
+      language: normalizeCellLanguage(cell.language),
       dataSources: normalizeDataSources(cell.dataSources),
       sql: cell.sql,
     })),
@@ -2332,6 +2406,7 @@ function sharedNotebookPayload(notebookId) {
     createdAt: metadata.createdAt || new Date().toISOString(),
     cells: (metadata.cells ?? []).map((cell) => ({
       cellId: cell.cellId,
+      language: normalizeCellLanguage(cell.language),
       sql: cell.sql,
       dataSources: normalizeDataSources(cell.dataSources),
     })),
@@ -2343,6 +2418,7 @@ function sharedNotebookPayload(notebookId) {
       tags: normalizeTags(version.tags),
       cells: normalizeNotebookCells(version.cells).map((cell) => ({
         cellId: cell.cellId,
+        language: normalizeCellLanguage(cell.language),
         sql: cell.sql,
         dataSources: normalizeDataSources(cell.dataSources),
       })),
@@ -2550,8 +2626,9 @@ function createVersionListEntry(version) {
 
   const cellLines = (version.cells ?? []).map((cell, index) => {
     const sources = sourceLabelsForIds(cell.dataSources).join(", ") || "No data sources";
-    const sqlText = cell.sql || "No SQL saved.";
-    return `Cell ${index + 1} Sources: ${sources}\nCell ${index + 1} SQL:\n${sqlText}`;
+    const cellLanguage = normalizeCellLanguage(cell.language);
+    const sqlText = cell.sql || `No ${cellLanguage === "python" ? "code" : "SQL"} saved.`;
+    return `Cell ${index + 1} (${cellLanguage.toUpperCase()}) Sources: ${sources}\nCell ${index + 1} ${cellLanguage === "python" ? "Code" : "SQL"}:\n${sqlText}`;
   });
   const tooltipLines = [
     `Description: ${version.summary || "No description saved."}`,
@@ -2647,6 +2724,7 @@ function updateSidebarNotebookLink(link, metadata) {
   link.dataset.defaultNotebookCells = JSON.stringify(
     (metadata.cells ?? []).map((cell) => ({
       cellId: cell.cellId,
+      language: normalizeCellLanguage(cell.language),
       dataSources: normalizeDataSources(cell.dataSources),
       sql: cell.sql,
     }))
@@ -2730,11 +2808,13 @@ function createEmptyCellState(initial = {}) {
   return normalizeCellEntry(
     {
       cellId: initial.cellId ?? createCellId(),
+      language: normalizeCellLanguage(initial.language),
       dataSources: initial.dataSources ?? [],
       sql: initial.sql ?? "",
     },
     {
       cellId: initial.cellId ?? createCellId(),
+      language: normalizeCellLanguage(initial.language),
       dataSources: initial.dataSources ?? [],
       sql: initial.sql ?? "",
     }
@@ -2743,6 +2823,7 @@ function createEmptyCellState(initial = {}) {
 
 function createSourceQueryCellState(sourceDescriptor, fields = []) {
   return createEmptyCellState({
+    language: "sql",
     dataSources: sourceDescriptor?.sourceId ? [sourceDescriptor.sourceId] : [],
     sql: sourceQuerySql(sourceDescriptor?.relation ?? "", fields),
   });
@@ -2899,6 +2980,7 @@ function duplicateCell(notebookId, cellId) {
   }
 
   const duplicate = createEmptyCellState({
+    language: nextCells[index].language,
     dataSources: [...nextCells[index].dataSources],
     sql: nextCells[index].sql,
   });
@@ -2977,6 +3059,37 @@ function currentEditorSql(root) {
   return textarea?.value ?? defaultEditorSql(textarea);
 }
 
+function editorExtensionsForLanguage(language, schema) {
+  const normalizedLanguage = normalizeCellLanguage(language);
+  if (normalizedLanguage === "python") {
+    const pythonSupport = pythonLanguageSupport();
+    return Array.isArray(pythonSupport) ? pythonSupport : [pythonSupport];
+  }
+
+  return [
+    sql({
+      dialect: PostgreSQL,
+      schema,
+      upperCaseKeywords: true,
+    }),
+  ];
+}
+
+function destroyEditor(root) {
+  if (!(root instanceof Element)) {
+    return;
+  }
+
+  const editor = editorRegistry.get(root);
+  if (editor) {
+    editor.destroy();
+    editorRegistry.delete(root);
+  }
+  root.querySelector(".editor-shell")?.remove();
+  root.classList.remove("editor-ready");
+  delete root.dataset.editorInitializedLanguage;
+}
+
 function createEditor(root) {
   if (editorRegistry.has(root)) {
     return editorRegistry.get(root);
@@ -2992,17 +3105,14 @@ function createEditor(root) {
   const shell = document.createElement("div");
   shell.className = "editor-shell";
   root.appendChild(shell);
+  const editorLanguage = normalizeCellLanguage(root.dataset.editorLanguage || textarea.dataset.editorLanguage);
 
   try {
     const editor = new EditorView({
       doc: textarea.value,
       extensions: [
         basicSetup,
-        sql({
-          dialect: PostgreSQL,
-          schema,
-          upperCaseKeywords: true,
-        }),
+        ...editorExtensionsForLanguage(editorLanguage, schema),
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             textarea.value = update.state.doc.toString();
@@ -3031,6 +3141,7 @@ function createEditor(root) {
     });
 
     root.classList.add("editor-ready");
+    root.dataset.editorInitializedLanguage = editorLanguage;
     editorRegistry.set(root, editor);
     autosizeEditor(root);
     window.requestAnimationFrame(() => autosizeEditor(root));
@@ -3235,6 +3346,7 @@ function renderLocalNotebookWorkspace(notebookId, options = {}) {
   revealNotebookLink(notebookId);
   writeLastNotebookId(notebookId);
   syncVisibleQueryCells();
+  syncVisiblePythonCells();
   renderQueryNotificationMenu();
   if (scrollToTop) {
     scrollWorkspaceNotebookIntoView();
@@ -3321,14 +3433,26 @@ function updateWorkspaceCellEditor(cellRoot, sqlText) {
     return;
   }
 
+  const cellLanguage = normalizeCellLanguage(cellRoot.dataset.defaultCellLanguage || textarea.dataset.editorLanguage);
+  editorRoot.dataset.editorLanguage = cellLanguage;
+  textarea.dataset.editorLanguage = cellLanguage;
+  cellRoot.dataset.defaultCellLanguage = cellLanguage;
+
   textarea.dataset.defaultSql = sqlText;
   textarea.defaultValue = sqlText;
   if (textarea.value !== sqlText) {
     textarea.value = sqlText;
   }
 
-  const editor = editorRegistry.get(editorRoot);
+  const existingEditor = editorRegistry.get(editorRoot);
+  const existingLanguage = normalizeCellLanguage(editorRoot.dataset.editorInitializedLanguage || "sql");
+  if (existingEditor && existingLanguage !== cellLanguage) {
+    destroyEditor(editorRoot);
+  }
+
+  const editor = createEditor(editorRoot);
   if (!editor) {
+    autosizeEditor(editorRoot);
     return;
   }
 
@@ -3351,6 +3475,9 @@ function updateWorkspaceCellEditor(cellRoot, sqlText) {
 
 function formatCellSql(notebookId, cellId) {
   const cellRoot = document.querySelector(`[data-query-cell][data-cell-id="${cellId}"]`);
+  if (cellLanguageForCellRoot(cellRoot) !== "sql") {
+    return;
+  }
   const editorRoot = cellRoot?.querySelector("[data-editor-root]");
   const textarea = cellRoot?.querySelector("[data-editor-source]");
   const editor = editorRoot ? editorRegistry.get(editorRoot) : null;
@@ -3386,10 +3513,11 @@ function formatCellSql(notebookId, cellId) {
 }
 
 function syncCellActionButtons(cellRoot, editable, index, totalCells) {
+  const cellLanguage = cellLanguageForCellRoot(cellRoot);
   syncWorkspaceActionButton(cellRoot?.querySelector("[data-format-cell-sql]"), {
-    allowed: editable,
+    allowed: editable && cellLanguage === "sql",
     enabledTitle: "Format SQL",
-    disabledTitle: "This notebook cannot be edited.",
+    disabledTitle: editable ? "Available in SQL cells only." : "This notebook cannot be edited.",
   });
   syncWorkspaceActionButton(cellRoot?.querySelector("[data-add-cell-after]"), {
     allowed: editable,
@@ -3505,6 +3633,9 @@ function applyWorkspaceCellState(workspaceRoot, cell, index, editable, totalCell
     return;
   }
 
+  const cellLanguage = normalizeCellLanguage(cell.language);
+  const notebookId = workspaceNotebookId(workspaceRoot);
+  cellRoot.dataset.defaultCellLanguage = cellLanguage;
   cellRoot.dataset.defaultCellSources = normalizeDataSources(cell.dataSources).join("||");
 
   const label = cellRoot.querySelector(".cell-label");
@@ -3517,6 +3648,18 @@ function applyWorkspaceCellState(workspaceRoot, cell, index, editable, totalCell
     accessBadge.textContent = accessModeForDataSources(cell.dataSources);
     accessBadge.title = accessModeHintForDataSources(cell.dataSources);
   }
+
+  const languageBadge = cellRoot.querySelector("[data-cell-language-badge]");
+  if (languageBadge) {
+    languageBadge.textContent =
+      cellLanguage === "python" ? "Python / Headless Jupyter Kernel" : "SQL / Query Engine";
+  }
+
+  cellRoot.querySelectorAll("[data-set-cell-language]").forEach((button) => {
+    const buttonLanguage = normalizeCellLanguage(button.dataset.setCellLanguage);
+    button.disabled = !editable;
+    button.classList.toggle("is-active", buttonLanguage === cellLanguage);
+  });
 
   const sourceSummary = cellRoot.querySelector("[data-cell-source-summary]");
   if (sourceSummary) {
@@ -3538,6 +3681,15 @@ function applyWorkspaceCellState(workspaceRoot, cell, index, editable, totalCell
 
   syncCellActionButtons(cellRoot, editable, index, totalCells);
   updateWorkspaceCellEditor(cellRoot, cell.sql);
+
+  const resultRoot = cellRoot.querySelector("[data-cell-result]");
+  if (resultRoot) {
+    const job = cellLanguage === "python" ? pythonJobForCell(notebookId, cell.cellId) : queryJobForCell(notebookId, cell.cellId);
+    resultRoot.outerHTML =
+      cellLanguage === "python"
+        ? pythonResultPanelMarkup(cell.cellId, job)
+        : queryResultPanelMarkup(cell.cellId, job);
+  }
 }
 
 function workspaceCellIds(workspaceRoot) {
@@ -3557,6 +3709,7 @@ function applyWorkspaceMetadata(metaRoot, metadata) {
   metaRoot.dataset.defaultCells = JSON.stringify(
     (metadata.cells ?? []).map((cell) => ({
       cellId: cell.cellId,
+      language: normalizeCellLanguage(cell.language),
       dataSources: normalizeDataSources(cell.dataSources),
       sql: cell.sql,
     }))
@@ -3694,6 +3847,8 @@ function applyNotebookMetadata() {
   });
 
   applySidebarSearchFilter();
+  syncVisibleQueryCells();
+  syncVisiblePythonCells();
 }
 
 async function renameNotebook(notebookId) {
@@ -3939,6 +4094,119 @@ async function loadQueryJobsState() {
   await requestQueryJobsState({ applyQueryJobsState });
 }
 
+function setCellLanguage(notebookId, cellId, language) {
+  const normalizedLanguage = normalizeCellLanguage(language);
+  updateStoredNotebookState(notebookId, (currentState) => {
+    const baseCells = normalizeNotebookCells(currentState.cells ?? notebookMetadata(notebookId).cells);
+    return {
+      ...currentState,
+      cells: baseCells.map((cell) =>
+        cell.cellId === cellId
+          ? {
+              ...cell,
+              language: normalizedLanguage,
+            }
+          : cell
+      ),
+    };
+  });
+
+  const metadata = notebookMetadata(notebookId);
+  notebookLinks(notebookId).forEach((link) => updateSidebarNotebookLink(link, metadata));
+  applyNotebookMetadata();
+  applySidebarSearchFilter();
+  recordNotebookActivity(notebookId, "edited");
+  scheduleSharedNotebookSync(notebookId);
+}
+
+function refreshLivePythonClock() {
+  const jobsById = new Map(pythonJobsSnapshot.map((job) => [job.jobId, job]));
+  document.querySelectorAll("[data-python-duration]").forEach((node) => {
+    const job = jobsById.get(node.dataset.jobId || "");
+    if (!job) {
+      return;
+    }
+    node.textContent = formatQueryDuration(pythonJobElapsedMs(job));
+  });
+}
+
+function syncPythonClockLoop() {
+  const hasRunningJobs = pythonJobsSnapshot.some((job) => pythonJobIsRunning(job));
+  if (hasRunningJobs && pythonJobsClockHandle === null) {
+    refreshLivePythonClock();
+    pythonJobsClockHandle = window.setInterval(refreshLivePythonClock, 100);
+    return;
+  }
+
+  if (!hasRunningJobs && pythonJobsClockHandle !== null) {
+    window.clearInterval(pythonJobsClockHandle);
+    pythonJobsClockHandle = null;
+  }
+
+  refreshLivePythonClock();
+}
+
+function syncPythonCellJobState(cellRoot) {
+  if (!(cellRoot instanceof Element) || cellLanguageForCellRoot(cellRoot) !== "python") {
+    return;
+  }
+
+  const workspaceRoot = cellRoot.closest("[data-workspace-notebook]");
+  const notebookId = workspaceNotebookId(workspaceRoot);
+  const cellId = cellRoot.dataset.cellId;
+  const job = pythonJobForCell(notebookId, cellId);
+  const runButton = cellRoot.querySelector("[data-run-cell]");
+  const cancelButton = cellRoot.querySelector("[data-cancel-query]");
+  const resultRoot = cellRoot.querySelector("[data-cell-result]");
+
+  cellRoot.classList.toggle("is-query-running", pythonJobIsRunning(job));
+
+  if (runButton) {
+    if (pythonJobIsRunning(job)) {
+      runButton.disabled = true;
+      runButton.classList.add("is-running");
+      runButton.innerHTML =
+        '<span class="query-button-spinner" aria-hidden="true"></span><span class="query-button-running-copy">Running ...</span>';
+    } else {
+      runButton.disabled = false;
+      runButton.classList.remove("is-running");
+      runButton.textContent = "Run Cell";
+    }
+  }
+
+  if (cancelButton) {
+    cancelButton.hidden = !pythonJobIsRunning(job);
+    cancelButton.dataset.jobId = job?.jobId || "";
+    cancelButton.dataset.jobKind = "python";
+    cancelButton.disabled = !pythonJobIsRunning(job);
+  }
+
+  if (resultRoot) {
+    resultRoot.outerHTML = pythonResultPanelMarkup(cellId, job);
+  }
+}
+
+function syncVisiblePythonCells() {
+  document.querySelectorAll("[data-query-cell]").forEach((cellRoot) => {
+    syncPythonCellJobState(cellRoot);
+  });
+}
+
+function applyPythonJobsState(snapshot) {
+  pythonJobsStateVersion = snapshot?.version ?? null;
+  pythonJobsSummary = snapshot?.summary ?? { runningCount: 0, totalCount: 0 };
+  pythonJobsSnapshot = Array.isArray(snapshot?.jobs)
+    ? snapshot.jobs.map((job) => normalizePythonJob(job)).filter(Boolean).sort(comparePythonJobsByStartedAt)
+    : [];
+
+  syncVisiblePythonCells();
+  syncPythonClockLoop();
+}
+
+async function loadPythonJobsState() {
+  await requestPythonJobsState({ applyPythonJobsState });
+}
+
 async function loadDataSourceEventsState() {
   const response = await window.fetch("/api/data-source-events", {
     headers: {
@@ -3979,6 +4247,9 @@ function applyRealtimeTopicSnapshot(topic, snapshot) {
   switch (topic) {
     case "query-jobs":
       applyQueryJobsState(snapshot);
+      break;
+    case "python-jobs":
+      applyPythonJobsState(snapshot);
       break;
     case "data-generation-jobs":
       applyDataGenerationJobsState(snapshot);
@@ -4155,6 +4426,7 @@ async function loadWorkspacePanelPartial(path) {
   processHtmx(panel);
   initializeEditors(panel);
   applyNotebookMetadata();
+  syncVisiblePythonCells();
   renderQueryNotificationMenu();
   return panel;
 }
@@ -4304,6 +4576,9 @@ function ensureRealtimeEventsEventSource() {
   if (queryJobsStateVersion !== null) {
     params.set("queryJobsVersion", String(queryJobsStateVersion));
   }
+  if (pythonJobsStateVersion !== null) {
+    params.set("pythonJobsVersion", String(pythonJobsStateVersion));
+  }
   if (dataGenerationJobsStateVersion !== null) {
     params.set("dataGenerationJobsVersion", String(dataGenerationJobsStateVersion));
   }
@@ -4326,6 +4601,7 @@ function ensureRealtimeEventsEventSource() {
   const eventSource = new window.EventSource(streamUrl);
   [
     "query-jobs",
+    "python-jobs",
     "data-generation-jobs",
     "data-source-events",
     "service-consumption",
@@ -4346,6 +4622,13 @@ function ensureRealtimeEventsEventSource() {
     if (queryJobsStateVersion !== null) {
       refreshTasks.push(
         loadQueryJobsState().catch(() => {
+          // Ignore transient reconnect issues.
+        })
+      );
+    }
+    if (pythonJobsStateVersion !== null) {
+      refreshTasks.push(
+        loadPythonJobsState().catch(() => {
           // Ignore transient reconnect issues.
         })
       );
@@ -4606,6 +4889,11 @@ async function openNotebookForQueryJob(notebookId, cellId = "") {
 }
 
 async function startQueryJobForForm(form) {
+  if (formCellLanguage(form) === "python") {
+    await startPythonJobForForm(form);
+    return;
+  }
+
   const workspaceRoot = form.closest("[data-workspace-notebook]");
   const cellRoot = form.closest("[data-query-cell]");
   const notebookId = workspaceNotebookId(workspaceRoot);
@@ -4615,7 +4903,8 @@ async function startQueryJobForForm(form) {
   }
 
   const existingJob = queryJobForCell(notebookId, cellId);
-  if (queryJobIsRunning(existingJob)) {
+  const existingPythonJob = pythonJobForCell(notebookId, cellId);
+  if (queryJobIsRunning(existingJob) || pythonJobIsRunning(existingPythonJob)) {
     return;
   }
 
@@ -4710,6 +4999,132 @@ async function startQueryJobForForm(form) {
   });
 }
 
+async function startPythonJobForForm(form) {
+  const workspaceRoot = form.closest("[data-workspace-notebook]");
+  const cellRoot = form.closest("[data-query-cell]");
+  const notebookId = workspaceNotebookId(workspaceRoot);
+  const cellId = cellRoot?.dataset.cellId;
+  if (!workspaceRoot || !cellRoot || !notebookId || !cellId) {
+    return;
+  }
+
+  const existingJob = pythonJobForCell(notebookId, cellId);
+  const existingQueryJob = queryJobForCell(notebookId, cellId);
+  if (pythonJobIsRunning(existingJob) || queryJobIsRunning(existingQueryJob)) {
+    return;
+  }
+
+  const formData = new FormData(form);
+  const editorSource = cellRoot.querySelector("[data-editor-source]");
+  const originalCode = editorSource?.value ?? "";
+  let localRelationMap = {};
+  try {
+    const preparedExecution = await prepareLocalWorkspacePythonExecution(originalCode);
+    localRelationMap = preparedExecution.localRelationMap || {};
+  } catch (error) {
+    const resultRoot = cellRoot.querySelector("[data-cell-result]");
+    if (resultRoot) {
+      resultRoot.outerHTML = pythonResultPanelMarkup(cellId, {
+        jobId: `local-python-error-${cellId}`,
+        notebookId,
+        notebookTitle: currentWorkspaceNotebookTitle(workspaceRoot),
+        cellId,
+        code: originalCode,
+        language: "python",
+        status: "failed",
+        durationMs: 0,
+        updatedAt: new Date().toISOString(),
+        outputs: [
+          {
+            type: "error",
+            errorName: "Local Workspace Error",
+            errorValue:
+              error instanceof Error
+                ? error.message
+                : "The Local Workspace sources could not be prepared for Python execution.",
+            text:
+              error instanceof Error
+                ? error.message
+                : "The Local Workspace sources could not be prepared for Python execution.",
+          },
+        ],
+        message: "Python execution failed.",
+        error:
+          error instanceof Error
+            ? error.message
+            : "The Local Workspace sources could not be prepared for Python execution.",
+      });
+    }
+    return;
+  }
+
+  formData.set("code", originalCode);
+  formData.set("sql", originalCode);
+  formData.set("notebook_id", notebookId);
+  formData.set("cell_id", cellId);
+  formData.set("notebook_title", currentWorkspaceNotebookTitle(workspaceRoot));
+  formData.set("data_sources", selectedDataSourcesForCell(cellRoot).join("||"));
+  formData.set("localRelations", JSON.stringify(localRelationMap));
+
+  const response = await window.fetch("/api/python-jobs", {
+    method: "POST",
+    body: formData,
+    headers: {
+      Accept: "application/json",
+      "X-Workbench-Client-Id": workbenchClientId(),
+    },
+  });
+
+  if (!response.ok) {
+    let message = "The Python cell could not be started.";
+    try {
+      const payload = await response.json();
+      message = payload?.detail || message;
+    } catch (_error) {
+      // Ignore invalid JSON bodies.
+    }
+
+    const resultRoot = cellRoot.querySelector("[data-cell-result]");
+    if (resultRoot) {
+      resultRoot.outerHTML = pythonResultPanelMarkup(cellId, {
+        jobId: `local-python-error-${cellId}`,
+        notebookId,
+        notebookTitle: currentWorkspaceNotebookTitle(workspaceRoot),
+        cellId,
+        code: originalCode,
+        language: "python",
+        status: "failed",
+        durationMs: 0,
+        updatedAt: new Date().toISOString(),
+        outputs: [
+          {
+            type: "error",
+            errorName: "Python execution failed",
+            errorValue: message,
+            text: message,
+          },
+        ],
+        message: "Python execution failed.",
+        error: message,
+      });
+    }
+    return;
+  }
+
+  const snapshot = normalizePythonJob(await response.json());
+  if (!snapshot) {
+    return;
+  }
+
+  recordNotebookActivity(notebookId, "run");
+  applyOptimisticPythonJobSnapshot({
+    snapshot,
+    applyPythonJobsState,
+    getPythonState: currentPythonState,
+    incrementRunningCount: true,
+  });
+}
+
 async function cancelQueryJob(jobId) {
   if (!jobId) {
     return;
@@ -4739,6 +5154,76 @@ async function cancelQueryJob(jobId) {
       getQueryState: currentQueryState,
     });
   }
+}
+
+async function cancelPythonJob(jobId) {
+  if (!jobId) {
+    return;
+  }
+
+  const response = await window.fetch(`/api/python-jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+    },
+  });
+  if (!response.ok) {
+    return;
+  }
+
+  try {
+    await loadPythonJobsState();
+  } catch (_error) {
+    const snapshot = normalizePythonJob(await response.json());
+    if (!snapshot) {
+      return;
+    }
+
+    applyOptimisticPythonJobSnapshot({
+      snapshot,
+      applyPythonJobsState,
+      getPythonState: currentPythonState,
+    });
+  }
+}
+
+async function restartPythonKernel(notebookId) {
+  const normalizedNotebookId = String(notebookId || "").trim();
+  if (!normalizedNotebookId) {
+    return;
+  }
+
+  const response = await window.fetch(
+    `/api/python-kernels/${encodeURIComponent(normalizedNotebookId)}/restart`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "X-Workbench-Client-Id": workbenchClientId(),
+      },
+    }
+  );
+
+  if (!response.ok) {
+    let message = "The Python kernel could not be restarted.";
+    try {
+      const payload = await response.json();
+      message = payload?.detail || message;
+    } catch (_error) {
+      // Ignore invalid JSON bodies.
+    }
+    await showMessageDialog({
+      title: "Kernel restart failed",
+      copy: message,
+    });
+    return;
+  }
+
+  const payload = await response.json();
+  await showMessageDialog({
+    title: "Python kernel restarted",
+    copy: String(payload?.message || "Python kernel restarted."),
+  });
 }
 
 function closeResultActionMenus() {
@@ -6236,6 +6721,7 @@ async function loadNotebookWorkspace(notebookId, options = {}) {
   revealNotebookLink(notebookId);
   writeLastNotebookId(notebookId);
   syncVisibleQueryCells();
+  syncVisiblePythonCells();
   renderQueryNotificationMenu();
   if (scrollToTop) {
     scrollWorkspaceNotebookIntoView();
@@ -6523,6 +7009,21 @@ document.body.addEventListener("click", async (event) => {
       return;
     }
     await startQueryJobForForm(form);
+    return;
+  }
+
+  const cancelCellButton = event.target.closest("[data-cancel-query]");
+  if (cancelCellButton) {
+    event.preventDefault();
+    const jobId = cancelCellButton.dataset.jobId || "";
+    if (!jobId) {
+      return;
+    }
+    if (cancelCellButton.dataset.jobKind === "python") {
+      await cancelPythonJob(jobId);
+      return;
+    }
+    await cancelQueryJob(jobId);
     return;
   }
 
@@ -6884,6 +7385,7 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
   restoreSelectedSourceObject();
   renderQueryMonitor();
   syncVisibleQueryCells();
+  syncVisiblePythonCells();
   renderQueryNotificationMenu();
   dataProductsController.initializeCurrentPage();
   serviceConsumptionUi.initializeCurrentPage().catch((error) => {
@@ -7029,6 +7531,9 @@ const initialWorkspaceMode = currentWorkspaceMode();
 const initialLoadTasks = [
   loadQueryJobsState().catch((error) => {
     console.error("Failed to load query jobs.", error);
+  }),
+  loadPythonJobsState().catch((error) => {
+    console.error("Failed to load python jobs.", error);
   }),
   loadDataGenerationJobsState().catch((error) => {
     console.error("Failed to load data generation jobs.", error);

@@ -38,6 +38,15 @@ def build_realtime_service():
 
 
 class RealtimeConnectionsTests(unittest.TestCase):
+    def test_realtime_topic_order_includes_python_jobs(self) -> None:
+        REALTIME_TOPIC_ORDER, _ = build_realtime_service()
+
+        self.assertIn("python-jobs", REALTIME_TOPIC_ORDER)
+        self.assertLess(
+            REALTIME_TOPIC_ORDER.index("query-jobs"),
+            REALTIME_TOPIC_ORDER.index("python-jobs"),
+        )
+
     def test_register_and_unregister_realtime_clients_publish_connection_count(
         self,
     ) -> None:
@@ -88,6 +97,34 @@ class RealtimeConnectionsTests(unittest.TestCase):
         self.assertEqual(
             updates,
             [{"topic": "query-jobs", "snapshot": {"version": 1, "items": []}}],
+        )
+
+    def test_wait_for_realtime_updates_returns_python_job_snapshots(self) -> None:
+        REALTIME_TOPIC_ORDER, service = build_realtime_service()
+
+        service._set_realtime_snapshot_locked(
+            "python-jobs",
+            {"version": 2, "summary": {"runningCount": 1, "totalCount": 1}, "jobs": []},
+            notify=False,
+        )
+
+        updates = service.wait_for_realtime_updates(
+            {topic: 0 for topic in REALTIME_TOPIC_ORDER},
+            timeout=0,
+        )
+
+        self.assertEqual(
+            updates,
+            [
+                {
+                    "topic": "python-jobs",
+                    "snapshot": {
+                        "version": 2,
+                        "summary": {"runningCount": 1, "totalCount": 1},
+                        "jobs": [],
+                    },
+                }
+            ],
         )
 
     def test_wait_for_realtime_updates_supports_service_consumption_topic(

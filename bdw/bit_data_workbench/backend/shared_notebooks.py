@@ -12,6 +12,11 @@ def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def normalize_notebook_cell_language(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    return "python" if normalized == "python" else "sql"
+
+
 def notebook_cell_from_payload(payload: object) -> NotebookCellDefinition | None:
     if not isinstance(payload, dict):
         return None
@@ -23,6 +28,7 @@ def notebook_cell_from_payload(payload: object) -> NotebookCellDefinition | None
     return NotebookCellDefinition(
         cell_id=cell_id,
         sql=str(payload.get("sql") or ""),
+        language=normalize_notebook_cell_language(payload.get("language")),
         data_sources=[
             str(source_id).strip()
             for source_id in payload.get("dataSources", payload.get("data_sources", [])) or []
