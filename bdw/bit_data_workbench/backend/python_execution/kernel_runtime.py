@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from types import SimpleNamespace
 from typing import Any
 
@@ -8,6 +9,9 @@ import duckdb
 
 from ...config import Settings
 from ..runtime_connections import create_duckdb_worker_connection
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(slots=True)
@@ -44,24 +48,80 @@ class PythonSourceHandle:
 class PythonKernelRuntime:
     def __init__(self) -> None:
         self._settings = Settings.from_env()
-        self._connection = self._create_connection()
+        self._connection: duckdb.DuckDBPyConnection | None = None
+        self._connection_mode = ""
         self._selected_sources: list[dict[str, Any]] = []
         self._relation_entries: list[dict[str, Any]] = []
         self._relation_index: dict[str, dict[str, Any]] = {}
         self._local_relation_map: dict[str, str] = {}
         self.pd = self._import_pandas()
 
-    def _create_connection(self):
-        try:
-            return create_duckdb_worker_connection(self._settings)
-        except duckdb.IOException as exc:
-            message = str(exc).lower()
-            if "cannot open file" not in message and "being used by another process" not in message:
-                raise
+    def _create_connection(self, *, mode: str):
+        if mode == "memory":
+            logger.info(
+                "Starting Python kernel runtime with in-memory DuckDB worker for non-workspace sources."
+            )
             return create_duckdb_worker_connection(
                 self._settings,
                 database_path=":memory:",
             )
+
+        if mode != "shared":
+            raise ValueError(f"Unsupported Python kernel connection mode: {mode}")
+
+        try:
+            return create_duckdb_worker_connection(self._settings)
+        except duckdb.IOException as exc:
+            if not self._is_duckdb_lock_conflict(exc):
+                raise
+            raise RuntimeError(
+                "Python execution for Shared Workspace or Local Workspace sources is temporarily unavailable "
+                "because the shared DuckDB catalog is locked by the running workbench process. "
+                "Retry the cell, restart the Python kernel, or run the cell against PostgreSQL-only sources."
+            ) from exc
+
+    def _ensure_connection(self, context: dict[str, Any]) -> None:
+        desired_mode = "shared" if self._context_requires_shared_catalog(context) else "memory"
+        if self._connection is not None and self._connection_mode == desired_mode:
+            return
+
+        if self._connection is not None:
+            try:
+                self._connection.close()
+            except Exception:
+                logger.warning("Failed to close Python kernel DuckDB worker connection.", exc_info=True)
+            finally:
+                self._connection = None
+                self._connection_mode = ""
+
+        self._connection = self._create_connection(mode=desired_mode)
+        self._connection_mode = desired_mode
+
+    def _context_requires_shared_catalog(self, context: dict[str, Any]) -> bool:
+        for selected_source in context.get("selectedSources", []) or []:
+            canonical_source_id = str(
+                selected_source.get("canonicalSourceId") or selected_source.get("sourceId") or ""
+            )
+            if canonical_source_id.strip().lower() in {"workspace.s3", "workspace.local"}:
+                return True
+
+        for relation_entry in context.get("relations", []) or []:
+            source_id = str(relation_entry.get("sourceId") or "").strip().lower()
+            if source_id in {"workspace.s3", "workspace.local"}:
+                return True
+
+        return bool(context.get("localRelationMap"))
+
+    def _is_duckdb_lock_conflict(self, error: duckdb.IOException) -> bool:
+        message = str(error).lower()
+        return any(
+            token in message
+            for token in (
+                "being used by another process",
+                "could not set lock on file",
+                "conflicting lock is held",
+            )
+        )
 
     def _import_pandas(self):
         import pandas as pd
@@ -69,9 +129,14 @@ class PythonKernelRuntime:
         return pd
 
     def close(self) -> None:
+        if self._connection is None:
+            return
         self._connection.close()
+        self._connection = None
+        self._connection_mode = ""
 
     def configure(self, context: dict[str, Any]) -> None:
+        self._ensure_connection(context)
         self._selected_sources = [dict(item) for item in context.get("selectedSources", []) or []]
         self._relation_entries = [dict(item) for item in context.get("relations", []) or []]
         self._local_relation_map = {
@@ -105,6 +170,8 @@ class PythonKernelRuntime:
         return rewritten
 
     def sql(self, query: str):
+        if self._connection is None:
+            raise RuntimeError("Python kernel runtime is not configured with an active DuckDB worker connection.")
         rewritten_query = self.rewrite_query(query)
         cursor = self._connection.execute(rewritten_query)
         if not cursor.description:

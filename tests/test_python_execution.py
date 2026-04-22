@@ -233,8 +233,18 @@ class PythonExecutionContextTests(unittest.TestCase):
 
 
 class PythonKernelRuntimeTests(unittest.TestCase):
-    def test_kernel_runtime_falls_back_to_in_memory_when_workspace_db_is_locked(self) -> None:
+    def test_kernel_runtime_uses_in_memory_connection_for_postgres_only_context(self) -> None:
         connection = object()
+        context = {
+            "selectedSources": [
+                {
+                    "sourceId": "pg_oltp",
+                    "canonicalSourceId": "pg_oltp",
+                }
+            ],
+            "relations": [],
+            "localRelationMap": {},
+        }
 
         with (
             patch(
@@ -243,22 +253,52 @@ class PythonKernelRuntimeTests(unittest.TestCase):
             ),
             patch(
                 "bit_data_workbench.backend.python_execution.kernel_runtime.create_duckdb_worker_connection",
-                side_effect=[
-                    duckdb.IOException("Cannot open file because it is being used by another process."),
-                    connection,
-                ],
+                return_value=connection,
             ) as create_connection,
             patch.object(PythonKernelRuntime, "_import_pandas", return_value=object()),
         ):
             runtime = PythonKernelRuntime()
+            runtime.configure(context)
 
         self.assertIs(runtime._connection, connection)
-        self.assertEqual(create_connection.call_count, 2)
-        self.assertEqual(create_connection.call_args_list[0].kwargs, {})
         self.assertEqual(
-            create_connection.call_args_list[1].kwargs,
+            create_connection.call_args.kwargs,
             {"database_path": ":memory:"},
         )
+
+    def test_kernel_runtime_raises_clear_error_for_workspace_lock_conflict(self) -> None:
+        context = {
+            "selectedSources": [
+                {
+                    "sourceId": "workspace.s3",
+                    "canonicalSourceId": "workspace.s3",
+                }
+            ],
+            "relations": [],
+            "localRelationMap": {},
+        }
+        lock_error = duckdb.IOException(
+            'IO Error: Could not set lock on file "/tmp/workspace/workspace.duckdb": '
+            "Conflicting lock is held in /usr/local/bin/python3.12 (PID 2)."
+        )
+
+        with (
+            patch(
+                "bit_data_workbench.backend.python_execution.kernel_runtime.Settings.from_env",
+                return_value=object(),
+            ),
+            patch(
+                "bit_data_workbench.backend.python_execution.kernel_runtime.create_duckdb_worker_connection",
+                side_effect=lock_error,
+            ),
+            patch.object(PythonKernelRuntime, "_import_pandas", return_value=object()),
+        ):
+            runtime = PythonKernelRuntime()
+            with self.assertRaises(RuntimeError) as error_context:
+                runtime.configure(context)
+
+        self.assertIn("Shared Workspace or Local Workspace sources", str(error_context.exception))
+        self.assertIn("locked", str(error_context.exception))
 
 
 if __name__ == "__main__":

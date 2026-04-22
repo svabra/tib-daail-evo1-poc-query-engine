@@ -1,9 +1,27 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.7.0. Keep entries concise and
+# Derived from git history through version 0.7.1. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.7.1",
+        "releasedAt": "2026-04-22T16:10:00+02:00",
+        "features": [
+            (
+                "Python notebook execution no longer races the shared DuckDB workspace file for PostgreSQL-only cells, "
+                "so headless Jupyter kernels can run reliably in k8s and other multi-process deployments."
+            ),
+            (
+                "The Python kernel now detects DuckDB lock conflicts more explicitly and returns a clear runtime error "
+                "for Shared Workspace or Local Workspace cells instead of surfacing the raw low-level IOException."
+            ),
+            (
+                "Regression coverage now includes the k8s-style DuckDB lock message and the PostgreSQL-only in-memory "
+                "kernel path, reducing the chance of this concurrency bug returning in future releases."
+            ),
+        ],
+    },
     {
         "version": "0.7.0",
         "releasedAt": "2026-04-22T14:15:00+02:00",
