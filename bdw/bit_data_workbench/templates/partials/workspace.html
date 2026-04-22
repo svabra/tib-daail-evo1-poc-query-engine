@@ -149,6 +149,14 @@
           <button
             type="button"
             class="workspace-action-menu-item"
+            data-restart-python-kernel
+            title="Restart this notebook's Python kernel"
+          >
+            Restart Python Kernel
+          </button>
+          <button
+            type="button"
+            class="workspace-action-menu-item"
             data-copy-notebook
             title="Create a copy of this notebook"
           >
@@ -230,10 +238,12 @@
 
   <section class="workspace-cells" data-cell-list>
     {% for cell in active_notebook.cells %}
+      {% set cell_language = 'python' if cell.language == 'python' else 'sql' %}
       <article
         class="workspace-cell"
         data-query-cell
         data-cell-id="{{ cell.cell_id }}"
+        data-default-cell-language="{{ cell_language }}"
         data-default-cell-sources="{{ cell.data_sources | join('||') }}"
       >
         <form
@@ -245,6 +255,24 @@
           <div class="cell-toolbar">
             <div class="cell-heading">
               <span class="cell-label">Cell {{ loop.index }}</span>
+              <div class="cell-language-toggle" data-cell-language-toggle>
+                <button
+                  type="button"
+                  class="cell-language-toggle-button{% if cell_language == 'sql' %} is-active{% endif %}"
+                  data-set-cell-language="sql"
+                  {% if not active_notebook.can_edit %}disabled{% endif %}
+                >SQL</button>
+                <button
+                  type="button"
+                  class="cell-language-toggle-button{% if cell_language == 'python' %} is-active{% endif %}"
+                  data-set-cell-language="python"
+                  {% if not active_notebook.can_edit %}disabled{% endif %}
+                >Python</button>
+              </div>
+              <span
+                class="workspace-access-badge workspace-access-badge-small workspace-access-badge-language"
+                data-cell-language-badge
+              >{{ 'Python / Headless Jupyter Kernel' if cell_language == 'python' else 'SQL / Query Engine' }}</span>
               <span
                 class="workspace-access-badge workspace-access-badge-small"
                 data-cell-access-badge
@@ -323,10 +351,10 @@
                 <div class="workspace-action-menu-panel">
                   <button
                     type="button"
-                    class="workspace-action-menu-item{% if not active_notebook.can_edit %} is-action-disabled{% endif %}"
+                    class="workspace-action-menu-item{% if not active_notebook.can_edit or cell_language != 'sql' %} is-action-disabled{% endif %}"
                     data-format-cell-sql
-                    {% if not active_notebook.can_edit %}disabled{% endif %}
-                    title="{% if active_notebook.can_edit %}Format SQL{% else %}This notebook cannot be edited.{% endif %}"
+                    {% if not active_notebook.can_edit or cell_language != 'sql' %}disabled{% endif %}
+                    title="{% if not active_notebook.can_edit %}This notebook cannot be edited.{% elif cell_language == 'sql' %}Format SQL{% else %}Available in SQL cells only.{% endif %}"
                   >
                     Format SQL
                   </button>
@@ -410,10 +438,12 @@
             class="editor-frame"
             data-editor-root
             data-editor-name="sql-{{ cell.cell_id }}"
+            data-editor-language="{{ cell_language }}"
           >
             <textarea
               name="sql"
               data-editor-source
+              data-editor-language="{{ cell_language }}"
               data-default-sql="{{ cell.sql }}"
               rows="{{ 10 if cell.sql | trim else 5 }}"
               spellcheck="false"
@@ -421,6 +451,24 @@
           </div>
         </form>
 
+        {% if cell_language == 'python' %}
+          <section id="python-results-{{ cell.cell_id }}" class="result-panel python-result-panel" data-cell-result data-python-job-id="" hidden>
+            <header class="result-header">
+              <div class="result-header-copy">
+                <h3>Python Output</h3>
+                <div class="result-meta-row">
+                  <p class="result-meta">0 ms</p>
+                </div>
+              </div>
+              <div class="result-header-actions">
+                <span class="result-badge">Run this Python cell to inspect results.</span>
+              </div>
+            </header>
+            <div class="result-empty">
+              <p>Run this Python cell to inspect results.</p>
+            </div>
+          </section>
+        {% else %}
         <section id="query-results-{{ cell.cell_id }}" class="result-panel" data-cell-result data-query-job-id="" hidden>
           <header class="result-header">
             <div class="result-header-copy">
@@ -467,6 +515,7 @@
             <p>Run this cell to inspect the selected data sources.</p>
           </div>
         </section>
+        {% endif %}
       </article>
     {% endfor %}
   </section>

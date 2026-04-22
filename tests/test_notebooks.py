@@ -249,6 +249,89 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             notebooks["postgres-smoke-test"].cells[0].sql,
         )
 
+    def test_build_notebooks_includes_immutable_python_demo_presets(
+        self,
+    ) -> None:
+        (
+            _,
+            build_notebooks,
+            _,
+            _,
+            source_catalog_type,
+            source_object_type,
+            source_schema_type,
+        ) = import_notebook_helpers()
+
+        postgres_relation = "pg_oltp.public.vat_smoke_test_reference"
+        catalogs = [
+            source_catalog_type(
+                name="pg_oltp",
+                schemas=[
+                    source_schema_type(
+                        name="public",
+                        objects=[
+                            source_object_type(
+                                name="vat_smoke_test_reference",
+                                kind="table",
+                                relation=postgres_relation,
+                            )
+                        ],
+                    )
+                ],
+            )
+        ]
+
+        notebooks = {
+            notebook.notebook_id: notebook
+            for notebook in build_notebooks(catalogs)
+        }
+
+        pandas_demo = notebooks["python-pandas-vat-demo"]
+        self.assertEqual(
+            pandas_demo.tree_path,
+            ("PoC Tests", "General Functionalities"),
+        )
+        self.assertFalse(pandas_demo.can_edit)
+        self.assertFalse(pandas_demo.can_delete)
+        self.assertEqual(
+            [cell.language for cell in pandas_demo.cells],
+            ["sql", "python", "python"],
+        )
+        self.assertTrue(
+            all(cell.data_sources == ["pg_oltp"] for cell in pandas_demo.cells)
+        )
+        self.assertIn(
+            f'vat_df = source("{postgres_relation}").df()',
+            pandas_demo.cells[1].sql,
+        )
+        self.assertIn(
+            'quarter=vat_df["tax_period_end"].dt.to_period("Q").astype(str)',
+            pandas_demo.cells[2].sql,
+        )
+
+        chart_demo = notebooks["python-chart-vat-demo"]
+        self.assertEqual(
+            chart_demo.tree_path,
+            ("PoC Tests", "General Functionalities"),
+        )
+        self.assertFalse(chart_demo.can_edit)
+        self.assertFalse(chart_demo.can_delete)
+        self.assertEqual(
+            [cell.language for cell in chart_demo.cells],
+            ["python", "python"],
+        )
+        self.assertTrue(
+            all(cell.data_sources == ["pg_oltp"] for cell in chart_demo.cells)
+        )
+        self.assertIn(
+            f"FROM {postgres_relation}",
+            chart_demo.cells[0].sql,
+        )
+        self.assertIn(
+            "import matplotlib.pyplot as plt",
+            chart_demo.cells[1].sql,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

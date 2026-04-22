@@ -56,10 +56,12 @@ from .ingestion_types.csv import (
 )
 from .local_workspace_query_sources import LocalWorkspaceQuerySourceManager
 from .local_workspace_transfers import LocalWorkspaceTransferManager
+from .python_execution import KernelSessionManager, PythonJobManager
 from .query_analysis import analyze_query_touches, build_relation_index
 from .query_jobs import QueryJobManager
 from .query_result_exports import QueryResultExportManager
 from .realtime_facade import WorkbenchRealtimeFacade
+from .runtime_connections import normalize_postgres_host, open_postgres_native_connection
 from .notebooks import (
     build_completion_schema,
     build_generator_notebook_links,
@@ -72,7 +74,7 @@ from .service_consumption import (
     SERVICE_CONSUMPTION_DEFAULT_WINDOW,
     ServiceConsumptionMonitor,
 )
-from .shared_notebooks import SharedNotebookStore
+from .shared_notebooks import SharedNotebookStore, normalize_notebook_cell_language
 from .source_discovery import (
     DataSourceDiscoveryManager,
     S3DataSourceDiscoverer,
@@ -89,6 +91,7 @@ S3_BOOTSTRAP_SAMPLE_KEY = "startup/vat_context_bootstrap.csv"
 MAX_NOTEBOOK_EVENT_HISTORY = 40
 REALTIME_TOPIC_ORDER = (
     "query-jobs",
+    "python-jobs",
     "data-generation-jobs",
     "data-source-events",
     "service-consumption",
@@ -114,13 +117,6 @@ CHE-100.000.012,Valais Hydro SA,VS,2025-12-31,TX-10012,301400.00,25400.00,0.00,a
 def normalize_port(value: str, variable_name: str) -> str:
     if not value.isdigit():
         raise ValueError(f"{variable_name} must be numeric, got: {value}")
-    return value
-
-
-def normalize_postgres_host(value: str | None) -> str | None:
-    normalized = str(value or "").strip().lower()
-    if normalized in {"localhost", "::1"}:
-        return "127.0.0.1"
     return value
 
 
@@ -152,6 +148,15 @@ class WorkbenchService:
             metadata_refresher=self.refresh_metadata_state,
             state_change_callback=lambda snapshot: self._publish_realtime_snapshot(
                 "query-jobs",
+                snapshot,
+            ),
+        )
+        self._kernel_sessions = KernelSessionManager()
+        self._python_jobs = PythonJobManager(
+            kernel_sessions=self._kernel_sessions,
+            metadata_refresher=self.refresh_metadata_state,
+            state_change_callback=lambda snapshot: self._publish_realtime_snapshot(
+                "python-jobs",
                 snapshot,
             ),
         )
@@ -256,6 +261,11 @@ class WorkbenchService:
             notify=False,
         )
         self._set_realtime_snapshot(
+            "python-jobs",
+            self._python_jobs.state_payload(),
+            notify=False,
+        )
+        self._set_realtime_snapshot(
             "data-generation-jobs",
             self._data_generation_jobs.state_payload(),
             notify=False,
@@ -351,6 +361,7 @@ class WorkbenchService:
         self._log_startup("Workbench shutdown begin")
         self._service_consumption.stop()
         self._data_source_discovery.stop()
+        self._kernel_sessions.shutdown_all()
         self._close_persistent_postgres_connections()
         for thread in list(self._startup_threads):
             if thread.is_alive():
@@ -619,6 +630,7 @@ class WorkbenchService:
             NotebookCellDefinition(
                 cell_id=str(cell.get("cellId") or "").strip() or f"shared-cell-{uuid.uuid4().hex[:12]}",
                 sql=str(cell.get("sql") or ""),
+                language=normalize_notebook_cell_language(cell.get("language")),
                 data_sources=[
                     source_id
                     for source_id in (str(value).strip() for value in cell.get("dataSources", []) or [])
@@ -646,6 +658,7 @@ class WorkbenchService:
                     NotebookCellDefinition(
                         cell_id=str(cell.get("cellId") or "").strip() or f"shared-cell-{uuid.uuid4().hex[:12]}",
                         sql=str(cell.get("sql") or ""),
+                        language=normalize_notebook_cell_language(cell.get("language")),
                         data_sources=[
                             source_id
                             for source_id in (str(value).strip() for value in cell.get("dataSources", []) or [])
@@ -709,6 +722,9 @@ class WorkbenchService:
 
     def query_jobs_state(self) -> dict[str, object]:
         return self._query_jobs.state_payload()
+
+    def python_jobs_state(self) -> dict[str, object]:
+        return self._python_jobs.state_payload()
 
     def data_generators(self) -> list[dict[str, object]]:
         with self._lock:
@@ -778,6 +794,41 @@ class WorkbenchService:
             touched_buckets=query_analysis.touched_buckets,
         )
         return snapshot.payload
+
+    def start_python_job(
+        self,
+        *,
+        client_id: str,
+        code: str,
+        notebook_id: str,
+        notebook_title: str,
+        cell_id: str,
+        data_sources: list[str] | None = None,
+        local_relation_map: dict[str, str] | None = None,
+    ) -> dict[str, object]:
+        snapshot = self._python_jobs.start_job(
+            client_id=client_id,
+            code=code,
+            notebook_id=notebook_id,
+            notebook_title=notebook_title,
+            cell_id=cell_id,
+            data_sources=data_sources,
+            source_context=self._python_execution_context(
+                data_sources=data_sources or [],
+                local_relation_map=local_relation_map or {},
+            ),
+        )
+        return snapshot.payload
+
+    def cancel_python_job(self, job_id: str) -> dict[str, object]:
+        snapshot = self._python_jobs.cancel_job(job_id)
+        return snapshot.payload
+
+    def restart_python_kernel(self, *, client_id: str, notebook_id: str) -> dict[str, object]:
+        return self._python_jobs.restart_kernel(
+            client_id=client_id,
+            notebook_id=notebook_id,
+        )
 
     def cancel_query_job(self, job_id: str) -> dict[str, object]:
         snapshot = self._query_jobs.cancel_job(job_id)
@@ -1171,14 +1222,7 @@ class WorkbenchService:
         return required_catalogs.issubset(attached_catalogs)
 
     def _create_postgres_native_connection(self, target: str):
-        normalized_target = str(target).strip().lower()
-        if normalized_target == "oltp":
-            database = self.settings.pg_oltp_database
-        elif normalized_target == "olap":
-            database = self.settings.pg_olap_database
-        else:
-            raise ValueError(f"Unsupported PostgreSQL native target: {target}")
-        return self._open_postgres_connection(database)
+        return open_postgres_native_connection(self.settings, target)
 
     def _open_postgres_connection(self, database: str | None):
         try:
@@ -1252,6 +1296,142 @@ class WorkbenchService:
         with self._lock:
             relation_index = build_relation_index(self._catalogs)
         return analyze_query_touches(sql, relation_index=relation_index)
+
+    def _python_execution_context(
+        self,
+        *,
+        data_sources: list[str],
+        local_relation_map: dict[str, str],
+    ) -> dict[str, object]:
+        normalized_sources = [
+            source_id
+            for source_id in (str(value).strip() for value in data_sources)
+            if source_id
+        ]
+        selected_catalog_source_ids = {
+            self._python_catalog_source_id(source_id)
+            for source_id in normalized_sources
+        }
+        with self._lock:
+            catalogs = list(self._catalogs)
+            source_options = [dict(option) for option in self._source_options]
+
+        option_map = {
+            str(option.get("source_id") or "").strip(): option
+            for option in source_options
+            if str(option.get("source_id") or "").strip()
+        }
+        field_cache: dict[str, list[dict[str, str]]] = {}
+
+        def fields_for_relation(relation: str) -> list[dict[str, str]]:
+            normalized_relation = str(relation or "").strip()
+            if not normalized_relation:
+                return []
+            cached = field_cache.get(normalized_relation)
+            if cached is not None:
+                return cached
+            try:
+                fields = [
+                    field.payload
+                    for field in self.source_object_fields(normalized_relation)
+                ]
+            except Exception:
+                fields = []
+            field_cache[normalized_relation] = fields
+            return fields
+
+        relation_entries: list[dict[str, object]] = []
+        relation_seen: set[str] = set()
+        relations_by_source: dict[str, list[dict[str, object]]] = {}
+
+        for catalog in catalogs:
+            catalog_source_id = self._python_catalog_source_id(catalog.connection_source_id or catalog.name)
+            if catalog_source_id == "workspace.local" or catalog_source_id not in selected_catalog_source_ids:
+                continue
+            for source_schema in catalog.schemas:
+                for source_object in source_schema.objects:
+                    relation = str(source_object.relation or "").strip()
+                    if not relation or relation in relation_seen:
+                        continue
+                    relation_seen.add(relation)
+                    relation_entry = {
+                        "sourceId": catalog_source_id,
+                        "name": source_object.name,
+                        "displayName": source_object.display_name or source_object.name,
+                        "relation": relation,
+                        "logicalRelation": "",
+                        "fields": fields_for_relation(relation),
+                        "aliases": [
+                            relation,
+                            source_object.name,
+                            f"{source_schema.name}.{source_object.name}" if source_schema.name else source_object.name,
+                            source_object.display_name or source_object.name,
+                        ],
+                    }
+                    relation_entries.append(relation_entry)
+                    relations_by_source.setdefault(catalog_source_id, []).append(relation_entry)
+
+        local_entries: list[dict[str, object]] = []
+        for logical_relation, physical_relation in sorted((local_relation_map or {}).items()):
+            normalized_logical_relation = str(logical_relation or "").strip()
+            normalized_physical_relation = str(physical_relation or "").strip()
+            if not normalized_logical_relation or not normalized_physical_relation:
+                continue
+            relation_entry = {
+                "sourceId": "workspace.local",
+                "name": normalized_logical_relation.split(".")[-1],
+                "displayName": normalized_logical_relation.split(".")[-1],
+                "relation": normalized_physical_relation,
+                "logicalRelation": normalized_logical_relation,
+                "fields": fields_for_relation(normalized_physical_relation),
+                "aliases": [
+                    normalized_logical_relation,
+                    normalized_physical_relation,
+                    normalized_logical_relation.split(".")[-1],
+                ],
+            }
+            local_entries.append(relation_entry)
+            relation_entries.append(relation_entry)
+        if local_entries:
+            relations_by_source["workspace.local"] = local_entries
+
+        selected_sources_payload: list[dict[str, object]] = []
+        for source_id in normalized_sources:
+            option = option_map.get(source_id, {})
+            canonical_source_id = self._python_catalog_source_id(source_id)
+            selected_sources_payload.append(
+                {
+                    "sourceId": source_id,
+                    "canonicalSourceId": canonical_source_id,
+                    "label": str(option.get("label") or source_id),
+                    "classification": str(option.get("classification") or ""),
+                    "computationMode": str(option.get("computation_mode") or ""),
+                    "relations": [
+                        dict(entry)
+                        for entry in relations_by_source.get(canonical_source_id, [])
+                    ],
+                }
+            )
+
+        return {
+            "selectedSources": selected_sources_payload,
+            "relations": relation_entries,
+            "localRelationMap": {
+                str(key): str(value)
+                for key, value in (local_relation_map or {}).items()
+                if str(key).strip() and str(value).strip()
+            },
+        }
+
+    def _python_catalog_source_id(self, source_id: str) -> str:
+        normalized_source_id = str(source_id or "").strip().lower()
+        if normalized_source_id == "pg_oltp_native":
+            return "pg_oltp"
+        if normalized_source_id == "workspace":
+            return "workspace.s3"
+        if normalized_source_id == "workspace_local":
+            return "workspace.local"
+        return normalized_source_id
 
     def _log_startup(
         self,

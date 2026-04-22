@@ -18,8 +18,10 @@ export function createNotebookWorkspaceController(helpers) {
     renameNotebook,
     revealNotebookLink,
     saveNotebookVersion,
+    restartPythonKernel,
     setActiveCell,
     setCellDataSources,
+    setCellLanguage,
     setCellSql,
     setNotebookSummary,
     setNotebookTags,
@@ -159,6 +161,18 @@ export function createNotebookWorkspaceController(helpers) {
       return true;
     }
 
+    const restartPythonKernelButton = event.target.closest("[data-restart-python-kernel]");
+    if (restartPythonKernelButton) {
+      event.preventDefault();
+      closeWorkspaceActionMenus();
+
+      const { notebookId } = notebookContext(restartPythonKernelButton);
+      if (notebookId) {
+        await restartPythonKernel(notebookId);
+      }
+      return true;
+    }
+
     const addCellButton = event.target.closest("[data-add-cell]");
     if (addCellButton) {
       event.preventDefault();
@@ -179,6 +193,19 @@ export function createNotebookWorkspaceController(helpers) {
       const { notebookId, cellId } = notebookCellContext(addCellAfterButton);
       if (notebookId && cellId) {
         addCell(notebookId, cellId);
+      }
+      return true;
+    }
+
+    const setCellLanguageButton = event.target.closest("[data-set-cell-language]");
+    if (setCellLanguageButton) {
+      event.preventDefault();
+      closeCellActionMenus();
+
+      const nextLanguage = setCellLanguageButton.dataset.setCellLanguage;
+      const { notebookId, cellId } = notebookCellContext(setCellLanguageButton);
+      if (notebookId && cellId && nextLanguage) {
+        setCellLanguage(notebookId, cellId, nextLanguage);
       }
       return true;
     }

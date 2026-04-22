@@ -283,6 +283,113 @@ def build_static_notebooks(
         if preferred_postgres_relation
         else "SELECT 'Run the PostgreSQL OLTP VAT Smoke Loader from the Loader Workbench first.' AS status;"
     )
+    pandas_preview_sql = (
+        "SELECT\n"
+        "  filing_id,\n"
+        "  company_uid,\n"
+        "  canton_code,\n"
+        "  tax_period_end,\n"
+        "  output_vat_chf,\n"
+        "  input_vat_chf,\n"
+        "  net_vat_due_chf,\n"
+        "  filing_status,\n"
+        "  audit_flag\n"
+        f"FROM {preferred_postgres_relation}\n"
+        "WHERE tax_period_end >= DATE '2025-01-01'\n"
+        "ORDER BY tax_period_end DESC, net_vat_due_chf DESC, filing_id DESC\n"
+        "LIMIT 25;"
+        if preferred_postgres_relation
+        else "SELECT 'Run the PostgreSQL OLTP VAT Smoke Loader from the Loader Workbench first.' AS status;"
+    )
+    pandas_python_load_code = (
+        "# Load the static VAT smoke table into pandas via the explicit source helper.\n"
+        f'vat_df = source("{preferred_postgres_relation}").df()\n'
+        'vat_df["tax_period_end"] = pd.to_datetime(vat_df["tax_period_end"])\n'
+        'vat_df["net_gap_chf"] = vat_df["output_vat_chf"] - vat_df["input_vat_chf"]\n'
+        "vat_df = (\n"
+        '    vat_df.loc[vat_df["tax_period_end"] >= "2025-01-01"]\n'
+        "    .sort_values([\"tax_period_end\", \"net_vat_due_chf\"], ascending=[False, False])\n"
+        "    .reset_index(drop=True)\n"
+        ")\n"
+        "vat_df.head(12)\n"
+        if preferred_postgres_relation
+        else 'print("Run the PostgreSQL OLTP VAT Smoke Loader from the Loader Workbench first.")\n'
+    )
+    pandas_python_wrangle_code = (
+        "# Reuse the DataFrame from the previous cell and wrangle it with pandas.\n"
+        "canton_summary = (\n"
+        "    vat_df.assign(\n"
+        '        quarter=vat_df["tax_period_end"].dt.to_period("Q").astype(str),\n'
+        '        needs_attention=vat_df["audit_flag"] | vat_df["net_vat_due_chf"].gt(15000),\n'
+        "    )\n"
+        "    .groupby([\"quarter\", \"canton_code\", \"filing_status\"], as_index=False)\n"
+        "    .agg(\n"
+        '        filing_count=("filing_id", "count"),\n'
+        '        net_vat_total_chf=("net_vat_due_chf", "sum"),\n'
+        '        average_gap_chf=("net_gap_chf", "mean"),\n'
+        '        attention_cases=("needs_attention", "sum"),\n'
+        "    )\n"
+        "    .sort_values([\"net_vat_total_chf\", \"filing_count\"], ascending=[False, False])\n"
+        "    .reset_index(drop=True)\n"
+        ")\n"
+        "canton_summary.head(15)\n"
+        if preferred_postgres_relation
+        else 'print("Run the PostgreSQL OLTP VAT Smoke Loader from the Loader Workbench first.")\n'
+    )
+    chart_python_load_code = (
+        "# Use the sql(...) helper to pull an aggregated slice into pandas.\n"
+        'quarterly_vat = sql("""\n'
+        "SELECT\n"
+        "  canton_code,\n"
+        "  CAST(date_trunc('quarter', tax_period_end) AS DATE) AS tax_quarter_start,\n"
+        "  net_vat_due_chf,\n"
+        "  filing_status,\n"
+        "  audit_flag\n"
+        f"FROM {preferred_postgres_relation}\n"
+        "WHERE tax_period_end >= DATE '2025-01-01'\n"
+        '""")\n'
+        'quarterly_vat["tax_quarter_start"] = pd.to_datetime(quarterly_vat["tax_quarter_start"])\n'
+        "quarterly_vat = (\n"
+        "    quarterly_vat.groupby([\"tax_quarter_start\", \"canton_code\"], as_index=False)\n"
+        "    .agg(\n"
+        '        net_vat_total_chf=("net_vat_due_chf", "sum"),\n'
+        '        filing_count=("net_vat_due_chf", "size"),\n'
+        '        audit_cases=("audit_flag", "sum"),\n'
+        "    )\n"
+        "    .sort_values([\"tax_quarter_start\", \"net_vat_total_chf\"], ascending=[True, False])\n"
+        "    .reset_index(drop=True)\n"
+        ")\n"
+        "quarterly_vat.head(12)\n"
+        if preferred_postgres_relation
+        else 'print("Run the PostgreSQL OLTP VAT Smoke Loader from the Loader Workbench first.")\n'
+    )
+    chart_python_plot_code = (
+        "import matplotlib.pyplot as plt\n\n"
+        "# Reuse the aggregated DataFrame from the previous cell and render a chart.\n"
+        "top_cantons = (\n"
+        "    quarterly_vat.groupby(\"canton_code\", as_index=False)[\"net_vat_total_chf\"]\n"
+        "    .sum()\n"
+        "    .sort_values(\"net_vat_total_chf\", ascending=False)\n"
+        "    .head(4)[\"canton_code\"]\n"
+        "    .tolist()\n"
+        ")\n\n"
+        "chart_ready = (\n"
+        "    quarterly_vat[quarterly_vat[\"canton_code\"].isin(top_cantons)]\n"
+        "    .assign(quarter_label=quarterly_vat[quarterly_vat[\"canton_code\"].isin(top_cantons)][\"tax_quarter_start\"].dt.to_period(\"Q\").astype(str))\n"
+        "    .pivot(index=\"quarter_label\", columns=\"canton_code\", values=\"net_vat_total_chf\")\n"
+        "    .fillna(0)\n"
+        "    .sort_index()\n"
+        ")\n\n"
+        'ax = chart_ready.plot(kind="bar", figsize=(10, 5), rot=0)\n'
+        'ax.set_title("Quarterly VAT Total by Canton")\n'
+        'ax.set_xlabel("Quarter")\n'
+        'ax.set_ylabel("Net VAT due (CHF)")\n'
+        'ax.legend(title="Canton", ncols=2)\n'
+        "plt.tight_layout()\n"
+        "plt.show()\n"
+        if preferred_postgres_relation
+        else 'print("Run the PostgreSQL OLTP VAT Smoke Loader from the Loader Workbench first.")\n'
+    )
     performance_sql_template = (
         "-- Approximation: summarize quarterly tax-assessment pressure across cantons and sectors.\n"
         "-- Logic: filter recent assessments, aggregate assessed, collected, and open balances, and keep only large exposure groups.\n"
@@ -642,6 +749,59 @@ def build_static_notebooks(
             ],
             tags=["smoke", "postgres"],
             tree_path=("PoC Tests", "Smoke Tests", "Relational"),
+            linked_generator_id="postgres_oltp_smoke_orders",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="python-pandas-vat-demo",
+            title="Python Pandas VAT Demo",
+            summary="Shows how an immutable notebook can combine SQL with Python and pandas on the static PostgreSQL VAT smoke reference table, including persistent state across Python cells.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="python-pandas-vat-demo-cell-1",
+                    data_sources=["pg_oltp"],
+                    sql=pandas_preview_sql,
+                ),
+                NotebookCellDefinition(
+                    cell_id="python-pandas-vat-demo-cell-2",
+                    data_sources=["pg_oltp"],
+                    language="python",
+                    sql=pandas_python_load_code,
+                ),
+                NotebookCellDefinition(
+                    cell_id="python-pandas-vat-demo-cell-3",
+                    data_sources=["pg_oltp"],
+                    language="python",
+                    sql=pandas_python_wrangle_code,
+                ),
+            ],
+            tags=["python", "pandas", "demo", "postgres"],
+            tree_path=("PoC Tests", "General Functionalities"),
+            linked_generator_id="postgres_oltp_smoke_orders",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="python-chart-vat-demo",
+            title="Python Chart VAT Demo",
+            summary="Shows how an immutable notebook can use Python, pandas, and matplotlib to chart the static PostgreSQL VAT smoke reference table inside a headless Jupyter kernel.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="python-chart-vat-demo-cell-1",
+                    data_sources=["pg_oltp"],
+                    language="python",
+                    sql=chart_python_load_code,
+                ),
+                NotebookCellDefinition(
+                    cell_id="python-chart-vat-demo-cell-2",
+                    data_sources=["pg_oltp"],
+                    language="python",
+                    sql=chart_python_plot_code,
+                ),
+            ],
+            tags=["python", "pandas", "chart", "matplotlib", "demo", "postgres"],
+            tree_path=("PoC Tests", "General Functionalities"),
             linked_generator_id="postgres_oltp_smoke_orders",
             can_edit=False,
             can_delete=False,

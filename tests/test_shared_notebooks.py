@@ -117,6 +117,7 @@ class SharedNotebookServiceTests(unittest.TestCase):
             notebook["cells"][0]["dataSources"],
             ["pg_oltp.public.tax_assessment", "workspace.s3.vat_smoke"],
         )
+        self.assertEqual(notebook["cells"][0]["language"], "sql")
         self.assertTrue(
             notebook["cells"][0]["cellId"].startswith("shared-cell-")
         )
@@ -130,6 +131,7 @@ class SharedNotebookServiceTests(unittest.TestCase):
             notebook["versions"][0]["cells"][0]["dataSources"],
             ["workspace.s3.vat_smoke"],
         )
+        self.assertEqual(notebook["versions"][0]["cells"][0]["language"], "sql")
         self.assertTrue(
             notebook["versions"][0]["versionId"].startswith("shared-version-")
         )
@@ -208,6 +210,50 @@ class SharedNotebookServiceTests(unittest.TestCase):
             ["updated", "deleted"],
         )
         self.assertEqual(appended_events[1]["origin_client_id"], "client-2")
+
+    def test_upsert_shared_notebook_preserves_python_cell_language(self) -> None:
+        service, _, _ = build_shared_notebook_service()
+
+        result = service.upsert_shared_notebook(
+            notebook_id="shared-notebook-python",
+            title="Python notebook",
+            summary="Mixed runtime notebook",
+            tags=[],
+            tree_path=["Shared Notebooks"],
+            linked_generator_id="",
+            created_at="2026-04-22T10:00:00+00:00",
+            cells=[
+                {
+                    "cellId": "cell-python",
+                    "language": "python",
+                    "sql": "print('hello')",
+                    "dataSources": ["pg_oltp"],
+                }
+            ],
+            versions=[
+                {
+                    "versionId": "version-python",
+                    "createdAt": "2026-04-22T10:05:00+00:00",
+                    "title": "Python version",
+                    "summary": "Saved Python state",
+                    "tags": [],
+                    "cells": [
+                        {
+                            "cellId": "cell-python",
+                            "language": "python",
+                            "sql": "print('saved')",
+                            "dataSources": ["pg_oltp"],
+                        }
+                    ],
+                }
+            ],
+            origin_client_id="client-python",
+        )
+
+        notebook = result["notebook"]
+
+        self.assertEqual(notebook["cells"][0]["language"], "python")
+        self.assertEqual(notebook["versions"][0]["cells"][0]["language"], "python")
 
 
 if __name__ == "__main__":

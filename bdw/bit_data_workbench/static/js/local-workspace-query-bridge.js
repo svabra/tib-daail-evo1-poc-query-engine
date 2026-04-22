@@ -106,7 +106,7 @@ export function createLocalWorkspaceQueryBridge(helpers) {
     return result.fields;
   }
 
-  function localWorkspaceRelationsInSql(sqlText = "") {
+  function localWorkspaceRelationsInText(sqlText = "") {
     const matches = new Set();
     const sourceText = String(sqlText || "");
     const pattern = /workspace\.local\.saved_results\.[A-Za-z0-9_-]+/g;
@@ -125,7 +125,7 @@ export function createLocalWorkspaceQueryBridge(helpers) {
     let rewrittenSql = String(sqlText || "");
     const synchronizedSources = [];
 
-    for (const logicalRelation of localWorkspaceRelationsInSql(rewrittenSql)) {
+    for (const logicalRelation of localWorkspaceRelationsInText(rewrittenSql)) {
       const entryId = localWorkspaceEntryIdFromRelation(logicalRelation);
       if (!entryId) {
         continue;
@@ -143,6 +143,30 @@ export function createLocalWorkspaceQueryBridge(helpers) {
     return {
       sql: rewrittenSql,
       synchronizedSources,
+    };
+  }
+
+  async function preparePythonExecution(codeText = "") {
+    const sourceText = String(codeText || "");
+    const synchronizedSources = [];
+    const localRelationMap = {};
+
+    for (const logicalRelation of localWorkspaceRelationsInText(sourceText)) {
+      const entryId = localWorkspaceEntryIdFromRelation(logicalRelation);
+      if (!entryId) {
+        continue;
+      }
+      const result = await syncLocalWorkspaceEntry(entryId);
+      synchronizedSources.push(result);
+      if (result.relation && result.relation !== logicalRelation) {
+        localRelationMap[logicalRelation] = result.relation;
+      }
+    }
+
+    return {
+      code: sourceText,
+      synchronizedSources,
+      localRelationMap,
     };
   }
 
@@ -293,8 +317,9 @@ export function createLocalWorkspaceQueryBridge(helpers) {
     deleteLocalWorkspaceQuerySource,
     loadLocalWorkspaceSourceFields,
     localWorkspaceEntryIdFromSourceObject,
-    localWorkspaceRelationsInSql,
+    localWorkspaceRelationsInText,
     moveLocalWorkspaceEntryToS3,
+    preparePythonExecution,
     prepareQuerySql,
     syncLocalWorkspaceEntry,
   };
