@@ -1,9 +1,27 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.6.1. Keep entries concise and
+# Derived from git history through version 0.7.0. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.7.0",
+        "releasedAt": "2026-04-22T14:15:00+02:00",
+        "features": [
+            (
+                "Notebook cells can now run as either SQL or Python, with an explicit per-cell runtime toggle, "
+                "persistent per-user notebook kernel state, and the existing SQL path preserved."
+            ),
+            (
+                "Python notebook execution now runs through a headless Jupyter kernel with pandas helpers such as "
+                "sql(...) and source(...).df(), plus rich outputs for tables, HTML, JSON, exceptions, and matplotlib charts."
+            ),
+            (
+                "PoC Tests now include immutable demo notebooks under General Functionalities that show pandas "
+                "wrangling and chart rendering against the static PostgreSQL VAT smoke reference data."
+            ),
+        ],
+    },
     {
         "version": "0.6.1",
         "releasedAt": "2026-04-21T13:46:00+02:00",
