@@ -15,6 +15,7 @@ import {
   renderResultExportSettings,
 } from "./data-exporters/export-settings.js";
 import { createS3ExplorerLoader, s3ExplorerPath } from "./s3-explorer-loader.js";
+import { normalizeS3BucketNameForCreate } from "./source-metadata-utils.js";
 
 export function createLocalWorkspaceDialogController(helpers) {
   const {
@@ -37,7 +38,6 @@ export function createLocalWorkspaceDialogController(helpers) {
     renderLocalWorkspaceSaveBreadcrumbs,
     renderS3ExplorerChildrenMarkup,
     refreshSidebar,
-    showConfirmDialog,
     showFolderNameDialog,
   } = helpers;
 
@@ -588,16 +588,7 @@ export function createLocalWorkspaceDialogController(helpers) {
       return;
     }
 
-    const normalizedBucketName = String(bucketName).trim().toLowerCase();
-    const confirmation = await showConfirmDialog({
-      title: "Create bucket",
-      copy: `Create bucket "${normalizedBucketName}" in Shared Workspace?`,
-      confirmLabel: "Create bucket",
-      confirmTone: "primary",
-    });
-    if (!confirmation.confirmed) {
-      return;
-    }
+    const normalizedBucketName = normalizeS3BucketNameForCreate(bucketName);
 
     const created = await fetchJsonOrThrow("/api/s3/explorer/buckets", {
       method: "POST",

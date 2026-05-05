@@ -232,10 +232,28 @@ export function sourceObjectDdlDescriptor(sourceObjectRoot) {
 }
 
 const S3_BUCKET_NAME_PATTERN = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
+export const S3_BUCKET_NAME_VALIDATION_MESSAGE =
+  "Bucket names must be 3-63 characters and use lowercase letters, numbers, dots, or hyphens.";
+
+export function normalizeS3BucketNameInput(value) {
+  return String(value ?? "").trim().toLowerCase();
+}
+
+export function isValidS3BucketName(value) {
+  return S3_BUCKET_NAME_PATTERN.test(normalizeS3BucketNameInput(value));
+}
+
+export function normalizeS3BucketNameForCreate(value) {
+  const bucket = normalizeS3BucketNameInput(value);
+  if (!isValidS3BucketName(bucket)) {
+    throw new Error(S3_BUCKET_NAME_VALIDATION_MESSAGE);
+  }
+  return bucket;
+}
 
 function normalizedS3BucketName(value) {
-  const bucket = String(value ?? "").trim().toLowerCase();
-  return S3_BUCKET_NAME_PATTERN.test(bucket) ? bucket : "";
+  const bucket = normalizeS3BucketNameInput(value);
+  return isValidS3BucketName(bucket) ? bucket : "";
 }
 
 function sourceSchemaObjectBucket(sourceSchemaRoot) {

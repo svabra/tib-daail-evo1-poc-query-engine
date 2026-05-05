@@ -1,9 +1,23 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.7.5. Keep entries concise and
+# Derived from git history through version 0.7.6. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.7.6",
+        "releasedAt": "2026-05-05T16:25:48+02:00",
+        "features": [
+            (
+                "Shared Workspace bucket creation now rejects names with underscores before contacting S3, "
+                "matching the backend S3 bucket-name policy."
+            ),
+            (
+                "Creating a bucket now uses a single name prompt instead of asking for a second confirmation, "
+                "with Playwright coverage for invalid-name rejection and the one-prompt create flow."
+            ),
+        ],
+    },
     {
         "version": "0.7.5",
         "releasedAt": "2026-05-05T13:13:07+02:00",

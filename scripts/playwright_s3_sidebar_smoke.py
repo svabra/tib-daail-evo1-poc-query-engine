@@ -139,6 +139,16 @@ async def wait_for_bucket_summary(page, bucket_name: str, timeout_ms: int):
     return summary
 
 
+async def visible_create_bucket_button(page, timeout_ms: int):
+    catalog_summary = page.locator(
+        '[data-source-catalog][data-source-catalog-name="workspace"] > summary'
+    ).first
+    await catalog_summary.hover()
+    button = page.locator("[data-create-source-bucket]:visible").first
+    await button.wait_for(state="visible", timeout=timeout_ms)
+    return button
+
+
 async def create_bucket_via_sidebar(
     page,
     bucket_name: str,
@@ -149,10 +159,17 @@ async def create_bucket_via_sidebar(
         page,
         '[data-source-catalog][data-source-catalog-name="workspace"]',
     )
-    await page.locator("[data-create-source-bucket]").click()
+    await (await visible_create_bucket_button(page, timeout_ms)).click()
     await page.locator("[data-folder-name-input]").fill(bucket_name)
     await page.locator("[data-folder-name-submit]").click()
-    await page.locator("[data-confirm-submit]").click()
+    await page.wait_for_timeout(250)
+    confirm_dialog = page.locator("[data-confirm-dialog]")
+    if await confirm_dialog.count() and await confirm_dialog.evaluate(
+        "node => Boolean(node.open)"
+    ):
+        raise AssertionError(
+            "Sidebar bucket creation opened a second confirmation prompt."
+        )
 
     started = time.perf_counter()
     await (
@@ -167,6 +184,54 @@ async def create_bucket_via_sidebar(
     )
     await wait_for_bucket_summary(page, bucket_name, timeout_ms)
     return (time.perf_counter() - started) * 1000
+
+
+async def reject_invalid_bucket_via_sidebar(
+    page,
+    bucket_name: str,
+    timeout_ms: int,
+    bucket_create_requests: list[str],
+) -> None:
+    await ensure_details_open(page, "[data-data-sources-section]")
+    await ensure_details_open(
+        page,
+        '[data-source-catalog][data-source-catalog-name="workspace"]',
+    )
+
+    request_count_before = len(bucket_create_requests)
+    await (await visible_create_bucket_button(page, timeout_ms)).click()
+    await page.locator("[data-folder-name-input]").fill(bucket_name)
+    await page.locator("[data-folder-name-submit]").click()
+    await page.wait_for_timeout(250)
+
+    confirm_dialog = page.locator("[data-confirm-dialog]")
+    if await confirm_dialog.count() and await confirm_dialog.evaluate(
+        "node => Boolean(node.open)"
+    ):
+        raise AssertionError(
+            "Invalid sidebar bucket creation opened a second confirmation prompt."
+        )
+
+    message_dialog = page.locator("[data-message-dialog]")
+    await message_dialog.wait_for(state="visible", timeout=timeout_ms)
+    message_copy = await page.locator("[data-message-copy]").inner_text()
+    expected_message = "lowercase letters, numbers, dots, or hyphens"
+    if expected_message not in message_copy:
+        raise AssertionError(
+            "Invalid sidebar bucket creation showed an unexpected message: "
+            f"{message_copy!r}"
+        )
+
+    await page.locator("[data-message-submit]").click()
+    await page.wait_for_function(
+        "() => !document.querySelector('[data-message-dialog]')?.open",
+        timeout=timeout_ms,
+    )
+
+    if len(bucket_create_requests) != request_count_before:
+        raise AssertionError(
+            "Invalid sidebar bucket creation sent a bucket-create request."
+        )
 
 
 async def delete_bucket_via_sidebar(
@@ -311,9 +376,22 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 (resp.request.method, resp.url, resp.status)
             ),
         )
+        bucket_create_requests: list[str] = []
+        page.on(
+            "request",
+            lambda req: bucket_create_requests.append(req.url)
+            if req.method == "POST" and "/api/s3/explorer/buckets" in req.url
+            else None,
+        )
 
         try:
             await open_query_notebook(page, args.base_url, args.timeout_ms)
+            await reject_invalid_bucket_via_sidebar(
+                page,
+                "client_bucket",
+                args.timeout_ms,
+                bucket_create_requests,
+            )
             create_ms = await create_bucket_via_sidebar(
                 page,
                 created_bucket,

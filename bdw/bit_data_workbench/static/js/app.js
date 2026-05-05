@@ -126,6 +126,7 @@ import { createWorkspaceScrollManager } from "./workspace-scroll-manager.js";
 import {
   accessModeForDataSources,
   accessModeHintForDataSources,
+  normalizeS3BucketNameForCreate,
   normalizeDataSources,
   normalizeSourceObjectFields,
   parseDefaultDataSources,
@@ -439,7 +440,6 @@ const {
   renderLocalWorkspaceSaveBreadcrumbs,
   renderS3ExplorerChildrenMarkup: s3ExplorerPickerChildrenMarkup,
   refreshSidebar: (mode) => refreshSidebar(mode),
-  showConfirmDialog,
   showFolderNameDialog,
 });
 
@@ -6083,16 +6083,7 @@ async function createSidebarS3Bucket() {
     return null;
   }
 
-  const normalizedBucketName = String(bucketName).trim().toLowerCase();
-  const confirmation = await showConfirmDialog({
-    title: "Create bucket",
-    copy: `Create bucket "${normalizedBucketName}" in S3?`,
-    confirmLabel: "Create bucket",
-    confirmTone: "primary",
-  });
-  if (!confirmation.confirmed) {
-    return null;
-  }
+  const normalizedBucketName = normalizeS3BucketNameForCreate(bucketName);
 
   setSidebarSourceOperationStatus({
     tone: "info",
@@ -6446,16 +6437,7 @@ async function createS3ExplorerBucket() {
     return;
   }
 
-  const normalizedBucketName = String(bucketName).trim().toLowerCase();
-  const confirmation = await showConfirmDialog({
-    title: "Create bucket",
-    copy: `Create bucket "${normalizedBucketName}" in S3?`,
-    confirmLabel: "Create bucket",
-    confirmTone: "primary",
-  });
-  if (!confirmation.confirmed) {
-    return;
-  }
+  const normalizedBucketName = normalizeS3BucketNameForCreate(bucketName);
 
   const created = await createS3BucketRecord(normalizedBucketName);
   await loadS3ExplorerRoot({ preferredBucket: String(created.bucket || "").trim(), preferredPrefix: "" });
