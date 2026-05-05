@@ -24,32 +24,36 @@ export function createNotebookUrlHelpers({ isLocalNotebookId }) {
     window.history.pushState({ mode: "query-workbench" }, "", "/query-workbench");
   }
 
-  function queryWorkbenchDataSourcesUrl(sourceId = "") {
+  function queryWorkbenchDataSourcesUrl(sourceId = "", { browse = false } = {}) {
     const normalizedSourceId = String(sourceId || "").trim();
-    if (!normalizedSourceId) {
-      return "/query-workbench/data-sources";
+    const params = new URLSearchParams();
+    if (normalizedSourceId) {
+      params.set("source_id", normalizedSourceId);
     }
-
-    return `/query-workbench/data-sources?source_id=${encodeURIComponent(normalizedSourceId)}`;
+    if (browse) {
+      params.set("browse", "1");
+    }
+    const query = params.toString();
+    return query ? `/data-sources?${query}` : "/data-sources";
   }
 
   function queryWorkbenchDataSourceExplorerUrl(sourceId = "") {
     const normalizedSourceId = String(sourceId || "").trim();
     if (!normalizedSourceId) {
-      return "/query-workbench/data-sources/explorer";
+      return "/data-sources/browser";
     }
 
-    return `/query-workbench/data-sources/explorer?source_id=${encodeURIComponent(normalizedSourceId)}`;
+    return `/data-sources/browser?source_id=${encodeURIComponent(normalizedSourceId)}`;
   }
 
-  function pushQueryWorkbenchDataSourcesHistory(sourceId = "") {
-    const nextUrl = queryWorkbenchDataSourcesUrl(sourceId);
+  function pushQueryWorkbenchDataSourcesHistory(sourceId = "", { browse = false } = {}) {
+    const nextUrl = queryWorkbenchDataSourcesUrl(sourceId, { browse });
     if (`${window.location.pathname}${window.location.search}` === nextUrl) {
       return;
     }
 
     window.history.pushState(
-      { mode: "query-workbench-data-sources", sourceId: String(sourceId || "").trim() },
+      { mode: "data-sources", sourceId: String(sourceId || "").trim(), browse: Boolean(browse) },
       "",
       nextUrl
     );
@@ -62,7 +66,7 @@ export function createNotebookUrlHelpers({ isLocalNotebookId }) {
     }
 
     window.history.pushState(
-      { mode: "query-workbench-data-source-explorer", sourceId: String(sourceId || "").trim() },
+      { mode: "data-sources-browser", sourceId: String(sourceId || "").trim() },
       "",
       nextUrl
     );

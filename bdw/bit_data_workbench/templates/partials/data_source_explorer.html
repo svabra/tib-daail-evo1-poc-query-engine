@@ -53,7 +53,7 @@
         Query actions stay available, but browsing is split by source type so PostgreSQL, Shared Workspace, and Local Workspace each get their own explorer flow.
       </p>
       <a
-        href="{{ selected_data_source.management_path if selected_data_source else '/query-workbench/data-sources' }}"
+        href="{{ selected_data_source.management_path if selected_data_source else '/data-sources' }}"
         class="data-source-management-back-link"
         data-open-query-data-source="{{ selected_data_source.source_id if selected_data_source else '' }}"
       >

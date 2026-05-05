@@ -107,7 +107,7 @@ async def open_loader_workbench_from_home(page, timeout_ms: int) -> None:
 async def open_data_source_management(page, timeout_ms: int) -> None:
     button = page.locator("[data-open-query-data-sources]").first
     await click_control(button, timeout_ms)
-    await wait_for_location(page, timeout_ms, pathname="/query-workbench/data-sources")
+    await wait_for_location(page, timeout_ms, pathname="/data-sources")
     await page.locator("[data-data-source-management-page]").wait_for(
         state="visible",
         timeout=timeout_ms,
@@ -122,7 +122,7 @@ async def open_focused_data_source_and_explorer_from_home(page, timeout_ms: int)
     await wait_for_location(
         page,
         timeout_ms,
-        pathname="/query-workbench/data-sources",
+        pathname="/data-sources",
         search="?source_id=workspace.local",
     )
     await page.locator("[data-data-source-management-page]").wait_for(
@@ -136,30 +136,39 @@ async def open_focused_data_source_and_explorer_from_home(page, timeout_ms: int)
         timeout=timeout_ms,
     )
     browse_button = page.locator(
-        "[data-data-source-management-page] [data-open-data-source-explorer='workspace.local']"
+        "[data-data-source-management-page] [data-browse-data-source='workspace.local']"
     ).first
     await click_control(browse_button, timeout_ms)
     await wait_for_location(
         page,
         timeout_ms,
-        pathname="/query-workbench/data-sources/explorer",
-        search="?source_id=workspace.local",
+        pathname="/data-sources",
+        search="?source_id=workspace.local&browse=1",
     )
     await page.locator(
-        "[data-data-source-explorer-page][data-selected-source-id='workspace.local'][data-explorer-kind='local-workspace']"
+        "[data-data-source-management-page][data-selected-source-id='workspace.local'][data-browse-source-id='workspace.local']"
     ).wait_for(
         state="visible",
         timeout=timeout_ms,
     )
-    detail_button = page.locator(
-        "[data-data-source-explorer-page] .data-source-detail-action-cluster [data-open-query-data-source='workspace.local']"
-    ).first
-    await click_control(detail_button, timeout_ms)
-    await wait_for_location(
-        page,
-        timeout_ms,
-        pathname="/query-workbench/data-sources",
-        search="?source_id=workspace.local",
+    await page.locator("[data-data-sources-section]").wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
+    await page.locator(
+        "[data-source-catalog][data-source-catalog-source-id='workspace.local']"
+    ).wait_for(state="visible", timeout=timeout_ms)
+    await page.wait_for_function(
+        """() => {
+          const shell = document.querySelector("[data-shell]");
+          const sources = document.querySelector("[data-data-sources-section]");
+          const catalog = document.querySelector("[data-source-catalog][data-source-catalog-source-id='workspace.local']");
+          return shell && !shell.classList.contains("shell-sidebar-hidden")
+            && sources?.open === true
+            && catalog?.open === true
+            && !document.querySelector("[data-data-source-explorer-page]");
+        }""",
+        timeout=timeout_ms,
     )
     await page.locator(
         "[data-data-source-management-page] [data-open-query-data-source='workspace.local'][aria-current='page']"

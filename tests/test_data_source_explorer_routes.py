@@ -237,30 +237,34 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
         self.assertIn('data-home-data-source-link', body)
         self.assertIn('data-open-query-data-source="workspace.local"', body)
         self.assertIn(
-            'href="/query-workbench/data-sources?source_id=workspace.local"',
+            'href="/data-sources?source_id=workspace.local"',
             body,
         )
 
-    def test_management_page_renders_browse_data_launcher(self) -> None:
+    def test_management_page_uses_standalone_url_and_sidebar_browse_launcher(self) -> None:
         response = query_workbench_data_sources(
-            request=build_request("/query-workbench/data-sources", partial=True),
+            request=build_request("/data-sources", partial=True),
             source_id="pg_olap",
             service=FakeWorkbenchService(),
         )
 
         self.assertEqual(response.status_code, 200)
         body = response.body.decode("utf-8")
+        self.assertIn('data-data-source-management-page', body)
+        self.assertIn('data-selected-source-id="pg_olap"', body)
         self.assertIn("Browse Data", body)
-        self.assertIn('data-open-data-source-explorer="pg_olap"', body)
+        self.assertIn('data-browse-data-source="pg_olap"', body)
+        self.assertIn('data-browse-sidebar-source-id="pg_olap"', body)
         self.assertIn(
-            'href="/query-workbench/data-sources/explorer?source_id=pg_olap"',
+            'href="/data-sources?source_id=pg_olap&amp;browse=1"',
             body,
         )
+        self.assertNotIn('data-data-source-explorer-page', body)
 
-    def test_explorer_page_maps_native_source_to_postgres_browser(self) -> None:
+    def test_browser_route_reuses_management_page_and_sidebar_source_mapping(self) -> None:
         response = query_workbench_data_source_explorer(
             request=build_request(
-                "/query-workbench/data-sources/explorer",
+                "/data-sources/browser",
                 partial=True,
             ),
             source_id="pg_oltp_native",
@@ -269,17 +273,17 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.body.decode("utf-8")
-        self.assertIn('data-data-source-explorer-page', body)
+        self.assertIn('data-data-source-management-page', body)
         self.assertIn('data-selected-source-id="pg_oltp_native"', body)
-        self.assertIn('data-browse-source-id="pg_oltp"', body)
-        self.assertIn('data-explorer-kind="postgres"', body)
-        self.assertIn('data-open-data-source-explorer="workspace.local"', body)
-        self.assertIn("View Source Details", body)
+        self.assertIn('data-browse-source-id="pg_oltp_native"', body)
+        self.assertIn('data-browse-sidebar-source-id="pg_oltp"', body)
+        self.assertIn('data-browse-data-source="pg_oltp_native"', body)
         self.assertIn('data-open-query-data-source="pg_oltp_native"', body)
         self.assertIn(
-            'href="/query-workbench/data-sources?source_id=pg_oltp_native"',
+            'href="/data-sources?source_id=pg_oltp_native"',
             body,
         )
+        self.assertNotIn('data-data-source-explorer-page', body)
 
     def test_explorer_api_returns_postgres_catalog_payload(self) -> None:
         response = data_source_explorer_payload(

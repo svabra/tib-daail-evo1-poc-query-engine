@@ -1,6 +1,7 @@
 export function createWorkbenchNavigationController(helpers) {
   const {
     applySidebarCollapsedState,
+    browseDataSourceInSidebar,
     closeSettingsMenus,
     getClearVisibleNotifications,
     openDataProductsWorkbench,
@@ -102,6 +103,20 @@ export function createWorkbenchNavigationController(helpers) {
       closeNotificationMenu();
       await loadQueryWorkbenchDataSourceExplorer(
         openDataSourceExplorerButton.dataset.openDataSourceExplorer || ""
+      );
+      return true;
+    }
+
+    const browseDataSourceButton = event.target.closest("[data-browse-data-source]");
+    if (browseDataSourceButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeNotificationMenu();
+      await browseDataSourceInSidebar(
+        browseDataSourceButton.dataset.browseDataSource || "",
+        {
+          sidebarSourceId: browseDataSourceButton.dataset.browseSidebarSourceId || "",
+        }
       );
       return true;
     }

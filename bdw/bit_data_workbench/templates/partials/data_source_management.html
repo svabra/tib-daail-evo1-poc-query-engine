@@ -32,7 +32,13 @@
   {% endif %}
 {%- endmacro %}
 
-<section class="data-source-management-page" data-data-source-management-page>
+<section
+  class="data-source-management-page"
+  data-data-source-management-page
+  data-selected-source-id="{{ selected_data_source.source_id if selected_data_source else '' }}"
+  data-browse-source-id="{{ browse_data_source.source_id if browse_data_source else '' }}"
+  data-browse-sidebar-source-id="{{ browse_data_source.explorer_source_id if browse_data_source else '' }}"
+>
   <div class="home-hero data-source-management-hero">
     <div class="home-hero-copy">
       <span class="home-eyebrow">Managed Data Sources</span>
@@ -101,9 +107,10 @@
           </div>
           <div class="data-source-detail-action-cluster">
             <a
-              href="{{ selected_data_source.explorer_path }}"
+              href="{{ selected_data_source.browse_path }}"
               class="data-source-explorer-launcher"
-              data-open-data-source-explorer="{{ selected_data_source.source_id }}"
+              data-browse-data-source="{{ selected_data_source.source_id }}"
+              data-browse-sidebar-source-id="{{ selected_data_source.explorer_source_id }}"
               aria-label="Browse data for {{ selected_data_source.name }}"
             >
               <span class="data-source-explorer-launcher-icon" aria-hidden="true">

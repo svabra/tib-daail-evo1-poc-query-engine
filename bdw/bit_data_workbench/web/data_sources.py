@@ -8,6 +8,10 @@ from ..backend.data_sources.explorer_payloads import (
 from ..models import SourceCatalog
 
 
+DATA_SOURCES_PATH = "/data-sources"
+DATA_SOURCES_BROWSER_PATH = "/data-sources/browser"
+
+
 def _display_value(value: object, fallback: str = "Not configured") -> str:
     if value is None:
         return fallback
@@ -91,21 +95,22 @@ def _source_status(
 def management_path_for_source(source_id: str) -> str:
     normalized_source_id = str(source_id or "").strip()
     if not normalized_source_id:
-        return "/query-workbench/data-sources"
-    return (
-        "/query-workbench/data-sources"
-        f"?source_id={normalized_source_id}"
-    )
+        return DATA_SOURCES_PATH
+    return f"{DATA_SOURCES_PATH}?source_id={normalized_source_id}"
 
 
 def explorer_path_for_source(source_id: str) -> str:
     normalized_source_id = str(source_id or "").strip()
     if not normalized_source_id:
-        return "/query-workbench/data-sources/explorer"
-    return (
-        "/query-workbench/data-sources/explorer"
-        f"?source_id={normalized_source_id}"
-    )
+        return DATA_SOURCES_BROWSER_PATH
+    return f"{DATA_SOURCES_BROWSER_PATH}?source_id={normalized_source_id}"
+
+
+def browse_path_for_source(source_id: str) -> str:
+    normalized_source_id = str(source_id or "").strip()
+    if not normalized_source_id:
+        return f"{DATA_SOURCES_PATH}?browse=1"
+    return f"{DATA_SOURCES_PATH}?source_id={normalized_source_id}&browse=1"
 
 
 def explorer_copy_for_source(source_kind: str) -> str:
@@ -124,6 +129,7 @@ def _attach_source_navigation(record: dict[str, object]) -> dict[str, object]:
     explorer_source_id = canonical_explorer_source_id(source_id)
     record["management_path"] = management_path_for_source(source_id)
     record["explorer_path"] = explorer_path_for_source(source_id)
+    record["browse_path"] = browse_path_for_source(source_id)
     record["explorer_source_id"] = explorer_source_id
     record["explorer_kind"] = explorer_kind_for_source(explorer_source_id)
     record["explorer_cta_copy"] = explorer_copy_for_source(

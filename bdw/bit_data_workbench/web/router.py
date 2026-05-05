@@ -559,13 +559,18 @@ def query_workbench_entry(
     )
 
 
+@router.get("/data-sources", response_class=HTMLResponse)
 @router.get("/query-workbench/data-sources", response_class=HTMLResponse)
 def query_workbench_data_sources(
     request: Request,
     source_id: str | None = Query(default=None),
+    browse: bool = Query(default=False),
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> HTMLResponse:
     context = build_data_source_management_context(service, source_id)
+    context["browse_data_source"] = (
+        context.get("selected_data_source") if browse else None
+    )
 
     if is_partial_request(request):
         return templates.TemplateResponse(
@@ -586,7 +591,7 @@ def query_workbench_data_sources(
                 workspace_partial_template=(
                     "partials/data_source_management.html"
                 ),
-                shell_sidebar_hidden=True,
+                shell_sidebar_hidden=False,
             ),
             "title": "DAAIFL Data Source Workbench",
             **context,
@@ -594,6 +599,7 @@ def query_workbench_data_sources(
     )
 
 
+@router.get("/data-sources/browser", response_class=HTMLResponse)
 @router.get("/query-workbench/data-sources/explorer", response_class=HTMLResponse)
 def query_workbench_data_source_explorer(
     request: Request,
@@ -601,11 +607,12 @@ def query_workbench_data_source_explorer(
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> HTMLResponse:
     context = build_data_source_explorer_context(service, source_id)
+    context["browse_data_source"] = context.get("selected_data_source")
 
     if is_partial_request(request):
         return templates.TemplateResponse(
             request=request,
-            name="partials/data_source_explorer.html",
+            name="partials/data_source_management.html",
             context=context,
         )
 
@@ -619,9 +626,9 @@ def query_workbench_data_source_explorer(
                 active_notebook=None,
                 workspace_mode="notebook",
                 workspace_partial_template=(
-                    "partials/data_source_explorer.html"
+                    "partials/data_source_management.html"
                 ),
-                shell_sidebar_hidden=True,
+                shell_sidebar_hidden=False,
             ),
             "title": "DAAIFL Data Source Workbench",
             **context,

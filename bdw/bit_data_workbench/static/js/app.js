@@ -731,6 +731,7 @@ const {
   handleClick: handleWorkbenchNavigationClick,
 } = createWorkbenchNavigationController({
   applySidebarCollapsedState,
+  browseDataSourceInSidebar,
   closeSettingsMenus,
   getClearVisibleNotifications: () => clearVisibleNotifications,
   getQueryNotificationMenu: queryNotificationMenu,
@@ -1469,7 +1470,6 @@ function syncShellVisibility() {
     dataProductsPageRoot() ||
     serviceConsumptionPageRoot() ||
     queryWorkbenchEntryPageRoot() ||
-    queryWorkbenchDataSourcesPageRoot() ||
     dataSourceExplorerPageRoot() ||
     currentWorkspaceMode() === "ingestion"
   ) {
@@ -4493,8 +4493,68 @@ async function loadQueryWorkbenchEntry({ pushHistory = true } = {}) {
   }
 }
 
-async function loadQueryWorkbenchDataSources(sourceId = "", { pushHistory = true } = {}) {
-  const panel = await loadWorkspacePanelPartial(queryWorkbenchDataSourcesUrl(sourceId));
+function sidebarSourceIdForDataSource(sourceId = "", explicitSidebarSourceId = "") {
+  const normalizedExplicit = String(explicitSidebarSourceId || "").trim();
+  if (normalizedExplicit) {
+    return normalizedExplicit;
+  }
+  const normalizedSourceId = String(sourceId || "").trim();
+  if (normalizedSourceId === "pg_oltp_native") {
+    return "pg_oltp";
+  }
+  return normalizedSourceId;
+}
+
+async function revealDataSourceSidebarBrowser(sourceId = "", { sidebarSourceId = "" } = {}) {
+  if (currentSidebarMode() !== "notebook") {
+    await refreshSidebar("notebook");
+  }
+
+  const normalizedSidebarSourceId = sidebarSourceIdForDataSource(sourceId, sidebarSourceId);
+  setShellSidebarHidden(false);
+  applySidebarCollapsedState(false);
+  writeSidebarCollapsed(false);
+
+  const sourcesRoot = dataSourcesSection();
+  if (sourcesRoot instanceof HTMLDetailsElement) {
+    sourcesRoot.open = true;
+  }
+
+  const catalogRoot =
+    sourceCatalogNode(normalizedSidebarSourceId) ||
+    sourceCatalogNode(String(sourceId || "").trim());
+  if (catalogRoot instanceof HTMLDetailsElement) {
+    catalogRoot.open = true;
+    catalogRoot.scrollIntoView({ block: "nearest" });
+    blinkSourceCatalog(
+      catalogRoot.dataset.sourceCatalogSourceId?.trim() ||
+        catalogRoot.dataset.sourceCatalogName?.trim() ||
+        normalizedSidebarSourceId
+    );
+  }
+}
+
+async function initializeDataSourceManagementPage() {
+  const root = queryWorkbenchDataSourcesPageRoot();
+  if (!(root instanceof Element)) {
+    return;
+  }
+
+  const browseSourceId = String(root.dataset.browseSourceId || "").trim();
+  if (!browseSourceId) {
+    return;
+  }
+
+  await revealDataSourceSidebarBrowser(browseSourceId, {
+    sidebarSourceId: root.dataset.browseSidebarSourceId || "",
+  });
+}
+
+async function loadQueryWorkbenchDataSources(
+  sourceId = "",
+  { pushHistory = true, browse = false, sidebarSourceId = "" } = {}
+) {
+  const panel = await loadWorkspacePanelPartial(queryWorkbenchDataSourcesUrl(sourceId, { browse }));
   if (!panel) {
     return;
   }
@@ -4502,16 +4562,24 @@ async function loadQueryWorkbenchDataSources(sourceId = "", { pushHistory = true
   syncShellVisibility();
   activateNotebookLink("");
   applyWorkbenchTitle("data-sources");
+  if (browse) {
+    await revealDataSourceSidebarBrowser(sourceId, { sidebarSourceId });
+  } else {
+    await initializeDataSourceManagementPage();
+  }
   if (pushHistory) {
-    pushQueryWorkbenchDataSourcesHistory(sourceId);
+    pushQueryWorkbenchDataSourcesHistory(sourceId, { browse });
   }
 }
 
-async function loadQueryWorkbenchDataSourceExplorer(sourceId = "", { pushHistory = true } = {}) {
-  if (currentSidebarMode() !== "notebook") {
-    await refreshSidebar("notebook");
-  }
+async function browseDataSourceInSidebar(sourceId = "", { sidebarSourceId = "" } = {}) {
+  await loadQueryWorkbenchDataSources(sourceId, {
+    browse: true,
+    sidebarSourceId,
+  });
+}
 
+async function loadQueryWorkbenchDataSourceExplorer(sourceId = "", { pushHistory = true } = {}) {
   const panel = await loadWorkspacePanelPartial(queryWorkbenchDataSourceExplorerUrl(sourceId));
   if (!panel) {
     return;
@@ -4520,7 +4588,7 @@ async function loadQueryWorkbenchDataSourceExplorer(sourceId = "", { pushHistory
   syncShellVisibility();
   activateNotebookLink("");
   applyWorkbenchTitle("data-sources");
-  await dataSourceExplorerController.initializeCurrentPage();
+  await initializeDataSourceManagementPage();
   if (pushHistory) {
     pushQueryWorkbenchDataSourceExplorerHistory(sourceId);
   }
@@ -7550,11 +7618,15 @@ window.addEventListener("popstate", async () => {
     return;
   }
 
-  if (window.location.pathname === "/query-workbench/data-sources") {
+  if (
+    window.location.pathname === "/data-sources" ||
+    window.location.pathname === "/query-workbench/data-sources"
+  ) {
     try {
+      const params = new URLSearchParams(window.location.search);
       await loadQueryWorkbenchDataSources(
-        new URLSearchParams(window.location.search).get("source_id") || "",
-        { pushHistory: false }
+        params.get("source_id") || "",
+        { pushHistory: false, browse: params.get("browse") === "1" }
       );
     } catch (error) {
       if (error?.name !== "AbortError") {
@@ -7564,7 +7636,10 @@ window.addEventListener("popstate", async () => {
     return;
   }
 
-  if (window.location.pathname === "/query-workbench/data-sources/explorer") {
+  if (
+    window.location.pathname === "/data-sources/browser" ||
+    window.location.pathname === "/query-workbench/data-sources/explorer"
+  ) {
     try {
       await loadQueryWorkbenchDataSourceExplorer(
         new URLSearchParams(window.location.search).get("source_id") || "",
@@ -7697,7 +7772,7 @@ Promise.allSettled(initialLoadTasks)
   .finally(() => {
     ensureRealtimeEventsEventSource();
     const initialSidebarMode = initialWorkspaceMode === "loader" ? "loader" : "notebook";
-    refreshSidebar(initialSidebarMode).catch((error) => {
+    const sidebarRefreshTask = refreshSidebar(initialSidebarMode).catch((error) => {
       console.error("Failed to refresh the sidebar during startup.", error);
     });
 
@@ -7724,6 +7799,16 @@ Promise.allSettled(initialLoadTasks)
 
     if (dataProductsPageRoot()) {
       dataProductsController.initializeCurrentPage();
+      renderQueryNotificationMenu();
+      return;
+    }
+
+    if (queryWorkbenchDataSourcesPageRoot()) {
+      sidebarRefreshTask.finally(() => {
+        initializeDataSourceManagementPage().catch((error) => {
+          console.error("Failed to initialize the Data Source Workbench page.", error);
+        });
+      });
       renderQueryNotificationMenu();
       return;
     }

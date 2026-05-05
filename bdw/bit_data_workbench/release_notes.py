@@ -1,25 +1,20 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.7.10. Keep entries concise and
+# Derived from git history through version 0.7.11. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
     {
-        "version": "0.7.10",
-        "releasedAt": "2026-05-05T21:15:50+02:00",
+        "version": "0.7.11",
+        "releasedAt": "2026-05-05T21:30:52+02:00",
         "features": [
             (
-                "CSV ingestion uploads now use smaller 5 MiB chunks with five client retry attempts, "
-                "improving resilience for large S3 Parquet imports."
+                "The Data Source Workbench now has its own canonical /data-sources URL, "
+                "with the previous query-workbench data-source routes kept compatible."
             ),
             (
-                "Upload progress and failure dialogs now identify the active chunk, total chunks, "
-                "percent complete, and transferred MB, while server-side target-format transformation "
-                "runs through short status polls instead of one long gateway-sensitive request."
-            ),
-            (
-                "Shared Workspace S3 deletes now strike through pending sidebar and explorer entries "
-                "until the backend confirms the object, folder, or bucket was removed."
+                "Browse Data now opens the existing left-side Data Sources tree instead of a separate "
+                "object browser, so browsing uses the same controls as the Query Workbench."
             ),
         ],
     },
