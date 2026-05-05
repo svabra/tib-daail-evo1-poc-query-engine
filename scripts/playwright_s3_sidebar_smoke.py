@@ -345,14 +345,83 @@ def bucket_exists(client, bucket_name: str) -> bool:
         return False
 
 
+def object_exists(client, bucket_name: str, key: str) -> bool:
+    try:
+        client.head_object(Bucket=bucket_name, Key=key)
+        return True
+    except ClientError:
+        return False
+
+
+async def delete_object_via_sidebar_shows_pending_strike(
+    page,
+    bucket_name: str,
+    timeout_ms: int,
+) -> float:
+    await ensure_details_open(page, "[data-data-sources-section]")
+    await ensure_details_open(
+        page,
+        '[data-source-catalog][data-source-catalog-name="workspace"]',
+    )
+    await wait_for_bucket_summary(page, bucket_name, timeout_ms)
+    await ensure_details_open(
+        page,
+        f'[data-source-schema][data-source-bucket="{bucket_name}"]',
+    )
+
+    object_key = "samples/data.csv"
+    object_root = page.locator(
+        f'[data-source-object][data-s3-bucket="{bucket_name}"][data-s3-key="{object_key}"]'
+    ).first
+    await object_root.wait_for(state="visible", timeout=timeout_ms)
+
+    async def slow_delete(route):
+        if route.request.method == "DELETE":
+            await asyncio.sleep(0.75)
+        await route.continue_()
+
+    await page.route("**/api/s3/explorer/entries", slow_delete)
+    try:
+        await object_root.hover()
+        await object_root.locator("[data-source-action-menu-toggle]").click()
+        await object_root.locator("[data-delete-source-s3-object]").click()
+        await page.locator("[data-confirm-submit]").click()
+
+        started = time.perf_counter()
+        await page.wait_for_function(
+            """([bucketName, objectKey]) => {
+                const object = Array.from(document.querySelectorAll("[data-source-object][data-s3-bucket]"))
+                    .find((node) => node.dataset.s3Bucket === bucketName && node.dataset.s3Key === objectKey);
+                if (!object?.classList.contains("is-pending-delete")) {
+                    return false;
+                }
+                const label = object.querySelector(".source-node-label");
+                return label && getComputedStyle(label).textDecorationLine.includes("line-through");
+            }""",
+            arg=[bucket_name, object_key],
+            timeout=timeout_ms,
+        )
+        await (
+            page.locator("[data-source-operation-status-title]")
+            .filter(has_text="Object deleted")
+            .wait_for(timeout=timeout_ms)
+        )
+        await object_root.wait_for(state="detached", timeout=timeout_ms)
+        return (time.perf_counter() - started) * 1000
+    finally:
+        await page.unroute("**/api/s3/explorer/entries", slow_delete)
+
+
 async def run_smoke(args: argparse.Namespace) -> int:
     created_bucket = unique_bucket_name("pw-sidebar-create")
     versioned_bucket = unique_bucket_name("pw-sidebar-versioned-delete")
+    object_delete_bucket = unique_bucket_name("pw-sidebar-object-delete")
     descriptor_bucket = unique_bucket_name("pw-sidebar-descriptor-delete")
     client = s3_client(args)
 
     purge_bucket(client, created_bucket)
     seed_versioned_bucket(client, versioned_bucket)
+    seed_csv_bucket(client, object_delete_bucket)
     seed_csv_bucket(client, descriptor_bucket)
 
     async with async_playwright() as playwright:
@@ -402,6 +471,11 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 created_bucket,
                 args.timeout_ms,
             )
+            object_delete_ms = await delete_object_via_sidebar_shows_pending_strike(
+                page,
+                object_delete_bucket,
+                args.timeout_ms,
+            )
             versioned_delete_ms = await delete_bucket_via_sidebar(
                 page,
                 versioned_bucket,
@@ -417,7 +491,12 @@ async def run_smoke(args: argparse.Namespace) -> int:
             for message in console_messages:
                 print(message, file=sys.stderr)
             await browser.close()
-            for bucket_name in (created_bucket, versioned_bucket, descriptor_bucket):
+            for bucket_name in (
+                created_bucket,
+                versioned_bucket,
+                object_delete_bucket,
+                descriptor_bucket,
+            ):
                 purge_bucket(client, bucket_name)
             return 1
         except Exception as exc:
@@ -425,7 +504,12 @@ async def run_smoke(args: argparse.Namespace) -> int:
             for message in console_messages:
                 print(message, file=sys.stderr)
             await browser.close()
-            for bucket_name in (created_bucket, versioned_bucket, descriptor_bucket):
+            for bucket_name in (
+                created_bucket,
+                versioned_bucket,
+                object_delete_bucket,
+                descriptor_bucket,
+            ):
                 purge_bucket(client, bucket_name)
             return 1
 
@@ -442,6 +526,11 @@ async def run_smoke(args: argparse.Namespace) -> int:
             "Versioned bucket still exists after recursive sidebar delete: "
             f"{versioned_bucket}"
         )
+    if object_exists(client, object_delete_bucket, "samples/data.csv"):
+        failures.append(
+            "Sidebar object still exists after delete: "
+            f"{object_delete_bucket}/samples/data.csv"
+        )
     if bucket_exists(client, descriptor_bucket):
         failures.append(
             "Descriptor fallback bucket still exists after sidebar delete: "
@@ -454,16 +543,23 @@ async def run_smoke(args: argparse.Namespace) -> int:
 
     print(f"Sidebar create bucket: {create_ms:.0f} ms")
     print(f"Sidebar delete empty bucket: {delete_ms:.0f} ms")
+    print(f"Sidebar delete object pending strike: {object_delete_ms:.0f} ms")
     print(f"Sidebar delete versioned bucket: {versioned_delete_ms:.0f} ms")
     print(f"Sidebar delete bucket descriptor fallback: {descriptor_delete_ms:.0f} ms")
 
     if failures:
         for failure in failures:
             print(failure, file=sys.stderr)
-        for bucket_name in (created_bucket, versioned_bucket, descriptor_bucket):
+        for bucket_name in (
+            created_bucket,
+            versioned_bucket,
+            object_delete_bucket,
+            descriptor_bucket,
+        ):
             purge_bucket(client, bucket_name)
         return 1
 
+    purge_bucket(client, object_delete_bucket)
     print("Playwright S3 sidebar smoke passed.")
     return 0
 

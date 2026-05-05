@@ -22,8 +22,10 @@ import {
   readCsvFilesFromZip,
 } from "./zip-reader.js";
 
-const DEFAULT_CSV_UPLOAD_CHUNK_BYTES = 10 * 1024 * 1024;
+const DEFAULT_CSV_UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024;
 const CSV_UPLOAD_CHUNK_ATTEMPTS = 5;
+const CSV_UPLOAD_COMPLETION_POLL_INTERVAL_MS = 2000;
+const CSV_UPLOAD_COMPLETION_TIMEOUT_MS = 60 * 60 * 1000;
 
 function normalizeCsvIdentifier(value, defaultPrefix) {
   let normalized = String(value || "")
@@ -1096,6 +1098,70 @@ export function createCsvIngestionController(helpers) {
     return payload || {};
   }
 
+  function sleep(milliseconds) {
+    return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+  }
+
+  function isAmbiguousCompletionStatus(status) {
+    return [502, 503, 504].includes(Number(status));
+  }
+
+  function csvUploadCompletionResult(payload) {
+    if (Array.isArray(payload?.imports)) {
+      return payload;
+    }
+    if (payload?.status === "completed" && payload?.result && typeof payload.result === "object") {
+      return payload.result;
+    }
+    if (payload?.status === "failed") {
+      throw new Error(payload?.error || "The CSV files could not be imported.");
+    }
+    return null;
+  }
+
+  async function waitForCsvUploadSessionCompletion(sessionId, fileEntries, totalBytes) {
+    const deadline = Date.now() + CSV_UPLOAD_COMPLETION_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      const response = await window.fetch(
+        `/api/ingestion/csv/upload-sessions/${encodeURIComponent(sessionId)}`,
+        { headers: { Accept: "application/json" } }
+      );
+      const payload = await readJsonResponse(
+        response,
+        "The CSV upload processing status could not be read."
+      );
+      const result = csvUploadCompletionResult(payload);
+      if (result) {
+        return result;
+      }
+      setUploadProgress({
+        label: "Processing ...",
+        phase: "processing",
+        detail: serverProcessingProgressDetail(fileEntries),
+        transferredBytes: totalBytes,
+        totalBytes,
+        indeterminate: true,
+      });
+      await sleep(CSV_UPLOAD_COMPLETION_POLL_INTERVAL_MS);
+    }
+    throw new Error("The CSV upload processing step did not finish before the client-side wait timeout.");
+  }
+
+  async function readCsvUploadCompletionResult(response, sessionId, fileEntries, totalBytes) {
+    if (isAmbiguousCompletionStatus(response.status)) {
+      return waitForCsvUploadSessionCompletion(sessionId, fileEntries, totalBytes);
+    }
+    const payload = await readJsonResponse(
+      response,
+      "The CSV files could not be imported."
+    );
+    const result = csvUploadCompletionResult(payload);
+    if (result) {
+      return result;
+    }
+    return waitForCsvUploadSessionCompletion(sessionId, fileEntries, totalBytes);
+  }
+
   function uploadCsvChunk({
     sessionId,
     fileId,
@@ -1208,6 +1274,7 @@ export function createCsvIngestionController(helpers) {
 
     let committedBytes = 0;
     let committedChunks = 0;
+    let shouldDeleteSessionOnError = true;
     try {
       for (let fileIndex = 0; fileIndex < fileEntries.length; fileIndex += 1) {
         const entry = fileEntries[fileIndex];
@@ -1281,11 +1348,16 @@ export function createCsvIngestionController(helpers) {
           }),
         }
       );
+      if (completeResponse.ok || isAmbiguousCompletionStatus(completeResponse.status)) {
+        shouldDeleteSessionOnError = false;
+      }
       let payload = {};
       try {
-        payload = await readJsonResponse(
+        payload = await readCsvUploadCompletionResult(
           completeResponse,
-          "The CSV files could not be imported."
+          sessionId,
+          fileEntries,
+          totalBytes
         );
       } catch (error) {
         throw new Error(processingFailureMessage(error, totalBytes));
@@ -1293,10 +1365,12 @@ export function createCsvIngestionController(helpers) {
       await refreshSidebar("notebook");
       return Array.isArray(payload?.imports) ? payload.imports : [];
     } catch (error) {
-      window.fetch(`/api/ingestion/csv/upload-sessions/${encodeURIComponent(sessionId)}`, {
-        method: "DELETE",
-        headers: { Accept: "application/json" },
-      }).catch(() => {});
+      if (shouldDeleteSessionOnError) {
+        window.fetch(`/api/ingestion/csv/upload-sessions/${encodeURIComponent(sessionId)}`, {
+          method: "DELETE",
+          headers: { Accept: "application/json" },
+        }).catch(() => {});
+      }
       throw error;
     }
   }

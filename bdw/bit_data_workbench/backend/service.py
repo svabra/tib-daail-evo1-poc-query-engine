@@ -144,6 +144,7 @@ class WorkbenchService:
         self._completion_schema: dict[str, object] = {}
         self._source_options: list[dict[str, str]] = []
         self._startup_threads: list[Thread] = []
+        self._csv_upload_completion_threads: list[Thread] = []
         self._query_jobs = QueryJobManager(
             max_result_rows=settings.max_result_rows,
             connection_factory=self._create_worker_connection,
@@ -372,6 +373,10 @@ class WorkbenchService:
             if thread.is_alive():
                 thread.join(timeout=0.2)
         self._startup_threads.clear()
+        for thread in list(self._csv_upload_completion_threads):
+            if thread.is_alive():
+                thread.join(timeout=0.2)
+        self._csv_upload_completion_threads.clear()
         with self._lock:
             if self._conn is not None:
                 self._conn.close()
@@ -1068,9 +1073,47 @@ class WorkbenchService:
         replace_existing: bool = True,
         storage_format: str = "csv",
     ) -> dict[str, object]:
+        state = self._csv_upload_sessions.start_processing(session_id)
+        should_start_worker = bool(state.pop("processingStarted", False))
+        if should_start_worker:
+            worker = Thread(
+                target=self._complete_csv_upload_session_in_background,
+                kwargs={
+                    "session_id": session_id,
+                    "target_id": target_id,
+                    "bucket": bucket,
+                    "prefix": prefix,
+                    "schema_name": schema_name,
+                    "table_prefix": table_prefix,
+                    "delimiter": delimiter,
+                    "has_header": has_header,
+                    "replace_existing": replace_existing,
+                    "storage_format": storage_format,
+                },
+                name=f"bdw-csv-upload-complete-{session_id[:8]}",
+                daemon=True,
+            )
+            worker.start()
+            self._csv_upload_completion_threads.append(worker)
+        return state
+
+    def _complete_csv_upload_session_in_background(
+        self,
+        *,
+        session_id: str,
+        target_id: str,
+        bucket: str,
+        prefix: str,
+        schema_name: str,
+        table_prefix: str,
+        delimiter: str,
+        has_header: bool,
+        replace_existing: bool,
+        storage_format: str,
+    ) -> None:
         normalized_target_id = str(target_id or "").strip()
-        sources = self._csv_upload_sessions.source_files(session_id)
         try:
+            sources = self._csv_upload_sessions.source_files(session_id)
             payload = self._csv_ingestion.import_csv_sources(
                 sources=sources,
                 target_id=normalized_target_id,
@@ -1083,9 +1126,14 @@ class WorkbenchService:
                 replace_existing=replace_existing,
                 storage_format=storage_format,
             )
-        finally:
-            self._csv_upload_sessions.delete_session(session_id)
-        return self._finalize_csv_import_payload(payload, normalized_target_id)
+            result = self._finalize_csv_import_payload(payload, normalized_target_id)
+            self._csv_upload_sessions.finish_processing_success(session_id, result)
+        except Exception as exc:
+            logger.exception("CSV upload session completion failed: %s", session_id)
+            try:
+                self._csv_upload_sessions.finish_processing_failure(session_id, str(exc))
+            except Exception:
+                logger.exception("Failed to persist CSV upload session failure: %s", session_id)
 
     def _finalize_csv_import_payload(
         self,

@@ -5964,6 +5964,104 @@ function s3ExplorerPreferredLocationAfterDelete(descriptor) {
   };
 }
 
+function s3DeleteDescriptorMatchesKey(descriptor, bucket, key) {
+  const descriptorBucket = String(descriptor?.bucket || "").trim();
+  const descriptorPrefix = String(descriptor?.prefix || "").trim();
+  const entryKind = String(descriptor?.entryKind || "").trim();
+  const candidateBucket = String(bucket || "").trim();
+  const candidateKey = String(key || "").trim();
+
+  if (!descriptorBucket || descriptorBucket !== candidateBucket) {
+    return false;
+  }
+  if (entryKind === "bucket") {
+    return true;
+  }
+  if (entryKind === "folder") {
+    return Boolean(descriptorPrefix) && candidateKey.startsWith(descriptorPrefix);
+  }
+  return entryKind === "file" && descriptorPrefix === candidateKey;
+}
+
+function collectS3PendingDeleteTargets(descriptor) {
+  const targets = new Set();
+  const descriptorBucket = String(descriptor?.bucket || "").trim();
+  const descriptorPrefix = String(descriptor?.prefix || "").trim();
+  const entryKind = String(descriptor?.entryKind || "").trim();
+  if (!descriptorBucket || !entryKind) {
+    return [];
+  }
+
+  document.querySelectorAll("[data-source-object][data-s3-bucket]").forEach((node) => {
+    if (s3DeleteDescriptorMatchesKey(descriptor, node.dataset.s3Bucket, node.dataset.s3Key)) {
+      targets.add(node);
+    }
+  });
+
+  if (entryKind === "bucket") {
+    document.querySelectorAll("[data-source-schema]").forEach((node) => {
+      const schemaBucket = String(node.dataset.sourceBucket || "").trim();
+      const hasBucketObject = Array.from(node.querySelectorAll("[data-source-object][data-s3-bucket]")).some(
+        (sourceObject) => String(sourceObject.dataset.s3Bucket || "").trim() === descriptorBucket
+      );
+      if (schemaBucket === descriptorBucket || hasBucketObject) {
+        targets.add(node);
+      }
+    });
+  }
+
+  document.querySelectorAll("[data-s3-explorer-entry]").forEach((node) => {
+    const candidateBucket = String(node.dataset.s3ExplorerBucket || "").trim();
+    const candidatePrefix = String(node.dataset.s3ExplorerPrefix || "").trim();
+    if (s3DeleteDescriptorMatchesKey(descriptor, candidateBucket, candidatePrefix)) {
+      targets.add(node);
+    }
+  });
+
+  document.querySelectorAll(".data-source-explorer-object[data-bucket]").forEach((node) => {
+    const candidateBucket = String(node.dataset.bucket || "").trim();
+    const candidatePrefix = String(node.dataset.prefix || "").trim();
+    if (s3DeleteDescriptorMatchesKey(descriptor, candidateBucket, candidatePrefix)) {
+      targets.add(node);
+    }
+  });
+
+  if (entryKind === "file" && descriptorPrefix) {
+    document
+      .querySelectorAll(
+        `[data-source-object][data-s3-bucket="${escapeSelectorValue(
+          descriptorBucket
+        )}"][data-s3-key="${escapeSelectorValue(descriptorPrefix)}"]`
+      )
+      .forEach((node) => targets.add(node));
+  }
+
+  return Array.from(targets);
+}
+
+function setS3PendingDeleteState(descriptor, pending) {
+  collectS3PendingDeleteTargets(descriptor).forEach((node) => {
+    node.classList.toggle("is-pending-delete", pending);
+    if (pending) {
+      node.dataset.pendingDelete = "true";
+      node.setAttribute("aria-busy", "true");
+    } else {
+      delete node.dataset.pendingDelete;
+      node.removeAttribute("aria-busy");
+    }
+
+    node
+      .querySelectorAll(
+        "[data-delete-source-s3-object], [data-delete-source-s3-bucket], [data-s3-explorer-entry-delete]"
+      )
+      .forEach((button) => {
+        if (button instanceof HTMLButtonElement) {
+          button.disabled = pending;
+        }
+      });
+  });
+}
+
 async function deleteS3ExplorerEntry(target) {
   const descriptor = s3ExplorerEntryDescriptor(target);
   if (!descriptor) {
@@ -6010,6 +6108,8 @@ async function deleteS3EntryDescriptor(
     });
   }
 
+  setS3PendingDeleteState(descriptor, true);
+
   try {
     const result = await fetchJsonOrThrow("/api/s3/explorer/entries", {
       method: "DELETE",
@@ -6049,8 +6149,12 @@ async function deleteS3EntryDescriptor(
         { autoClearMs: 6000 }
       );
     }
+    if (!refreshExplorerAfter && !refreshSidebarAfter) {
+      setS3PendingDeleteState(descriptor, false);
+    }
     return result;
   } catch (error) {
+    setS3PendingDeleteState(descriptor, false);
     if (showSidebarStatus) {
       setSidebarSourceOperationStatus(
         {

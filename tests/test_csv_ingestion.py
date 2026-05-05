@@ -709,3 +709,41 @@ class CsvUploadSessionManagerTests(TestCase):
 
             self.assertTrue(cancel_state["cancelled"])
             self.assertFalse(session_dir.exists())
+
+    def test_upload_session_tracks_background_processing_result(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            settings = make_settings()
+            settings.ingestion_upload_dir = Path(temp_dir) / "uploads"
+            settings.ingestion_upload_chunk_bytes = 4
+            manager = CsvUploadSessionManager(settings=settings)
+
+            state = manager.create_session(
+                [CsvUploadFileRequest(file_name="large.csv", size_bytes=4)]
+            )
+            session_id = str(state["sessionId"])
+            manager.append_chunk(
+                session_id=session_id,
+                file_id=str(state["files"][0]["fileId"]),
+                chunk_index=0,
+                content_range="bytes 0-3/4",
+                payload=b"data",
+            )
+
+            processing_state = manager.start_processing(session_id)
+
+            self.assertEqual(processing_state["status"], "processing")
+            self.assertTrue(processing_state["processingStarted"])
+            already_processing = manager.start_processing(session_id)
+            self.assertFalse(already_processing["processingStarted"])
+
+            result = {
+                "targetId": "workspace.s3",
+                "importedCount": 1,
+                "failedCount": 0,
+                "imports": [{"fileName": "large.csv", "status": "imported"}],
+            }
+            completed_state = manager.finish_processing_success(session_id, result)
+
+            self.assertEqual(completed_state["status"], "completed")
+            self.assertEqual(completed_state["result"], result)
+            self.assertFalse((settings.ingestion_upload_dir / session_id / "files").exists())

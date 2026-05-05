@@ -113,6 +113,7 @@ class CsvUploadSessionManager:
                 "sessionId": session_id,
                 "createdAt": _isoformat(now),
                 "expiresAt": _isoformat(expires_at),
+                "status": "uploading",
                 "chunkSizeBytes": self._settings.ingestion_upload_chunk_bytes,
                 "files": file_entries,
             }
@@ -197,6 +198,50 @@ class CsvUploadSessionManager:
                 )
             return sources
 
+    def start_processing(self, session_id: str) -> dict[str, object]:
+        with self._lock:
+            state = self._read_state(session_id)
+            self._raise_if_expired(session_id, state)
+            status = str(state.get("status") or "uploading").strip().lower()
+            if status in {"processing", "completed", "failed"}:
+                public_state = self._public_state(state)
+                public_state["processingStarted"] = False
+                return public_state
+            for item in state.get("files") or []:
+                file_entry = item if isinstance(item, dict) else {}
+                if file_entry.get("complete") is not True:
+                    raise ValueError("Upload session is not complete yet.")
+            state["status"] = "processing"
+            state["processingStartedAt"] = _isoformat(_utc_now())
+            state.pop("processingCompletedAt", None)
+            state.pop("result", None)
+            state.pop("error", None)
+            self._write_state(session_id, state)
+            public_state = self._public_state(state)
+            public_state["processingStarted"] = True
+            return public_state
+
+    def finish_processing_success(self, session_id: str, result: dict[str, object]) -> dict[str, object]:
+        with self._lock:
+            state = self._read_state(session_id)
+            state["status"] = "completed"
+            state["processingCompletedAt"] = _isoformat(_utc_now())
+            state["result"] = result
+            state.pop("error", None)
+            self._remove_staged_files(session_id)
+            self._write_state(session_id, state)
+            return self._public_state(state)
+
+    def finish_processing_failure(self, session_id: str, error: str) -> dict[str, object]:
+        with self._lock:
+            state = self._read_state(session_id)
+            state["status"] = "failed"
+            state["processingCompletedAt"] = _isoformat(_utc_now())
+            state["error"] = str(error or "The CSV files could not be imported.")
+            state.pop("result", None)
+            self._write_state(session_id, state)
+            return self._public_state(state)
+
     def cancel_session(self, session_id: str) -> dict[str, object]:
         with self._lock:
             state = self._read_state(session_id)
@@ -237,6 +282,9 @@ class CsvUploadSessionManager:
     def _state_path(self, session_id: str) -> Path:
         return self._session_dir(session_id) / "session.json"
 
+    def _remove_staged_files(self, session_id: str) -> None:
+        shutil.rmtree(self._session_dir(session_id) / "files", ignore_errors=True)
+
     def _read_state(self, session_id: str) -> dict[str, object]:
         state_path = self._state_path(session_id)
         if not state_path.is_file():
@@ -270,6 +318,11 @@ class CsvUploadSessionManager:
             "sessionId": state.get("sessionId"),
             "createdAt": state.get("createdAt"),
             "expiresAt": state.get("expiresAt"),
+            "status": state.get("status") or "uploading",
+            "processingStartedAt": state.get("processingStartedAt"),
+            "processingCompletedAt": state.get("processingCompletedAt"),
+            "result": state.get("result") if isinstance(state.get("result"), dict) else None,
+            "error": state.get("error"),
             "chunkSizeBytes": state.get("chunkSizeBytes"),
             "files": [
                 {
@@ -283,4 +336,3 @@ class CsvUploadSessionManager:
                 if isinstance(item, dict)
             ],
         }
-

@@ -314,6 +314,11 @@ async def import_server_csv_with_progress(page, timeout_ms: int) -> None:
         await page.locator("[data-csv-import-submit]").click()
         progress = page.locator("[data-csv-upload-progress]").first
         await progress.wait_for(state="visible", timeout=timeout_ms)
+        progress_track = page.locator(".ingestion-csv-upload-progress-track").first
+        await progress_track.wait_for(state="visible", timeout=timeout_ms)
+        initial_track_width = await progress_track.evaluate(
+            "(element) => Math.round(element.getBoundingClientRect().width)"
+        )
         progress_text = (await progress.text_content() or "").strip()
         if "Uploading" not in progress_text or "MB" not in progress_text:
             raise RuntimeError(f"Expected upload progress next to the import button, got: {progress_text!r}")
@@ -326,6 +331,14 @@ async def import_server_csv_with_progress(page, timeout_ms: int) -> None:
             }""",
             timeout=timeout_ms,
         )
+        upload_track_width = await progress_track.evaluate(
+            "(element) => Math.round(element.getBoundingClientRect().width)"
+        )
+        if abs(upload_track_width - initial_track_width) > 1:
+            raise RuntimeError(
+                "Expected upload progress track width to stay fixed while upload text changes, "
+                f"got {initial_track_width}px then {upload_track_width}px."
+            )
         await page.wait_for_function(
             """() => {
                 const text = document.querySelector("[data-csv-upload-progress]")?.textContent || "";
@@ -336,6 +349,14 @@ async def import_server_csv_with_progress(page, timeout_ms: int) -> None:
             }""",
             timeout=timeout_ms,
         )
+        processing_track_width = await progress_track.evaluate(
+            "(element) => Math.round(element.getBoundingClientRect().width)"
+        )
+        if abs(processing_track_width - initial_track_width) > 1:
+            raise RuntimeError(
+                "Expected upload progress track width to stay fixed when processing begins, "
+                f"got {initial_track_width}px then {processing_track_width}px."
+            )
 
     await page.locator("[data-csv-result-list] .ingestion-csv-result-card-imported").first.wait_for(
         state="visible",
@@ -453,6 +474,124 @@ async def import_server_csv_with_retried_chunk(page, timeout_ms: int) -> None:
         )
         if chunk_attempts.get(1) != 5:
             raise RuntimeError(f"Expected chunk 2 to be attempted five times, got: {chunk_attempts!r}")
+        await close_message_dialog(page, timeout_ms)
+    finally:
+        await page.unroute("**/api/ingestion/csv/upload-sessions", handle_create)
+        await page.unroute("**/api/ingestion/csv/upload-sessions/**", handle_session)
+
+
+async def import_server_csv_recovers_after_complete_gateway_timeout(page, timeout_ms: int) -> None:
+    file_payload = b"id,name,value\n1,alpha,10\n2,beta,20\n"
+    chunk_size = 10
+    upload_state = {
+        "sessionId": "playwright-timeout-session",
+        "status": "uploading",
+        "chunkSizeBytes": chunk_size,
+        "files": [
+            {
+                "fileId": "playwright-timeout-file",
+                "fileName": "playwright-timeout.csv",
+                "sizeBytes": len(file_payload),
+                "receivedBytes": 0,
+                "complete": False,
+            }
+        ],
+    }
+    completed_payload = {
+        "targetId": "workspace.s3",
+        "importedCount": 1,
+        "failedCount": 0,
+        "imports": [
+            {
+                "fileName": "playwright-timeout.csv",
+                "storedFileName": "playwright-timeout.parquet",
+                "status": "imported",
+                "destination": "workspace.s3",
+                "bucket": "playwright-timeout-bucket",
+                "objectKey": "playwright-timeout.parquet",
+                "storageFormat": "parquet",
+                "rowCount": 2,
+            }
+        ],
+    }
+    delete_requests = 0
+
+    async def handle_create(route):
+        await route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(upload_state),
+        )
+
+    async def handle_session(route):
+        nonlocal delete_requests
+        request = route.request
+        if request.method == "PUT":
+            chunk_index = int(request.url.rstrip("/").rsplit("/", 1)[-1])
+            received = min(len(file_payload), (chunk_index + 1) * chunk_size)
+            upload_state["files"][0]["receivedBytes"] = received
+            upload_state["files"][0]["complete"] = received == len(file_payload)
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(upload_state),
+            )
+            return
+        if request.method == "POST" and request.url.endswith("/complete"):
+            upload_state["status"] = "processing"
+            await route.fulfill(
+                status=504,
+                content_type="text/html",
+                body="<html><body>Gateway Time-out</body></html>",
+            )
+            return
+        if request.method == "GET":
+            upload_state["status"] = "completed"
+            upload_state["result"] = completed_payload
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(upload_state),
+            )
+            return
+        if request.method == "DELETE":
+            delete_requests += 1
+            await route.fulfill(
+                status=404,
+                content_type="application/json",
+                body=json.dumps({"detail": "Unknown upload session."}),
+            )
+            return
+        await route.fulfill(status=200, content_type="application/json", body="{}")
+
+    await page.route("**/api/ingestion/csv/upload-sessions", handle_create)
+    await page.route("**/api/ingestion/csv/upload-sessions/**", handle_session)
+    try:
+        await page.locator('[data-csv-target-option][value="workspace.s3"]').check()
+        await page.locator("[data-csv-s3-bucket]").fill("playwright-timeout-bucket")
+        await page.locator('[data-csv-s3-storage-format][value="parquet"]').check()
+        await page.locator("[data-csv-file-input]").set_input_files(
+            files=[
+                {
+                    "name": "playwright-timeout.csv",
+                    "mimeType": "text/csv",
+                    "buffer": file_payload,
+                }
+            ]
+        )
+        await page.locator("[data-csv-preview-root] .ingestion-csv-preview-card").wait_for(
+            state="visible",
+            timeout=timeout_ms,
+        )
+        await page.locator("[data-csv-import-submit]").click()
+        await page.locator(
+            "[data-csv-result-list] .ingestion-csv-result-card-imported",
+            has_text="playwright-timeout.csv",
+        ).first.wait_for(state="visible", timeout=timeout_ms)
+        if delete_requests:
+            raise RuntimeError(
+                f"Expected gateway-timeout recovery to avoid DELETE cleanup, got {delete_requests} DELETE request(s)."
+            )
         await close_message_dialog(page, timeout_ms)
     finally:
         await page.unroute("**/api/ingestion/csv/upload-sessions", handle_create)
@@ -692,6 +831,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
             await import_local_zip_file(page, args.timeout_ms)
             await import_server_csv_with_progress(page, args.timeout_ms)
             await import_server_csv_with_retried_chunk(page, args.timeout_ms)
+            await import_server_csv_recovers_after_complete_gateway_timeout(page, args.timeout_ms)
             await reject_server_csv_chunk_failure_with_context(page, args.timeout_ms)
             await reject_server_csv_processing_failure_with_context(page, args.timeout_ms)
         except (PlaywrightTimeoutError, RuntimeError) as exc:

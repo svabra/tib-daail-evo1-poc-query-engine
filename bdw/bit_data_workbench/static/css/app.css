@@ -1409,6 +1409,17 @@ details:not([open]) > .source-schema > summary::before {
   margin-left: 16px;
 }
 
+.source-schema.is-pending-delete > summary {
+  cursor: wait;
+  opacity: 0.64;
+}
+
+.source-schema.is-pending-delete > summary .source-node-label,
+.source-schema.is-pending-delete > summary .source-schema-meta {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+
 [data-local-workspace-root-schema] {
   margin-left: 0;
 }
@@ -1486,6 +1497,17 @@ details:not([open]) > .source-schema > summary::before {
   border-top-color: var(--text-muted);
   border-radius: 999px;
   animation: sidebar-spin 0.7s linear infinite;
+}
+
+.source-object.is-pending-delete {
+  cursor: wait;
+  opacity: 0.64;
+}
+
+.source-object.is-pending-delete .source-node-label,
+.source-object.is-pending-delete .source-object-meta {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
 }
 
 .source-object .source-node-label {
@@ -3475,6 +3497,17 @@ details:not([open]) > .source-schema > summary::before {
   transform: translateY(-1px);
 }
 
+.data-source-explorer-object.is-pending-delete {
+  cursor: wait;
+  opacity: 0.64;
+  transform: none;
+}
+
+.data-source-explorer-object.is-pending-delete .data-source-explorer-object-copy {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+
 .data-source-explorer-object-copy {
   display: grid;
   gap: 3px;
@@ -5267,6 +5300,17 @@ details:not([open]) > .source-schema > summary::before {
   color: var(--accent-strong);
 }
 
+.s3-explorer-node.is-pending-delete > .tree-folder-summary {
+  cursor: wait;
+  opacity: 0.64;
+}
+
+.s3-explorer-node.is-pending-delete > .tree-folder-summary .tree-folder-label,
+.s3-explorer-node.is-pending-delete > .tree-folder-summary .tree-folder-count {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
+}
+
 .s3-explorer-node > .tree-children {
   margin-top: 8px;
 }
@@ -5325,6 +5369,17 @@ details:not([open]) > .source-schema > summary::before {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: #fff;
+}
+
+.s3-explorer-file.is-pending-delete {
+  cursor: wait;
+  opacity: 0.64;
+}
+
+.s3-explorer-file.is-pending-delete .s3-explorer-file-name,
+.s3-explorer-file.is-pending-delete .s3-explorer-file-meta {
+  text-decoration: line-through;
+  text-decoration-thickness: 1.5px;
 }
 
 .s3-explorer-file-name {
@@ -5856,18 +5911,23 @@ details:not([open]) > .source-schema > summary::before {
 }
 
 .ingestion-csv-upload-progress {
-  min-width: min(360px, 100%);
+  flex: 0 1 560px;
+  width: min(560px, 100%);
+  min-width: min(320px, 100%);
   display: grid;
   gap: 6px;
 }
 
 .ingestion-csv-upload-progress-copy {
-  display: inline-flex;
+  min-width: 0;
+  display: flex;
   align-items: baseline;
+  flex-wrap: wrap;
   gap: 8px;
   color: var(--text-muted);
   font-size: 0.82rem;
   line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .ingestion-csv-upload-progress-copy strong {
