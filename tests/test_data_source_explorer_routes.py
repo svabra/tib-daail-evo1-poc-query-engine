@@ -26,6 +26,7 @@ from bit_data_workbench.web.router import (  # noqa: E402
     index,
     query_workbench_data_source_explorer,
     query_workbench_data_sources,
+    sidebar_partial,
 )
 
 
@@ -150,6 +151,14 @@ class FakeWorkbenchService:
                     )
                 ],
             ),
+            SourceCatalog(
+                name="workspace_local",
+                connection_source_id="workspace.local",
+                connection_status="connected",
+                connection_label="Available",
+                connection_detail="Local Workspace is available.",
+                schemas=[],
+            ),
         ]
 
     def notebooks(self):
@@ -260,6 +269,74 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
             body,
         )
         self.assertNotIn('data-data-source-explorer-page', body)
+        self.assertNotIn('data-inline-source-browser', body)
+
+    def test_management_full_page_hides_global_sidebar(self) -> None:
+        response = query_workbench_data_sources(
+            request=build_request("/data-sources"),
+            source_id="workspace.s3",
+            service=FakeWorkbenchService(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.body.decode("utf-8")
+        self.assertIn('class="shell shell-sidebar-hidden"', body)
+
+    def test_browse_mode_renders_inline_browser_for_each_source(self) -> None:
+        cases = [
+            ("workspace.s3", "workspace.s3"),
+            ("workspace.local", "workspace.local"),
+            ("pg_oltp", "pg_oltp"),
+            ("pg_olap", "pg_olap"),
+            ("pg_oltp_native", "pg_oltp"),
+        ]
+
+        for source_id, sidebar_source_id in cases:
+            with self.subTest(source_id=source_id):
+                response = query_workbench_data_sources(
+                    request=build_request("/data-sources", partial=True),
+                    source_id=source_id,
+                    browse=True,
+                    service=FakeWorkbenchService(),
+                )
+
+                self.assertEqual(response.status_code, 200)
+                body = response.body.decode("utf-8")
+                self.assertIn('data-inline-source-browser', body)
+                self.assertIn(f'data-browse-source-id="{source_id}"', body)
+                self.assertIn(
+                    f'data-browse-sidebar-source-id="{sidebar_source_id}"',
+                    body,
+                )
+                self.assertNotIn('data-data-source-explorer-page', body)
+
+    def test_inline_native_postgres_browser_preserves_native_source_id(self) -> None:
+        response = query_workbench_data_sources(
+            request=build_request("/data-sources", partial=True),
+            source_id="pg_oltp_native",
+            browse=True,
+            service=FakeWorkbenchService(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.body.decode("utf-8")
+        self.assertIn('data-inline-source-browser', body)
+        self.assertIn('data-source-catalog-source-id="pg_oltp"', body)
+        self.assertIn('data-source-option-id="pg_oltp_native"', body)
+
+    def test_query_workbench_sidebar_keeps_full_data_source_navigation(self) -> None:
+        response = sidebar_partial(
+            request=build_request("/sidebar", partial=True),
+            mode="notebook",
+            service=FakeWorkbenchService(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.body.decode("utf-8")
+        self.assertIn('data-data-sources-section', body)
+        self.assertIn('data-source-catalog-source-id="workspace.s3"', body)
+        self.assertIn('data-source-catalog-source-id="pg_oltp"', body)
+        self.assertIn('data-source-catalog-source-id="pg_olap"', body)
 
     def test_browser_route_reuses_management_page_and_sidebar_source_mapping(self) -> None:
         response = query_workbench_data_source_explorer(

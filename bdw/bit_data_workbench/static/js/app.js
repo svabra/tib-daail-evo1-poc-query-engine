@@ -1470,6 +1470,7 @@ function syncShellVisibility() {
     dataProductsPageRoot() ||
     serviceConsumptionPageRoot() ||
     queryWorkbenchEntryPageRoot() ||
+    queryWorkbenchDataSourcesPageRoot() ||
     dataSourceExplorerPageRoot() ||
     currentWorkspaceMode() === "ingestion"
   ) {
@@ -1480,8 +1481,12 @@ function syncShellVisibility() {
   restoreSidebarVisibilityForWorkspace();
 }
 
-function sourceOperationStatusRoot() {
-  return document.querySelector("[data-source-operation-status]");
+function sourceOperationStatusRoots() {
+  return Array.from(document.querySelectorAll("[data-source-operation-status]"));
+}
+
+function sourceBrowserScopeRoot(node = null) {
+  return node?.closest?.("[data-source-browser-scope]") || document;
 }
 
 function clearSidebarSourceOperationStatusTimer() {
@@ -1492,35 +1497,40 @@ function clearSidebarSourceOperationStatusTimer() {
 }
 
 function renderSidebarSourceOperationStatus() {
-  const root = sourceOperationStatusRoot();
-  if (!(root instanceof HTMLElement)) {
+  const roots = sourceOperationStatusRoots();
+  if (!roots.length) {
     return;
   }
 
-  const titleNode = root.querySelector("[data-source-operation-status-title]");
-  const copyNode = root.querySelector("[data-source-operation-status-copy]");
-  const status = sidebarSourceOperationStatus;
-  if (!status?.title || !status?.copy) {
-    root.hidden = true;
-    root.classList.remove("is-success", "is-danger");
+  roots.forEach((root) => {
+    if (!(root instanceof HTMLElement)) {
+      return;
+    }
+    const titleNode = root.querySelector("[data-source-operation-status-title]");
+    const copyNode = root.querySelector("[data-source-operation-status-copy]");
+    const status = sidebarSourceOperationStatus;
+    if (!status?.title || !status?.copy) {
+      root.hidden = true;
+      root.classList.remove("is-success", "is-danger");
+      if (titleNode) {
+        titleNode.textContent = "";
+      }
+      if (copyNode) {
+        copyNode.textContent = "";
+      }
+      return;
+    }
+
+    root.hidden = false;
+    root.classList.toggle("is-success", status.tone === "success");
+    root.classList.toggle("is-danger", status.tone === "danger");
     if (titleNode) {
-      titleNode.textContent = "";
+      titleNode.textContent = status.title;
     }
     if (copyNode) {
-      copyNode.textContent = "";
+      copyNode.textContent = status.copy;
     }
-    return;
-  }
-
-  root.hidden = false;
-  root.classList.toggle("is-success", status.tone === "success");
-  root.classList.toggle("is-danger", status.tone === "danger");
-  if (titleNode) {
-    titleNode.textContent = status.title;
-  }
-  if (copyNode) {
-    copyNode.textContent = status.copy;
-  }
+  });
 }
 
 function setSidebarSourceOperationStatus(status, { autoClearMs = 0 } = {}) {
@@ -4540,14 +4550,33 @@ async function initializeDataSourceManagementPage() {
     return;
   }
 
+  await renderLocalWorkspaceSidebarEntries();
+
   const browseSourceId = String(root.dataset.browseSourceId || "").trim();
   if (!browseSourceId) {
     return;
   }
 
-  await revealDataSourceSidebarBrowser(browseSourceId, {
-    sidebarSourceId: root.dataset.browseSidebarSourceId || "",
-  });
+  const inlineBrowser = root.querySelector("[data-inline-source-browser]");
+  if (!(inlineBrowser instanceof Element)) {
+    return;
+  }
+
+  const normalizedSidebarSourceId = sidebarSourceIdForDataSource(
+    browseSourceId,
+    root.dataset.browseSidebarSourceId || ""
+  );
+  const catalogRoot =
+    inlineBrowser.querySelector(
+      `[data-source-catalog-source-id="${CSS.escape(normalizedSidebarSourceId)}"]`
+    ) ||
+    inlineBrowser.querySelector(
+      `[data-source-catalog-source-id="${CSS.escape(browseSourceId)}"]`
+    );
+  if (catalogRoot instanceof HTMLDetailsElement) {
+    catalogRoot.open = true;
+  }
+  inlineBrowser.scrollIntoView({ block: "start" });
 }
 
 async function loadQueryWorkbenchDataSources(
@@ -4562,11 +4591,7 @@ async function loadQueryWorkbenchDataSources(
   syncShellVisibility();
   activateNotebookLink("");
   applyWorkbenchTitle("data-sources");
-  if (browse) {
-    await revealDataSourceSidebarBrowser(sourceId, { sidebarSourceId });
-  } else {
-    await initializeDataSourceManagementPage();
-  }
+  await initializeDataSourceManagementPage();
   if (pushHistory) {
     pushQueryWorkbenchDataSourcesHistory(sourceId, { browse });
   }
@@ -4576,6 +4601,19 @@ async function browseDataSourceInSidebar(sourceId = "", { sidebarSourceId = "" }
   await loadQueryWorkbenchDataSources(sourceId, {
     browse: true,
     sidebarSourceId,
+  });
+}
+
+async function refreshActiveDataSourceWorkbenchBrowser() {
+  const root = queryWorkbenchDataSourcesPageRoot();
+  const browseSourceId = String(root?.dataset.browseSourceId || "").trim();
+  if (!browseSourceId) {
+    return;
+  }
+  await loadQueryWorkbenchDataSources(browseSourceId, {
+    pushHistory: false,
+    browse: true,
+    sidebarSourceId: String(root?.dataset.browseSidebarSourceId || "").trim(),
   });
 }
 
@@ -5696,7 +5734,11 @@ async function saveQueryResultExportToLocalWorkspace(job, exportFormat, options 
   const sourceObjectRoot = localWorkspaceEntryNode(storedEntry.id);
   if (sourceObjectRoot instanceof Element) {
     setSelectedSourceObjectState(sourceObjectRoot);
-    renderSourceInspectorMarkup(localWorkspaceInspectorMarkup(sourceObjectRoot));
+    renderSourceInspectorMarkup(
+      localWorkspaceInspectorMarkup(sourceObjectRoot),
+      false,
+      sourceBrowserScopeRoot(sourceObjectRoot)
+    );
     sourceObjectRoot.scrollIntoView({ block: "nearest" });
   }
 
@@ -5769,7 +5811,11 @@ async function moveLocalWorkspaceExport(entryId, options = {}) {
   if (movedNode instanceof Element) {
     if (getActiveSourceObjectRelation() === localWorkspaceRelation(updatedEntry.id)) {
       setSelectedSourceObjectState(movedNode);
-      renderSourceInspectorMarkup(localWorkspaceInspectorMarkup(movedNode));
+      renderSourceInspectorMarkup(
+        localWorkspaceInspectorMarkup(movedNode),
+        false,
+        sourceBrowserScopeRoot(movedNode)
+      );
     }
     movedNode.scrollIntoView({ block: "nearest" });
   }
@@ -5825,7 +5871,11 @@ async function copyLocalWorkspaceExport(entryId, options = {}) {
   const copiedNode = localWorkspaceEntryNode(copiedEntry.id);
   if (copiedNode instanceof Element) {
     setSelectedSourceObjectState(copiedNode);
-    renderSourceInspectorMarkup(localWorkspaceInspectorMarkup(copiedNode));
+    renderSourceInspectorMarkup(
+      localWorkspaceInspectorMarkup(copiedNode),
+      false,
+      sourceBrowserScopeRoot(copiedNode)
+    );
     copiedNode.scrollIntoView({ block: "nearest" });
   }
 
@@ -6202,6 +6252,7 @@ async function deleteS3EntryDescriptor(
         blinkSourceCatalog("workspace.s3");
       }
     }
+    await refreshActiveDataSourceWorkbenchBrowser();
     if (showSidebarStatus) {
       setSidebarSourceOperationStatus(
         {

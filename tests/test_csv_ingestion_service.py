@@ -105,6 +105,54 @@ class CsvIngestionServiceTests(TestCase):
             "vat_smoke_test.vat_smoke",
         )
 
+    def test_import_csv_files_attaches_s3_query_source_from_discovery_specs(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._csv_ingestion = SimpleNamespace(
+            import_csv_files=lambda **_kwargs: {
+                "targetId": "workspace.s3",
+                "importedCount": 1,
+                "failedCount": 0,
+                "imports": [
+                    {
+                        "fileName": "vat-smoke.csv",
+                        "status": "imported",
+                        "bucket": "vat-smoke-test",
+                        "path": "s3://vat-smoke-test/incoming/vat-smoke.parquet",
+                    }
+                ],
+            }
+        )
+        service._catalogs = []
+        calls: list[tuple[str, object]] = []
+        service._data_source_discovery = SimpleNamespace(
+            sync_source=lambda source_id, emit_event=True: calls.append((source_id, emit_event)),
+            s3_relation_specs=lambda: {
+                "vat_smoke_test.vat_smoke": SimpleNamespace(
+                    schema_name="vat_smoke_test",
+                    relation_name="vat_smoke",
+                    object_path="s3://vat-smoke-test/incoming/vat-smoke.parquet",
+                    display_name="vat-smoke.parquet",
+                )
+            },
+        )
+        service.refresh_metadata_state = lambda: calls.append(("refresh", None))
+
+        payload = service.import_csv_files(
+            files=[],
+            target_id="workspace.s3",
+            bucket="vat-smoke-test",
+            prefix="incoming",
+            storage_format="parquet",
+        )
+
+        self.assertEqual(calls, [("workspace.s3", True)])
+        self.assertEqual(payload["firstQuerySource"]["sourceId"], "workspace.s3")
+        self.assertEqual(
+            payload["imports"][0]["querySource"]["relation"],
+            "vat_smoke_test.vat_smoke",
+        )
+        self.assertNotIn("queryUnavailableReason", payload["imports"][0])
+
     def test_import_csv_files_refreshes_metadata_for_postgres_targets(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)
         service._csv_ingestion = SimpleNamespace(

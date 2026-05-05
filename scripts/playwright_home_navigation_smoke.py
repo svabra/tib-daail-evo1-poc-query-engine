@@ -112,6 +112,10 @@ async def open_data_source_management(page, timeout_ms: int) -> None:
         state="visible",
         timeout=timeout_ms,
     )
+    await page.locator("[data-shell].shell-sidebar-hidden").wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
 
 
 async def open_focused_data_source_and_explorer_from_home(page, timeout_ms: int) -> None:
@@ -151,20 +155,21 @@ async def open_focused_data_source_and_explorer_from_home(page, timeout_ms: int)
         state="visible",
         timeout=timeout_ms,
     )
-    await page.locator("[data-data-sources-section]").wait_for(
+    inline_browser = page.locator("[data-inline-source-browser]").first
+    await inline_browser.wait_for(
         state="visible",
         timeout=timeout_ms,
     )
-    await page.locator(
+    await inline_browser.locator(
         "[data-source-catalog][data-source-catalog-source-id='workspace.local']"
     ).wait_for(state="visible", timeout=timeout_ms)
     await page.wait_for_function(
         """() => {
           const shell = document.querySelector("[data-shell]");
-          const sources = document.querySelector("[data-data-sources-section]");
-          const catalog = document.querySelector("[data-source-catalog][data-source-catalog-source-id='workspace.local']");
-          return shell && !shell.classList.contains("shell-sidebar-hidden")
-            && sources?.open === true
+          const inlineBrowser = document.querySelector("[data-inline-source-browser]");
+          const catalog = inlineBrowser?.querySelector("[data-source-catalog][data-source-catalog-source-id='workspace.local']");
+          return shell && shell.classList.contains("shell-sidebar-hidden")
+            && inlineBrowser
             && catalog?.open === true
             && !document.querySelector("[data-data-source-explorer-page]");
         }""",
@@ -176,6 +181,97 @@ async def open_focused_data_source_and_explorer_from_home(page, timeout_ms: int)
         state="visible",
         timeout=timeout_ms,
     )
+
+
+async def verify_inline_browser_for_source(
+    page,
+    args: argparse.Namespace,
+    source_id: str,
+    sidebar_source_id: str,
+) -> None:
+    await page.goto(
+        urljoin(args.base_url, f"/data-sources?source_id={source_id}"),
+        wait_until="domcontentloaded",
+        timeout=args.timeout_ms,
+    )
+    await wait_for_location(
+        page,
+        args.timeout_ms,
+        pathname="/data-sources",
+        search=f"?source_id={source_id}",
+    )
+    await page.locator(
+        f"[data-data-source-management-page][data-selected-source-id='{source_id}']"
+    ).wait_for(state="visible", timeout=args.timeout_ms)
+    await page.locator("[data-inline-source-browser]").wait_for(
+        state="detached",
+        timeout=args.timeout_ms,
+    )
+
+    browse_button = page.locator(
+        f"[data-data-source-management-page] [data-browse-data-source='{source_id}']"
+    ).first
+    await click_control(browse_button, args.timeout_ms)
+    await wait_for_location(
+        page,
+        args.timeout_ms,
+        pathname="/data-sources",
+        search=f"?source_id={source_id}&browse=1",
+    )
+
+    inline_browser = page.locator(
+        f"[data-inline-source-browser][data-browse-source-id='{source_id}']"
+    ).first
+    await inline_browser.wait_for(state="visible", timeout=args.timeout_ms)
+    await inline_browser.locator(
+        f"[data-source-catalog][data-source-catalog-source-id='{sidebar_source_id}']"
+    ).wait_for(state="visible", timeout=args.timeout_ms)
+    await page.wait_for_function(
+        """(expected) => {
+          const shell = document.querySelector("[data-shell]");
+          const inlineBrowser = document.querySelector(
+            `[data-inline-source-browser][data-browse-source-id="${expected.sourceId}"]`
+          );
+          const catalog = inlineBrowser?.querySelector(
+            `[data-source-catalog][data-source-catalog-source-id="${expected.sidebarSourceId}"]`
+          );
+          return shell?.classList.contains("shell-sidebar-hidden")
+            && inlineBrowser
+            && catalog?.open === true
+            && !document.querySelector("[data-data-source-explorer-page]");
+        }""",
+        arg={"sourceId": source_id, "sidebarSourceId": sidebar_source_id},
+        timeout=args.timeout_ms,
+    )
+
+    if source_id == "pg_oltp_native":
+        native_option_count = await inline_browser.locator(
+            "[data-source-object][data-source-option-id='pg_oltp_native']"
+        ).count()
+        non_native_option_count = await inline_browser.locator(
+            "[data-source-object]:not([data-source-option-id='pg_oltp_native'])"
+        ).count()
+        if native_option_count and non_native_option_count:
+            raise AssertionError(
+                "Native PostgreSQL inline browser mixed native and non-native source option IDs."
+            )
+
+
+async def verify_inline_browsers_for_all_sources(page, args: argparse.Namespace) -> None:
+    source_cases = [
+        ("workspace.local", "workspace.local"),
+        ("workspace.s3", "workspace.s3"),
+        ("pg_oltp", "pg_oltp"),
+        ("pg_olap", "pg_olap"),
+        ("pg_oltp_native", "pg_oltp"),
+    ]
+    for source_id, sidebar_source_id in source_cases:
+        await verify_inline_browser_for_source(
+            page,
+            args,
+            source_id,
+            sidebar_source_id,
+        )
 
 
 async def open_query_navigation_from_topbar(page, timeout_ms: int) -> None:
@@ -245,6 +341,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 page,
                 args.timeout_ms,
             )
+            await verify_inline_browsers_for_all_sources(page, args)
             await open_home(page, args)
             await open_query_workbench_from_home(page, args.timeout_ms)
             await open_home(page, args)

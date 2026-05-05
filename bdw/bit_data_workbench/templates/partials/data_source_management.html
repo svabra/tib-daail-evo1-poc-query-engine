@@ -136,6 +136,36 @@
           </div>
         </div>
 
+        {% if browse_data_source %}
+          <section
+            class="data-source-inline-browser"
+            data-inline-source-browser
+            data-source-browser-scope
+            data-browse-source-id="{{ browse_data_source.source_id }}"
+            data-browse-sidebar-source-id="{{ browse_data_source.explorer_source_id }}"
+          >
+            <div class="data-source-inline-browser-header">
+              <div>
+                <span class="home-eyebrow">Browse Data</span>
+                <h4>{{ browse_data_source.name }}</h4>
+                <p>{{ browse_data_source.explorer_cta_copy }}</p>
+              </div>
+              <a
+                href="{{ browse_data_source.management_path }}"
+                class="data-source-management-back-link data-source-inline-browser-detail-link"
+                data-open-query-data-source="{{ browse_data_source.source_id }}"
+              >
+                View Source Details
+              </a>
+            </div>
+            {% set source_tree_catalogs = inline_browse_catalogs %}
+            {% set source_tree_scope = 'inline' %}
+            {% set source_tree_force_source_option_id = inline_source_option_id %}
+            {% set source_tree_open_catalogs = true %}
+            {% include "partials/source_tree.html" %}
+          </section>
+        {% endif %}
+
         <div class="data-source-detail-metric-grid">
           {% for metric in selected_data_source.summary_metrics %}
             <article class="data-source-metric-card">

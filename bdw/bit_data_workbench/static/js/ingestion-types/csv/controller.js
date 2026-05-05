@@ -93,6 +93,7 @@ export function createCsvIngestionController(helpers) {
   let busyPhase = "";
   let uploadProgress = null;
   let latestResults = [];
+  let latestImportPayload = null;
   let activeEntryId = "";
   let previewState = emptyPreviewState();
   let previewRequestVersion = 0;
@@ -193,6 +194,57 @@ export function createCsvIngestionController(helpers) {
 
   function selectedFileEntries() {
     return Array.isArray(selectedFiles) ? selectedFiles : [];
+  }
+
+  function normalizedCsvImportStatus(item) {
+    return String(item?.status || "").trim().toLowerCase();
+  }
+
+  function csvImportPayloadFromResults(results, targetId = selectedTargetId()) {
+    const imports = Array.isArray(results) ? results : [];
+    const importedCount = imports.filter(
+      (item) => normalizedCsvImportStatus(item) === "imported"
+    ).length;
+    return {
+      targetId,
+      importedCount,
+      failedCount: Math.max(0, imports.length - importedCount),
+      imports,
+    };
+  }
+
+  function csvImportResultsFromPayload(payload) {
+    const imports = Array.isArray(payload?.imports) ? payload.imports : [];
+    const firstQuerySource =
+      payload?.firstQuerySource && typeof payload.firstQuerySource === "object"
+        ? payload.firstQuerySource
+        : null;
+    if (!firstQuerySource) {
+      return imports;
+    }
+    let attachedFallback = false;
+    return imports.map((item) => {
+      if (
+        attachedFallback ||
+        item?.querySource ||
+        normalizedCsvImportStatus(item) !== "imported"
+      ) {
+        return item;
+      }
+      attachedFallback = true;
+      return {
+        ...item,
+        querySource: firstQuerySource,
+      };
+    });
+  }
+
+  function csvImportedCount(payload, imports = csvImportResultsFromPayload(payload)) {
+    const importedCount = Number(payload?.importedCount);
+    if (Number.isFinite(importedCount)) {
+      return importedCount;
+    }
+    return imports.filter((item) => normalizedCsvImportStatus(item) === "imported").length;
   }
 
   function isCsvOrZipFile(file) {
@@ -638,7 +690,7 @@ export function createCsvIngestionController(helpers) {
           : null;
         return `
           <article class="ingestion-csv-result-card ingestion-csv-result-card-${escapeHtml(
-            item.status || "unknown"
+            normalizedCsvImportStatus(item) || "unknown"
           )}">
             <div class="ingestion-csv-result-header">
               <strong>${escapeHtml(resultDisplayName)}</strong>
@@ -963,6 +1015,7 @@ export function createCsvIngestionController(helpers) {
       .filter((file) => isCsvOrZipFile(file))
       .map((file) => buildSelectedFileEntry(file));
     latestResults = [];
+    latestImportPayload = null;
     uploadProgress = null;
     renderCsvIngestionWorkbench();
     void refreshPreview();
@@ -1363,7 +1416,9 @@ export function createCsvIngestionController(helpers) {
         throw new Error(processingFailureMessage(error, totalBytes));
       }
       await refreshSidebar("notebook");
-      return Array.isArray(payload?.imports) ? payload.imports : [];
+      return payload && typeof payload === "object"
+        ? payload
+        : csvImportPayloadFromResults([], targetId);
     } catch (error) {
       if (shouldDeleteSessionOnError) {
         window.fetch(`/api/ingestion/csv/upload-sessions/${encodeURIComponent(sessionId)}`, {
@@ -1384,15 +1439,19 @@ export function createCsvIngestionController(helpers) {
     busyPhase = selectedTargetId() === "workspace.local" ? "processing" : "uploading";
     uploadProgress = null;
     latestResults = [];
+    latestImportPayload = null;
     renderCsvIngestionWorkbench();
 
     try {
-      latestResults =
-        selectedTargetId() === "workspace.local"
-          ? await importToLocalWorkspace()
-          : await importToServerTarget();
+      if (selectedTargetId() === "workspace.local") {
+        latestResults = await importToLocalWorkspace();
+        latestImportPayload = csvImportPayloadFromResults(latestResults, "workspace.local");
+      } else {
+        latestImportPayload = await importToServerTarget();
+        latestResults = csvImportResultsFromPayload(latestImportPayload);
+      }
       renderCsvIngestionWorkbench();
-      const completedCount = latestResults.filter((item) => item.status === "imported").length;
+      const completedCount = csvImportedCount(latestImportPayload, latestResults);
       await showMessageDialog({
         title: "CSV import finished",
         copy:

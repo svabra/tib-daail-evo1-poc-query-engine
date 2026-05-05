@@ -269,6 +269,14 @@ async def import_server_csv_with_progress(page, timeout_ms: int) -> None:
                         "targetId": "workspace.s3",
                         "importedCount": 1,
                         "failedCount": 0,
+                        "firstQuerySource": {
+                            "sourceId": "workspace.s3",
+                            "catalogName": "workspace",
+                            "schemaName": "playwright_progress_bucket",
+                            "schemaLabel": "playwright-progress-bucket",
+                            "relation": "playwright_progress_bucket.playwright_progress",
+                            "name": "playwright-progress.parquet",
+                        },
                         "imports": [
                             {
                                 "fileName": "playwright-progress.csv",
@@ -359,6 +367,15 @@ async def import_server_csv_with_progress(page, timeout_ms: int) -> None:
             )
 
     await page.locator("[data-csv-result-list] .ingestion-csv-result-card-imported").first.wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
+    message_dialog = page.locator("[data-message-dialog]")
+    await message_dialog.wait_for(state="visible", timeout=timeout_ms)
+    message_text = (await message_dialog.text_content() or "").strip()
+    if "1 file(s) processed for Shared Workspace S3." not in message_text:
+        raise RuntimeError(f"Expected successful server import count in dialog, got: {message_text!r}")
+    await page.locator("[data-csv-import-open-query]").first.wait_for(
         state="visible",
         timeout=timeout_ms,
     )

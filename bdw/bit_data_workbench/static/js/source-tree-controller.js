@@ -46,6 +46,10 @@ export function createSourceTreeController(helpers) {
     return document.querySelector(sourceCatalogSelector(sourceId));
   }
 
+  function sourceCatalogNodes(sourceId) {
+    return Array.from(document.querySelectorAll(sourceCatalogSelector(sourceId)));
+  }
+
   function sourceSchemaBucketNode(bucketName) {
     const normalizedBucketName = String(bucketName ?? "").trim();
     if (!normalizedBucketName) {
@@ -56,53 +60,59 @@ export function createSourceTreeController(helpers) {
     );
   }
 
-  function localWorkspaceSchemaNode() {
-    return document.querySelector(
+  function localWorkspaceSchemaNode(root = document) {
+    const scope = root && typeof root.querySelector === "function" ? root : document;
+    return scope.querySelector(
       `[data-source-schema][data-source-schema-key="${escapeSelectorValue(localWorkspaceSchemaKey)}"]`
     );
   }
 
-  function localWorkspaceFolderNode(folderPath = "") {
+  function localWorkspaceFolderNode(folderPath = "", root = document) {
     const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(folderPath);
     if (!normalizedFolderPath) {
       return null;
     }
 
-    return document.querySelector(
+    const scope = root && typeof root.querySelector === "function" ? root : document;
+    return scope.querySelector(
       `[data-local-workspace-folder-node][data-local-workspace-folder-path="${escapeSelectorValue(normalizedFolderPath)}"]`
     );
   }
 
-  function localWorkspaceEntryNode(entryId) {
+  function localWorkspaceEntryNode(entryId, root = document) {
     const normalizedEntryId = String(entryId || "").trim();
     if (!normalizedEntryId) {
       return null;
     }
 
-    return document.querySelector(
+    const scope = root && typeof root.querySelector === "function" ? root : document;
+    return scope.querySelector(
       `[data-local-workspace-entry-id="${escapeSelectorValue(normalizedEntryId)}"]`
     );
   }
 
   function ensureLocalWorkspaceCatalogOrder() {
-    const sourceTree = document.querySelector(".source-tree");
-    const localWorkspaceCatalog = sourceCatalogNode(localWorkspaceCatalogSourceId);
-    if (!(sourceTree instanceof Element) || !(localWorkspaceCatalog instanceof Element)) {
-      return;
-    }
-
-    if (sourceTree.firstElementChild !== localWorkspaceCatalog) {
-      sourceTree.prepend(localWorkspaceCatalog);
-    }
+    document.querySelectorAll(".source-tree").forEach((sourceTree) => {
+      const localWorkspaceCatalog = sourceTree.querySelector(
+        sourceCatalogSelector(localWorkspaceCatalogSourceId)
+      );
+      if (!(localWorkspaceCatalog instanceof Element)) {
+        return;
+      }
+      if (sourceTree.firstElementChild !== localWorkspaceCatalog) {
+        sourceTree.prepend(localWorkspaceCatalog);
+      }
+    });
   }
 
-  function localWorkspaceFolderNodes() {
-    return Array.from(document.querySelectorAll("[data-local-workspace-folder-node]"));
+  function localWorkspaceFolderNodes(root = document) {
+    const scope = root && typeof root.querySelectorAll === "function" ? root : document;
+    return Array.from(scope.querySelectorAll("[data-local-workspace-folder-node]"));
   }
 
-  function localWorkspaceOpenFolderPaths() {
+  function localWorkspaceOpenFolderPaths(root = document) {
     return new Set(
-      localWorkspaceFolderNodes()
+      localWorkspaceFolderNodes(root)
         .filter((node) => node instanceof HTMLDetailsElement && node.open)
         .map((node) => normalizeLocalWorkspaceFolderPath(node.dataset.localWorkspaceFolderPath || ""))
         .filter(Boolean)
@@ -112,34 +122,36 @@ export function createSourceTreeController(helpers) {
   async function renderLocalWorkspaceSidebarEntries() {
     ensureLocalWorkspaceCatalogOrder();
 
-    const localWorkspaceCatalog = sourceCatalogNode(localWorkspaceCatalogSourceId);
-    if (!(localWorkspaceCatalog instanceof Element)) {
+    const localWorkspaceCatalogs = sourceCatalogNodes(localWorkspaceCatalogSourceId);
+    if (!localWorkspaceCatalogs.length) {
       return;
     }
 
     const entries = await listLocalWorkspaceExports();
-    const existingSchema = localWorkspaceSchemaNode();
-    const schemaOpen = existingSchema instanceof HTMLDetailsElement ? existingSchema.open : true;
-    const openFolderPaths = localWorkspaceOpenFolderPaths();
     const folderPaths = allLocalWorkspaceFolderPaths(entries.map((entry) => entry.folderPath));
 
-    if (!entries.length && !folderPaths.filter(Boolean).length) {
-      existingSchema?.remove();
-      if (getActiveSourceObjectRelation()?.startsWith(localWorkspaceRelationPrefix)) {
-        getSetSelectedSourceObjectState()?.(null);
-        getRenderSourceInspectorMarkup()?.("", true);
+    for (const localWorkspaceCatalog of localWorkspaceCatalogs) {
+      const existingSchema = localWorkspaceSchemaNode(localWorkspaceCatalog);
+      const schemaOpen = existingSchema instanceof HTMLDetailsElement ? existingSchema.open : true;
+      const openFolderPaths = localWorkspaceOpenFolderPaths(localWorkspaceCatalog);
+
+      if (!entries.length && !folderPaths.filter(Boolean).length) {
+        existingSchema?.remove();
+        if (getActiveSourceObjectRelation()?.startsWith(localWorkspaceRelationPrefix)) {
+          getSetSelectedSourceObjectState()?.(null);
+          getRenderSourceInspectorMarkup()?.("", true);
+        }
+        continue;
       }
-      await syncOpenLocalWorkspaceSaveDialog();
-      await syncOpenLocalWorkspaceMoveDialog();
-      return;
+
+      const markup = localWorkspaceSchemaMarkup(entries, folderPaths, schemaOpen, openFolderPaths);
+      if (existingSchema instanceof Element) {
+        existingSchema.outerHTML = markup;
+      } else {
+        localWorkspaceCatalog.insertAdjacentHTML("beforeend", markup);
+      }
     }
 
-    const markup = localWorkspaceSchemaMarkup(entries, folderPaths, schemaOpen, openFolderPaths);
-    if (existingSchema instanceof Element) {
-      existingSchema.outerHTML = markup;
-    } else {
-      localWorkspaceCatalog.insertAdjacentHTML("beforeend", markup);
-    }
     await syncOpenLocalWorkspaceSaveDialog();
     await syncOpenLocalWorkspaceMoveDialog();
   }

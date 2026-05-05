@@ -10,16 +10,24 @@ export function dataSourceNodes() {
   return Array.from(document.querySelectorAll("[data-source-catalog], [data-source-schema]"));
 }
 
-export function sourceObjectNodes() {
-  return Array.from(document.querySelectorAll("[data-source-object]"));
+function queryScope(root) {
+  return root && typeof root.querySelectorAll === "function" ? root : document;
 }
 
-export function sourceInspector() {
-  return document.querySelector("[data-source-inspector]");
+export function sourceObjectNodes(root = document) {
+  return Array.from(queryScope(root).querySelectorAll("[data-source-object]"));
 }
 
-export function sourceInspectorPanel() {
-  return document.querySelector("[data-source-inspector-panel]");
+export function sourceInspector(root = document) {
+  return (root && typeof root.querySelector === "function" ? root : document).querySelector(
+    "[data-source-inspector]"
+  );
+}
+
+export function sourceInspectorPanel(root = document) {
+  return (root && typeof root.querySelector === "function" ? root : document).querySelector(
+    "[data-source-inspector-panel]"
+  );
 }
 
 export function queryMonitorList() {

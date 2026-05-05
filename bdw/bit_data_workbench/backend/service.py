@@ -1145,8 +1145,78 @@ class WorkbenchService:
                 self._data_source_discovery.sync_source("workspace.s3", emit_event=True)
             else:
                 self.refresh_metadata_state()
-            payload = attach_query_sources_to_csv_imports(payload, self._catalogs)
+            payload = attach_query_sources_to_csv_imports(
+                payload,
+                list(getattr(self, "_catalogs", []) or []),
+            )
+            if normalized_target_id == "workspace.s3":
+                payload = self._attach_s3_query_sources_from_discovery(payload)
         return payload
+
+    def _attach_s3_query_sources_from_discovery(
+        self,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        discovery = getattr(self, "_data_source_discovery", None)
+        specs_snapshot = getattr(discovery, "s3_relation_specs", None)
+        if not callable(specs_snapshot):
+            return payload
+        specs = specs_snapshot()
+        if not specs:
+            return payload
+
+        specs_by_path: dict[str, tuple[str, object]] = {}
+        for relation_id, spec in specs.items():
+            object_path = str(getattr(spec, "object_path", "") or "").strip()
+            if object_path:
+                specs_by_path[object_path] = (str(relation_id), spec)
+
+        if not specs_by_path:
+            return payload
+
+        next_payload = dict(payload)
+        imports: list[object] = []
+        first_query_source = (
+            dict(next_payload["firstQuerySource"])
+            if isinstance(next_payload.get("firstQuerySource"), dict)
+            else None
+        )
+        for item in next_payload.get("imports", []) or []:
+            if not isinstance(item, dict):
+                imports.append(item)
+                continue
+            next_item = dict(item)
+            item_path = str(next_item.get("path") or "").strip()
+            if (
+                str(next_item.get("status") or "").strip().lower() == "imported"
+                and not isinstance(next_item.get("querySource"), dict)
+                and item_path in specs_by_path
+            ):
+                relation_id, spec = specs_by_path[item_path]
+                schema_name = str(getattr(spec, "schema_name", "") or "").strip()
+                relation_name = str(getattr(spec, "relation_name", "") or "").strip()
+                if not schema_name or not relation_name:
+                    parts = relation_id.split(".", 1)
+                    schema_name = schema_name or parts[0]
+                    relation_name = relation_name or (parts[1] if len(parts) > 1 else relation_id)
+                query_source = {
+                    "sourceId": "workspace.s3",
+                    "catalogName": "workspace",
+                    "schemaName": schema_name,
+                    "schemaLabel": str(next_item.get("bucket") or schema_name),
+                    "relation": relation_id,
+                    "name": str(getattr(spec, "display_name", "") or relation_name),
+                }
+                next_item["querySource"] = query_source
+                next_item.pop("queryUnavailableReason", None)
+                if first_query_source is None:
+                    first_query_source = dict(query_source)
+            imports.append(next_item)
+
+        next_payload["imports"] = imports
+        if first_query_source is not None:
+            next_payload["firstQuerySource"] = first_query_source
+        return next_payload
 
     def sync_local_workspace_query_source(
         self,

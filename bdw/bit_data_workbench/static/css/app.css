@@ -3387,6 +3387,52 @@ details:not([open]) > .source-schema > summary::before {
   line-height: 1.55;
 }
 
+.data-source-inline-browser {
+  display: grid;
+  gap: 18px;
+  margin-top: 6px;
+  padding: 18px 0 8px;
+  border-top: 1px solid var(--border);
+}
+
+.data-source-inline-browser-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.data-source-inline-browser-header h4,
+.data-source-inline-browser-header p {
+  margin: 0;
+}
+
+.data-source-inline-browser-header p {
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.data-source-inline-browser .source-tree {
+  max-height: min(62vh, 720px);
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(248, 250, 252, 0.78);
+}
+
+.data-source-inline-browser .sidebar-source-inspector {
+  border-top: 1px solid var(--border);
+}
+
+.data-source-inline-browser .sidebar-source-inspector-divider {
+  display: none;
+}
+
+.data-source-inline-browser-detail-link {
+  flex: 0 0 auto;
+}
+
 .data-source-explorer-shell {
   display: grid;
   grid-template-columns: minmax(300px, 0.92fr) minmax(0, 1.08fr);

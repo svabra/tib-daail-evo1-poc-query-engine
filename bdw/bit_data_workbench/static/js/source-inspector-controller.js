@@ -11,8 +11,18 @@ export function createSourceInspectorController(helpers) {
   } = helpers;
 
   let activeSourceObjectRelation = null;
+  const activeSourceObjectRelations = new WeakMap();
   const sourceObjectFieldCache = new Map();
   const sourceObjectFieldRequests = new Map();
+
+  function sourceBrowserScope(sourceObjectRoot = null) {
+    return sourceObjectRoot?.closest?.("[data-source-browser-scope]") || document;
+  }
+
+  function sourceBrowserScopes() {
+    const scopes = Array.from(document.querySelectorAll("[data-source-browser-scope]"));
+    return scopes.length ? scopes : [document];
+  }
 
   function sourceObjectRelation(sourceObjectRoot) {
     if (!(sourceObjectRoot instanceof Element)) {
@@ -43,7 +53,10 @@ export function createSourceInspectorController(helpers) {
     });
   }
 
-  function getActiveSourceObjectRelation() {
+  function getActiveSourceObjectRelation(scopeRoot = null) {
+    if (scopeRoot && activeSourceObjectRelations.has(scopeRoot)) {
+      return activeSourceObjectRelations.get(scopeRoot) || null;
+    }
     return activeSourceObjectRelation;
   }
 
@@ -57,10 +70,30 @@ export function createSourceInspectorController(helpers) {
   }
 
   function setSelectedSourceObjectState(sourceObjectRoot = null) {
+    if (!(sourceObjectRoot instanceof Element)) {
+      activeSourceObjectRelation = null;
+      sourceBrowserScopes().forEach((scopeRoot) => {
+        activeSourceObjectRelations.delete(scopeRoot);
+        sourceObjectNodes(scopeRoot).forEach((item) => {
+          item.classList.remove("is-selected");
+          item.setAttribute("aria-selected", "false");
+          setSourceObjectLoadingState(item, false);
+        });
+        renderSourceInspectorMarkup("", true, scopeRoot);
+      });
+      return;
+    }
+
+    const scopeRoot = sourceBrowserScope(sourceObjectRoot);
     const selectedRelation = sourceObjectRoot?.dataset.sourceObjectRelation?.trim() || null;
     activeSourceObjectRelation = selectedRelation;
+    if (selectedRelation) {
+      activeSourceObjectRelations.set(scopeRoot, selectedRelation);
+    } else {
+      activeSourceObjectRelations.delete(scopeRoot);
+    }
 
-    sourceObjectNodes().forEach((item) => {
+    sourceObjectNodes(scopeRoot).forEach((item) => {
       const isSelected = item === sourceObjectRoot;
       item.classList.toggle("is-selected", isSelected);
       item.setAttribute("aria-selected", isSelected ? "true" : "false");
@@ -69,9 +102,6 @@ export function createSourceInspectorController(helpers) {
       }
     });
 
-    if (!(sourceObjectRoot instanceof Element)) {
-      renderSourceInspectorMarkup("", true);
-    }
   }
 
   async function fetchSourceObjectFields(relation) {
@@ -94,6 +124,7 @@ export function createSourceInspectorController(helpers) {
 
   async function loadSourceObjectFields(sourceObjectRoot, { renderLoading = true } = {}) {
     const relation = sourceObjectFieldCacheKey(sourceObjectRoot);
+    const scopeRoot = sourceBrowserScope(sourceObjectRoot);
     if (!relation) {
       return [];
     }
@@ -101,13 +132,13 @@ export function createSourceInspectorController(helpers) {
     if (isLocalWorkspaceSourceObject(sourceObjectRoot)) {
       if (sourceObjectFieldCache.has(relation)) {
         const fields = sourceObjectFieldCache.get(relation) ?? [];
-        if (getActiveSourceObjectRelation() === relation) {
+        if (getActiveSourceObjectRelation(scopeRoot) === relation) {
           renderSourceInspector(sourceObjectRoot, fields);
         }
         return fields;
       }
 
-      if (renderLoading && getActiveSourceObjectRelation() === relation) {
+      if (renderLoading && getActiveSourceObjectRelation(scopeRoot) === relation) {
         setSourceObjectLoadingState(sourceObjectRoot, true);
         renderSourceInspectorLoading(sourceObjectRoot);
       }
@@ -128,12 +159,12 @@ export function createSourceInspectorController(helpers) {
 
       try {
         const fields = await pendingRequest;
-        if (getActiveSourceObjectRelation() === relation) {
+        if (getActiveSourceObjectRelation(scopeRoot) === relation) {
           renderSourceInspector(sourceObjectRoot, fields);
         }
         return fields;
       } catch (error) {
-        if (getActiveSourceObjectRelation() === relation) {
+        if (getActiveSourceObjectRelation(scopeRoot) === relation) {
           renderSourceInspectorError(
             sourceObjectRoot,
             error instanceof Error
@@ -149,13 +180,13 @@ export function createSourceInspectorController(helpers) {
 
     if (sourceObjectFieldCache.has(relation)) {
       const fields = sourceObjectFieldCache.get(relation) ?? [];
-      if (getActiveSourceObjectRelation() === relation) {
+      if (getActiveSourceObjectRelation(scopeRoot) === relation) {
         renderSourceInspector(sourceObjectRoot, fields);
       }
       return fields;
     }
 
-    if (renderLoading && getActiveSourceObjectRelation() === relation) {
+    if (renderLoading && getActiveSourceObjectRelation(scopeRoot) === relation) {
       setSourceObjectLoadingState(sourceObjectRoot, true);
       renderSourceInspectorLoading(sourceObjectRoot);
     }
@@ -175,12 +206,12 @@ export function createSourceInspectorController(helpers) {
 
     try {
       const fields = await pendingRequest;
-      if (getActiveSourceObjectRelation() === relation) {
+      if (getActiveSourceObjectRelation(scopeRoot) === relation) {
         renderSourceInspector(sourceObjectRoot, fields);
       }
       return fields;
     } catch (error) {
-      if (getActiveSourceObjectRelation() === relation) {
+      if (getActiveSourceObjectRelation(scopeRoot) === relation) {
         renderSourceInspectorError(
           sourceObjectRoot,
           error instanceof Error ? error.message : "The fields could not be loaded for this source object."
@@ -202,18 +233,30 @@ export function createSourceInspectorController(helpers) {
   }
 
   function restoreSelectedSourceObject() {
-    const activeRelation = getActiveSourceObjectRelation();
-    const sourceObjectRoot =
-      sourceObjectNodes().find((item) => item.dataset.sourceObjectRelation?.trim() === activeRelation) ?? null;
+    sourceBrowserScopes().forEach((scopeRoot) => {
+      const activeRelation = getActiveSourceObjectRelation(scopeRoot);
+      if (!activeRelation) {
+        return;
+      }
+      const sourceObjectRoot =
+        sourceObjectNodes(scopeRoot).find(
+          (item) => item.dataset.sourceObjectRelation?.trim() === activeRelation
+        ) ?? null;
 
-    if (!sourceObjectRoot) {
-      activeSourceObjectRelation = null;
-    }
+      if (!sourceObjectRoot) {
+        activeSourceObjectRelations.delete(scopeRoot);
+        if (activeSourceObjectRelation === activeRelation) {
+          activeSourceObjectRelation = null;
+        }
+        renderSourceInspectorMarkup("", true, scopeRoot);
+        return;
+      }
 
-    selectSourceObject(sourceObjectRoot, {
-      renderLoading: !sourceObjectFieldCache.has(sourceObjectFieldCacheKey(sourceObjectRoot)),
-    }).catch(() => {
-      // Keep the last selected state, but do not interrupt the rest of the UI.
+      selectSourceObject(sourceObjectRoot, {
+        renderLoading: !sourceObjectFieldCache.has(sourceObjectFieldCacheKey(sourceObjectRoot)),
+      }).catch(() => {
+        // Keep the last selected state, but do not interrupt the rest of the UI.
+      });
     });
   }
 

@@ -12,6 +12,10 @@ export function createSourceInspectorUi(helpers) {
     sourceObjectDisplayName,
   } = helpers;
 
+  function sourceBrowserScope(sourceObjectRoot = null) {
+    return sourceObjectRoot?.closest?.("[data-source-browser-scope]") || document;
+  }
+
   function normalizedSourceFieldDataType(dataType) {
     return String(dataType ?? "")
       .trim()
@@ -255,9 +259,10 @@ export function createSourceInspectorUi(helpers) {
     `;
   }
 
-  function renderSourceInspectorMarkup(markup, hidden = false) {
-    const inspectorRoot = sourceInspector();
-    const inspectorPanel = sourceInspectorPanel();
+  function renderSourceInspectorMarkup(markup, hidden = false, scopeRoot = document) {
+    const scope = scopeRoot || document;
+    const inspectorRoot = sourceInspector(scope);
+    const inspectorPanel = sourceInspectorPanel(scope);
     if (!inspectorRoot || !inspectorPanel) {
       return;
     }
@@ -279,7 +284,9 @@ export function createSourceInspectorUi(helpers) {
     }
 
     renderSourceInspectorMarkup(
-      sourceInspectorMarkup(sourceObjectRoot, normalizeSourceObjectFields(fields))
+      sourceInspectorMarkup(sourceObjectRoot, normalizeSourceObjectFields(fields)),
+      false,
+      sourceBrowserScope(sourceObjectRoot)
     );
   }
 
@@ -289,7 +296,11 @@ export function createSourceInspectorUi(helpers) {
       return;
     }
 
-    renderSourceInspectorMarkup(sourceInspectorLoadingMarkup(sourceObjectRoot));
+    renderSourceInspectorMarkup(
+      sourceInspectorLoadingMarkup(sourceObjectRoot),
+      false,
+      sourceBrowserScope(sourceObjectRoot)
+    );
   }
 
   function renderSourceInspectorError(sourceObjectRoot, message) {
@@ -302,7 +313,9 @@ export function createSourceInspectorUi(helpers) {
       sourceInspectorErrorMarkup(
         sourceObjectRoot,
         message || "The fields could not be loaded for this source object."
-      )
+      ),
+      false,
+      sourceBrowserScope(sourceObjectRoot)
     );
   }
 

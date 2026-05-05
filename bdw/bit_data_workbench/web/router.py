@@ -568,8 +568,9 @@ def query_workbench_data_sources(
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> HTMLResponse:
     context = build_data_source_management_context(service, source_id)
+    browse_enabled = browse is True
     context["browse_data_source"] = (
-        context.get("selected_data_source") if browse else None
+        context.get("selected_data_source") if browse_enabled else None
     )
 
     if is_partial_request(request):
@@ -591,7 +592,7 @@ def query_workbench_data_sources(
                 workspace_partial_template=(
                     "partials/data_source_management.html"
                 ),
-                shell_sidebar_hidden=False,
+                shell_sidebar_hidden=True,
             ),
             "title": "DAAIFL Data Source Workbench",
             **context,
@@ -628,7 +629,7 @@ def query_workbench_data_source_explorer(
                 workspace_partial_template=(
                     "partials/data_source_management.html"
                 ),
-                shell_sidebar_hidden=False,
+                shell_sidebar_hidden=True,
             ),
             "title": "DAAIFL Data Source Workbench",
             **context,

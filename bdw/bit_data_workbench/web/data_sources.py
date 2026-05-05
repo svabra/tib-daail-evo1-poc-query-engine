@@ -389,9 +389,8 @@ def data_source_management_context(
     service: WorkbenchService,
     selected_source_id: str | None,
 ) -> dict[str, object]:
-    catalogs_by_name = {
-        catalog.name: catalog for catalog in service.catalogs()
-    }
+    catalogs = service.catalogs()
+    catalogs_by_name = {catalog.name: catalog for catalog in catalogs}
     sources = [
         _local_browser_source_record(
             service=service,
@@ -459,9 +458,28 @@ def data_source_management_context(
             sources[0],
         )
 
+    inline_catalog_source_id = (
+        str(selected_source.get("explorer_source_id") or "").strip()
+        if selected_source
+        else ""
+    )
+    inline_browse_catalogs = [
+        catalog
+        for catalog in catalogs
+        if (catalog.connection_source_id or catalog.name) == inline_catalog_source_id
+        or catalog.name == inline_catalog_source_id
+    ]
+    inline_source_option_id = (
+        "pg_oltp_native"
+        if selected_source and selected_source.get("source_id") == "pg_oltp_native"
+        else ""
+    )
+
     return {
         "data_sources": sources,
         "selected_data_source": selected_source,
+        "inline_browse_catalogs": inline_browse_catalogs,
+        "inline_source_option_id": inline_source_option_id,
     }
 
 
