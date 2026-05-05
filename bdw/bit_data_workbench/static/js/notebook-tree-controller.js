@@ -13,6 +13,7 @@ export function createNotebookTreeController(helpers) {
     folderCanEdit,
     folderLabel,
     getDraggedNotebook,
+    isUnassignedFolder,
     notebookTreeRoot,
     persistNotebookTree,
     refreshSidebar,
@@ -89,14 +90,17 @@ export function createNotebookTreeController(helpers) {
     event.stopPropagation();
 
     const folder = deleteFolderButton.closest("[data-tree-folder]");
-    const label = folderLabel(folder)?.textContent?.trim() ?? "this folder";
     if (!folder || !folderCanDelete(folder)) {
       return true;
     }
 
+    const label = folderLabel(folder)?.textContent?.trim() ?? "this folder";
+    const isDeletingUnassignedFolder = isUnassignedFolder(folder);
     const { confirmed, optionChecked } = await showConfirmDialog({
       title: "Delete folder",
-      copy: `Delete "${label}"? All notebooks in this folder will be moved to "${unassignedFolderName}" at the bottom of the notebook tree.`,
+      copy: isDeletingUnassignedFolder
+        ? `Delete "${label}"? All notebooks in this folder will be moved to the notebook tree root.`
+        : `Delete "${label}"? All notebooks in this folder will be moved to "${unassignedFolderName}" at the bottom of the notebook tree.`,
       confirmLabel: "Delete folder",
       option: {
         label: "Delete this folder recursively, including nested folders and notebooks.",
