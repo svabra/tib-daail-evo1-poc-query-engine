@@ -10,6 +10,8 @@ import tempfile
 from .version_info import runtime_image_version
 
 
+DEFAULT_INGESTION_UPLOAD_CHUNK_BYTES = 10 * 1024 * 1024
+
 WORKBENCH_ENVIRONMENT_VARIABLES = (
     "BDW_ENABLE_FILE_LOGGING",
     "IMAGE_VERSION",
@@ -541,7 +543,7 @@ class Settings:
     ingestion_upload_dir: Path = field(
         default_factory=lambda: Path(tempfile.gettempdir()) / "bdw-ingestion-uploads"
     )
-    ingestion_upload_chunk_bytes: int = 32 * 1024 * 1024
+    ingestion_upload_chunk_bytes: int = DEFAULT_INGESTION_UPLOAD_CHUNK_BYTES
     ingestion_upload_max_archive_bytes: int = 5 * 1024 * 1024 * 1024
     ingestion_upload_max_csv_bytes: int = 20 * 1024 * 1024 * 1024
     ingestion_upload_max_extracted_bytes: int = 20 * 1024 * 1024 * 1024
@@ -625,7 +627,10 @@ class Settings:
             ),
             ingestion_upload_chunk_bytes=max(
                 1024 * 1024,
-                env_int("BDW_INGESTION_UPLOAD_CHUNK_BYTES", 32 * 1024 * 1024),
+                env_int(
+                    "BDW_INGESTION_UPLOAD_CHUNK_BYTES",
+                    DEFAULT_INGESTION_UPLOAD_CHUNK_BYTES,
+                ),
             ),
             ingestion_upload_max_archive_bytes=max(
                 1,

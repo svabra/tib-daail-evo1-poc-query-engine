@@ -22,6 +22,9 @@ import {
   readCsvFilesFromZip,
 } from "./zip-reader.js";
 
+const DEFAULT_CSV_UPLOAD_CHUNK_BYTES = 10 * 1024 * 1024;
+const CSV_UPLOAD_CHUNK_ATTEMPTS = 5;
+
 function normalizeCsvIdentifier(value, defaultPrefix) {
   let normalized = String(value || "")
     .trim()
@@ -200,6 +203,72 @@ export function createCsvIngestionController(helpers) {
     return megabytes.toLocaleString(undefined, {
       maximumFractionDigits: megabytes >= 100 ? 0 : 1,
     });
+  }
+
+  function uploadFailureProgressDetails({ progressBaseBytes = 0, totalBytes = 0 } = {}) {
+    const safeTotalBytes = Math.max(0, Number(totalBytes || 0));
+    const transferredBytes = Math.min(
+      safeTotalBytes || Number.MAX_SAFE_INTEGER,
+      Math.max(0, Number(progressBaseBytes || 0))
+    );
+    const percentage = safeTotalBytes > 0
+      ? Math.min(100, Math.max(0, Math.round((transferredBytes / safeTotalBytes) * 100)))
+      : 0;
+    return {
+      percentage,
+      transferredBytes,
+      totalBytes: safeTotalBytes,
+    };
+  }
+
+  function chunkUploadFailureMessage(options = {}, error = null) {
+    const progressDetails = uploadFailureProgressDetails(options);
+    const chunkNumber = Math.max(1, Number(options.chunkNumber || Number(options.chunkIndex || 0) + 1));
+    const totalChunks = Math.max(0, Number(options.totalChunks || 0));
+    const chunkCopy = totalChunks > 0
+      ? `${Math.min(chunkNumber, totalChunks)}/${totalChunks}`
+      : String(chunkNumber);
+    const detail = error instanceof Error
+      ? error.message
+      : String(error || "The CSV upload chunk failed.");
+    const mbCopy = progressDetails.totalBytes > 0
+      ? `${formatMegabytes(progressDetails.transferredBytes)} / ${formatMegabytes(progressDetails.totalBytes)} MB uploaded`
+      : `${formatMegabytes(progressDetails.transferredBytes)} MB uploaded`;
+    const startBytes = Number(options.start || 0);
+    const endBytes = Number(options.end || 0);
+    const rangeCopy = Number.isFinite(startBytes) && Number.isFinite(endBytes) && endBytes >= startBytes
+      ? `; chunk range ${formatMegabytes(startBytes)}-${formatMegabytes(endBytes)} MB`
+      : "";
+    return `Upload failed at chunk ${chunkCopy} after ${CSV_UPLOAD_CHUNK_ATTEMPTS} attempts (${progressDetails.percentage}% complete, ${mbCopy}${rangeCopy}). ${detail}`;
+  }
+
+  function processingFailureMessage(error, totalBytes) {
+    const safeTotalBytes = Math.max(0, Number(totalBytes || 0));
+    const detail = error instanceof Error
+      ? error.message
+      : String(error || "The CSV files could not be imported.");
+    const mbCopy = safeTotalBytes > 0
+      ? `${formatMegabytes(safeTotalBytes)} / ${formatMegabytes(safeTotalBytes)} MB`
+      : "0 / 0 MB";
+    return `Upload finished (100%, ${mbCopy}), but the server-side processing step failed during Step 2 of 2: Transforming file to match target data format. ${detail}`;
+  }
+
+  function uploadChunkCount(fileSize, chunkSize) {
+    const safeFileSize = Math.max(0, Number(fileSize || 0));
+    const safeChunkSize = Math.max(1, Number(chunkSize || 1));
+    return safeFileSize > 0 ? Math.ceil(safeFileSize / safeChunkSize) : 0;
+  }
+
+  function committedChunkCount(receivedBytes, fileSize, chunkSize) {
+    const totalChunks = uploadChunkCount(fileSize, chunkSize);
+    if (totalChunks <= 0) {
+      return 0;
+    }
+    const safeReceivedBytes = Math.min(
+      Math.max(0, Number(receivedBytes || 0)),
+      Math.max(0, Number(fileSize || 0))
+    );
+    return Math.min(totalChunks, Math.ceil(safeReceivedBytes / Math.max(1, Number(chunkSize || 1))));
   }
 
   function previewFileEntry() {
@@ -797,11 +866,16 @@ export function createCsvIngestionController(helpers) {
       : Number(uploadProgress.percentage || 0);
     const label = uploadProgress.label || "Uploading ...";
     const phase = uploadProgress.phase || (uploadProgress.indeterminate ? "processing" : "uploading");
+    const chunkNumber = Math.max(0, Number(uploadProgress.chunkNumber || 0));
+    const totalChunks = Math.max(0, Number(uploadProgress.totalChunks || 0));
+    const chunkCopy = phase === "uploading" && chunkNumber > 0 && totalChunks > 0
+      ? `, chunk ${Math.min(chunkNumber, totalChunks)}/${totalChunks}`
+      : "";
     const detail = uploadProgress.detail
       || (phase === "processing"
         ? "Step 2 of 2: Upload complete. Processing server-side import."
         : totalBytes > 0
-          ? `Step 1 of 2: ${percentage}% (${formatMegabytes(transferredBytes)} / ${formatMegabytes(totalBytes)} MB) uploaded`
+          ? `Step 1 of 2: ${percentage}% (${formatMegabytes(transferredBytes)} / ${formatMegabytes(totalBytes)} MB) uploaded${chunkCopy}`
           : "Step 1 of 2: Uploading ...");
     progressRoot.hidden = false;
     progressRoot.innerHTML = `
@@ -1032,6 +1106,8 @@ export function createCsvIngestionController(helpers) {
     totalSize,
     progressBaseBytes,
     totalBytes,
+    chunkNumber,
+    totalChunks,
   }) {
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
@@ -1049,6 +1125,8 @@ export function createCsvIngestionController(helpers) {
           label: "Uploading ...",
           transferredBytes: Math.min(totalBytes, progressBaseBytes + event.loaded),
           totalBytes,
+          chunkNumber,
+          totalChunks,
         });
       };
       xhr.onload = () => {
@@ -1073,15 +1151,17 @@ export function createCsvIngestionController(helpers) {
 
   async function uploadCsvChunkWithRetries(options) {
     let lastError = null;
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < CSV_UPLOAD_CHUNK_ATTEMPTS; attempt += 1) {
       try {
         return await uploadCsvChunk(options);
       } catch (error) {
         lastError = error;
-        await new Promise((resolve) => window.setTimeout(resolve, 300 * (attempt + 1)));
+        if (attempt + 1 < CSV_UPLOAD_CHUNK_ATTEMPTS) {
+          await new Promise((resolve) => window.setTimeout(resolve, 300 * (attempt + 1)));
+        }
       }
     }
-    throw lastError || new Error("The CSV upload chunk failed.");
+    throw new Error(chunkUploadFailureMessage(options, lastError));
   }
 
   async function importToServerTarget() {
@@ -1117,12 +1197,17 @@ export function createCsvIngestionController(helpers) {
 
     const sessionId = String(session?.sessionId || "").trim();
     const sessionFiles = Array.isArray(session?.files) ? session.files : [];
-    const chunkSize = Number(session?.chunkSizeBytes || 32 * 1024 * 1024);
-    if (!sessionId || sessionFiles.length !== fileEntries.length || !Number.isFinite(chunkSize)) {
+    const chunkSize = Number(session?.chunkSizeBytes || DEFAULT_CSV_UPLOAD_CHUNK_BYTES);
+    if (!sessionId || sessionFiles.length !== fileEntries.length || !Number.isFinite(chunkSize) || chunkSize < 1) {
       throw new Error("The CSV upload session response is incomplete.");
     }
+    const totalChunks = fileEntries.reduce(
+      (sum, entry) => sum + uploadChunkCount(entry.file?.size, chunkSize),
+      0
+    );
 
     let committedBytes = 0;
+    let committedChunks = 0;
     try {
       for (let fileIndex = 0; fileIndex < fileEntries.length; fileIndex += 1) {
         const entry = fileEntries[fileIndex];
@@ -1133,10 +1218,12 @@ export function createCsvIngestionController(helpers) {
         }
         let offset = Number(sessionFile?.receivedBytes || 0);
         committedBytes += offset;
+        committedChunks += committedChunkCount(offset, entry.file.size, chunkSize);
         while (offset < entry.file.size) {
           const end = Math.min(offset + chunkSize, entry.file.size);
           const chunk = entry.file.slice(offset, end);
           const chunkIndex = Math.floor(offset / chunkSize);
+          const chunkNumber = totalChunks > 0 ? Math.min(totalChunks, committedChunks + 1) : 0;
           await uploadCsvChunkWithRetries({
             sessionId,
             fileId,
@@ -1147,14 +1234,19 @@ export function createCsvIngestionController(helpers) {
             totalSize: entry.file.size,
             progressBaseBytes: committedBytes,
             totalBytes,
+            chunkNumber,
+            totalChunks,
           });
           const chunkBytes = end - offset;
           committedBytes += chunkBytes;
+          committedChunks += 1;
           offset = end;
           setUploadProgress({
             label: "Uploading ...",
             transferredBytes: Math.min(totalBytes, committedBytes),
             totalBytes,
+            chunkNumber: totalChunks > 0 ? Math.min(totalChunks, committedChunks) : 0,
+            totalChunks,
           });
         }
       }
@@ -1189,10 +1281,15 @@ export function createCsvIngestionController(helpers) {
           }),
         }
       );
-      const payload = await readJsonResponse(
-        completeResponse,
-        "The CSV files could not be imported."
-      );
+      let payload = {};
+      try {
+        payload = await readJsonResponse(
+          completeResponse,
+          "The CSV files could not be imported."
+        );
+      } catch (error) {
+        throw new Error(processingFailureMessage(error, totalBytes));
+      }
       await refreshSidebar("notebook");
       return Array.isArray(payload?.imports) ? payload.imports : [];
     } catch (error) {

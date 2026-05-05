@@ -1,20 +1,21 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.7.8. Keep entries concise and
+# Derived from git history through version 0.7.9. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
     {
-        "version": "0.7.8",
-        "releasedAt": "2026-05-05T16:55:47+02:00",
+        "version": "0.7.9",
+        "releasedAt": "2026-05-05T18:00:22+02:00",
         "features": [
             (
-                "CSV ingestion processing progress now uses target-format language, showing that the "
-                "uploaded file is being transformed to match the selected target data format."
+                "CSV ingestion uploads now use smaller 10 MiB chunks with five client retry attempts, "
+                "improving resilience for large S3 Parquet imports."
             ),
             (
-                "The ingestion Playwright smoke now checks for the target-format transformation wording "
-                "during the server-side processing phase."
+                "Upload progress and failure dialogs now identify the active chunk, total chunks, "
+                "percent complete, transferred MB, and whether failures happened during upload or "
+                "target-format transformation."
             ),
         ],
     },

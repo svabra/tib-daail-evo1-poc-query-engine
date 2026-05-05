@@ -174,6 +174,13 @@ def zip_bytes(entries: dict[str, bytes]) -> bytes:
     return buffer.getvalue()
 
 
+async def close_message_dialog(page, timeout_ms: int) -> None:
+    message_dialog = page.locator("[data-message-dialog]")
+    if await message_dialog.is_visible():
+        await page.locator("[data-message-submit]").click()
+        await message_dialog.wait_for(state="hidden", timeout=timeout_ms)
+
+
 async def import_local_zip_file(page, timeout_ms: int) -> None:
     file_input = page.locator("[data-csv-file-input]").first
     await file_input.set_input_files(
@@ -315,6 +322,13 @@ async def import_server_csv_with_progress(page, timeout_ms: int) -> None:
         await page.wait_for_function(
             """() => {
                 const text = document.querySelector("[data-csv-upload-progress]")?.textContent || "";
+                return text.includes("chunk") && text.includes("/3");
+            }""",
+            timeout=timeout_ms,
+        )
+        await page.wait_for_function(
+            """() => {
+                const text = document.querySelector("[data-csv-upload-progress]")?.textContent || "";
                 return text.includes("Processing")
                     && text.includes("Step 2 of 2")
                     && text.includes("Upload complete")
@@ -329,10 +343,318 @@ async def import_server_csv_with_progress(page, timeout_ms: int) -> None:
     )
     await page.unroute("**/api/ingestion/csv/upload-sessions", handle_create)
     await page.unroute("**/api/ingestion/csv/upload-sessions/**", handle_session)
-    message_dialog = page.locator("[data-message-dialog]")
-    if await message_dialog.is_visible():
-        await page.locator("[data-message-submit]").click()
-        await message_dialog.wait_for(state="hidden", timeout=timeout_ms)
+    await close_message_dialog(page, timeout_ms)
+
+
+async def import_server_csv_with_retried_chunk(page, timeout_ms: int) -> None:
+    file_payload = b"id,name,value\n1,alpha,10\n2,beta,20\n3,gamma,30\n"
+    chunk_size = 10
+    upload_state = {
+        "sessionId": "playwright-retry-session",
+        "chunkSizeBytes": chunk_size,
+        "files": [
+            {
+                "fileId": "playwright-retry-file",
+                "fileName": "playwright-large-s3-parquet.csv",
+                "sizeBytes": len(file_payload),
+                "receivedBytes": 0,
+                "complete": False,
+            }
+        ],
+    }
+    chunk_attempts: dict[int, int] = {}
+
+    async def handle_create(route):
+        await route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(upload_state),
+        )
+
+    async def handle_session(route):
+        request = route.request
+        if request.method == "PUT":
+            chunk_index = int(request.url.rstrip("/").rsplit("/", 1)[-1])
+            chunk_attempts[chunk_index] = chunk_attempts.get(chunk_index, 0) + 1
+            if chunk_index == 1 and chunk_attempts[chunk_index] < 5:
+                await route.fulfill(
+                    status=503,
+                    content_type="application/json",
+                    body=json.dumps({"detail": "Mock transient chunk failure"}),
+                )
+                return
+            received = min(len(file_payload), (chunk_index + 1) * chunk_size)
+            upload_state["files"][0]["receivedBytes"] = received
+            upload_state["files"][0]["complete"] = received == len(file_payload)
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(upload_state),
+            )
+            return
+        if request.method == "POST" and request.url.endswith("/complete"):
+            payload = json.loads(request.post_data or "{}")
+            if payload.get("targetId") != "workspace.s3" or payload.get("storageFormat") != "parquet":
+                await route.fulfill(
+                    status=400,
+                    content_type="application/json",
+                    body=json.dumps({"detail": f"Unexpected completion payload: {payload!r}"}),
+                )
+                return
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "targetId": "workspace.s3",
+                        "importedCount": 1,
+                        "failedCount": 0,
+                        "imports": [
+                            {
+                                "fileName": "playwright-large-s3-parquet.csv",
+                                "storedFileName": "playwright-large-s3-parquet.parquet",
+                                "status": "imported",
+                                "destination": "workspace.s3",
+                                "bucket": "playwright-retry-bucket",
+                                "objectKey": "playwright-large-s3-parquet.parquet",
+                                "storageFormat": "parquet",
+                                "rowCount": 3,
+                            }
+                        ],
+                    }
+                ),
+            )
+            return
+        await route.fulfill(status=200, content_type="application/json", body="{}")
+
+    await page.route("**/api/ingestion/csv/upload-sessions", handle_create)
+    await page.route("**/api/ingestion/csv/upload-sessions/**", handle_session)
+    try:
+        await page.locator('[data-csv-target-option][value="workspace.s3"]').check()
+        await page.locator("[data-csv-s3-bucket]").fill("playwright-retry-bucket")
+        await page.locator('[data-csv-s3-storage-format][value="parquet"]').check()
+        await page.locator("[data-csv-file-input]").set_input_files(
+            files=[
+                {
+                    "name": "playwright-large-s3-parquet.csv",
+                    "mimeType": "text/csv",
+                    "buffer": file_payload,
+                }
+            ]
+        )
+        await page.locator("[data-csv-preview-root] .ingestion-csv-preview-card").wait_for(
+            state="visible",
+            timeout=timeout_ms,
+        )
+        await page.locator("[data-csv-import-submit]").click()
+        await page.locator("[data-csv-result-list] .ingestion-csv-result-card-imported").first.wait_for(
+            state="visible",
+            timeout=timeout_ms,
+        )
+        if chunk_attempts.get(1) != 5:
+            raise RuntimeError(f"Expected chunk 2 to be attempted five times, got: {chunk_attempts!r}")
+        await close_message_dialog(page, timeout_ms)
+    finally:
+        await page.unroute("**/api/ingestion/csv/upload-sessions", handle_create)
+        await page.unroute("**/api/ingestion/csv/upload-sessions/**", handle_session)
+
+
+async def reject_server_csv_chunk_failure_with_context(page, timeout_ms: int) -> None:
+    file_payload = b"id,name,value\n1,alpha,10\n2,beta,20\n3,gamma,30\n"
+    chunk_size = 10
+    upload_state = {
+        "sessionId": "playwright-failed-chunk-session",
+        "chunkSizeBytes": chunk_size,
+        "files": [
+            {
+                "fileId": "playwright-failed-chunk-file",
+                "fileName": "playwright-failed-chunk.csv",
+                "sizeBytes": len(file_payload),
+                "receivedBytes": 0,
+                "complete": False,
+            }
+        ],
+    }
+    chunk_attempts: dict[int, int] = {}
+
+    async def handle_create(route):
+        await route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(upload_state),
+        )
+
+    async def handle_session(route):
+        request = route.request
+        if request.method == "PUT":
+            chunk_index = int(request.url.rstrip("/").rsplit("/", 1)[-1])
+            chunk_attempts[chunk_index] = chunk_attempts.get(chunk_index, 0) + 1
+            if chunk_index == 1:
+                await route.fulfill(
+                    status=503,
+                    content_type="application/json",
+                    body=json.dumps({"detail": "Mock persistent chunk failure"}),
+                )
+                return
+            received = min(len(file_payload), (chunk_index + 1) * chunk_size)
+            upload_state["files"][0]["receivedBytes"] = received
+            upload_state["files"][0]["complete"] = received == len(file_payload)
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(upload_state),
+            )
+            return
+        await route.fulfill(status=200, content_type="application/json", body="{}")
+
+    await page.route("**/api/ingestion/csv/upload-sessions", handle_create)
+    await page.route("**/api/ingestion/csv/upload-sessions/**", handle_session)
+    try:
+        await page.locator('[data-csv-target-option][value="workspace.s3"]').check()
+        await page.locator("[data-csv-s3-bucket]").fill("playwright-failed-chunk-bucket")
+        await page.locator('[data-csv-s3-storage-format][value="parquet"]').check()
+        await page.locator("[data-csv-file-input]").set_input_files(
+            files=[
+                {
+                    "name": "playwright-failed-chunk.csv",
+                    "mimeType": "text/csv",
+                    "buffer": file_payload,
+                }
+            ]
+        )
+        await page.locator("[data-csv-preview-root] .ingestion-csv-preview-card").wait_for(
+            state="visible",
+            timeout=timeout_ms,
+        )
+        await page.locator("[data-csv-import-submit]").click()
+        message_dialog = page.locator("[data-message-dialog]")
+        await message_dialog.wait_for(state="visible", timeout=timeout_ms)
+        message_text = (await message_dialog.text_content() or "").strip()
+        expected_fragments = [
+            "CSV import failed",
+            "chunk 2/5",
+            "5 attempts",
+            "% complete",
+            "MB uploaded",
+            "Mock persistent chunk failure",
+        ]
+        missing = [fragment for fragment in expected_fragments if fragment not in message_text]
+        if missing:
+            raise RuntimeError(
+                f"Expected chunk failure dialog to contain {missing!r}, got: {message_text!r}"
+            )
+        if chunk_attempts.get(1) != 5:
+            raise RuntimeError(f"Expected failed chunk to be attempted five times, got: {chunk_attempts!r}")
+        await close_message_dialog(page, timeout_ms)
+    finally:
+        await page.unroute("**/api/ingestion/csv/upload-sessions", handle_create)
+        await page.unroute("**/api/ingestion/csv/upload-sessions/**", handle_session)
+
+
+async def reject_server_csv_processing_failure_with_context(page, timeout_ms: int) -> None:
+    file_payload = b"id,name,value\n1,alpha,10\n2,beta,20\n3,gamma,30\n"
+    chunk_size = 10
+    upload_state = {
+        "sessionId": "playwright-processing-failure-session",
+        "chunkSizeBytes": chunk_size,
+        "files": [
+            {
+                "fileId": "playwright-processing-failure-file",
+                "fileName": "playwright-processing-failure.csv",
+                "sizeBytes": len(file_payload),
+                "receivedBytes": 0,
+                "complete": False,
+            }
+        ],
+    }
+
+    async def handle_create(route):
+        await route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(upload_state),
+        )
+
+    async def handle_session(route):
+        request = route.request
+        if request.method == "PUT":
+            chunk_index = int(request.url.rstrip("/").rsplit("/", 1)[-1])
+            received = min(len(file_payload), (chunk_index + 1) * chunk_size)
+            upload_state["files"][0]["receivedBytes"] = received
+            upload_state["files"][0]["complete"] = received == len(file_payload)
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(upload_state),
+            )
+            return
+        if request.method == "POST" and request.url.endswith("/complete"):
+            payload = json.loads(request.post_data or "{}")
+            if payload.get("targetId") != "workspace.s3" or payload.get("storageFormat") != "parquet":
+                await route.fulfill(
+                    status=400,
+                    content_type="application/json",
+                    body=json.dumps({"detail": f"Unexpected completion payload: {payload!r}"}),
+                )
+                return
+            await asyncio.sleep(0.2)
+            await route.fulfill(
+                status=500,
+                content_type="application/json",
+                body=json.dumps({"detail": "Mock Parquet conversion failure"}),
+            )
+            return
+        await route.fulfill(status=200, content_type="application/json", body="{}")
+
+    await page.route("**/api/ingestion/csv/upload-sessions", handle_create)
+    await page.route("**/api/ingestion/csv/upload-sessions/**", handle_session)
+    try:
+        await page.locator('[data-csv-target-option][value="workspace.s3"]').check()
+        await page.locator("[data-csv-s3-bucket]").fill("playwright-processing-failure-bucket")
+        await page.locator('[data-csv-s3-storage-format][value="parquet"]').check()
+        await page.locator("[data-csv-file-input]").set_input_files(
+            files=[
+                {
+                    "name": "playwright-processing-failure.csv",
+                    "mimeType": "text/csv",
+                    "buffer": file_payload,
+                }
+            ]
+        )
+        await page.locator("[data-csv-preview-root] .ingestion-csv-preview-card").wait_for(
+            state="visible",
+            timeout=timeout_ms,
+        )
+        await page.locator("[data-csv-import-submit]").click()
+        await page.wait_for_function(
+            """() => {
+                const text = document.querySelector("[data-csv-upload-progress]")?.textContent || "";
+                return text.includes("Processing")
+                    && text.includes("Step 2 of 2")
+                    && text.includes("Transforming file to match target data format");
+            }""",
+            timeout=timeout_ms,
+        )
+        message_dialog = page.locator("[data-message-dialog]")
+        await message_dialog.wait_for(state="visible", timeout=timeout_ms)
+        message_text = (await message_dialog.text_content() or "").strip()
+        expected_fragments = [
+            "CSV import failed",
+            "Upload finished",
+            "100%",
+            "Step 2 of 2",
+            "Transforming file to match target data format",
+            "Mock Parquet conversion failure",
+        ]
+        missing = [fragment for fragment in expected_fragments if fragment not in message_text]
+        if missing:
+            raise RuntimeError(
+                f"Expected processing failure dialog to contain {missing!r}, got: {message_text!r}"
+            )
+        await close_message_dialog(page, timeout_ms)
+    finally:
+        await page.unroute("**/api/ingestion/csv/upload-sessions", handle_create)
+        await page.unroute("**/api/ingestion/csv/upload-sessions/**", handle_session)
 
 
 async def run_smoke(args: argparse.Namespace) -> int:
@@ -369,6 +691,9 @@ async def run_smoke(args: argparse.Namespace) -> int:
             await import_local_csv_file(page, args.timeout_ms)
             await import_local_zip_file(page, args.timeout_ms)
             await import_server_csv_with_progress(page, args.timeout_ms)
+            await import_server_csv_with_retried_chunk(page, args.timeout_ms)
+            await reject_server_csv_chunk_failure_with_context(page, args.timeout_ms)
+            await reject_server_csv_processing_failure_with_context(page, args.timeout_ms)
         except (PlaywrightTimeoutError, RuntimeError) as exc:
             print(str(exc), file=sys.stderr)
             for method, url, status in responses:
