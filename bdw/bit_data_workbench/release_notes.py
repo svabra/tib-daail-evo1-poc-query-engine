@@ -1,9 +1,23 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.7.6. Keep entries concise and
+# Derived from git history through version 0.7.7. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.7.7",
+        "releasedAt": "2026-05-05T16:42:17+02:00",
+        "features": [
+            (
+                "CSV ingestion progress now clearly separates upload transfer from the server-side "
+                "processing step, including format conversion such as CSV to Parquet."
+            ),
+            (
+                "The ingestion Playwright smoke now verifies the upload progress handoff from step 1 "
+                "to step 2 before the server completes the import."
+            ),
+        ],
+    },
     {
         "version": "0.7.6",
         "releasedAt": "2026-05-05T16:25:48+02:00",

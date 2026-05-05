@@ -245,20 +245,32 @@ async def import_server_csv_with_progress(page, timeout_ms: int) -> None:
             )
             return
         if request.method == "POST" and request.url.endswith("/complete"):
+            payload = json.loads(request.post_data or "{}")
+            if payload.get("targetId") != "workspace.s3" or payload.get("storageFormat") != "parquet":
+                await route.fulfill(
+                    status=400,
+                    content_type="application/json",
+                    body=json.dumps({"detail": f"Unexpected completion payload: {payload!r}"}),
+                )
+                return
+            await asyncio.sleep(0.5)
             await route.fulfill(
                 status=200,
                 content_type="application/json",
                 body=json.dumps(
                     {
-                        "targetId": "pg_oltp",
+                        "targetId": "workspace.s3",
                         "importedCount": 1,
                         "failedCount": 0,
                         "imports": [
                             {
                                 "fileName": "playwright-progress.csv",
+                                "storedFileName": "playwright-progress.parquet",
                                 "status": "imported",
-                                "destination": "pg_oltp",
-                                "relation": "public.playwright_progress",
+                                "destination": "workspace.s3",
+                                "bucket": "playwright-progress-bucket",
+                                "objectKey": "playwright-progress.parquet",
+                                "storageFormat": "parquet",
                                 "rowCount": 2,
                             }
                         ],
@@ -270,7 +282,9 @@ async def import_server_csv_with_progress(page, timeout_ms: int) -> None:
 
     await page.route("**/api/ingestion/csv/upload-sessions", handle_create)
     await page.route("**/api/ingestion/csv/upload-sessions/**", handle_session)
-    await page.locator('[data-csv-target-option][value="pg_oltp"]').check()
+    await page.locator('[data-csv-target-option][value="workspace.s3"]').check()
+    await page.locator("[data-csv-s3-bucket]").fill("playwright-progress-bucket")
+    await page.locator('[data-csv-s3-storage-format][value="parquet"]').check()
     await page.locator("[data-csv-file-input]").set_input_files(
         files=[
             {
@@ -296,6 +310,18 @@ async def import_server_csv_with_progress(page, timeout_ms: int) -> None:
         progress_text = (await progress.text_content() or "").strip()
         if "Uploading" not in progress_text or "MB" not in progress_text:
             raise RuntimeError(f"Expected upload progress next to the import button, got: {progress_text!r}")
+        if "Step 1 of 2" not in progress_text:
+            raise RuntimeError(f"Expected upload progress to identify step 1, got: {progress_text!r}")
+        await page.wait_for_function(
+            """() => {
+                const text = document.querySelector("[data-csv-upload-progress]")?.textContent || "";
+                return text.includes("Processing")
+                    && text.includes("Step 2 of 2")
+                    && text.includes("Upload complete")
+                    && text.includes("Converting CSV to Parquet");
+            }""",
+            timeout=timeout_ms,
+        )
 
     await page.locator("[data-csv-result-list] .ingestion-csv-result-card-imported").first.wait_for(
         state="visible",

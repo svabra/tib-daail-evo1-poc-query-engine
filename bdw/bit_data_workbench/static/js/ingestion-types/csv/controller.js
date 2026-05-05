@@ -796,9 +796,13 @@ export function createCsvIngestionController(helpers) {
       ? Math.min(100, Math.max(0, Math.round((transferredBytes / totalBytes) * 100)))
       : Number(uploadProgress.percentage || 0);
     const label = uploadProgress.label || "Uploading ...";
-    const detail = totalBytes > 0
-      ? `${percentage}% (${formatMegabytes(transferredBytes)} / ${formatMegabytes(totalBytes)} MB)`
-      : "Processing ...";
+    const phase = uploadProgress.phase || (uploadProgress.indeterminate ? "processing" : "uploading");
+    const detail = uploadProgress.detail
+      || (phase === "processing"
+        ? "Step 2 of 2: Upload complete. Processing server-side import."
+        : totalBytes > 0
+          ? `Step 1 of 2: ${percentage}% (${formatMegabytes(transferredBytes)} / ${formatMegabytes(totalBytes)} MB) uploaded`
+          : "Step 1 of 2: Uploading ...");
     progressRoot.hidden = false;
     progressRoot.innerHTML = `
       <span class="ingestion-csv-upload-progress-copy">
@@ -811,6 +815,23 @@ export function createCsvIngestionController(helpers) {
         <span style="width: ${escapeHtml(String(percentage))}%"></span>
       </span>
     `;
+  }
+
+  function serverProcessingProgressDetail(targetId, config, fileEntries = []) {
+    const hasArchive = fileEntries.some((entry) => isZipFile(entry?.file));
+    const archivePrefix = hasArchive ? "Extracting ZIP archive contents, then " : "";
+    if (targetId === "workspace.s3") {
+      const storageFormat = normalizeCsvS3StorageFormat(config.s3StorageFormat);
+      if (storageFormat === "csv") {
+        const action = hasArchive ? "saving" : "Saving";
+        return `Step 2 of 2: Upload complete. ${archivePrefix}${action} CSV object(s) to Shared Workspace S3.`;
+      }
+      const formatLabel = csvS3StorageFormatDefinition(storageFormat).label;
+      const action = hasArchive ? "converting" : "Converting";
+      return `Step 2 of 2: Upload complete. ${archivePrefix}${action} CSV to ${formatLabel} and saving to Shared Workspace S3.`;
+    }
+    const action = hasArchive ? "loading" : "Loading";
+    return `Step 2 of 2: Upload complete. ${archivePrefix}${action} CSV data into ${targetLabel(targetId)}.`;
   }
 
   function syncSubmitState() {
@@ -1152,6 +1173,8 @@ export function createCsvIngestionController(helpers) {
       busyPhase = "processing";
       setUploadProgress({
         label: "Processing ...",
+        phase: "processing",
+        detail: serverProcessingProgressDetail(targetId, config, fileEntries),
         transferredBytes: totalBytes,
         totalBytes,
         indeterminate: true,
