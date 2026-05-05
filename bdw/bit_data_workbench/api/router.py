@@ -97,6 +97,47 @@ class LocalWorkspaceQuerySourceDeletePayload(BaseModel):
     entry_id: str = Field(validation_alias="entryId", serialization_alias="entryId")
 
 
+class CsvUploadSessionFilePayload(BaseModel):
+    file_name: str = Field(validation_alias="fileName", serialization_alias="fileName")
+    size_bytes: int = Field(validation_alias="sizeBytes", serialization_alias="sizeBytes")
+
+
+class CsvUploadSessionCreatePayload(BaseModel):
+    files: list[CsvUploadSessionFilePayload] = Field(default_factory=list)
+
+
+class CsvUploadSessionCompletePayload(BaseModel):
+    target_id: str = Field(default="", validation_alias="targetId", serialization_alias="targetId")
+    bucket: str = ""
+    prefix: str = ""
+    schema_name: str = Field(
+        default="public",
+        validation_alias="schemaName",
+        serialization_alias="schemaName",
+    )
+    table_prefix: str = Field(
+        default="",
+        validation_alias="tablePrefix",
+        serialization_alias="tablePrefix",
+    )
+    delimiter: str = ""
+    has_header: bool = Field(
+        default=True,
+        validation_alias="hasHeader",
+        serialization_alias="hasHeader",
+    )
+    replace_existing: bool = Field(
+        default=True,
+        validation_alias="replaceExisting",
+        serialization_alias="replaceExisting",
+    )
+    storage_format: str = Field(
+        default="csv",
+        validation_alias="storageFormat",
+        serialization_alias="storageFormat",
+    )
+
+
 @router.get("/info")
 def info(service: WorkbenchService = Depends(get_workbench_service)) -> JSONResponse:
     return JSONResponse({"ok": True, "runtime": service.runtime_info()})
@@ -379,6 +420,108 @@ def import_csv_files(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return JSONResponse(jsonable_encoder(payload))
+
+
+@router.post("/api/ingestion/csv/upload-sessions")
+def create_csv_upload_session(
+    payload: CsvUploadSessionCreatePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        state = service.create_csv_upload_session(
+            files=[item.model_dump(by_alias=True) for item in payload.files],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(state))
+
+
+@router.get("/api/ingestion/csv/upload-sessions/{session_id}")
+def csv_upload_session_state(
+    session_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        state = service.csv_upload_session_state(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(state))
+
+
+@router.put("/api/ingestion/csv/upload-sessions/{session_id}/files/{file_id}/chunks/{chunk_index}")
+async def append_csv_upload_session_chunk(
+    session_id: str,
+    file_id: str,
+    chunk_index: int,
+    request: Request,
+    content_range: str | None = Header(default=None, alias="Content-Range"),
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    if not content_range:
+        raise HTTPException(
+            status_code=411,
+            detail="Content-Range is required for CSV upload chunks.",
+        )
+    try:
+        state = service.append_csv_upload_session_chunk(
+            session_id=session_id,
+            file_id=file_id,
+            chunk_index=chunk_index,
+            content_range=content_range,
+            payload=await request.body(),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(state))
+
+
+@router.post("/api/ingestion/csv/upload-sessions/{session_id}/complete")
+def complete_csv_upload_session(
+    session_id: str,
+    payload: CsvUploadSessionCompletePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        result = service.complete_csv_upload_session(
+            session_id=session_id,
+            target_id=payload.target_id,
+            bucket=payload.bucket,
+            prefix=payload.prefix,
+            schema_name=payload.schema_name,
+            table_prefix=payload.table_prefix,
+            delimiter=payload.delimiter,
+            has_header=payload.has_header,
+            replace_existing=payload.replace_existing,
+            storage_format=payload.storage_format,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(result))
+
+
+@router.delete("/api/ingestion/csv/upload-sessions/{session_id}")
+def cancel_csv_upload_session(
+    session_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        state = service.cancel_csv_upload_session(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(state))
 
 
 @router.post("/api/local-workspace/query-sources/sync")

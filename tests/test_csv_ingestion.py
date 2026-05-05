@@ -6,6 +6,7 @@ import sys
 from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
+import zipfile
 
 import duckdb
 
@@ -17,10 +18,15 @@ if str(BDW_ROOT) not in sys.path:
 
 from bit_data_workbench.backend.ingestion_types.csv.manager import (  # noqa: E402
     CsvIngestionManager,
+    CsvLocalSource,
     duckdb_type_to_postgres_type,
     normalize_csv_delimiter,
     normalize_csv_columns,
     normalize_csv_table_name,
+)
+from bit_data_workbench.backend.ingestion_types.csv.uploads import (  # noqa: E402
+    CsvUploadFileRequest,
+    CsvUploadSessionManager,
 )
 from bit_data_workbench.backend.ingestion_types.csv.s3_formats import (  # noqa: E402
     normalize_csv_s3_storage_format,
@@ -53,6 +59,7 @@ class FakeS3Client:
         bucket: str,
         key: str,
         ExtraArgs: dict[str, object] | None = None,
+        Config: object | None = None,
     ) -> None:
         self.uploads.append((filename, bucket, key, ExtraArgs, Path(filename).read_bytes()))
 
@@ -251,6 +258,116 @@ class CsvIngestionManagerTests(TestCase):
             },
         )
         self.assertEqual(payload["imports"][0]["storageFormat"], "csv")
+
+    def test_import_zip_files_to_s3_extracts_multiple_csv_entries(self) -> None:
+        fake_client = FakeS3Client()
+        manager = CsvIngestionManager(
+            settings=make_settings(),
+            postgres_connection_factory=lambda target: None,
+            s3_client_factory=lambda settings: fake_client,
+        )
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as handle:
+            handle.writestr("folder/alpha.csv", "id,name\n1,alpha\n")
+            handle.writestr("beta.csv", "id,name\n2,beta\n")
+        upload = FakeUpload("batch.zip", archive.getvalue())
+
+        with patch(
+            "bit_data_workbench.backend.ingestion_types.csv.manager.ensure_s3_bucket"
+        ):
+            payload = manager.import_csv_files(
+                files=[upload],
+                target_id="workspace.s3",
+                bucket="csv-imports",
+                delimiter=",",
+                has_header=True,
+            )
+
+        self.assertEqual(payload["importedCount"], 2)
+        self.assertEqual(payload["failedCount"], 0)
+        self.assertEqual(
+            [item["fileName"] for item in payload["imports"]],
+            ["alpha.csv", "beta.csv"],
+        )
+        self.assertEqual(
+            [upload_record[2] for upload_record in fake_client.uploads],
+            ["alpha.csv", "beta.csv"],
+        )
+
+    def test_import_zip_files_rejects_archive_with_non_csv_entry(self) -> None:
+        fake_client = FakeS3Client()
+        manager = CsvIngestionManager(
+            settings=make_settings(),
+            postgres_connection_factory=lambda target: None,
+            s3_client_factory=lambda settings: fake_client,
+        )
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as handle:
+            handle.writestr("alpha.csv", "id,name\n1,alpha\n")
+            handle.writestr("notes.txt", "not allowed\n")
+
+        payload = manager.import_csv_files(
+            files=[FakeUpload("batch.zip", archive.getvalue())],
+            target_id="workspace.s3",
+            bucket="csv-imports",
+            delimiter=",",
+            has_header=True,
+        )
+
+        self.assertEqual(payload["importedCount"], 0)
+        self.assertEqual(payload["failedCount"], 1)
+        self.assertIn("not a CSV file", payload["imports"][0]["error"])
+        self.assertEqual(fake_client.uploads, [])
+
+    def test_import_zip_files_rejects_zip_slip_entry(self) -> None:
+        fake_client = FakeS3Client()
+        manager = CsvIngestionManager(
+            settings=make_settings(),
+            postgres_connection_factory=lambda target: None,
+            s3_client_factory=lambda settings: fake_client,
+        )
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as handle:
+            handle.writestr("../evil.csv", "id,name\n1,alpha\n")
+
+        payload = manager.import_csv_files(
+            files=[FakeUpload("batch.zip", archive.getvalue())],
+            target_id="workspace.s3",
+            bucket="csv-imports",
+            delimiter=",",
+            has_header=True,
+        )
+
+        self.assertEqual(payload["importedCount"], 0)
+        self.assertIn("unsafe path", payload["imports"][0]["error"])
+        self.assertEqual(fake_client.uploads, [])
+
+    def test_import_csv_sources_uses_existing_local_path_without_upload_copy(self) -> None:
+        fake_client = FakeS3Client()
+        manager = CsvIngestionManager(
+            settings=make_settings(),
+            postgres_connection_factory=lambda target: None,
+            s3_client_factory=lambda settings: fake_client,
+        )
+
+        with TemporaryDirectory() as temp_dir:
+            csv_path = Path(temp_dir) / "staged.csv"
+            csv_path.write_text("id,name\n1,alpha\n", encoding="utf-8")
+            with patch.object(manager, "_persist_upload") as persist_upload:
+                with patch(
+                    "bit_data_workbench.backend.ingestion_types.csv.manager.ensure_s3_bucket"
+                ):
+                    payload = manager.import_csv_sources(
+                        sources=[CsvLocalSource(file_name="staged.csv", local_path=csv_path)],
+                        target_id="workspace.s3",
+                        bucket="csv-imports",
+                        delimiter=",",
+                        has_header=True,
+                    )
+
+        persist_upload.assert_not_called()
+        self.assertEqual(payload["importedCount"], 1)
+        self.assertEqual(fake_client.uploads[0][0], str(csv_path))
 
     def test_import_csv_files_to_s3_auto_detects_delimiter_before_upload(self) -> None:
         fake_client = FakeS3Client()
@@ -502,3 +619,93 @@ class CsvIngestionManagerTests(TestCase):
             cursor.copy_sql,
         )
         self.assertEqual(payload["imports"][0]["rowCount"], 3)
+
+
+class CsvUploadSessionManagerTests(TestCase):
+    def test_upload_session_accepts_chunks_reports_status_and_sources(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            settings = make_settings()
+            settings.ingestion_upload_dir = Path(temp_dir) / "uploads"
+            settings.ingestion_upload_chunk_bytes = 4
+            manager = CsvUploadSessionManager(settings=settings)
+
+            state = manager.create_session(
+                [CsvUploadFileRequest(file_name="large.csv", size_bytes=8)]
+            )
+            session_id = str(state["sessionId"])
+            file_id = str(state["files"][0]["fileId"])
+
+            first_state = manager.append_chunk(
+                session_id=session_id,
+                file_id=file_id,
+                chunk_index=0,
+                content_range="bytes 0-3/8",
+                payload=b"id,n",
+            )
+            self.assertEqual(first_state["files"][0]["receivedBytes"], 4)
+            retry_state = manager.append_chunk(
+                session_id=session_id,
+                file_id=file_id,
+                chunk_index=0,
+                content_range="bytes 0-3/8",
+                payload=b"id,n",
+            )
+            self.assertEqual(retry_state["files"][0]["receivedBytes"], 4)
+            complete_state = manager.append_chunk(
+                session_id=session_id,
+                file_id=file_id,
+                chunk_index=1,
+                content_range="bytes 4-7/8",
+                payload=b"ame\n",
+            )
+
+            self.assertTrue(complete_state["files"][0]["complete"])
+            sources = manager.source_files(session_id)
+            self.assertEqual(len(sources), 1)
+            self.assertEqual(sources[0].file_name, "large.csv")
+            self.assertEqual(sources[0].local_path.read_bytes(), b"id,name\n")
+
+    def test_upload_session_rejects_out_of_order_chunk(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            settings = make_settings()
+            settings.ingestion_upload_dir = Path(temp_dir) / "uploads"
+            settings.ingestion_upload_chunk_bytes = 4
+            manager = CsvUploadSessionManager(settings=settings)
+
+            state = manager.create_session(
+                [CsvUploadFileRequest(file_name="large.csv", size_bytes=8)]
+            )
+            with self.assertRaisesRegex(ValueError, "Expected byte offset 0"):
+                manager.append_chunk(
+                    session_id=str(state["sessionId"]),
+                    file_id=str(state["files"][0]["fileId"]),
+                    chunk_index=1,
+                    content_range="bytes 4-7/8",
+                    payload=b"ame\n",
+                )
+
+    def test_upload_session_cancel_removes_staged_files(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            settings = make_settings()
+            settings.ingestion_upload_dir = Path(temp_dir) / "uploads"
+            settings.ingestion_upload_chunk_bytes = 4
+            manager = CsvUploadSessionManager(settings=settings)
+
+            state = manager.create_session(
+                [CsvUploadFileRequest(file_name="large.csv", size_bytes=4)]
+            )
+            session_id = str(state["sessionId"])
+            manager.append_chunk(
+                session_id=session_id,
+                file_id=str(state["files"][0]["fileId"]),
+                chunk_index=0,
+                content_range="bytes 0-3/4",
+                payload=b"data",
+            )
+            session_dir = settings.ingestion_upload_dir / session_id
+            self.assertTrue(session_dir.exists())
+
+            cancel_state = manager.cancel_session(session_id)
+
+            self.assertTrue(cancel_state["cancelled"])
+            self.assertFalse(session_dir.exists())

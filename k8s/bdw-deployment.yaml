@@ -20,7 +20,7 @@ spec:
       serviceAccountName: evo1-bdw
       containers:
         - name: bdw
-          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.7.4
+          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.7.5
           imagePullPolicy: Always
           ports:
             - name: http
@@ -35,6 +35,26 @@ spec:
               value: "false"
             - name: DUCKDB_DATABASE
               value: /tmp/workspace/workspace.duckdb
+            - name: TMPDIR
+              value: /workspace/tmp
+            - name: BDW_INGESTION_UPLOAD_DIR
+              value: /workspace/ingestion-uploads
+            - name: BDW_INGESTION_UPLOAD_CHUNK_BYTES
+              value: "33554432"
+            - name: BDW_INGESTION_UPLOAD_MAX_ARCHIVE_BYTES
+              value: "5368709120"
+            - name: BDW_INGESTION_UPLOAD_MAX_CSV_BYTES
+              value: "21474836480"
+            - name: BDW_INGESTION_UPLOAD_MAX_EXTRACTED_BYTES
+              value: "21474836480"
+            - name: BDW_INGESTION_UPLOAD_SESSION_TTL_HOURS
+              value: "24"
+            - name: BDW_INGESTION_ZIP_MAX_ENTRIES
+              value: "100"
+            - name: BDW_INGESTION_ZIP_MAX_EXPANSION_RATIO
+              value: "100"
+            - name: BDW_INGESTION_COPY_CHUNK_BYTES
+              value: "8388608"
             - name: BDW_SERVICE_CONSUMPTION_DATA_DIR
               value: /workspace/service-consumption
             - name: BDW_SERVICE_CONSUMPTION_CPU_MEMORY_INTERVAL_SECONDS

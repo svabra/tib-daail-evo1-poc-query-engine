@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import io
+import json
 import sys
+import zipfile
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
@@ -45,11 +48,15 @@ async def open_ingestion_workbench(page, base_url: str, timeout_ms: int) -> None
 
 async def open_csv_ingestor(page, timeout_ms: int) -> None:
     csv_tile = page.locator('[data-ingestion-tile="csv"]').first
-    await csv_tile.click()
-    await page.locator("[data-csv-ingestion-form]").wait_for(
-        state="visible",
-        timeout=timeout_ms,
-    )
+    form = page.locator("[data-csv-ingestion-form]")
+    for _attempt in range(5):
+        await csv_tile.click()
+        try:
+            await form.wait_for(state="visible", timeout=2000)
+            break
+        except PlaywrightTimeoutError:
+            await page.wait_for_timeout(500)
+    await form.wait_for(state="visible", timeout=timeout_ms)
     await page.locator('[data-csv-target-option][value="workspace.s3"]').check()
     for value in ("csv", "parquet", "json"):
         await page.locator(f'[data-csv-s3-storage-format][value="{value}"]').wait_for(
@@ -159,6 +166,149 @@ async def import_local_csv_file(page, timeout_ms: int) -> None:
     await query_button.wait_for(state="visible", timeout=timeout_ms)
 
 
+def zip_bytes(entries: dict[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED) as archive:
+        for name, payload in entries.items():
+            archive.writestr(name, payload)
+    return buffer.getvalue()
+
+
+async def import_local_zip_file(page, timeout_ms: int) -> None:
+    file_input = page.locator("[data-csv-file-input]").first
+    await file_input.set_input_files(
+        files=[
+            {
+                "name": "playwright-local-archive.zip",
+                "mimeType": "application/zip",
+                "buffer": zip_bytes(
+                    {
+                        "alpha.csv": b"id,name\n1,alpha\n",
+                        "nested/beta.csv": b"id,name\n2,beta\n",
+                    }
+                ),
+            }
+        ]
+    )
+
+    preview_card = page.locator("[data-csv-preview-root] .ingestion-csv-preview-card").first
+    await preview_card.wait_for(state="visible", timeout=timeout_ms)
+    preview_text = (await preview_card.text_content() or "").strip()
+    if "2 CSV file(s)" not in preview_text:
+        raise RuntimeError(f"Expected ZIP preview to report two CSV files, got: {preview_text!r}")
+
+    await page.locator("[data-csv-import-submit]").click()
+    await page.locator("[data-csv-result-list] .ingestion-csv-result-card-imported").nth(1).wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
+    message_dialog = page.locator("[data-message-dialog]")
+    if await message_dialog.is_visible():
+        await page.locator("[data-message-submit]").click()
+        await message_dialog.wait_for(state="hidden", timeout=timeout_ms)
+
+
+async def import_server_csv_with_progress(page, timeout_ms: int) -> None:
+    upload_state = {
+        "sessionId": "playwright-session",
+        "chunkSizeBytes": 8,
+        "files": [
+            {
+                "fileId": "playwright-file",
+                "fileName": "playwright-progress.csv",
+                "sizeBytes": 23,
+                "receivedBytes": 0,
+                "complete": False,
+            }
+        ],
+    }
+
+    async def handle_create(route):
+        await route.fulfill(
+            status=200,
+            content_type="application/json",
+            body=json.dumps(upload_state),
+        )
+
+    async def handle_session(route):
+        request = route.request
+        await asyncio.sleep(0.2)
+        if request.method == "PUT":
+            chunk_index = int(request.url.rstrip("/").rsplit("/", 1)[-1])
+            received = min(23, (chunk_index + 1) * 8)
+            upload_state["files"][0]["receivedBytes"] = received
+            upload_state["files"][0]["complete"] = received == 23
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(upload_state),
+            )
+            return
+        if request.method == "POST" and request.url.endswith("/complete"):
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "targetId": "pg_oltp",
+                        "importedCount": 1,
+                        "failedCount": 0,
+                        "imports": [
+                            {
+                                "fileName": "playwright-progress.csv",
+                                "status": "imported",
+                                "destination": "pg_oltp",
+                                "relation": "public.playwright_progress",
+                                "rowCount": 2,
+                            }
+                        ],
+                    }
+                ),
+            )
+            return
+        await route.fulfill(status=200, content_type="application/json", body="{}")
+
+    await page.route("**/api/ingestion/csv/upload-sessions", handle_create)
+    await page.route("**/api/ingestion/csv/upload-sessions/**", handle_session)
+    await page.locator('[data-csv-target-option][value="pg_oltp"]').check()
+    await page.locator("[data-csv-file-input]").set_input_files(
+        files=[
+            {
+                "name": "playwright-progress.csv",
+                "mimeType": "text/csv",
+                "buffer": b"id,name\n1,alpha\n2,beta\n",
+            }
+        ]
+    )
+    await page.locator("[data-csv-preview-root] .ingestion-csv-preview-card").wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
+
+    async with page.expect_response(
+        lambda response: response.request.method == "POST"
+        and response.url.endswith("/complete"),
+        timeout=timeout_ms,
+    ):
+        await page.locator("[data-csv-import-submit]").click()
+        progress = page.locator("[data-csv-upload-progress]").first
+        await progress.wait_for(state="visible", timeout=timeout_ms)
+        progress_text = (await progress.text_content() or "").strip()
+        if "Uploading" not in progress_text or "MB" not in progress_text:
+            raise RuntimeError(f"Expected upload progress next to the import button, got: {progress_text!r}")
+
+    await page.locator("[data-csv-result-list] .ingestion-csv-result-card-imported").first.wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
+    await page.unroute("**/api/ingestion/csv/upload-sessions", handle_create)
+    await page.unroute("**/api/ingestion/csv/upload-sessions/**", handle_session)
+    message_dialog = page.locator("[data-message-dialog]")
+    if await message_dialog.is_visible():
+        await page.locator("[data-message-submit]").click()
+        await message_dialog.wait_for(state="hidden", timeout=timeout_ms)
+
+
 async def run_smoke(args: argparse.Namespace) -> int:
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=args.headless)
@@ -191,10 +341,12 @@ async def run_smoke(args: argparse.Namespace) -> int:
             await open_csv_ingestor(page, args.timeout_ms)
             await reject_invalid_csv_file(page, args.timeout_ms)
             await import_local_csv_file(page, args.timeout_ms)
+            await import_local_zip_file(page, args.timeout_ms)
+            await import_server_csv_with_progress(page, args.timeout_ms)
         except (PlaywrightTimeoutError, RuntimeError) as exc:
             print(str(exc), file=sys.stderr)
             for method, url, status in responses:
-                if "/api/ingestion/csv/import" in url:
+                if "/api/ingestion/csv/import" in url or "/api/ingestion/csv/upload-sessions" in url:
                     print(f"HTTP {method} {status} {url}", file=sys.stderr)
             for message in console_messages:
                 print(message, file=sys.stderr)

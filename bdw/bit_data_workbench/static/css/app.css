@@ -5849,7 +5849,51 @@ details:not([open]) > .source-schema > summary::before {
 
 .ingestion-csv-actions {
   display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
   justify-content: flex-start;
+}
+
+.ingestion-csv-upload-progress {
+  min-width: min(360px, 100%);
+  display: grid;
+  gap: 6px;
+}
+
+.ingestion-csv-upload-progress-copy {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.ingestion-csv-upload-progress-copy strong {
+  color: var(--text);
+}
+
+.ingestion-csv-upload-progress-track {
+  position: relative;
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(11, 68, 121, 0.08);
+}
+
+.ingestion-csv-upload-progress-track > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  min-width: 4px;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(11, 68, 121, 0.72), var(--accent));
+}
+
+.ingestion-csv-upload-progress-track.is-indeterminate > span {
+  width: 38% !important;
+  animation: query-indeterminate 1.25s linear infinite;
 }
 
 .ingestion-csv-result-header {

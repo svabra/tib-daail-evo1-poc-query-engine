@@ -33,11 +33,16 @@ async def open_csv_ingestion(page, base_url: str, timeout_ms: int) -> None:
         timeout=timeout_ms,
     )
     await page.wait_for_timeout(1000)
-    await page.locator('[data-ingestion-tile="csv"]').click()
-    await page.locator("[data-csv-ingestion-form]").wait_for(
-        state="visible",
-        timeout=timeout_ms,
-    )
+    csv_tile = page.locator('[data-ingestion-tile="csv"]').first
+    form = page.locator("[data-csv-ingestion-form]")
+    for _attempt in range(5):
+        await csv_tile.click()
+        try:
+            await form.wait_for(state="visible", timeout=2000)
+            break
+        except PlaywrightTimeoutError:
+            await page.wait_for_timeout(500)
+    await form.wait_for(state="visible", timeout=timeout_ms)
 
 
 async def import_csv_to_pg(page, timeout_ms: int) -> str:
@@ -69,7 +74,8 @@ async def import_csv_to_pg(page, timeout_ms: int) -> str:
 
     async with page.expect_response(
         lambda response: response.request.method == "POST"
-        and response.url.endswith("/api/ingestion/csv/import"),
+        and "/api/ingestion/csv/upload-sessions/" in response.url
+        and response.url.endswith("/complete"),
         timeout=timeout_ms,
     ) as response_info:
         await page.locator("[data-csv-import-submit]").click()

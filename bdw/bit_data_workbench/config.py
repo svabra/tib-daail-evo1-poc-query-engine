@@ -5,6 +5,7 @@ import socket
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+import tempfile
 
 from .version_info import runtime_image_version
 
@@ -27,6 +28,15 @@ WORKBENCH_ENVIRONMENT_VARIABLES = (
     "BDW_SERVICE_CONSUMPTION_COST_CPU_WEIGHT",
     "BDW_SERVICE_CONSUMPTION_COST_RAM_WEIGHT",
     "BDW_APP_STORAGE_PVC_NAME",
+    "BDW_INGESTION_UPLOAD_DIR",
+    "BDW_INGESTION_UPLOAD_CHUNK_BYTES",
+    "BDW_INGESTION_UPLOAD_MAX_ARCHIVE_BYTES",
+    "BDW_INGESTION_UPLOAD_MAX_CSV_BYTES",
+    "BDW_INGESTION_UPLOAD_MAX_EXTRACTED_BYTES",
+    "BDW_INGESTION_UPLOAD_SESSION_TTL_HOURS",
+    "BDW_INGESTION_ZIP_MAX_ENTRIES",
+    "BDW_INGESTION_ZIP_MAX_EXPANSION_RATIO",
+    "BDW_INGESTION_COPY_CHUNK_BYTES",
     "MAX_RESULT_ROWS",
     "S3_ENDPOINT",
     "S3_BUCKET",
@@ -145,6 +155,21 @@ def env_float_optional(name: str) -> float | None:
         return float(raw)
     except ValueError as exc:
         raise ValueError(f"Unsupported float value for {name}: {raw}") from exc
+
+
+def env_int(name: str, default: int) -> int:
+    raw = env_optional(name)
+    if raw is None:
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"Unsupported integer value for {name}: {raw}") from exc
+
+
+def env_float(name: str, default: float) -> float:
+    raw = env_float_optional(name)
+    return default if raw is None else raw
 
 
 def read_secret_file(path: Path, *, variable_name: str) -> str:
@@ -513,6 +538,17 @@ class Settings:
     service_consumption_cost_cpu_weight: float = 0.5
     service_consumption_cost_ram_weight: float = 0.5
     app_storage_pvc_name: str | None = None
+    ingestion_upload_dir: Path = field(
+        default_factory=lambda: Path(tempfile.gettempdir()) / "bdw-ingestion-uploads"
+    )
+    ingestion_upload_chunk_bytes: int = 32 * 1024 * 1024
+    ingestion_upload_max_archive_bytes: int = 5 * 1024 * 1024 * 1024
+    ingestion_upload_max_csv_bytes: int = 20 * 1024 * 1024 * 1024
+    ingestion_upload_max_extracted_bytes: int = 20 * 1024 * 1024 * 1024
+    ingestion_upload_session_ttl_hours: int = 24
+    ingestion_zip_max_entries: int = 100
+    ingestion_zip_max_expansion_ratio: float = 100.0
+    ingestion_copy_chunk_bytes: int = 8 * 1024 * 1024
     _generated_s3_ca_cert_file: Path | None = field(init=False, default=None, repr=False)
 
     @classmethod
@@ -581,6 +617,44 @@ class Settings:
                 or 0.5,
             ),
             app_storage_pvc_name=env_optional("BDW_APP_STORAGE_PVC_NAME"),
+            ingestion_upload_dir=Path(
+                env(
+                    "BDW_INGESTION_UPLOAD_DIR",
+                    str(Path(tempfile.gettempdir()) / "bdw-ingestion-uploads"),
+                )
+            ),
+            ingestion_upload_chunk_bytes=max(
+                1024 * 1024,
+                env_int("BDW_INGESTION_UPLOAD_CHUNK_BYTES", 32 * 1024 * 1024),
+            ),
+            ingestion_upload_max_archive_bytes=max(
+                1,
+                env_int("BDW_INGESTION_UPLOAD_MAX_ARCHIVE_BYTES", 5 * 1024 * 1024 * 1024),
+            ),
+            ingestion_upload_max_csv_bytes=max(
+                1,
+                env_int("BDW_INGESTION_UPLOAD_MAX_CSV_BYTES", 20 * 1024 * 1024 * 1024),
+            ),
+            ingestion_upload_max_extracted_bytes=max(
+                1,
+                env_int(
+                    "BDW_INGESTION_UPLOAD_MAX_EXTRACTED_BYTES",
+                    20 * 1024 * 1024 * 1024,
+                ),
+            ),
+            ingestion_upload_session_ttl_hours=max(
+                1,
+                env_int("BDW_INGESTION_UPLOAD_SESSION_TTL_HOURS", 24),
+            ),
+            ingestion_zip_max_entries=max(1, env_int("BDW_INGESTION_ZIP_MAX_ENTRIES", 100)),
+            ingestion_zip_max_expansion_ratio=max(
+                1.0,
+                env_float("BDW_INGESTION_ZIP_MAX_EXPANSION_RATIO", 100.0),
+            ),
+            ingestion_copy_chunk_bytes=max(
+                1024 * 1024,
+                env_int("BDW_INGESTION_COPY_CHUNK_BYTES", 8 * 1024 * 1024),
+            ),
             max_result_rows=int(env("MAX_RESULT_ROWS", "200")),
             s3_endpoint=env_optional("S3_ENDPOINT"),
             s3_bucket=env_optional("S3_BUCKET"),

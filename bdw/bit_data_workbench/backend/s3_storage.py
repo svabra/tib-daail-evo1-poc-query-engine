@@ -616,6 +616,7 @@ def upload_s3_file(
     bucket: str,
     key: str,
     metadata: dict[str, str] | None = None,
+    transfer_config=None,
 ) -> None:
     extra_args = None
     if metadata:
@@ -626,10 +627,13 @@ def upload_s3_file(
                 if str(name).strip()
             }
         }
+    kwargs = {}
+    if transfer_config is not None:
+        kwargs["Config"] = transfer_config
     if extra_args:
-        client.upload_file(str(local_path), bucket, key, ExtraArgs=extra_args)
+        client.upload_file(str(local_path), bucket, key, ExtraArgs=extra_args, **kwargs)
         return
-    client.upload_file(str(local_path), bucket, key)
+    client.upload_file(str(local_path), bucket, key, **kwargs)
 
 
 def download_s3_file(client, *, bucket: str, key: str, local_path: Path) -> None:

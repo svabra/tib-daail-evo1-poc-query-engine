@@ -54,6 +54,8 @@ from .data_products import DataProductManager, DataProductStore
 from .data_generation_jobs import DataGenerationJobManager
 from .ingestion_types.csv import (
     CsvIngestionManager,
+    CsvUploadFileRequest,
+    CsvUploadSessionManager,
     attach_query_sources_to_csv_imports,
 )
 from .local_workspace_query_sources import LocalWorkspaceQuerySourceManager
@@ -203,6 +205,7 @@ class WorkbenchService:
             settings=settings,
             postgres_connection_factory=self._create_postgres_native_connection,
         )
+        self._csv_upload_sessions = CsvUploadSessionManager(settings=settings)
         self._local_workspace_query_sources = LocalWorkspaceQuerySourceManager(
             settings=settings,
         )
@@ -1015,6 +1018,80 @@ class WorkbenchService:
             replace_existing=replace_existing,
             storage_format=storage_format,
         )
+        return self._finalize_csv_import_payload(payload, normalized_target_id)
+
+    def create_csv_upload_session(self, *, files: list[dict[str, object]]) -> dict[str, object]:
+        requests = [
+            CsvUploadFileRequest(
+                file_name=str(item.get("fileName") or ""),
+                size_bytes=int(item.get("sizeBytes") or 0),
+            )
+            for item in files
+            if isinstance(item, dict)
+        ]
+        return self._csv_upload_sessions.create_session(requests)
+
+    def csv_upload_session_state(self, session_id: str) -> dict[str, object]:
+        return self._csv_upload_sessions.session_state(session_id)
+
+    def append_csv_upload_session_chunk(
+        self,
+        *,
+        session_id: str,
+        file_id: str,
+        chunk_index: int,
+        content_range: str,
+        payload: bytes,
+    ) -> dict[str, object]:
+        return self._csv_upload_sessions.append_chunk(
+            session_id=session_id,
+            file_id=file_id,
+            chunk_index=chunk_index,
+            content_range=content_range,
+            payload=payload,
+        )
+
+    def cancel_csv_upload_session(self, session_id: str) -> dict[str, object]:
+        return self._csv_upload_sessions.cancel_session(session_id)
+
+    def complete_csv_upload_session(
+        self,
+        *,
+        session_id: str,
+        target_id: str,
+        bucket: str = "",
+        prefix: str = "",
+        schema_name: str = "public",
+        table_prefix: str = "",
+        delimiter: str = "",
+        has_header: bool = True,
+        replace_existing: bool = True,
+        storage_format: str = "csv",
+    ) -> dict[str, object]:
+        normalized_target_id = str(target_id or "").strip()
+        sources = self._csv_upload_sessions.source_files(session_id)
+        try:
+            payload = self._csv_ingestion.import_csv_sources(
+                sources=sources,
+                target_id=normalized_target_id,
+                bucket=bucket,
+                prefix=prefix,
+                schema_name=schema_name,
+                table_prefix=table_prefix,
+                delimiter=delimiter,
+                has_header=has_header,
+                replace_existing=replace_existing,
+                storage_format=storage_format,
+            )
+        finally:
+            self._csv_upload_sessions.delete_session(session_id)
+        return self._finalize_csv_import_payload(payload, normalized_target_id)
+
+    def _finalize_csv_import_payload(
+        self,
+        payload: dict[str, object],
+        normalized_target_id: str,
+    ) -> dict[str, object]:
         if payload.get("importedCount"):
             if normalized_target_id == "workspace.s3":
                 self._data_source_discovery.sync_source("workspace.s3", emit_event=True)

@@ -5,6 +5,7 @@ metadata:
   namespace: daai-brs-d
   annotations:
     openshift.io/host.generated: "true"
+    haproxy.router.openshift.io/timeout: 1h
   labels:
     app.kubernetes.io/name: evo1-bdw
     ros.bit.admin.ch/ingress: extern

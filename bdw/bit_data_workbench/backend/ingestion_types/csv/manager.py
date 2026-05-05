@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import re
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, BinaryIO, Protocol
 
 import duckdb
+from boto3.s3.transfer import TransferConfig
 
 from ....config import Settings
 from ...s3_storage import ensure_s3_bucket, s3_client, upload_s3_file
 from ...sql_utils import sql_identifier, sql_literal
+from .archives import CsvArchivePolicy, extract_csv_archive
 from .dialect import normalize_csv_delimiter
 from .s3_formats import build_csv_s3_upload_artifact, normalize_csv_s3_storage_format
 from .validation import validate_csv_file
@@ -19,6 +22,12 @@ from .validation import validate_csv_file
 class CsvUpload(Protocol):
     filename: str | None
     file: BinaryIO
+
+
+@dataclass(frozen=True, slots=True)
+class CsvLocalSource:
+    file_name: str
+    local_path: Path
 
 
 def normalize_csv_identifier(value: str, *, default_prefix: str) -> str:
@@ -114,6 +123,14 @@ class CsvIngestionManager:
         self._settings = settings
         self._postgres_connection_factory = postgres_connection_factory
         self._s3_client_factory = s3_client_factory
+        self._archive_policy = CsvArchivePolicy(
+            max_archive_bytes=settings.ingestion_upload_max_archive_bytes,
+            max_csv_bytes=settings.ingestion_upload_max_csv_bytes,
+            max_extracted_bytes=settings.ingestion_upload_max_extracted_bytes,
+            max_entries=settings.ingestion_zip_max_entries,
+            max_expansion_ratio=settings.ingestion_zip_max_expansion_ratio,
+            copy_chunk_bytes=settings.ingestion_copy_chunk_bytes,
+        )
 
     def import_csv_files(
         self,
@@ -129,37 +146,99 @@ class CsvIngestionManager:
         replace_existing: bool = True,
         storage_format: str = "csv",
     ) -> dict[str, Any]:
+        with TemporaryDirectory() as temp_dir:
+            sources, failures = self._materialize_uploads(
+                files=list(files or []),
+                temp_dir=Path(temp_dir),
+            )
+            return self.import_csv_sources(
+                sources=sources,
+                target_id=target_id,
+                bucket=bucket,
+                prefix=prefix,
+                schema_name=schema_name,
+                table_prefix=table_prefix,
+                delimiter=delimiter,
+                has_header=has_header,
+                replace_existing=replace_existing,
+                storage_format=storage_format,
+                initial_imports=failures,
+            )
+
+    def import_csv_sources(
+        self,
+        *,
+        sources: list[CsvLocalSource],
+        target_id: str,
+        bucket: str = "",
+        prefix: str = "",
+        schema_name: str = "public",
+        table_prefix: str = "",
+        delimiter: str = "",
+        has_header: bool = True,
+        replace_existing: bool = True,
+        storage_format: str = "csv",
+        initial_imports: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
         normalized_target_id = str(target_id or "").strip()
         if normalized_target_id not in {"workspace.s3", "pg_oltp", "pg_olap"}:
             raise ValueError(f"Unsupported CSV ingestion target: {target_id}")
-        if not files:
-            raise ValueError("Choose at least one CSV file before importing.")
+        if not sources and not initial_imports:
+            raise ValueError("Choose at least one CSV or ZIP file before importing.")
 
-        imports: list[dict[str, Any]] = []
-        for upload in files:
-            file_name = Path(str(getattr(upload, "filename", "") or "")).name.strip()
-            if not file_name:
-                imports.append(
-                    {
-                        "fileName": "unnamed.csv",
-                        "status": "failed",
-                        "error": "The uploaded file is missing its file name.",
-                    }
-                )
-                continue
-            if not file_name.lower().endswith(".csv"):
-                imports.append(
-                    {
-                        "fileName": file_name,
-                        "status": "failed",
-                        "error": "Only .csv files are supported in this ingestion flow.",
-                    }
-                )
-                continue
+        imports: list[dict[str, Any]] = list(initial_imports or [])
+        with TemporaryDirectory() as extract_temp_dir:
+            csv_sources: list[CsvLocalSource] = []
+            extraction_root = Path(extract_temp_dir)
+            for source_index, source in enumerate(sources):
+                file_name = Path(str(source.file_name or "")).name.strip()
+                if not file_name:
+                    imports.append(
+                        {
+                            "fileName": "unnamed.csv",
+                            "status": "failed",
+                            "error": "The uploaded file is missing its file name.",
+                        }
+                    )
+                    continue
+                suffix = file_name.lower()
+                try:
+                    if suffix.endswith(".csv"):
+                        csv_sources.append(CsvLocalSource(file_name=file_name, local_path=source.local_path))
+                    elif suffix.endswith(".zip"):
+                        extracted = extract_csv_archive(
+                            archive_path=source.local_path,
+                            output_dir=extraction_root / normalize_csv_identifier(
+                                f"{Path(file_name).stem}_{source_index + 1}",
+                                default_prefix="archive",
+                            ),
+                            policy=self._archive_policy,
+                        )
+                        csv_sources.extend(
+                            CsvLocalSource(file_name=item.file_name, local_path=item.local_path)
+                            for item in extracted
+                        )
+                    else:
+                        imports.append(
+                            {
+                                "fileName": file_name,
+                                "status": "failed",
+                                "error": "Only .csv and .zip files are supported in this ingestion flow.",
+                            }
+                        )
+                except Exception as exc:
+                    imports.append(
+                        {
+                            "fileName": file_name,
+                            "status": "failed",
+                            "error": str(exc),
+                        }
+                    )
 
-            try:
-                with TemporaryDirectory() as temp_dir:
-                    local_path = self._persist_upload(upload, Path(temp_dir))
+            for source in csv_sources:
+                file_name = source.file_name
+                local_path = source.local_path
+                try:
                     resolved_delimiter = validate_csv_file(
                         local_path,
                         delimiter=delimiter,
@@ -186,23 +265,23 @@ class CsvIngestionManager:
                             has_header=has_header,
                             replace_existing=replace_existing,
                         )
-            except Exception as exc:
+                except Exception as exc:
+                    imports.append(
+                        {
+                            "fileName": file_name,
+                            "status": "failed",
+                            "error": str(exc),
+                        }
+                    )
+                    continue
+
                 imports.append(
                     {
                         "fileName": file_name,
-                        "status": "failed",
-                        "error": str(exc),
+                        "status": "imported",
+                        **result,
                     }
                 )
-                continue
-
-            imports.append(
-                {
-                    "fileName": file_name,
-                    "status": "imported",
-                    **result,
-                }
-            )
 
         imported_count = sum(1 for item in imports if item.get("status") == "imported")
         return {
@@ -212,8 +291,69 @@ class CsvIngestionManager:
             "imports": imports,
         }
 
-    def _persist_upload(self, upload: CsvUpload, temp_dir: Path) -> Path:
-        file_name = Path(str(getattr(upload, "filename", "") or "upload.csv")).name or "upload.csv"
+    def _materialize_uploads(
+        self,
+        *,
+        files: list[CsvUpload],
+        temp_dir: Path,
+    ) -> tuple[list[CsvLocalSource], list[dict[str, Any]]]:
+        if not files:
+            return [], []
+
+        upload_dir = temp_dir / "uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        sources: list[CsvLocalSource] = []
+        failures: list[dict[str, Any]] = []
+        seen_names: dict[str, int] = {}
+        for upload in files:
+            file_name = Path(str(getattr(upload, "filename", "") or "")).name.strip()
+            if not file_name:
+                failures.append(
+                    {
+                        "fileName": "unnamed.csv",
+                        "status": "failed",
+                        "error": "The uploaded file is missing its file name.",
+                    }
+                )
+                continue
+            if not file_name.lower().endswith((".csv", ".zip")):
+                failures.append(
+                    {
+                        "fileName": file_name,
+                        "status": "failed",
+                        "error": "Only .csv and .zip files are supported in this ingestion flow.",
+                    }
+                )
+                continue
+
+            local_path = self._persist_upload(
+                upload,
+                upload_dir,
+                file_name=self._unique_materialized_name(file_name, seen_names),
+            )
+            sources.append(CsvLocalSource(file_name=file_name, local_path=local_path))
+        return sources, failures
+
+    def _unique_materialized_name(self, file_name: str, seen: dict[str, int]) -> str:
+        normalized_key = file_name.lower()
+        next_index = seen.get(normalized_key, 0)
+        seen[normalized_key] = next_index + 1
+        if next_index == 0:
+            return file_name
+        path = Path(file_name)
+        return f"{path.stem}_{next_index + 1}{path.suffix}"
+
+    def _persist_upload(
+        self,
+        upload: CsvUpload,
+        temp_dir: Path,
+        *,
+        file_name: str | None = None,
+    ) -> Path:
+        file_name = (
+            Path(str(file_name or getattr(upload, "filename", "") or "upload.csv")).name
+            or "upload.csv"
+        )
         target_path = temp_dir / file_name
         input_file = getattr(upload, "file", None)
         if input_file is None:
@@ -265,6 +405,11 @@ class CsvIngestionManager:
             bucket=normalized_bucket,
             key=key,
             metadata=upload_artifact.metadata,
+            transfer_config=TransferConfig(
+                multipart_threshold=64 * 1024 * 1024,
+                multipart_chunksize=64 * 1024 * 1024,
+                max_concurrency=4,
+            ),
         )
         return {
             "destination": "s3",
@@ -326,7 +471,7 @@ class CsvIngestionManager:
             ) as copy:
                 with local_path.open("rb") as input_file:
                     while True:
-                        chunk = input_file.read(1024 * 1024)
+                        chunk = input_file.read(self._settings.ingestion_copy_chunk_bytes)
                         if not chunk:
                             break
                         copy.write(chunk)

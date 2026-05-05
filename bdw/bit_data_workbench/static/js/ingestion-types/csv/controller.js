@@ -16,6 +16,11 @@ import {
   normalizeCsvS3StorageFormat,
 } from "./s3-storage-formats.js";
 import { resolveCsvS3LocationDetails } from "./s3-location.js";
+import {
+  buildCsvZipPreviewState,
+  isZipFile,
+  readCsvFilesFromZip,
+} from "./zip-reader.js";
 
 function normalizeCsvIdentifier(value, defaultPrefix) {
   let normalized = String(value || "")
@@ -80,6 +85,8 @@ export function createCsvIngestionController(helpers) {
 
   let selectedFiles = [];
   let busy = false;
+  let busyPhase = "";
+  let uploadProgress = null;
   let latestResults = [];
   let activeEntryId = "";
   let previewState = emptyPreviewState();
@@ -119,6 +126,10 @@ export function createCsvIngestionController(helpers) {
 
   function submitButton() {
     return document.querySelector("[data-csv-import-submit]");
+  }
+
+  function uploadProgressRoot() {
+    return document.querySelector("[data-csv-upload-progress]");
   }
 
   function activeEntryPanel() {
@@ -179,6 +190,18 @@ export function createCsvIngestionController(helpers) {
     return Array.isArray(selectedFiles) ? selectedFiles : [];
   }
 
+  function isCsvOrZipFile(file) {
+    const fileName = String(file?.name || "").trim().toLowerCase();
+    return fileName.endsWith(".csv") || fileName.endsWith(".zip");
+  }
+
+  function formatMegabytes(bytes) {
+    const megabytes = Number(bytes || 0) / (1024 * 1024);
+    return megabytes.toLocaleString(undefined, {
+      maximumFractionDigits: megabytes >= 100 ? 0 : 1,
+    });
+  }
+
   function previewFileEntry() {
     return selectedFileEntries()[0] || null;
   }
@@ -188,6 +211,9 @@ export function createCsvIngestionController(helpers) {
   }
 
   function resolvedSourceUploadFileName(entry) {
+    if (isZipFile(entry?.file)) {
+      return `${resolvedImportBaseName(entry)}.zip`;
+    }
     return resolveCsvSourceUploadFileName(
       resolvedImportBaseName(entry),
       entry?.file?.name || ""
@@ -245,6 +271,11 @@ export function createCsvIngestionController(helpers) {
   }
 
   function resolvedDestinationCopy(entry, targetId = selectedTargetId(), config = currentConfig()) {
+    if (isZipFile(entry?.file)) {
+      return targetId === "workspace.local"
+        ? localWorkspaceDisplayPath(config.folderPath, "extracted CSV files")
+        : `Extracted CSV files from ${resolvedSourceUploadFileName(entry)}`;
+    }
     if (targetId === "workspace.local") {
       return localWorkspaceDisplayPath(config.folderPath, resolvedDestinationFileName(entry, targetId, config));
     }
@@ -287,7 +318,7 @@ export function createCsvIngestionController(helpers) {
 
   function fileListMarkup() {
     if (!selectedFileEntries().length) {
-      return '<p class="ingestion-empty">No CSV files selected yet.</p>';
+      return '<p class="ingestion-empty">No CSV or ZIP files selected yet.</p>';
     }
 
     return selectedFileEntries()
@@ -310,10 +341,13 @@ export function createCsvIngestionController(helpers) {
     const targetId = selectedTargetId();
     const config = currentConfig();
     const importNameLabel = csvImportNameFieldLabel(targetId);
-    const importNameSuffix = csvImportNameSuffix(targetId, config.s3StorageFormat);
     return selectedFileEntries()
       .map(
-        (entry) => `
+        (entry) => {
+          const importNameSuffix = isZipFile(entry.file)
+            ? ".zip"
+            : csvImportNameSuffix(targetId, config.s3StorageFormat);
+          return `
           <article class="ingestion-csv-review-card">
             <span class="ingestion-csv-review-name">${escapeHtml(entry.file.name)}</span>
             <span class="ingestion-csv-review-target">${escapeHtml(targetLabel(targetId))}</span>
@@ -359,14 +393,15 @@ export function createCsvIngestionController(helpers) {
                   )}</code>`
             }
           </article>
-        `
+        `;
+        }
       )
       .join("");
   }
 
   function previewMarkup() {
     if (previewState.status === "empty") {
-      return '<p class="ingestion-empty">Select CSV files to preview the detected columns and sample rows.</p>';
+      return '<p class="ingestion-empty">Select CSV or ZIP files to preview the detected columns and sample rows.</p>';
     }
 
     if (previewState.status === "loading") {
@@ -388,6 +423,19 @@ export function createCsvIngestionController(helpers) {
 
     const columnCount = previewState.columns.length;
     const sampleCount = previewState.rows.length;
+    if (Number.isFinite(Number(previewState.archiveEntryCount))) {
+      return `
+        <article class="ingestion-csv-preview-card">
+          <div class="ingestion-csv-preview-header">
+            <strong>${escapeHtml(previewState.fileName || "ZIP archive")}</strong>
+            <span class="ingestion-csv-review-target">ZIP archive</span>
+          </div>
+          <p class="ingestion-csv-preview-copy">
+            ${escapeHtml(String(previewState.archiveEntryCount))} CSV file(s) will be extracted during import.
+          </p>
+        </article>
+      `;
+    }
     const previewTableHead = previewState.columns.length
       ? `
         <thead>
@@ -475,7 +523,9 @@ export function createCsvIngestionController(helpers) {
     renderCsvIngestionWorkbench();
 
     try {
-      const nextPreviewState = await buildCsvPreviewState(file, currentConfig());
+      const nextPreviewState = isZipFile(file)
+        ? await buildCsvZipPreviewState(file)
+        : await buildCsvPreviewState(file, currentConfig());
       if (requestVersion !== previewRequestVersion) {
         return;
       }
@@ -723,6 +773,46 @@ export function createCsvIngestionController(helpers) {
     });
   }
 
+  function setUploadProgress(nextProgress) {
+    uploadProgress = nextProgress;
+    syncUploadProgress();
+    syncSubmitState();
+  }
+
+  function syncUploadProgress() {
+    const progressRoot = uploadProgressRoot();
+    if (!progressRoot) {
+      return;
+    }
+    if (!uploadProgress) {
+      progressRoot.hidden = true;
+      progressRoot.innerHTML = "";
+      return;
+    }
+
+    const totalBytes = Number(uploadProgress.totalBytes || 0);
+    const transferredBytes = Number(uploadProgress.transferredBytes || 0);
+    const percentage = totalBytes > 0
+      ? Math.min(100, Math.max(0, Math.round((transferredBytes / totalBytes) * 100)))
+      : Number(uploadProgress.percentage || 0);
+    const label = uploadProgress.label || "Uploading ...";
+    const detail = totalBytes > 0
+      ? `${percentage}% (${formatMegabytes(transferredBytes)} / ${formatMegabytes(totalBytes)} MB)`
+      : "Processing ...";
+    progressRoot.hidden = false;
+    progressRoot.innerHTML = `
+      <span class="ingestion-csv-upload-progress-copy">
+        <strong>${escapeHtml(label)}</strong>
+        <span>${escapeHtml(detail)}</span>
+      </span>
+      <span class="ingestion-csv-upload-progress-track ${
+        uploadProgress.indeterminate ? "is-indeterminate" : ""
+      }" aria-hidden="true">
+        <span style="width: ${escapeHtml(String(percentage))}%"></span>
+      </span>
+    `;
+  }
+
   function syncSubmitState() {
     const button = submitButton();
     if (!button) {
@@ -733,7 +823,15 @@ export function createCsvIngestionController(helpers) {
       !selectedFiles.length ||
       previewState.status === "loading" ||
       previewState.status === "error";
-    button.textContent = busy ? "Importing ..." : "Import CSV files";
+    if (!busy) {
+      button.textContent = "Import CSV files";
+    } else if (busyPhase === "uploading") {
+      button.textContent = "Uploading ...";
+    } else if (busyPhase === "processing") {
+      button.textContent = "Processing ...";
+    } else {
+      button.textContent = "Importing ...";
+    }
   }
 
   function renderCsvIngestionWorkbench() {
@@ -770,14 +868,16 @@ export function createCsvIngestionController(helpers) {
       results.innerHTML = resultMarkup();
     }
 
+    syncUploadProgress();
     syncSubmitState();
   }
 
   function setSelectedFiles(files) {
     selectedFiles = Array.from(files || [])
-      .filter((file) => String(file?.name || "").trim().toLowerCase().endsWith(".csv"))
+      .filter((file) => isCsvOrZipFile(file))
       .map((file) => buildSelectedFileEntry(file));
     latestResults = [];
+    uploadProgress = null;
     renderCsvIngestionWorkbench();
     void refreshPreview();
   }
@@ -830,85 +930,266 @@ export function createCsvIngestionController(helpers) {
     const folderPath = normalizeLocalWorkspaceFolderPath(config.folderPath);
     ensureLocalWorkspaceFolderPath(folderPath);
     const timestamp = new Date().toISOString();
+    const totalBytes = selectedFileEntries().reduce(
+      (sum, entry) => sum + Number(entry.file?.size || 0),
+      0
+    );
+    let transferredBytes = 0;
 
     const results = [];
     for (const entry of selectedFileEntries()) {
-      const storedFileName = resolvedSourceUploadFileName(entry);
-      const storedEntry = await saveLocalWorkspaceExport({
-        id: `local-workspace-csv-${Date.now().toString(36)}-${Math.random()
-          .toString(36)
-          .slice(2, 8)}`,
-        fileName: storedFileName,
-        folderPath,
-        exportFormat: "csv",
-        mimeType: entry.file.type || "text/csv",
-        sizeBytes: entry.file.size,
-        createdAt: timestamp,
-        updatedAt: timestamp,
-        notebookTitle: "CSV Ingestion",
-        cellId: "",
-        columnCount: Array.isArray(previewState.columns) ? previewState.columns.length : 0,
-        rowCount: 0,
-        csvDelimiter: config.delimiterMode === "auto" ? previewState.delimiter || config.delimiter : config.delimiter,
-        csvHasHeader: config.hasHeader,
-        blob: entry.file,
-      });
-      results.push({
-        fileName: storedEntry.fileName,
-        status: "imported",
-        path: localWorkspaceDisplayPath(storedEntry.folderPath, storedEntry.fileName),
-        querySource: {
-          sourceId: "workspace.local",
-          relation: localWorkspaceRelation(storedEntry.id),
-          name: storedEntry.fileName,
-        },
-      });
+      const csvFiles = isZipFile(entry.file)
+        ? await readCsvFilesFromZip(entry.file, {
+            onProgress: ({ transferredBytes: extractedBytes }) => {
+              setUploadProgress({
+                label: "Extracting ...",
+                transferredBytes: Math.min(totalBytes, transferredBytes + extractedBytes),
+                totalBytes,
+              });
+            },
+          })
+        : [
+            {
+              fileName: resolvedSourceUploadFileName(entry),
+              blob: entry.file,
+              sizeBytes: entry.file.size,
+            },
+          ];
+
+      for (const csvFile of csvFiles) {
+        const storedEntry = await saveLocalWorkspaceExport({
+          id: `local-workspace-csv-${Date.now().toString(36)}-${Math.random()
+            .toString(36)
+            .slice(2, 8)}`,
+          fileName: csvFile.fileName,
+          folderPath,
+          exportFormat: "csv",
+          mimeType: csvFile.blob.type || "text/csv",
+          sizeBytes: csvFile.sizeBytes,
+          createdAt: timestamp,
+          updatedAt: timestamp,
+          notebookTitle: "CSV Ingestion",
+          cellId: "",
+          columnCount: Array.isArray(previewState.columns) ? previewState.columns.length : 0,
+          rowCount: 0,
+          csvDelimiter: config.delimiterMode === "auto" ? previewState.delimiter || config.delimiter : config.delimiter,
+          csvHasHeader: config.hasHeader,
+          blob: csvFile.blob,
+        });
+        transferredBytes += Number(csvFile.sizeBytes || 0);
+        setUploadProgress({
+          label: "Saving ...",
+          transferredBytes: Math.min(totalBytes, transferredBytes),
+          totalBytes,
+        });
+        results.push({
+          fileName: storedEntry.fileName,
+          status: "imported",
+          path: localWorkspaceDisplayPath(storedEntry.folderPath, storedEntry.fileName),
+          querySource: {
+            sourceId: "workspace.local",
+            relation: localWorkspaceRelation(storedEntry.id),
+            name: storedEntry.fileName,
+          },
+        });
+      }
     }
 
     await renderLocalWorkspaceSidebarEntries();
     return results;
   }
 
+  async function readJsonResponse(response, fallbackMessage) {
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch (_error) {
+      // Ignore invalid JSON payloads from infrastructure errors.
+    }
+    if (!response.ok) {
+      throw new Error(payload?.detail || fallbackMessage);
+    }
+    return payload || {};
+  }
+
+  function uploadCsvChunk({
+    sessionId,
+    fileId,
+    chunkIndex,
+    chunk,
+    start,
+    end,
+    totalSize,
+    progressBaseBytes,
+    totalBytes,
+  }) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open(
+        "PUT",
+        `/api/ingestion/csv/upload-sessions/${encodeURIComponent(sessionId)}/files/${encodeURIComponent(fileId)}/chunks/${chunkIndex}`
+      );
+      xhr.setRequestHeader("Accept", "application/json");
+      xhr.setRequestHeader("Content-Range", `bytes ${start}-${end - 1}/${totalSize}`);
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable) {
+          return;
+        }
+        setUploadProgress({
+          label: "Uploading ...",
+          transferredBytes: Math.min(totalBytes, progressBaseBytes + event.loaded),
+          totalBytes,
+        });
+      };
+      xhr.onload = () => {
+        let payload = {};
+        try {
+          payload = xhr.responseText ? JSON.parse(xhr.responseText) : {};
+        } catch (_error) {
+          reject(new Error("The CSV upload server returned an invalid response."));
+          return;
+        }
+        if (xhr.status < 200 || xhr.status >= 300) {
+          reject(new Error(payload?.detail || "The CSV upload chunk failed."));
+          return;
+        }
+        resolve(payload);
+      };
+      xhr.onerror = () => reject(new Error("The CSV upload chunk failed."));
+      xhr.ontimeout = () => reject(new Error("The CSV upload chunk timed out."));
+      xhr.send(chunk);
+    });
+  }
+
+  async function uploadCsvChunkWithRetries(options) {
+    let lastError = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await uploadCsvChunk(options);
+      } catch (error) {
+        lastError = error;
+        await new Promise((resolve) => window.setTimeout(resolve, 300 * (attempt + 1)));
+      }
+    }
+    throw lastError || new Error("The CSV upload chunk failed.");
+  }
+
   async function importToServerTarget() {
-    const formData = new FormData();
     const targetId = selectedTargetId();
     const config = currentConfig();
     const resolvedDelimiter =
       config.delimiterMode === "auto" ? previewState.delimiter || config.delimiter : config.delimiter;
-    formData.set("targetId", targetId);
-    formData.set("bucket", config.bucket);
-    formData.set("prefix", config.prefix);
-    formData.set("schemaName", config.schemaName);
-    formData.set("tablePrefix", config.tablePrefix);
-    formData.set("delimiter", resolvedDelimiter);
-    formData.set("hasHeader", config.hasHeader ? "true" : "false");
-    formData.set("replaceExisting", config.replaceExisting ? "true" : "false");
-    formData.set("storageFormat", config.s3StorageFormat);
-    selectedFileEntries().forEach((entry) => {
-      formData.append("files", entry.file, resolvedSourceUploadFileName(entry));
+    const fileEntries = selectedFileEntries();
+    const totalBytes = fileEntries.reduce((sum, entry) => sum + Number(entry.file?.size || 0), 0);
+    setUploadProgress({
+      label: "Uploading ...",
+      transferredBytes: 0,
+      totalBytes,
     });
 
-    const response = await window.fetch("/api/ingestion/csv/import", {
+    const createResponse = await window.fetch("/api/ingestion/csv/upload-sessions", {
       method: "POST",
-      body: formData,
       headers: {
         Accept: "application/json",
+        "Content-Type": "application/json",
       },
+      body: JSON.stringify({
+        files: fileEntries.map((entry) => ({
+          fileName: resolvedSourceUploadFileName(entry),
+          sizeBytes: entry.file.size,
+        })),
+      }),
     });
-    if (!response.ok) {
-      let message = "The CSV files could not be imported.";
-      try {
-        const payload = await response.json();
-        message = payload?.detail || message;
-      } catch (_error) {
-        // Ignore invalid JSON error payloads.
-      }
-      throw new Error(message);
+    const session = await readJsonResponse(
+      createResponse,
+      "The CSV upload session could not be created."
+    );
+
+    const sessionId = String(session?.sessionId || "").trim();
+    const sessionFiles = Array.isArray(session?.files) ? session.files : [];
+    const chunkSize = Number(session?.chunkSizeBytes || 32 * 1024 * 1024);
+    if (!sessionId || sessionFiles.length !== fileEntries.length || !Number.isFinite(chunkSize)) {
+      throw new Error("The CSV upload session response is incomplete.");
     }
 
-    const payload = await response.json();
-    await refreshSidebar("notebook");
-    return Array.isArray(payload?.imports) ? payload.imports : [];
+    let committedBytes = 0;
+    try {
+      for (let fileIndex = 0; fileIndex < fileEntries.length; fileIndex += 1) {
+        const entry = fileEntries[fileIndex];
+        const sessionFile = sessionFiles[fileIndex];
+        const fileId = String(sessionFile?.fileId || "").trim();
+        if (!fileId) {
+          throw new Error("The CSV upload session did not return a file id.");
+        }
+        let offset = Number(sessionFile?.receivedBytes || 0);
+        committedBytes += offset;
+        while (offset < entry.file.size) {
+          const end = Math.min(offset + chunkSize, entry.file.size);
+          const chunk = entry.file.slice(offset, end);
+          const chunkIndex = Math.floor(offset / chunkSize);
+          await uploadCsvChunkWithRetries({
+            sessionId,
+            fileId,
+            chunkIndex,
+            chunk,
+            start: offset,
+            end,
+            totalSize: entry.file.size,
+            progressBaseBytes: committedBytes,
+            totalBytes,
+          });
+          const chunkBytes = end - offset;
+          committedBytes += chunkBytes;
+          offset = end;
+          setUploadProgress({
+            label: "Uploading ...",
+            transferredBytes: Math.min(totalBytes, committedBytes),
+            totalBytes,
+          });
+        }
+      }
+
+      busyPhase = "processing";
+      setUploadProgress({
+        label: "Processing ...",
+        transferredBytes: totalBytes,
+        totalBytes,
+        indeterminate: true,
+      });
+      const completeResponse = await window.fetch(
+        `/api/ingestion/csv/upload-sessions/${encodeURIComponent(sessionId)}/complete`,
+        {
+          method: "POST",
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            targetId,
+            bucket: config.bucket,
+            prefix: config.prefix,
+            schemaName: config.schemaName,
+            tablePrefix: config.tablePrefix,
+            delimiter: resolvedDelimiter,
+            hasHeader: config.hasHeader,
+            replaceExisting: config.replaceExisting,
+            storageFormat: config.s3StorageFormat,
+          }),
+        }
+      );
+      const payload = await readJsonResponse(
+        completeResponse,
+        "The CSV files could not be imported."
+      );
+      await refreshSidebar("notebook");
+      return Array.isArray(payload?.imports) ? payload.imports : [];
+    } catch (error) {
+      window.fetch(`/api/ingestion/csv/upload-sessions/${encodeURIComponent(sessionId)}`, {
+        method: "DELETE",
+        headers: { Accept: "application/json" },
+      }).catch(() => {});
+      throw error;
+    }
   }
 
   async function submitCsvIngestionForm() {
@@ -917,6 +1198,8 @@ export function createCsvIngestionController(helpers) {
     }
 
     busy = true;
+    busyPhase = selectedTargetId() === "workspace.local" ? "processing" : "uploading";
+    uploadProgress = null;
     latestResults = [];
     renderCsvIngestionWorkbench();
 
@@ -936,6 +1219,8 @@ export function createCsvIngestionController(helpers) {
       });
     } finally {
       busy = false;
+      busyPhase = "";
+      uploadProgress = null;
       renderCsvIngestionWorkbench();
     }
 

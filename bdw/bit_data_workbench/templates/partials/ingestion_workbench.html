@@ -83,16 +83,16 @@
           <label class="ingestion-csv-dropzone" data-csv-dropzone>
             <input
               type="file"
-              accept=".csv,text/csv"
+              accept=".csv,.zip,text/csv,application/zip"
               multiple
               data-csv-file-input
               hidden
             >
-            <strong>Drop CSV files here</strong>
+            <strong>Drop CSV or ZIP files here</strong>
             <span>or click to browse from this machine</span>
           </label>
           <div class="ingestion-csv-file-list" data-csv-file-list>
-            <p class="ingestion-empty">No CSV files selected yet.</p>
+            <p class="ingestion-empty">No CSV or ZIP files selected yet.</p>
           </div>
         </section>
 
@@ -325,6 +325,7 @@
           </div>
           <div class="ingestion-csv-actions">
             <button type="submit" class="modal-button" data-csv-import-submit disabled>Import CSV files</button>
+            <div class="ingestion-csv-upload-progress" data-csv-upload-progress hidden></div>
           </div>
           <div class="ingestion-csv-results" data-csv-result-list hidden></div>
         </section>
