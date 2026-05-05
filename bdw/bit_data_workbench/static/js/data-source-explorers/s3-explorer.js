@@ -15,6 +15,7 @@ export function createS3DataSourceExplorer(helpers) {
     formatByteCount,
     openDataProductPublishDialog,
     showMessageDialog,
+    downloadSourceObjectDdl,
     downloadSourceS3Object,
   } = helpers;
 
@@ -179,6 +180,7 @@ export function createS3DataSourceExplorer(helpers) {
           copy: `Download the selected object or publish it as a managed data product.`,
           actions: [
             actionButtonMarkup("Download", "download", escapeHtml),
+            actionButtonMarkup("Download DDL", "download-ddl", escapeHtml),
             actionButtonMarkup("Create Data Product ...", "create-data-product", escapeHtml),
           ].join(""),
           body: `
@@ -349,6 +351,17 @@ export function createS3DataSourceExplorer(helpers) {
         await showMessageDialog({
           title: "S3 download unavailable",
           copy: "Choose a concrete Shared Workspace object before downloading it.",
+        });
+      }
+      return true;
+    }
+
+    if (action === "download-ddl") {
+      const descriptor = selectedFileDescriptor(state);
+      if (!(descriptor instanceof Element) || (await downloadSourceObjectDdl(descriptor)) === false) {
+        await showMessageDialog({
+          title: "DDL download unavailable",
+          copy: "Choose a concrete Shared Workspace object before downloading DDL.",
         });
       }
       return true;

@@ -41,6 +41,11 @@
       "enabledByDefault": true
     },
     {
+      "id": "source-ddl-download",
+      "script": "playwright_source_ddl_download_smoke.py",
+      "enabledByDefault": true
+    },
+    {
       "id": "local-workspace-query-handoff",
       "script": "playwright_local_workspace_query_handoff_smoke.py",
       "enabledByDefault": true

@@ -21,6 +21,7 @@ export function createSourceSidebarClickController(helpers) {
     downloadLocalWorkspaceExportFromSource,
     downloadQueryResultExport,
     downloadS3ExplorerObject,
+    downloadSourceObjectDdl,
     downloadSourceS3Object,
     loadS3ExplorerNode,
     loadLocalWorkspaceMoveS3ExplorerNode,
@@ -652,6 +653,32 @@ export function createSourceSidebarClickController(helpers) {
         await showMessageDialog({
           title: "S3 download unavailable",
           copy: "This source object does not point to a single downloadable S3 object.",
+        });
+      }
+      return true;
+    }
+
+    const downloadSourceDdlButton = event.target.closest("[data-download-source-ddl]");
+    if (downloadSourceDdlButton) {
+      event.preventDefault();
+      closeSourceActionMenus();
+
+      try {
+        const downloaded = await downloadSourceObjectDdl(
+          downloadSourceDdlButton.closest("[data-source-object]")
+        );
+        if (downloaded !== false) {
+          return true;
+        }
+        await showMessageDialog({
+          title: "DDL download unavailable",
+          copy: "This source object does not expose enough schema metadata for DDL generation.",
+        });
+      } catch (error) {
+        console.error("Failed to download the source DDL.", error);
+        await showMessageDialog({
+          title: "DDL download failed",
+          copy: error instanceof Error ? error.message : "The source DDL could not be downloaded.",
         });
       }
       return true;

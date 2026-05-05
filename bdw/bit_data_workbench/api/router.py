@@ -3,10 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import shutil
+from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from botocore.exceptions import BotoCoreError
 from pydantic import BaseModel, Field
 from botocore.exceptions import ClientError
@@ -192,6 +193,39 @@ def download_s3_object(
         media_type=artifact.content_type,
         filename=artifact.filename,
         background=BackgroundTask(shutil.rmtree, artifact.cleanup_dir, True),
+    )
+
+
+@router.get("/api/source-object-ddl/download")
+def download_source_object_ddl(
+    relation: str = Query(""),
+    source_id: str = Query(default="", alias="sourceId"),
+    bucket: str = Query(""),
+    key: str = Query(""),
+    object_name: str = Query(default="", alias="objectName"),
+    file_format: str = Query(default="", alias="fileFormat"),
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> Response:
+    try:
+        artifact = service.source_object_ddl(
+            relation=relation,
+            source_id=source_id,
+            bucket=bucket,
+            key=key,
+            object_name=object_name,
+            file_format=file_format,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    filename = artifact.filename or "source-ddl.sql"
+    disposition = f"attachment; filename*=UTF-8''{quote(filename)}"
+    return Response(
+        content=artifact.ddl,
+        media_type=artifact.content_type,
+        headers={"Content-Disposition": disposition},
     )
 
 

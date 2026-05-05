@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 from unittest import TestCase
 from unittest.mock import patch
 
+import duckdb
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BDW_ROOT = REPO_ROOT / "bdw"
@@ -349,6 +350,20 @@ class CsvIngestionManagerTests(TestCase):
         )
         self.assertIsNone(fake_client.uploads[0][3])
         self.assertEqual(fake_client.uploads[0][4][:4], b"PAR1")
+        with TemporaryDirectory() as temp_dir:
+            parquet_path = Path(temp_dir) / "uploaded.parquet"
+            parquet_path.write_bytes(fake_client.uploads[0][4])
+            connection = duckdb.connect(":memory:")
+            try:
+                rows = connection.execute(
+                    f"DESCRIBE SELECT * FROM read_parquet('{parquet_path.as_posix()}')"
+                ).fetchall()
+            finally:
+                connection.close()
+        self.assertEqual(
+            [(row[0], row[1]) for row in rows],
+            [("id", "BIGINT"), ("name", "VARCHAR")],
+        )
 
     def test_import_csv_files_to_s3_converts_csv_to_jsonl_before_upload(self) -> None:
         fake_client = FakeS3Client()

@@ -17,6 +17,7 @@ export function createPostgresDataSourceExplorer(helpers) {
     querySourceInNewNotebook,
     showMessageDialog,
     viewSourceData,
+    downloadSourceObjectDdl,
   } = helpers;
 
   const stateByRoot = new WeakMap();
@@ -164,6 +165,7 @@ export function createPostgresDataSourceExplorer(helpers) {
           actionButtonMarkup("Query In Current Notebook", "query-current", escapeHtml),
           actionButtonMarkup("Query In New Notebook", "query-new", escapeHtml),
           actionButtonMarkup("Create Data Product ...", "create-data-product", escapeHtml),
+          actionButtonMarkup("Download DDL", "download-ddl", escapeHtml),
         ].join(""),
         body: `
           ${publicationLinksMarkup(selectedObject.publishedDataProducts, escapeHtml)}
@@ -302,6 +304,17 @@ export function createPostgresDataSourceExplorer(helpers) {
       await openDataProductPublishDialog({
         sourceObjectRoot: selectedElement,
       });
+      return true;
+    }
+
+    if (action === "download-ddl") {
+      const downloaded = await downloadSourceObjectDdl(selectedElement);
+      if (downloaded === false) {
+        await showMessageDialog({
+          title: "DDL download unavailable",
+          copy: "The selected PostgreSQL relation does not expose DDL metadata.",
+        });
+      }
       return true;
     }
 

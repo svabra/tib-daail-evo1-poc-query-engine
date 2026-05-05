@@ -198,6 +198,39 @@ export function sourceObjectS3DeleteDescriptor(sourceObjectRoot) {
   };
 }
 
+export function sourceObjectDdlDescriptor(sourceObjectRoot) {
+  if (!(sourceObjectRoot instanceof Element)) {
+    return null;
+  }
+
+  const relation = sourceObjectRoot.dataset.sourceObjectRelation?.trim() || "";
+  const sourceId = sourceObjectRoot.dataset.sourceOptionId?.trim() || "";
+  const bucket = sourceObjectRoot.dataset.s3Bucket?.trim() || "";
+  const key = sourceObjectRoot.dataset.s3Key?.trim() || "";
+  const objectName = sourceObjectDisplayName(sourceObjectRoot);
+  const fileFormat =
+    sourceObjectRoot.dataset.s3FileFormat?.trim() ||
+    sourceObjectRoot.dataset.localWorkspaceExportFormat?.trim() ||
+    "";
+  const localWorkspaceEntryId = sourceObjectRoot.dataset.localWorkspaceEntryId?.trim() || "";
+
+  if (!relation && !(bucket && key) && !localWorkspaceEntryId) {
+    return null;
+  }
+
+  const baseName = objectName.replace(/\.[^.]+$/, "") || "source-ddl";
+  return {
+    relation,
+    sourceId,
+    bucket,
+    key,
+    objectName,
+    fileFormat,
+    localWorkspaceEntryId,
+    fileName: `${baseName}.sql`,
+  };
+}
+
 const S3_BUCKET_NAME_PATTERN = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
 
 function normalizedS3BucketName(value) {

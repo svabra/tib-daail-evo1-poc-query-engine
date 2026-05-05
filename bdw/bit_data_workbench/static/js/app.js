@@ -139,6 +139,7 @@ import {
   sourceLabelsForIds,
   sourceObjectDisplayKind,
   sourceObjectDisplayName,
+  sourceObjectDdlDescriptor,
   sourceObjectS3DeleteDescriptor,
   sourceObjectS3DownloadDescriptor,
   sourceQueryDescriptor,
@@ -333,6 +334,7 @@ const {
   moveLocalWorkspaceEntryToS3,
   preparePythonExecution: prepareLocalWorkspacePythonExecution,
   prepareQuerySql: prepareLocalWorkspaceQuerySql,
+  syncLocalWorkspaceEntry,
 } = createLocalWorkspaceQueryBridge({
   getLocalWorkspaceExport,
   isLocalWorkspaceRelation,
@@ -706,6 +708,7 @@ const dataProductsController = createDataProductsController({
 const dataSourceExplorerController = createDataSourceExplorerController({
   allLocalWorkspaceFolderPaths,
   downloadLocalWorkspaceExportFromSource,
+  downloadSourceObjectDdl,
   downloadSourceS3Object,
   escapeHtml,
   fetchJsonOrThrow,
@@ -835,6 +838,7 @@ const {
   downloadLocalWorkspaceExportFromSource,
   downloadQueryResultExport,
   downloadS3ExplorerObject,
+  downloadSourceObjectDdl,
   downloadSourceS3Object,
   loadS3ExplorerNode,
   loadLocalWorkspaceMoveS3ExplorerNode,
@@ -2133,6 +2137,48 @@ function downloadSourceS3Object(sourceObjectRoot) {
   const anchor = document.createElement("a");
   anchor.href = `/api/s3/object/download?${search.toString()}`;
   anchor.download = descriptor.fileName;
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  return true;
+}
+
+async function downloadSourceObjectDdl(sourceObjectRoot) {
+  const descriptor = sourceObjectDdlDescriptor(sourceObjectRoot);
+  if (!descriptor) {
+    return false;
+  }
+
+  const params = new URLSearchParams();
+  let relation = descriptor.relation;
+  if (descriptor.localWorkspaceEntryId) {
+    const synced = await syncLocalWorkspaceEntry(descriptor.localWorkspaceEntryId);
+    relation = synced.relation || relation;
+  }
+
+  if (relation) {
+    params.set("relation", relation);
+  }
+  if (descriptor.sourceId) {
+    params.set("sourceId", descriptor.sourceId);
+  }
+  if (descriptor.bucket) {
+    params.set("bucket", descriptor.bucket);
+  }
+  if (descriptor.key) {
+    params.set("key", descriptor.key);
+  }
+  if (descriptor.objectName) {
+    params.set("objectName", descriptor.objectName);
+  }
+  if (descriptor.fileFormat) {
+    params.set("fileFormat", descriptor.fileFormat);
+  }
+
+  const anchor = document.createElement("a");
+  anchor.href = `/api/source-object-ddl/download?${params.toString()}`;
+  anchor.download = descriptor.fileName || "source-ddl.sql";
   anchor.style.display = "none";
   document.body.appendChild(anchor);
   anchor.click();

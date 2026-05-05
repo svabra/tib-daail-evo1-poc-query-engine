@@ -54,6 +54,9 @@ class PostgresDataSourcePlugin(DataSourcePlugin):
     def relation_fields(self, relation: str):
         return self._explorer.relation_fields(relation)
 
+    def relation_ddl(self, relation: str, *, object_name: str = ""):
+        return self._explorer.relation_ddl(relation, object_name=object_name)
+
     def drop_schema_objects(self, schema_name: str) -> int:
         return self._explorer.drop_schema_objects(schema_name)
 

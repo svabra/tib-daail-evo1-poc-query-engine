@@ -163,6 +163,14 @@ export function createLocalWorkspaceSidebarUi(helpers) {
               >
                 Download
               </button>
+              <button
+                type="button"
+                class="workspace-action-menu-item"
+                data-download-source-ddl
+                title="Download DDL for this Local Workspace file"
+              >
+                Download DDL
+              </button>
               <div class="workspace-action-menu-separator" aria-hidden="true"></div>
               <button
                 type="button"

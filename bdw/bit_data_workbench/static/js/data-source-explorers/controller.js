@@ -6,6 +6,7 @@ export function createDataSourceExplorerController(helpers) {
   const {
     allLocalWorkspaceFolderPaths,
     downloadLocalWorkspaceExportFromSource,
+    downloadSourceObjectDdl,
     downloadSourceS3Object,
     escapeHtml,
     fetchJsonOrThrow,
@@ -32,8 +33,10 @@ export function createDataSourceExplorerController(helpers) {
       querySourceInNewNotebook,
       showMessageDialog,
       viewSourceData,
+      downloadSourceObjectDdl,
     }),
     s3: createS3DataSourceExplorer({
+      downloadSourceObjectDdl,
       downloadSourceS3Object,
       escapeHtml,
       fetchJsonOrThrow,
@@ -56,6 +59,7 @@ export function createDataSourceExplorerController(helpers) {
       querySourceInNewNotebook,
       showMessageDialog,
       viewSourceData,
+      downloadSourceObjectDdl,
     }),
   };
 

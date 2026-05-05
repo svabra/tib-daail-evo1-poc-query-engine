@@ -20,6 +20,7 @@ export function createLocalWorkspaceDataSourceExplorer(helpers) {
     querySourceInNewNotebook,
     showMessageDialog,
     viewSourceData,
+    downloadSourceObjectDdl,
     downloadLocalWorkspaceExportFromSource,
   } = helpers;
 
@@ -210,6 +211,7 @@ export function createLocalWorkspaceDataSourceExplorer(helpers) {
           actionButtonMarkup("Query In New Notebook", "query-new", escapeHtml),
           actionButtonMarkup("Create Data Product ...", "create-data-product", escapeHtml),
           actionButtonMarkup("Download", "download", escapeHtml),
+          actionButtonMarkup("Download DDL", "download-ddl", escapeHtml),
         ].join(""),
         body: `
           <ul class="sidebar-source-field-list">
@@ -323,6 +325,17 @@ export function createLocalWorkspaceDataSourceExplorer(helpers) {
         await showMessageDialog({
           title: "Download unavailable",
           copy: "The selected Local Workspace file could not be downloaded from browser storage.",
+        });
+      }
+      return true;
+    }
+
+    if (action === "download-ddl") {
+      const downloaded = await downloadSourceObjectDdl(descriptor);
+      if (downloaded === false) {
+        await showMessageDialog({
+          title: "DDL download unavailable",
+          copy: "The selected Local Workspace file could not be prepared for DDL generation.",
         });
       }
       return true;

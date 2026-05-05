@@ -44,10 +44,12 @@ from .s3_storage import (
     upload_s3_file,
 )
 from .data_sources import DataSourceCreateRequest, DataSourceDeleteRequest, DataSourcePlugin
+from .data_sources.ddl import SourceDdlDownload, synthetic_source_ddl
 from .data_sources.explorer_payloads import build_data_source_explorer_payload
 from .data_sources.publication_links import annotate_catalogs_with_published_products
 from .data_sources.postgres import PostgresDataSourcePlugin
 from .data_sources.s3 import S3DataSourcePlugin
+from .data_sources.s3.explorer import normalize_s3_bucket_name, normalize_s3_object_key
 from .data_products import DataProductManager, DataProductStore
 from .data_generation_jobs import DataGenerationJobManager
 from .ingestion_types.csv import (
@@ -882,6 +884,56 @@ class WorkbenchService:
     def download_s3_object(self, *, bucket: str, key: str, file_name: str = ""):
         return self._s3_plugin.download_object(bucket=bucket, key=key, file_name=file_name)
 
+    def source_object_ddl(
+        self,
+        *,
+        relation: str = "",
+        source_id: str = "",
+        bucket: str = "",
+        key: str = "",
+        object_name: str = "",
+        file_format: str = "",
+    ) -> SourceDdlDownload:
+        normalized_relation = str(relation or "").strip()
+        normalized_source_id = str(source_id or "").strip()
+        parts = [part.strip() for part in normalized_relation.split(".") if part.strip()]
+
+        if len(parts) == 3 and parts[0] in {"pg_oltp", "pg_olap"}:
+            return self._postgres_plugin_by_source_id(parts[0]).relation_ddl(
+                normalized_relation,
+                object_name=object_name,
+            )
+
+        if normalized_relation:
+            fields = self.source_object_fields(normalized_relation)
+            source_path = ""
+            if bucket and key:
+                source_path = f"s3://{str(bucket).strip()}/{str(key).strip()}"
+            return synthetic_source_ddl(
+                fields=fields,
+                relation=normalized_relation,
+                object_name=object_name,
+                source_id=normalized_source_id,
+                source_path=source_path,
+            )
+
+        if bucket and key:
+            normalized_bucket = normalize_s3_bucket_name(bucket)
+            normalized_key = normalize_s3_object_key(key)
+            path = f"s3://{normalized_bucket}/{normalized_key}"
+            fields = self._s3_object_fields(
+                path=path,
+                file_format=file_format or PurePosixPath(normalized_key).suffix.lstrip("."),
+            )
+            return synthetic_source_ddl(
+                fields=fields,
+                object_name=object_name or PurePosixPath(normalized_key).name,
+                source_id=normalized_source_id or "workspace.s3",
+                source_path=path,
+            )
+
+        raise KeyError("Choose a source object before downloading DDL.")
+
     def download_query_result_export(
         self,
         *,
@@ -1114,6 +1166,39 @@ class WorkbenchService:
             raise KeyError(f"Unsupported source object relation: {relation}")
 
         return [SourceField(name=column_name, data_type=data_type) for column_name, data_type in rows]
+
+    def _s3_object_fields(self, *, path: str, file_format: str = "") -> list[SourceField]:
+        normalized_format = str(file_format or "").strip().lower()
+        if normalized_format in {"jsonl", "ndjson"}:
+            normalized_format = "json"
+        if normalized_format not in {"parquet", "csv", "json"}:
+            lowered_path = path.lower()
+            if lowered_path.endswith(".parquet"):
+                normalized_format = "parquet"
+            elif lowered_path.endswith((".json", ".jsonl", ".ndjson")):
+                normalized_format = "json"
+            elif lowered_path.endswith((".csv", ".tsv")):
+                normalized_format = "csv"
+        if normalized_format not in {"parquet", "csv", "json"}:
+            raise ValueError("DDL download supports S3 CSV, JSON, and Parquet objects.")
+
+        if normalized_format == "parquet":
+            reader_sql = f"read_parquet({sql_literal(path)})"
+        elif normalized_format == "json":
+            reader_sql = f"read_json_auto({sql_literal(path)})"
+        else:
+            reader_sql = f"read_csv_auto({sql_literal(path)})"
+
+        with self._lock:
+            conn = self._require_connection()
+            rows = conn.execute(f"DESCRIBE SELECT * FROM {reader_sql}").fetchall()
+        return [
+            SourceField(
+                name=str(row[0] or "").strip() or f"column_{index + 1}",
+                data_type=str(row[1] or "").strip() or "UNKNOWN",
+            )
+            for index, row in enumerate(rows)
+        ]
 
     def execute_query(self, sql: str) -> QueryResult:
         query = sql.strip()

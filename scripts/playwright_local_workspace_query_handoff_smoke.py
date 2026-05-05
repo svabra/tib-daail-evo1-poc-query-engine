@@ -139,9 +139,10 @@ async def assert_local_workspace_sidebar_actions(page, expected_relation: str, t
         "Query in new notebook",
         "Move ...",
         "Download",
+        "Download DDL",
         "Delete ...",
     ):
-        item = menu_panel.get_by_role("button", name=label)
+        item = menu_panel.get_by_role("button", name=label, exact=True)
         await item.wait_for(state="visible", timeout=timeout_ms)
 
 

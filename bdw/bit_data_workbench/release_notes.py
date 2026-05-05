@@ -1,9 +1,24 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.7.2. Keep entries concise and
+# Derived from git history through version 0.7.3. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.7.3",
+        "releasedAt": "2026-05-05T11:26:00+02:00",
+        "features": [
+            (
+                "Source object action menus now include Download DDL for PostgreSQL, Shared Workspace S3, "
+                "and Local Workspace sources, returning catalog-backed DDL for PostgreSQL and suggested "
+                "CREATE TABLE statements for file-backed sources."
+            ),
+            (
+                "CSV ingestion schema handling is now covered with explicit tests for PostgreSQL type inference "
+                "and Parquet typed-schema preservation, plus a Playwright regression for DDL download content."
+            ),
+        ],
+    },
     {
         "version": "0.7.2",
         "releasedAt": "2026-05-05T10:13:00+02:00",
