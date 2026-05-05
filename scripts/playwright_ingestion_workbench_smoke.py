@@ -318,7 +318,7 @@ async def import_server_csv_with_progress(page, timeout_ms: int) -> None:
                 return text.includes("Processing")
                     && text.includes("Step 2 of 2")
                     && text.includes("Upload complete")
-                    && text.includes("Converting CSV to Parquet");
+                    && text.includes("Transforming file to match target data format");
             }""",
             timeout=timeout_ms,
         )

@@ -817,21 +817,10 @@ export function createCsvIngestionController(helpers) {
     `;
   }
 
-  function serverProcessingProgressDetail(targetId, config, fileEntries = []) {
+  function serverProcessingProgressDetail(fileEntries = []) {
     const hasArchive = fileEntries.some((entry) => isZipFile(entry?.file));
-    const archivePrefix = hasArchive ? "Extracting ZIP archive contents, then " : "";
-    if (targetId === "workspace.s3") {
-      const storageFormat = normalizeCsvS3StorageFormat(config.s3StorageFormat);
-      if (storageFormat === "csv") {
-        const action = hasArchive ? "saving" : "Saving";
-        return `Step 2 of 2: Upload complete. ${archivePrefix}${action} CSV object(s) to Shared Workspace S3.`;
-      }
-      const formatLabel = csvS3StorageFormatDefinition(storageFormat).label;
-      const action = hasArchive ? "converting" : "Converting";
-      return `Step 2 of 2: Upload complete. ${archivePrefix}${action} CSV to ${formatLabel} and saving to Shared Workspace S3.`;
-    }
-    const action = hasArchive ? "loading" : "Loading";
-    return `Step 2 of 2: Upload complete. ${archivePrefix}${action} CSV data into ${targetLabel(targetId)}.`;
+    const archiveCopy = hasArchive ? "Extracting ZIP archive contents. " : "";
+    return `Step 2 of 2: Upload complete. ${archiveCopy}Transforming file to match target data format.`;
   }
 
   function syncSubmitState() {
@@ -1174,7 +1163,7 @@ export function createCsvIngestionController(helpers) {
       setUploadProgress({
         label: "Processing ...",
         phase: "processing",
-        detail: serverProcessingProgressDetail(targetId, config, fileEntries),
+        detail: serverProcessingProgressDetail(fileEntries),
         transferredBytes: totalBytes,
         totalBytes,
         indeterminate: true,

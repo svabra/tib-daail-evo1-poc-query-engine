@@ -1,9 +1,23 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.7.7. Keep entries concise and
+# Derived from git history through version 0.7.8. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.7.8",
+        "releasedAt": "2026-05-05T16:55:47+02:00",
+        "features": [
+            (
+                "CSV ingestion processing progress now uses target-format language, showing that the "
+                "uploaded file is being transformed to match the selected target data format."
+            ),
+            (
+                "The ingestion Playwright smoke now checks for the target-format transformation wording "
+                "during the server-side processing phase."
+            ),
+        ],
+    },
     {
         "version": "0.7.7",
         "releasedAt": "2026-05-05T16:42:17+02:00",
