@@ -132,6 +132,33 @@ def tree_contains_notebook(nodes: list[dict], notebook_id: str) -> bool:
     return False
 
 
+def root_contains_notebook(nodes: list[dict], notebook_id: str) -> bool:
+    return any(
+        isinstance(node, dict)
+        and node.get("type") == "notebook"
+        and node.get("notebookId") == notebook_id
+        for node in nodes
+    )
+
+
+def folder_contains_notebook(
+    nodes: list[dict],
+    folder_name: str,
+    notebook_id: str,
+) -> bool:
+    for node in nodes:
+        if not isinstance(node, dict):
+            continue
+        if node.get("type") != "folder":
+            continue
+        children = node.get("children") or []
+        if str(node.get("name") or "").strip() == folder_name:
+            return tree_contains_notebook(children, notebook_id)
+        if folder_contains_notebook(children, folder_name, notebook_id):
+            return True
+    return False
+
+
 async def create_root_folder(page, folder_name: str, timeout_ms: int) -> float:
     await ensure_sidebar_expanded(page)
     await ensure_details_open(page, "[data-notebook-section]")
@@ -227,6 +254,90 @@ async def create_notebook_in_folder(
     return notebook_id, (time.perf_counter() - started) * 1000
 
 
+async def create_notebook_in_default_folder(
+    page,
+    timeout_ms: int,
+) -> tuple[str, float]:
+    await ensure_sidebar_expanded(page)
+    await ensure_details_open(page, "[data-notebook-section]")
+    section = page.locator("[data-notebook-section]")
+    summary = section.locator(":scope > summary")
+    await summary.hover()
+    previous_notebook_id = await page.evaluate(
+        """
+        () => {
+            const meta = document.querySelector('[data-notebook-meta]');
+            return meta?.dataset.notebookId || '';
+        }
+        """
+    )
+
+    started = time.perf_counter()
+    await summary.locator("[data-create-notebook]").click()
+    await page.wait_for_function(
+        """
+        (previousNotebookId) => {
+          const meta = document.querySelector('[data-notebook-meta]');
+          return Boolean(
+            meta &&
+            meta.dataset.notebookId &&
+            meta.dataset.notebookId !== previousNotebookId &&
+            meta.dataset.notebookId.startsWith('local-notebook-')
+          );
+        }
+        """,
+        arg=previous_notebook_id,
+        timeout=timeout_ms,
+    )
+
+    notebook_id = await page.evaluate(
+        """
+        () => {
+            const meta = document.querySelector('[data-notebook-meta]');
+            return meta?.dataset.notebookId || '';
+        }
+        """
+    )
+    if not notebook_id.startswith("local-notebook-"):
+        raise RuntimeError(
+            "Default notebook creation did not select a local notebook."
+        )
+
+    unassigned_folder = await wait_for_notebook_folder(
+        page,
+        "Unassigned",
+        timeout_ms,
+    )
+    await ensure_folder_open(unassigned_folder)
+    await unassigned_folder.locator(
+        f'[data-draggable-notebook][data-notebook-id="{notebook_id}"]'
+    ).wait_for(state="attached", timeout=timeout_ms)
+    return notebook_id, (time.perf_counter() - started) * 1000
+
+
+async def delete_folder_non_recursive(
+    page,
+    folder_name: str,
+    timeout_ms: int,
+) -> float:
+    folder = await wait_for_notebook_folder(page, folder_name, timeout_ms)
+    summary = folder.locator(":scope > summary")
+    await summary.hover()
+    await summary.locator("[data-delete-tree-folder]").click()
+    await page.locator("[data-confirm-submit]").wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
+
+    started = time.perf_counter()
+    await page.locator("[data-confirm-submit]").click()
+    await notebook_folder(page, folder_name).wait_for(
+        state="detached",
+        timeout=timeout_ms,
+    )
+    return (time.perf_counter() - started) * 1000
+
+
 async def delete_folder_recursive(
     page,
     folder_name: str,
@@ -253,6 +364,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
     root_folder = unique_name("pw-nb-folder")
     renamed_folder = f"{root_folder}-renamed"
     sibling_folder = unique_name("pw-nb-sibling")
+    recursive_folder = unique_name("pw-nb-recursive")
 
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=args.headless)
@@ -374,7 +486,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     "Reloading the active notebook reopened an unrelated notebook-tree branch."
                 )
 
-            delete_ms = await delete_folder_recursive(
+            move_to_unassigned_ms = await delete_folder_non_recursive(
                 page,
                 renamed_folder,
                 args.timeout_ms,
@@ -385,10 +497,113 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     "Deleted notebook folder is still present in tree state: "
                     f"{renamed_folder}"
                 )
-            if tree_contains_notebook(state, notebook_id):
+            if not folder_contains_notebook(state, "Unassigned", notebook_id):
                 raise RuntimeError(
-                    "Deleted folder notebook is still present in tree state: "
+                    "Non-recursive folder deletion did not move the notebook "
+                    "to Unassigned: "
                     f"{notebook_id}"
+                )
+            unassigned_folder = await wait_for_notebook_folder(
+                page,
+                "Unassigned",
+                args.timeout_ms,
+            )
+            await ensure_folder_open(unassigned_folder)
+            await unassigned_folder.locator(
+                f'[data-draggable-notebook][data-notebook-id="{notebook_id}"]'
+            ).wait_for(
+                state="attached",
+                timeout=args.timeout_ms,
+            )
+
+            unassigned_delete_ms = await delete_folder_non_recursive(
+                page,
+                "Unassigned",
+                args.timeout_ms,
+            )
+            state = await notebook_tree_state(page)
+            if tree_contains_folder(state, "Unassigned"):
+                raise RuntimeError(
+                    "Deleted Unassigned folder is still present in tree state."
+                )
+            if not root_contains_notebook(state, notebook_id):
+                raise RuntimeError(
+                    "Deleting Unassigned did not preserve its notebook at the "
+                    f"tree root: {notebook_id}"
+                )
+            await page.locator(
+                "[data-notebook-tree] > "
+                f'[data-draggable-notebook][data-notebook-id="{notebook_id}"]'
+            ).wait_for(
+                state="attached",
+                timeout=args.timeout_ms,
+            )
+
+            (
+                unassigned_notebook_id,
+                default_notebook_create_ms,
+            ) = await create_notebook_in_default_folder(page, args.timeout_ms)
+            state = await notebook_tree_state(page)
+            if not folder_contains_notebook(
+                state,
+                "Unassigned",
+                unassigned_notebook_id,
+            ):
+                raise RuntimeError(
+                    "Default notebook creation did not persist inside "
+                    f"Unassigned: {unassigned_notebook_id}"
+                )
+
+            unassigned_recursive_delete_ms = await delete_folder_recursive(
+                page,
+                "Unassigned",
+                args.timeout_ms,
+            )
+            state = await notebook_tree_state(page)
+            if tree_contains_folder(state, "Unassigned"):
+                raise RuntimeError(
+                    "Recursively deleted Unassigned folder is still present "
+                    "in tree state."
+                )
+            if tree_contains_notebook(state, unassigned_notebook_id):
+                raise RuntimeError(
+                    "Recursively deleted Unassigned notebook is still present "
+                    f"in tree state: {unassigned_notebook_id}"
+                )
+            if not root_contains_notebook(state, notebook_id):
+                raise RuntimeError(
+                    "Recursive Unassigned deletion removed an unrelated root "
+                    f"notebook: {notebook_id}"
+                )
+
+            recursive_create_ms = await create_root_folder(
+                page,
+                recursive_folder,
+                args.timeout_ms,
+            )
+            (
+                recursive_notebook_id,
+                recursive_notebook_create_ms,
+            ) = await create_notebook_in_folder(
+                page,
+                recursive_folder,
+                args.timeout_ms,
+            )
+            delete_ms = await delete_folder_recursive(
+                page,
+                recursive_folder,
+                args.timeout_ms,
+            )
+            state = await notebook_tree_state(page)
+            if tree_contains_folder(state, recursive_folder):
+                raise RuntimeError(
+                    "Recursively deleted notebook folder is still present in "
+                    f"tree state: {recursive_folder}"
+                )
+            if tree_contains_notebook(state, recursive_notebook_id):
+                raise RuntimeError(
+                    "Recursively deleted folder notebook is still present in "
+                    f"tree state: {recursive_notebook_id}"
                 )
 
             await page.reload(
@@ -402,7 +617,24 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 timeout=args.timeout_ms,
             )
             await page.locator(
+                "[data-notebook-tree] > "
                 f'[data-draggable-notebook][data-notebook-id="{notebook_id}"]'
+            ).wait_for(
+                state="attached",
+                timeout=args.timeout_ms,
+            )
+            await page.locator(
+                f'[data-draggable-notebook][data-notebook-id="{unassigned_notebook_id}"]'
+            ).wait_for(
+                state="detached",
+                timeout=args.timeout_ms,
+            )
+            await notebook_folder(page, recursive_folder).wait_for(
+                state="detached",
+                timeout=args.timeout_ms,
+            )
+            await page.locator(
+                f'[data-draggable-notebook][data-notebook-id="{recursive_notebook_id}"]'
             ).wait_for(
                 state="detached",
                 timeout=args.timeout_ms,
@@ -420,6 +652,18 @@ async def run_smoke(args: argparse.Namespace) -> int:
     print(f"Notebook folder rename: {rename_ms:.0f} ms")
     print(f"Sibling notebook folder create: {sibling_create_ms:.0f} ms")
     print(f"Notebook create in folder: {create_notebook_ms:.0f} ms")
+    print(f"Notebook folder move to Unassigned: {move_to_unassigned_ms:.0f} ms")
+    print(f"Unassigned folder non-recursive delete: {unassigned_delete_ms:.0f} ms")
+    print(f"Default notebook create in Unassigned: {default_notebook_create_ms:.0f} ms")
+    print(
+        "Unassigned folder recursive delete: "
+        f"{unassigned_recursive_delete_ms:.0f} ms"
+    )
+    print(f"Recursive test folder create: {recursive_create_ms:.0f} ms")
+    print(
+        "Recursive test notebook create: "
+        f"{recursive_notebook_create_ms:.0f} ms"
+    )
     print(f"Notebook folder recursive delete: {delete_ms:.0f} ms")
     print("Playwright notebook folder smoke passed.")
     return 0

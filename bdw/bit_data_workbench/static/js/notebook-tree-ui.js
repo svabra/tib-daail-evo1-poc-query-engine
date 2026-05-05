@@ -112,7 +112,10 @@ export function createNotebookTreeUi(helpers) {
     deleteButton.textContent = "Delete";
     applyFolderActionState(deleteButton, {
       allowed: canDelete,
-      enabledTitle: "Delete folder. Notebooks will be moved to the unassigned folder.",
+      enabledTitle:
+        name === unassignedFolderName
+          ? "Delete folder. Notebooks will be moved to the notebook tree root."
+          : "Delete folder. Notebooks will be moved to the unassigned folder.",
       disabledTitle: "This folder cannot be deleted.",
     });
 
@@ -154,6 +157,17 @@ export function createNotebookTreeUi(helpers) {
       folder.dataset.systemFolder === "unassigned" ||
       folderLabel(folder)?.textContent?.trim() === unassignedFolderName
     );
+  }
+
+  function syncUnassignedFolderActions(folder) {
+    if (!isUnassignedFolder(folder)) {
+      return;
+    }
+
+    const deleteButton = folder.querySelector(":scope > summary [data-delete-tree-folder]");
+    if (deleteButton) {
+      deleteButton.title = "Delete folder. Notebooks will be moved to the notebook tree root.";
+    }
   }
 
   function folderCanEdit(folder) {
@@ -201,6 +215,7 @@ export function createNotebookTreeUi(helpers) {
     }
 
     folder.dataset.systemFolder = "unassigned";
+    syncUnassignedFolderActions(folder);
     if (notebookCountInFolder(folder) === 0) {
       folder.remove();
       return null;
@@ -219,6 +234,7 @@ export function createNotebookTreeUi(helpers) {
     const existing = rootUnassignedFolder();
     if (existing) {
       existing.dataset.systemFolder = "unassigned";
+      syncUnassignedFolderActions(existing);
       existing.open = true;
       root.appendChild(existing);
       return existing;
@@ -226,6 +242,7 @@ export function createNotebookTreeUi(helpers) {
 
     const folder = createFolderNode(unassignedFolderName, { open: true });
     folder.dataset.systemFolder = "unassigned";
+    syncUnassignedFolderActions(folder);
     root.appendChild(folder);
     return folder;
   }
@@ -235,11 +252,8 @@ export function createNotebookTreeUi(helpers) {
   }
 
   async function deleteTreeFolder(folder, { recursive = false } = {}) {
+    const isDeletingUnassignedFolder = isUnassignedFolder(folder);
     const notebooks = collectFolderNotebooks(folder);
-    if (isUnassignedFolder(folder) && notebooks.length > 0) {
-      return;
-    }
-
     const removedNotebookIds = notebooks
       .map((notebook) => notebook.dataset.notebookId)
       .filter(Boolean);
@@ -248,8 +262,12 @@ export function createNotebookTreeUi(helpers) {
     if (!recursive) {
       let targetContainer = null;
       if (notebooks.length > 0) {
-        const targetFolder = ensureRootUnassignedFolder();
-        targetContainer = directChildrenContainer(targetFolder);
+        if (isDeletingUnassignedFolder) {
+          targetContainer = notebookTreeRoot();
+        } else {
+          const targetFolder = ensureRootUnassignedFolder();
+          targetContainer = directChildrenContainer(targetFolder);
+        }
         if (!targetContainer) {
           return;
         }
@@ -637,6 +655,7 @@ export function createNotebookTreeUi(helpers) {
     folderCanEdit,
     folderLabel,
     initializeNotebookTree,
+    isUnassignedFolder,
     persistNotebookTree,
     resolveAddTarget,
     resolveDropTarget,

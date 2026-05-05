@@ -1,9 +1,23 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.7.3. Keep entries concise and
+# Derived from git history through version 0.7.4. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.7.4",
+        "releasedAt": "2026-05-05T13:13:07+02:00",
+        "features": [
+            (
+                "Deleting the Unassigned notebook folder now works: a standard delete preserves notebooks "
+                "at the notebook tree root, while recursive delete still removes notebooks in that folder."
+            ),
+            (
+                "Notebook-folder regression coverage now includes focused unit checks and a Playwright smoke "
+                "for moving notebooks into Unassigned, deleting Unassigned, and recursive cleanup."
+            ),
+        ],
+    },
     {
         "version": "0.7.3",
         "releasedAt": "2026-05-05T11:26:00+02:00",
