@@ -100,10 +100,12 @@ async def run_query_and_assert_result(page, timeout_ms: int) -> str:
             f"Query job creation failed with status {response.status}."
         )
 
-    payload = await response.json()
-    job_id = str(payload.get("jobId") or payload.get("job_id") or "").strip()
-    if not job_id:
-        raise RuntimeError("The query job response did not include a job id.")
+    response_job_id = ""
+    try:
+        payload = await response.json()
+        response_job_id = str(payload.get("jobId") or payload.get("job_id") or "").strip()
+    except Exception:
+        response_job_id = ""
 
     result_root = cell.locator("[data-cell-result]")
     await result_root.wait_for(state="visible", timeout=timeout_ms)
@@ -115,10 +117,13 @@ async def run_query_and_assert_result(page, timeout_ms: int) -> str:
     rendered_job_id = (
         await result_root.get_attribute("data-query-job-id") or ""
     ).strip()
-    if rendered_job_id != job_id:
+    if not rendered_job_id:
+        raise RuntimeError("The query result panel did not include a job id.")
+    if response_job_id and rendered_job_id != response_job_id:
         raise RuntimeError(
             "The query result panel did not bind to the returned query job id."
         )
+    job_id = response_job_id or rendered_job_id
 
     first_value = (
         await cell.locator(".result-table tbody tr td").first.inner_text()

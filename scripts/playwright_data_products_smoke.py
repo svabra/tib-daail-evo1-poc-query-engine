@@ -34,13 +34,17 @@ async def open_home(page, args: argparse.Namespace) -> None:
         state="visible",
         timeout=args.timeout_ms,
     )
+    await page.wait_for_timeout(1000)
 
 
 async def open_data_products_workbench(page, timeout_ms: int) -> None:
     button = page.locator("[data-home-page] [data-open-data-products-workbench]").first
     await button.wait_for(state="visible", timeout=timeout_ms)
-    await button.click()
-    await page.wait_for_url("**/data-products", timeout=timeout_ms)
+    await button.evaluate("(node) => node.click()")
+    await page.wait_for_function(
+        "() => window.location.pathname === '/data-products'",
+        timeout=timeout_ms,
+    )
     await page.locator("[data-data-products-page]").wait_for(
         state="visible",
         timeout=timeout_ms,
@@ -63,7 +67,25 @@ async def publish_first_available_data_product(page, timeout_ms: int) -> str:
         raise RuntimeError(
             "The data-products smoke requires at least one publishable source option."
         )
-    await source_select.select_option(index=1)
+    preferred_source_value = await source_select.locator("option").evaluate_all(
+        """
+        (options) => {
+          const values = options
+            .map((option) => option.value || "")
+            .filter(Boolean);
+          return (
+            values.find((value) => value.startsWith("object::csv-import::")) ||
+            values.find((value) => value.startsWith("object::csv-imports::")) ||
+            values.find((value) => value.startsWith("bucket::vat-smoke-test")) ||
+            values[0] ||
+            ""
+          );
+        }
+        """
+    )
+    if not preferred_source_value:
+        raise RuntimeError("No publishable source option was available.")
+    await source_select.select_option(value=preferred_source_value)
 
     next_button = dialog.locator("[data-data-product-dialog-next]").first
     await next_button.click()

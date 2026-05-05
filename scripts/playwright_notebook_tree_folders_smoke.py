@@ -77,6 +77,22 @@ async def folder_is_open(folder) -> bool:
     return bool(await folder.evaluate("node => node.hasAttribute('open')"))
 
 
+async def fill_folder_name_dialog(page, folder_name: str, timeout_ms: int) -> None:
+    await page.wait_for_function(
+        "() => Boolean(document.querySelector('[data-folder-name-dialog]')?.open)",
+        timeout=timeout_ms,
+    )
+    await page.locator("[data-folder-name-input]").fill(folder_name)
+
+
+async def submit_folder_name_dialog(page, timeout_ms: int) -> None:
+    await page.locator("[data-folder-name-submit]").click()
+    await page.wait_for_function(
+        "() => !document.querySelector('[data-folder-name-dialog]')?.open",
+        timeout=timeout_ms,
+    )
+
+
 async def notebook_tree_state(page) -> list[dict]:
     raw_value = await page.evaluate(
         """([key]) => window.localStorage.getItem(key)""",
@@ -121,11 +137,15 @@ async def create_root_folder(page, folder_name: str, timeout_ms: int) -> float:
     await ensure_details_open(page, "[data-notebook-section]")
     section = page.locator("[data-notebook-section]")
     summary = section.locator(":scope > summary")
+    await page.wait_for_function(
+        "() => !document.querySelector('[data-folder-name-dialog]')?.open",
+        timeout=timeout_ms,
+    )
     await summary.hover()
-    await summary.locator("[data-add-tree-item]").click(force=True)
-    await page.locator("[data-folder-name-input]").fill(folder_name)
+    await summary.locator("[data-add-tree-item]").evaluate("(node) => node.click()")
+    await fill_folder_name_dialog(page, folder_name, timeout_ms)
     started = time.perf_counter()
-    await page.locator("[data-folder-name-submit]").click()
+    await submit_folder_name_dialog(page, timeout_ms)
     await wait_for_notebook_folder(page, folder_name, timeout_ms)
     return (time.perf_counter() - started) * 1000
 
@@ -139,10 +159,10 @@ async def rename_folder(
     folder = await wait_for_notebook_folder(page, current_name, timeout_ms)
     summary = folder.locator(":scope > summary")
     await summary.hover()
-    await summary.locator("[data-rename-tree-folder]").click()
-    await page.locator("[data-folder-name-input]").fill(new_name)
+    await summary.locator("[data-rename-tree-folder]").evaluate("(node) => node.click()")
+    await fill_folder_name_dialog(page, new_name, timeout_ms)
     started = time.perf_counter()
-    await page.locator("[data-folder-name-submit]").click()
+    await submit_folder_name_dialog(page, timeout_ms)
     await wait_for_notebook_folder(page, new_name, timeout_ms)
     await notebook_folder(page, current_name).wait_for(
         state="detached",

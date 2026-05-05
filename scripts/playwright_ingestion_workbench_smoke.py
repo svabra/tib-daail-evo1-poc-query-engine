@@ -40,6 +40,7 @@ async def open_ingestion_workbench(page, base_url: str, timeout_ms: int) -> None
         state="hidden",
         timeout=timeout_ms,
     )
+    await page.wait_for_timeout(1000)
 
 
 async def open_csv_ingestor(page, timeout_ms: int) -> None:

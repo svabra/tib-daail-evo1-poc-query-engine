@@ -1,9 +1,24 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.7.1. Keep entries concise and
+# Derived from git history through version 0.7.2. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.7.2",
+        "releasedAt": "2026-05-05T10:13:00+02:00",
+        "features": [
+            (
+                "Shared Workspace S3 bucket delete actions now resolve the real bucket name from object metadata "
+                "when the sidebar schema label contains a DuckDB-safe derived name, avoiding false bucket-name "
+                "validation errors."
+            ),
+            (
+                "Playwright regression coverage now verifies the bucket-delete fallback and hardens navigation "
+                "smokes against same-document route changes and startup timing races."
+            ),
+        ],
+    },
     {
         "version": "0.7.1",
         "releasedAt": "2026-04-22T16:10:00+02:00",

@@ -198,12 +198,30 @@ export function sourceObjectS3DeleteDescriptor(sourceObjectRoot) {
   };
 }
 
+const S3_BUCKET_NAME_PATTERN = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
+
+function normalizedS3BucketName(value) {
+  const bucket = String(value ?? "").trim().toLowerCase();
+  return S3_BUCKET_NAME_PATTERN.test(bucket) ? bucket : "";
+}
+
+function sourceSchemaObjectBucket(sourceSchemaRoot) {
+  const buckets = new Set(
+    Array.from(sourceSchemaRoot.querySelectorAll("[data-source-object][data-s3-bucket]"))
+      .map((node) => normalizedS3BucketName(node.dataset.s3Bucket))
+      .filter(Boolean)
+  );
+  return buckets.size === 1 ? Array.from(buckets)[0] : "";
+}
+
 export function sourceSchemaS3BucketDescriptor(sourceSchemaRoot) {
   if (!(sourceSchemaRoot instanceof Element)) {
     return null;
   }
 
-  const bucket = String(sourceSchemaRoot.dataset.sourceBucket || "").trim();
+  const bucket =
+    normalizedS3BucketName(sourceSchemaRoot.dataset.sourceBucket) ||
+    sourceSchemaObjectBucket(sourceSchemaRoot);
   if (!bucket) {
     return null;
   }

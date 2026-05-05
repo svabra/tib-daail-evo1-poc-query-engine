@@ -32,6 +32,7 @@ async def open_local_csv_ingestor(page, base_url: str, timeout_ms: int) -> None:
         state="visible",
         timeout=timeout_ms,
     )
+    await page.wait_for_timeout(1000)
     await page.locator('[data-ingestion-tile="csv"]').click()
     await page.locator("[data-csv-ingestion-form]").wait_for(
         state="visible",
@@ -136,9 +137,9 @@ async def assert_local_workspace_sidebar_actions(page, expected_relation: str, t
         "View Data",
         "Query in current notebook",
         "Query in new notebook",
-        "Move local file",
-        "Download local file",
-        "Delete local file",
+        "Move ...",
+        "Download",
+        "Delete ...",
     ):
         item = menu_panel.get_by_role("button", name=label)
         await item.wait_for(state="visible", timeout=timeout_ms)

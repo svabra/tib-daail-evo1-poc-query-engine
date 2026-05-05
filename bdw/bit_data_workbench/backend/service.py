@@ -2469,13 +2469,16 @@ class WorkbenchService:
                 continue
             relation_id = f"{schema}.{table_name}"
             s3_metadata = workspace_s3_objects.get(relation_id, {})
+            s3_bucket = str(s3_metadata.get("bucket") or "").strip()
+            if s3_bucket:
+                workspace_schema_labels.setdefault(schema, s3_bucket)
             grouped.setdefault("workspace", {}).setdefault(schema, []).append(
                 SourceObject(
                     name=table_name,
                     kind="view" if table_type.upper() == "VIEW" else "table",
                     relation=relation_id,
                     display_name=str(s3_metadata.get("display_name") or table_name),
-                    s3_bucket=str(s3_metadata.get("bucket") or ""),
+                    s3_bucket=s3_bucket,
                     s3_key=str(s3_metadata.get("key") or ""),
                     s3_path=str(s3_metadata.get("path") or ""),
                     s3_file_format=str(s3_metadata.get("file_format") or ""),

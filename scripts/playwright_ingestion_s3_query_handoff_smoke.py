@@ -48,6 +48,7 @@ async def open_csv_ingestion(page, base_url: str, timeout_ms: int) -> None:
         state="visible",
         timeout=timeout_ms,
     )
+    await page.wait_for_timeout(1000)
     await page.locator('[data-ingestion-tile="csv"]').click()
     await page.locator("[data-csv-ingestion-form]").wait_for(
         state="visible",

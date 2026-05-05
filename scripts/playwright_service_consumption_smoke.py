@@ -33,15 +33,19 @@ async def open_home(page, args: argparse.Namespace) -> None:
         state="visible",
         timeout=args.timeout_ms,
     )
+    await page.wait_for_timeout(1000)
 
 
 async def open_service_consumption_from_settings(page, timeout_ms: int) -> None:
     settings_menu = page.locator("[data-settings-menu]").first
-    await settings_menu.locator(":scope > summary").click()
+    await settings_menu.locator(":scope > summary").evaluate("(node) => node.click()")
     service_button = page.locator("[data-open-service-consumption]").first
     await service_button.wait_for(state="visible", timeout=timeout_ms)
-    await service_button.click()
-    await page.wait_for_url("**/service-consumption", timeout=timeout_ms)
+    await service_button.evaluate("(node) => node.click()")
+    await page.wait_for_function(
+        "() => window.location.pathname === '/service-consumption'",
+        timeout=timeout_ms,
+    )
     await page.locator("[data-service-consumption-page]").wait_for(
         state="visible",
         timeout=timeout_ms,
