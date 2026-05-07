@@ -20,7 +20,7 @@ spec:
       serviceAccountName: evo1-bdw
       containers:
         - name: bdw
-          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.7.12
+          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.7.13
           imagePullPolicy: Always
           ports:
             - name: http
@@ -42,11 +42,11 @@ spec:
             - name: BDW_INGESTION_UPLOAD_CHUNK_BYTES
               value: "5242880"
             - name: BDW_INGESTION_UPLOAD_MAX_ARCHIVE_BYTES
-              value: "5368709120"
+              value: "32212254720"
             - name: BDW_INGESTION_UPLOAD_MAX_CSV_BYTES
-              value: "21474836480"
+              value: "32212254720"
             - name: BDW_INGESTION_UPLOAD_MAX_EXTRACTED_BYTES
-              value: "21474836480"
+              value: "32212254720"
             - name: BDW_INGESTION_UPLOAD_SESSION_TTL_HOURS
               value: "24"
             - name: BDW_INGESTION_ZIP_MAX_ENTRIES

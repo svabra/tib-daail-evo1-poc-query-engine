@@ -41,6 +41,7 @@ from bit_data_workbench.version_info import current_repo_version  # noqa: E402
 
 
 CURRENT_VERSION = current_repo_version(REPO_ROOT)
+THIRTY_GIB = 30 * 1024 * 1024 * 1024
 
 
 class FakeUpload:
@@ -149,7 +150,54 @@ def make_settings() -> Settings:
     )
 
 
+def zip_payload(entries: dict[str, str]) -> bytes:
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as handle:
+        for name, content in entries.items():
+            handle.writestr(name, content)
+    return archive.getvalue()
+
+
+def staged_upload_session_sources(
+    *,
+    settings: Settings,
+    file_name: str,
+    payload: bytes,
+) -> list[CsvLocalSource]:
+    upload_sessions = CsvUploadSessionManager(settings=settings)
+    state = upload_sessions.create_session(
+        [CsvUploadFileRequest(file_name=file_name, size_bytes=len(payload))]
+    )
+    session_id = str(state["sessionId"])
+    file_id = str(state["files"][0]["fileId"])
+    chunk_size = settings.ingestion_upload_chunk_bytes
+    for offset in range(0, len(payload), chunk_size):
+        end = min(offset + chunk_size, len(payload))
+        upload_sessions.append_chunk(
+            session_id=session_id,
+            file_id=file_id,
+            chunk_index=offset // chunk_size,
+            content_range=f"bytes {offset}-{end - 1}/{len(payload)}",
+            payload=payload[offset:end],
+        )
+    return upload_sessions.source_files(session_id)
+
+
 class CsvIngestionHelperTests(TestCase):
+    def test_default_csv_ingestion_size_limits_and_archive_policy_are_30_gib(self) -> None:
+        settings = make_settings()
+        manager = CsvIngestionManager(
+            settings=settings,
+            postgres_connection_factory=lambda target: None,
+        )
+
+        self.assertEqual(settings.ingestion_upload_max_archive_bytes, THIRTY_GIB)
+        self.assertEqual(settings.ingestion_upload_max_csv_bytes, THIRTY_GIB)
+        self.assertEqual(settings.ingestion_upload_max_extracted_bytes, THIRTY_GIB)
+        self.assertEqual(manager._archive_policy.max_archive_bytes, THIRTY_GIB)
+        self.assertEqual(manager._archive_policy.max_csv_bytes, THIRTY_GIB)
+        self.assertEqual(manager._archive_policy.max_extracted_bytes, THIRTY_GIB)
+
     def test_normalize_csv_table_name_builds_sql_safe_identifier(self) -> None:
         self.assertEqual(
             normalize_csv_table_name("VAT Smoke Test.csv", prefix="raw"),
@@ -292,6 +340,68 @@ class CsvIngestionManagerTests(TestCase):
         self.assertEqual(
             [upload_record[2] for upload_record in fake_client.uploads],
             ["alpha.csv", "beta.csv"],
+        )
+
+    def test_upload_session_zip_import_to_s3_creates_one_object_per_csv(self) -> None:
+        fake_client = FakeS3Client()
+        archive_payload = zip_payload(
+            {
+                "alpha.csv": "id,name\n1,alpha\n",
+                "folder/beta.csv": "id,name\n2,beta\n",
+            }
+        )
+        with TemporaryDirectory() as temp_dir:
+            settings = make_settings()
+            settings.ingestion_upload_dir = Path(temp_dir) / "uploads"
+            settings.ingestion_upload_chunk_bytes = 17
+            sources = staged_upload_session_sources(
+                settings=settings,
+                file_name="client-batch.zip",
+                payload=archive_payload,
+            )
+            manager = CsvIngestionManager(
+                settings=settings,
+                postgres_connection_factory=lambda target: None,
+                s3_client_factory=lambda settings: fake_client,
+            )
+
+            with patch(
+                "bit_data_workbench.backend.ingestion_types.csv.manager.ensure_s3_bucket"
+            ) as ensure_bucket:
+                payload = manager.import_csv_sources(
+                    sources=sources,
+                    target_id="workspace.s3",
+                    bucket="client-imports",
+                    prefix="incoming/batch-001",
+                    delimiter=",",
+                    has_header=True,
+                )
+
+        self.assertEqual(payload["importedCount"], 2)
+        self.assertEqual(payload["failedCount"], 0)
+        self.assertEqual(
+            [item["fileName"] for item in payload["imports"]],
+            ["alpha.csv", "beta.csv"],
+        )
+        self.assertEqual(
+            [item["objectKey"] for item in payload["imports"]],
+            ["incoming/batch-001/alpha.csv", "incoming/batch-001/beta.csv"],
+        )
+        self.assertEqual(
+            {item["bucket"] for item in payload["imports"]},
+            {"client-imports"},
+        )
+        self.assertEqual(
+            [upload_record[1:3] for upload_record in fake_client.uploads],
+            [
+                ("client-imports", "incoming/batch-001/alpha.csv"),
+                ("client-imports", "incoming/batch-001/beta.csv"),
+            ],
+        )
+        self.assertEqual(ensure_bucket.call_count, 2)
+        self.assertEqual(
+            {call.args[1] for call in ensure_bucket.call_args_list},
+            {"client-imports"},
         )
 
     def test_import_zip_files_rejects_archive_with_non_csv_entry(self) -> None:
@@ -618,10 +728,83 @@ class CsvIngestionManagerTests(TestCase):
             "COPY \"stage\".\"raw_vat_smoke\" (\"column_1\", \"column_2\") FROM STDIN WITH (FORMAT CSV, HEADER FALSE, DELIMITER ';')",
             cursor.copy_sql,
         )
+
+    def test_upload_session_zip_import_to_postgres_creates_table_per_csv(self) -> None:
+        connection = FakeConnection()
+        archive_payload = zip_payload(
+            {
+                "alpha.csv": "id,name\n1,alpha\n",
+                "folder/beta.csv": "id,name\n2,beta\n",
+            }
+        )
+        with TemporaryDirectory() as temp_dir:
+            settings = make_settings()
+            settings.ingestion_upload_dir = Path(temp_dir) / "uploads"
+            settings.ingestion_upload_chunk_bytes = 17
+            sources = staged_upload_session_sources(
+                settings=settings,
+                file_name="client-batch.zip",
+                payload=archive_payload,
+            )
+            manager = CsvIngestionManager(
+                settings=settings,
+                postgres_connection_factory=lambda target: connection,
+            )
+
+            payload = manager.import_csv_sources(
+                sources=sources,
+                target_id="pg_oltp",
+                schema_name="stage",
+                table_prefix="raw",
+                delimiter=",",
+                has_header=True,
+            )
+
+        cursor = connection.cursor_instance
+        self.assertEqual(payload["importedCount"], 2)
+        self.assertEqual(payload["failedCount"], 0)
+        self.assertEqual(
+            [item["relation"] for item in payload["imports"]],
+            ["stage.raw_alpha", "stage.raw_beta"],
+        )
+        self.assertIn(
+            'CREATE TABLE "stage"."raw_alpha" ("id" BIGINT, "name" TEXT)',
+            cursor.executed,
+        )
+        self.assertIn(
+            'CREATE TABLE "stage"."raw_beta" ("id" BIGINT, "name" TEXT)',
+            cursor.executed,
+        )
         self.assertEqual(payload["imports"][0]["rowCount"], 3)
 
 
 class CsvUploadSessionManagerTests(TestCase):
+    def test_upload_session_accepts_30_gib_csv_and_zip_size_limits(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            settings = make_settings()
+            settings.ingestion_upload_dir = Path(temp_dir) / "uploads"
+            manager = CsvUploadSessionManager(settings=settings)
+
+            state = manager.create_session(
+                [
+                    CsvUploadFileRequest(file_name="large.csv", size_bytes=THIRTY_GIB),
+                    CsvUploadFileRequest(file_name="archive.zip", size_bytes=THIRTY_GIB),
+                ]
+            )
+
+            self.assertEqual(
+                [item["sizeBytes"] for item in state["files"]],
+                [THIRTY_GIB, THIRTY_GIB],
+            )
+            with self.assertRaisesRegex(ValueError, "exceeds the configured upload size limit"):
+                manager.create_session(
+                    [CsvUploadFileRequest(file_name="too-large.csv", size_bytes=THIRTY_GIB + 1)]
+                )
+            with self.assertRaisesRegex(ValueError, "exceeds the configured upload size limit"):
+                manager.create_session(
+                    [CsvUploadFileRequest(file_name="too-large.zip", size_bytes=THIRTY_GIB + 1)]
+                )
+
     def test_upload_session_accepts_chunks_reports_status_and_sources(self) -> None:
         with TemporaryDirectory() as temp_dir:
             settings = make_settings()

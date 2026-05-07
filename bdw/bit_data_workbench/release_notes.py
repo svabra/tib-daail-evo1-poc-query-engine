@@ -1,9 +1,23 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.7.12. Keep entries concise and
+# Derived from git history through version 0.7.13. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.7.13",
+        "releasedAt": "2026-05-07T12:01:05+02:00",
+        "features": [
+            (
+                "CSV ingestion now accepts direct CSV uploads, ZIP upload files, and extracted ZIP CSV data "
+                "up to 30 GiB, with matching backend, Kubernetes, and browser-side limits."
+            ),
+            (
+                "ZIP CSV ingestion is now covered end to end for Shared Workspace S3 and PostgreSQL, "
+                "including Playwright verification that the browser upload succeeds and each CSV is imported."
+            ),
+        ],
+    },
     {
         "version": "0.7.12",
         "releasedAt": "2026-05-05T21:30:52+02:00",
