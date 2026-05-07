@@ -58,6 +58,12 @@ from .ingestion_types.csv import (
     CsvUploadSessionManager,
     attach_query_sources_to_csv_imports,
 )
+from .ingestion_types.tabular import (
+    FILE_INGESTOR_SPECS,
+    FileIngestionManager,
+    FileUploadFileRequest,
+    FileUploadSessionManager,
+)
 from .local_workspace_query_sources import LocalWorkspaceQuerySourceManager
 from .local_workspace_transfers import LocalWorkspaceTransferManager
 from .python_execution import KernelSessionManager, PythonJobManager
@@ -207,6 +213,19 @@ class WorkbenchService:
             postgres_connection_factory=self._create_postgres_native_connection,
         )
         self._csv_upload_sessions = CsvUploadSessionManager(settings=settings)
+        self._file_ingestions = {
+            ingestor_id: FileIngestionManager(
+                settings=settings,
+                spec=spec,
+                postgres_connection_factory=self._create_postgres_native_connection,
+            )
+            for ingestor_id, spec in FILE_INGESTOR_SPECS.items()
+        }
+        self._file_upload_sessions = {
+            ingestor_id: FileUploadSessionManager(settings=settings, spec=spec)
+            for ingestor_id, spec in FILE_INGESTOR_SPECS.items()
+        }
+        self._file_upload_completion_threads: list[Thread] = []
         self._local_workspace_query_sources = LocalWorkspaceQuerySourceManager(
             settings=settings,
         )
@@ -1152,6 +1171,133 @@ class WorkbenchService:
             if normalized_target_id == "workspace.s3":
                 payload = self._attach_s3_query_sources_from_discovery(payload)
         return payload
+
+    def create_file_upload_session(
+        self,
+        *,
+        ingestor_id: str,
+        files: list[dict[str, object]],
+    ) -> dict[str, object]:
+        manager = self._file_upload_session_manager(ingestor_id)
+        requests = [
+            FileUploadFileRequest(
+                file_name=str(item.get("fileName") or item.get("file_name") or ""),
+                size_bytes=int(item.get("sizeBytes") or item.get("size_bytes") or 0),
+            )
+            for item in files
+            if isinstance(item, dict)
+        ]
+        return manager.create_session(requests)
+
+    def file_upload_session_state(self, ingestor_id: str, session_id: str) -> dict[str, object]:
+        return self._file_upload_session_manager(ingestor_id).session_state(session_id)
+
+    def append_file_upload_session_chunk(
+        self,
+        *,
+        ingestor_id: str,
+        session_id: str,
+        file_id: str,
+        chunk_index: int,
+        content_range: str,
+        payload: bytes,
+    ) -> dict[str, object]:
+        return self._file_upload_session_manager(ingestor_id).append_chunk(
+            session_id=session_id,
+            file_id=file_id,
+            chunk_index=chunk_index,
+            content_range=content_range,
+            payload=payload,
+        )
+
+    def cancel_file_upload_session(self, ingestor_id: str, session_id: str) -> dict[str, object]:
+        return self._file_upload_session_manager(ingestor_id).cancel_session(session_id)
+
+    def complete_file_upload_session(
+        self,
+        *,
+        ingestor_id: str,
+        session_id: str,
+        target_id: str,
+        bucket: str = "",
+        prefix: str = "",
+        schema_name: str = "public",
+        table_prefix: str = "",
+        replace_existing: bool = True,
+    ) -> dict[str, object]:
+        manager = self._file_upload_session_manager(ingestor_id)
+        state = manager.start_processing(session_id)
+        should_start_worker = bool(state.pop("processingStarted", False))
+        if should_start_worker:
+            normalized_ingestor_id = self._normalize_file_ingestor_id(ingestor_id)
+            worker = Thread(
+                target=self._complete_file_upload_session_in_background,
+                kwargs={
+                    "ingestor_id": normalized_ingestor_id,
+                    "session_id": session_id,
+                    "target_id": target_id,
+                    "bucket": bucket,
+                    "prefix": prefix,
+                    "schema_name": schema_name,
+                    "table_prefix": table_prefix,
+                    "replace_existing": replace_existing,
+                },
+                name=f"bdw-{normalized_ingestor_id}-upload-complete-{session_id[:8]}",
+                daemon=True,
+            )
+            worker.start()
+            self._file_upload_completion_threads.append(worker)
+        return state
+
+    def _complete_file_upload_session_in_background(
+        self,
+        *,
+        ingestor_id: str,
+        session_id: str,
+        target_id: str,
+        bucket: str,
+        prefix: str,
+        schema_name: str,
+        table_prefix: str,
+        replace_existing: bool,
+    ) -> None:
+        normalized_target_id = str(target_id or "").strip()
+        manager = self._file_upload_session_manager(ingestor_id)
+        try:
+            sources = manager.source_files(session_id)
+            payload = self._file_ingestion_manager(ingestor_id).import_sources(
+                sources=sources,
+                target_id=normalized_target_id,
+                bucket=bucket,
+                prefix=prefix,
+                schema_name=schema_name,
+                table_prefix=table_prefix,
+                replace_existing=replace_existing,
+            )
+            result = self._finalize_csv_import_payload(payload, normalized_target_id)
+            manager.finish_processing_success(session_id, result)
+        except Exception as exc:
+            logger.exception("%s upload session completion failed: %s", ingestor_id, session_id)
+            try:
+                manager.finish_processing_failure(session_id, str(exc))
+            except Exception:
+                logger.exception(
+                    "Failed to persist %s upload session failure: %s",
+                    ingestor_id,
+                    session_id,
+                )
+
+    def _normalize_file_ingestor_id(self, ingestor_id: str) -> str:
+        normalized = str(ingestor_id or "").strip().lower()
+        if normalized not in FILE_INGESTOR_SPECS:
+            raise ValueError(f"Unsupported file ingestor: {ingestor_id}")
+        return normalized
+
+    def _file_upload_session_manager(self, ingestor_id: str) -> FileUploadSessionManager:
+        return self._file_upload_sessions[self._normalize_file_ingestor_id(ingestor_id)]
+
+    def _file_ingestion_manager(self, ingestor_id: str) -> FileIngestionManager:
+        return self._file_ingestions[self._normalize_file_ingestor_id(ingestor_id)]
 
     def _attach_s3_query_sources_from_discovery(
         self,

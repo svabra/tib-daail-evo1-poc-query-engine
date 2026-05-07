@@ -5568,10 +5568,18 @@ details:not([open]) > .source-schema > summary::before {
   gap: 12px;
 }
 
+.ingestion-entry-search {
+  margin-bottom: 14px;
+}
+
 .ingestion-entry-grid {
   display: grid;
   gap: 14px;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.ingestion-entry-tile[hidden] {
+  display: none;
 }
 
 .ingestion-entry-tile {

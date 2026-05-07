@@ -138,6 +138,31 @@ class CsvUploadSessionCompletePayload(BaseModel):
     )
 
 
+FileUploadSessionFilePayload = CsvUploadSessionFilePayload
+FileUploadSessionCreatePayload = CsvUploadSessionCreatePayload
+
+
+class FileUploadSessionCompletePayload(BaseModel):
+    target_id: str = Field(default="", validation_alias="targetId", serialization_alias="targetId")
+    bucket: str = ""
+    prefix: str = ""
+    schema_name: str = Field(
+        default="public",
+        validation_alias="schemaName",
+        serialization_alias="schemaName",
+    )
+    table_prefix: str = Field(
+        default="",
+        validation_alias="tablePrefix",
+        serialization_alias="tablePrefix",
+    )
+    replace_existing: bool = Field(
+        default=True,
+        validation_alias="replaceExisting",
+        serialization_alias="replaceExisting",
+    )
+
+
 @router.get("/info")
 def info(service: WorkbenchService = Depends(get_workbench_service)) -> JSONResponse:
     return JSONResponse({"ok": True, "runtime": service.runtime_info()})
@@ -522,6 +547,340 @@ def cancel_csv_upload_session(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return JSONResponse(jsonable_encoder(state))
+
+
+def _create_file_upload_session(
+    *,
+    ingestor_id: str,
+    payload: FileUploadSessionCreatePayload,
+    service: WorkbenchService,
+) -> JSONResponse:
+    try:
+        state = service.create_file_upload_session(
+            ingestor_id=ingestor_id,
+            files=[item.model_dump(by_alias=True) for item in payload.files],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder(state))
+
+
+def _file_upload_session_state(
+    *,
+    ingestor_id: str,
+    session_id: str,
+    service: WorkbenchService,
+) -> JSONResponse:
+    try:
+        state = service.file_upload_session_state(ingestor_id, session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder(state))
+
+
+async def _append_file_upload_session_chunk(
+    *,
+    ingestor_id: str,
+    session_id: str,
+    file_id: str,
+    chunk_index: int,
+    request: Request,
+    content_range: str | None,
+    service: WorkbenchService,
+) -> JSONResponse:
+    if not content_range:
+        raise HTTPException(
+            status_code=411,
+            detail=f"Content-Range is required for {ingestor_id} upload chunks.",
+        )
+    try:
+        state = service.append_file_upload_session_chunk(
+            ingestor_id=ingestor_id,
+            session_id=session_id,
+            file_id=file_id,
+            chunk_index=chunk_index,
+            content_range=content_range,
+            payload=await request.body(),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder(state))
+
+
+def _complete_file_upload_session(
+    *,
+    ingestor_id: str,
+    session_id: str,
+    payload: FileUploadSessionCompletePayload,
+    service: WorkbenchService,
+) -> JSONResponse:
+    try:
+        result = service.complete_file_upload_session(
+            ingestor_id=ingestor_id,
+            session_id=session_id,
+            target_id=payload.target_id,
+            bucket=payload.bucket,
+            prefix=payload.prefix,
+            schema_name=payload.schema_name,
+            table_prefix=payload.table_prefix,
+            replace_existing=payload.replace_existing,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder(result))
+
+
+def _cancel_file_upload_session(
+    *,
+    ingestor_id: str,
+    session_id: str,
+    service: WorkbenchService,
+) -> JSONResponse:
+    try:
+        state = service.cancel_file_upload_session(ingestor_id, session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder(state))
+
+
+@router.post("/api/ingestion/parquet/upload-sessions")
+def create_parquet_upload_session(
+    payload: FileUploadSessionCreatePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return _create_file_upload_session(ingestor_id="parquet", payload=payload, service=service)
+
+
+@router.get("/api/ingestion/parquet/upload-sessions/{session_id}")
+def parquet_upload_session_state(
+    session_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return _file_upload_session_state(ingestor_id="parquet", session_id=session_id, service=service)
+
+
+@router.put("/api/ingestion/parquet/upload-sessions/{session_id}/files/{file_id}/chunks/{chunk_index}")
+async def append_parquet_upload_session_chunk(
+    session_id: str,
+    file_id: str,
+    chunk_index: int,
+    request: Request,
+    content_range: str | None = Header(default=None, alias="Content-Range"),
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return await _append_file_upload_session_chunk(
+        ingestor_id="parquet",
+        session_id=session_id,
+        file_id=file_id,
+        chunk_index=chunk_index,
+        request=request,
+        content_range=content_range,
+        service=service,
+    )
+
+
+@router.post("/api/ingestion/parquet/upload-sessions/{session_id}/complete")
+def complete_parquet_upload_session(
+    session_id: str,
+    payload: FileUploadSessionCompletePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return _complete_file_upload_session(
+        ingestor_id="parquet",
+        session_id=session_id,
+        payload=payload,
+        service=service,
+    )
+
+
+@router.delete("/api/ingestion/parquet/upload-sessions/{session_id}")
+def cancel_parquet_upload_session(
+    session_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return _cancel_file_upload_session(ingestor_id="parquet", session_id=session_id, service=service)
+
+
+@router.post("/api/ingestion/json/upload-sessions")
+def create_json_upload_session(
+    payload: FileUploadSessionCreatePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return _create_file_upload_session(ingestor_id="json", payload=payload, service=service)
+
+
+@router.get("/api/ingestion/json/upload-sessions/{session_id}")
+def json_upload_session_state(
+    session_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return _file_upload_session_state(ingestor_id="json", session_id=session_id, service=service)
+
+
+@router.put("/api/ingestion/json/upload-sessions/{session_id}/files/{file_id}/chunks/{chunk_index}")
+async def append_json_upload_session_chunk(
+    session_id: str,
+    file_id: str,
+    chunk_index: int,
+    request: Request,
+    content_range: str | None = Header(default=None, alias="Content-Range"),
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return await _append_file_upload_session_chunk(
+        ingestor_id="json",
+        session_id=session_id,
+        file_id=file_id,
+        chunk_index=chunk_index,
+        request=request,
+        content_range=content_range,
+        service=service,
+    )
+
+
+@router.post("/api/ingestion/json/upload-sessions/{session_id}/complete")
+def complete_json_upload_session(
+    session_id: str,
+    payload: FileUploadSessionCompletePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return _complete_file_upload_session(
+        ingestor_id="json",
+        session_id=session_id,
+        payload=payload,
+        service=service,
+    )
+
+
+@router.delete("/api/ingestion/json/upload-sessions/{session_id}")
+def cancel_json_upload_session(
+    session_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return _cancel_file_upload_session(ingestor_id="json", session_id=session_id, service=service)
+
+
+@router.post("/api/ingestion/xlsx/upload-sessions")
+def create_xlsx_upload_session(
+    payload: FileUploadSessionCreatePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return _create_file_upload_session(ingestor_id="xlsx", payload=payload, service=service)
+
+
+@router.get("/api/ingestion/xlsx/upload-sessions/{session_id}")
+def xlsx_upload_session_state(
+    session_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return _file_upload_session_state(ingestor_id="xlsx", session_id=session_id, service=service)
+
+
+@router.put("/api/ingestion/xlsx/upload-sessions/{session_id}/files/{file_id}/chunks/{chunk_index}")
+async def append_xlsx_upload_session_chunk(
+    session_id: str,
+    file_id: str,
+    chunk_index: int,
+    request: Request,
+    content_range: str | None = Header(default=None, alias="Content-Range"),
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return await _append_file_upload_session_chunk(
+        ingestor_id="xlsx",
+        session_id=session_id,
+        file_id=file_id,
+        chunk_index=chunk_index,
+        request=request,
+        content_range=content_range,
+        service=service,
+    )
+
+
+@router.post("/api/ingestion/xlsx/upload-sessions/{session_id}/complete")
+def complete_xlsx_upload_session(
+    session_id: str,
+    payload: FileUploadSessionCompletePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return _complete_file_upload_session(
+        ingestor_id="xlsx",
+        session_id=session_id,
+        payload=payload,
+        service=service,
+    )
+
+
+@router.delete("/api/ingestion/xlsx/upload-sessions/{session_id}")
+def cancel_xlsx_upload_session(
+    session_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return _cancel_file_upload_session(ingestor_id="xlsx", session_id=session_id, service=service)
+
+
+@router.post("/api/ingestion/xml/upload-sessions")
+def create_xml_upload_session(
+    payload: FileUploadSessionCreatePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return _create_file_upload_session(ingestor_id="xml", payload=payload, service=service)
+
+
+@router.get("/api/ingestion/xml/upload-sessions/{session_id}")
+def xml_upload_session_state(
+    session_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return _file_upload_session_state(ingestor_id="xml", session_id=session_id, service=service)
+
+
+@router.put("/api/ingestion/xml/upload-sessions/{session_id}/files/{file_id}/chunks/{chunk_index}")
+async def append_xml_upload_session_chunk(
+    session_id: str,
+    file_id: str,
+    chunk_index: int,
+    request: Request,
+    content_range: str | None = Header(default=None, alias="Content-Range"),
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return await _append_file_upload_session_chunk(
+        ingestor_id="xml",
+        session_id=session_id,
+        file_id=file_id,
+        chunk_index=chunk_index,
+        request=request,
+        content_range=content_range,
+        service=service,
+    )
+
+
+@router.post("/api/ingestion/xml/upload-sessions/{session_id}/complete")
+def complete_xml_upload_session(
+    session_id: str,
+    payload: FileUploadSessionCompletePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return _complete_file_upload_session(
+        ingestor_id="xml",
+        session_id=session_id,
+        payload=payload,
+        service=service,
+    )
+
+
+@router.delete("/api/ingestion/xml/upload-sessions/{session_id}")
+def cancel_xml_upload_session(
+    session_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return _cancel_file_upload_session(ingestor_id="xml", session_id=session_id, service=service)
 
 
 @router.post("/api/local-workspace/query-sources/sync")

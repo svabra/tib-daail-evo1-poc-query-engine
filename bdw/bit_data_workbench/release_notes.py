@@ -1,9 +1,27 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.7.13. Keep entries concise and
+# Derived from git history through version 0.7.14. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.7.14",
+        "releasedAt": "2026-05-07T14:33:25+02:00",
+        "features": [
+            (
+                "The Ingestion Workbench now offers dedicated Parquet, JSON/JSONL/NDJSON, Excel XLSX, "
+                "and simple XML ingestors alongside CSV, with direct-file and ZIP upload support for each format."
+            ),
+            (
+                "Shared ZIP extraction, upload sessions, and destination writers now keep each ingestor isolated "
+                "while preserving one S3 object or PostgreSQL table per uploaded file or archive member."
+            ),
+            (
+                "The ingestion landing page now includes search, clearer format guidance, and browser regression "
+                "smokes covering direct and ZIP imports to Shared Workspace S3 and PostgreSQL for every file ingestor."
+            ),
+        ],
+    },
     {
         "version": "0.7.13",
         "releasedAt": "2026-05-07T12:01:05+02:00",

@@ -110,6 +110,10 @@ export function createCsvIngestionController(helpers) {
     return document.querySelector(".ingestion-entry-grid");
   }
 
+  function entrySearch() {
+    return document.querySelector(".ingestion-entry-search");
+  }
+
   function previewRoot() {
     return document.querySelector("[data-csv-preview-root]");
   }
@@ -883,6 +887,10 @@ export function createCsvIngestionController(helpers) {
     const grid = entryGrid();
     if (grid) {
       grid.hidden = Boolean(activeEntryId);
+    }
+    const search = entrySearch();
+    if (search) {
+      search.hidden = Boolean(activeEntryId);
     }
 
     document.querySelectorAll("[data-ingestion-tile]").forEach((tile) => {

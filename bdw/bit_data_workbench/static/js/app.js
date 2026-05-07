@@ -20,6 +20,7 @@ import { createIngestionController } from "./ingestion-controller.js";
 import { createIngestionUi } from "./ingestion-ui.js";
 import { createHomeUi } from "./home-ui.js";
 import { createCsvIngestionController } from "./ingestion-types/csv/index.js";
+import { createFileIngestionController } from "./ingestion-types/file/index.js";
 import { createDataProductsController } from "./data-products-controller.js";
 import { createDataProductsSampleContracts } from "./data-products-sample-contracts.js";
 import { createDataProductsUi } from "./data-products-ui.js";
@@ -811,6 +812,26 @@ const {
   openQueryWorkbench,
   querySourceInNewNotebook,
   refreshSidebar,
+  renderLocalWorkspaceSidebarEntries,
+  saveLocalWorkspaceExport,
+  showMessageDialog,
+});
+
+const {
+  handleFileDragLeave,
+  handleFileDragOver,
+  handleFileDrop,
+  handleFileIngestionChange,
+  handleFileIngestionInput,
+  renderFileIngestionWorkbench,
+  submitFileIngestionForm,
+} = createFileIngestionController({
+  ensureLocalWorkspaceFolderPath,
+  escapeHtml,
+  formatByteCount,
+  localWorkspaceDisplayPath,
+  localWorkspaceRelation,
+  normalizeLocalWorkspaceFolderPath,
   renderLocalWorkspaceSidebarEntries,
   saveLocalWorkspaceExport,
   showMessageDialog,
@@ -7040,6 +7061,21 @@ document.body.addEventListener(
       return;
     }
 
+    const fileIngestionForm = event.target.closest("[data-file-ingestion-form]");
+    if (fileIngestionForm) {
+      event.preventDefault();
+      try {
+        await submitFileIngestionForm(fileIngestionForm);
+      } catch (error) {
+        console.error("Failed to import files.", error);
+        await showMessageDialog({
+          title: "File import failed",
+          copy: error instanceof Error ? error.message : "The files could not be imported.",
+        });
+      }
+      return;
+    }
+
     const resultExportForm = event.target.closest("[data-result-export-form]");
     if (resultExportForm) {
       event.preventDefault();
@@ -7393,6 +7429,10 @@ document.body.addEventListener("input", (event) => {
     return;
   }
 
+  if (handleFileIngestionInput(event)) {
+    return;
+  }
+
   if (handleNotebookWorkspaceInput(event)) {
     return;
   }
@@ -7514,6 +7554,10 @@ document.body.addEventListener("change", async (event) => {
     return;
   }
 
+  if (handleFileIngestionChange(event)) {
+    return;
+  }
+
   if (handleNotebookWorkspaceChange(event)) {
     return;
   }
@@ -7588,15 +7632,23 @@ document.body.addEventListener("dragover", (event) => {
     return;
   }
 
+  if (handleFileDragOver(event)) {
+    return;
+  }
+
   handleNotebookDragOver(event);
 });
 
 document.body.addEventListener("dragleave", (event) => {
   handleCsvDragLeave(event);
+  handleFileDragLeave(event);
 });
 
 document.body.addEventListener("drop", (event) => {
-  handleCsvDrop(event);
+  if (handleCsvDrop(event)) {
+    return;
+  }
+  handleFileDrop(event);
 });
 
 document.body.addEventListener("drop", (event) => {
@@ -7836,6 +7888,7 @@ Promise.allSettled(initialLoadTasks)
 
     if (initialWorkspaceMode === "ingestion") {
       showIngestionLanding();
+      renderFileIngestionWorkbench();
       renderQueryNotificationMenu();
       return;
     }

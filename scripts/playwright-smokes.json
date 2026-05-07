@@ -56,6 +56,31 @@
       "enabledByDefault": false
     },
     {
+      "id": "csv-zip-ingestion-real-backend",
+      "script": "playwright_csv_zip_ingestion_real_backend_smoke.py",
+      "enabledByDefault": false
+    },
+    {
+      "id": "parquet-ingestion-real-backend",
+      "script": "playwright_parquet_ingestion_real_backend_smoke.py",
+      "enabledByDefault": false
+    },
+    {
+      "id": "json-ingestion-real-backend",
+      "script": "playwright_json_ingestion_real_backend_smoke.py",
+      "enabledByDefault": false
+    },
+    {
+      "id": "xlsx-ingestion-real-backend",
+      "script": "playwright_xlsx_ingestion_real_backend_smoke.py",
+      "enabledByDefault": false
+    },
+    {
+      "id": "xml-ingestion-real-backend",
+      "script": "playwright_xml_ingestion_real_backend_smoke.py",
+      "enabledByDefault": false
+    },
+    {
       "id": "loader-workbench",
       "script": "playwright_loader_workbench_smoke.py",
       "enabledByDefault": true

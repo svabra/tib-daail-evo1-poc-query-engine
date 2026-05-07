@@ -8,11 +8,26 @@
     </div>
   </header>
 
+  <section class="ingestion-entry-search" aria-label="Filter ingestion tools">
+    <label class="result-export-field">
+      <span class="result-export-field-label">Search ingestors</span>
+      <input
+        class="modal-input"
+        type="search"
+        data-ingestion-search-input
+        placeholder="Filter by format, extension, or description"
+        autocomplete="off"
+      >
+    </label>
+    <p class="ingestion-empty" data-ingestion-no-matches hidden>No ingestors match this search.</p>
+  </section>
+
   <section class="ingestion-entry-grid" aria-label="Ingestion tools">
     <button
       type="button"
       class="home-workbench-card ingestion-entry-tile"
       data-ingestion-tile="csv"
+      data-ingestion-search-text="csv files comma separated values .csv .zip spreadsheet table"
       aria-pressed="false"
       aria-controls="csv-ingestion-panel"
     >
@@ -27,14 +42,43 @@
       </span>
       <span class="home-workbench-title">CSV Files</span>
       <span class="home-workbench-copy">
-        Drag and drop one or more CSV files, map them to a destination, and ingest them directly into the selected data source.
+        Drag and drop CSV or ZIP files, map them to a destination, and ingest them directly into the selected data source.
       </span>
     </button>
+    {% set file_ingestors = [
+      {
+        "id": "parquet",
+        "title": "Parquet Files",
+        "copy": "Import direct Parquet files or ZIP archives containing Parquet files. Preferred for repeated analytical scans.",
+        "search": "parquet files .parquet .zip columnar analytics analytical scans",
+      },
+      {
+        "id": "json",
+        "title": "JSON Files",
+        "copy": "Import JSON, JSONL, NDJSON, or ZIP archives. JSONL and NDJSON are preferred for larger datasets.",
+        "search": "json files jsonl ndjson .json .jsonl .ndjson .zip duckdb automatic inference",
+      },
+      {
+        "id": "xlsx",
+        "title": "Excel Files",
+        "copy": "Import XLSX files or ZIP archives containing XLSX files using the active worksheet.",
+        "search": "excel xlsx files .xlsx .zip spreadsheet active worksheet formulas stored values",
+      },
+      {
+        "id": "xml",
+        "title": "XML Files",
+        "copy": "Import simple table-like XML files or ZIP archives containing XML files.",
+        "search": "xml files .xml .zip simple repeated row elements root columns",
+      },
+    ] %}
+    {% for ingestor in file_ingestors %}
     <button
       type="button"
-      class="home-workbench-card ingestion-entry-tile ingestion-entry-tile-disabled"
-      disabled
-      title="Additional ingestion flows will be added here."
+      class="home-workbench-card ingestion-entry-tile"
+      data-ingestion-tile="{{ ingestor.id }}"
+      data-ingestion-search-text="{{ ingestor.search }}"
+      aria-pressed="false"
+      aria-controls="{{ ingestor.id }}-ingestion-panel"
     >
       <span class="home-workbench-icon" aria-hidden="true">
         <svg viewBox="0 0 24 24">
@@ -44,11 +88,12 @@
           <path d="M7.2 15.8h6.2"></path>
         </svg>
       </span>
-      <span class="home-workbench-title">More Ingestors</span>
+      <span class="home-workbench-title">{{ ingestor.title }}</span>
       <span class="home-workbench-copy">
-        JSON, Parquet, and pipeline-based ingestion flows will land here after the CSV path is stable.
+        {{ ingestor.copy }}
       </span>
     </button>
+    {% endfor %}
   </section>
 
   <section
@@ -332,4 +377,236 @@
       </div>
     </form>
   </section>
+
+  {% set file_ingestor_panels = [
+    {
+      "id": "parquet",
+      "title": "Parquet Import",
+      "step_title": "Choose Parquet files",
+      "dropzone": "Drop Parquet or ZIP files here",
+      "empty": "No Parquet or ZIP files selected yet.",
+      "accept": ".parquet,.zip,application/vnd.apache.parquet,application/zip",
+      "extensions": ".parquet",
+      "format": "Parquet",
+      "submit": "Import Parquet files",
+      "tooltip": "Parquet is imported directly and is the preferred format for repeated analytical scans.",
+      "table_prefix": "parquet_",
+    },
+    {
+      "id": "json",
+      "title": "JSON Import",
+      "step_title": "Choose JSON files",
+      "dropzone": "Drop JSON, JSONL, NDJSON, or ZIP files here",
+      "empty": "No JSON or ZIP files selected yet.",
+      "accept": ".json,.jsonl,.ndjson,.zip,application/json,application/x-ndjson,application/zip",
+      "extensions": ".json, .jsonl, .ndjson",
+      "format": "JSON",
+      "submit": "Import JSON files",
+      "tooltip": "JSON support uses DuckDB automatic JSON inference. JSONL/NDJSON is preferred for large datasets.",
+      "table_prefix": "json_",
+    },
+    {
+      "id": "xlsx",
+      "title": "Excel Import",
+      "step_title": "Choose Excel files",
+      "dropzone": "Drop Excel or ZIP files here",
+      "empty": "No Excel or ZIP files selected yet.",
+      "accept": ".xlsx,.zip,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/zip",
+      "extensions": ".xlsx",
+      "format": "Excel",
+      "submit": "Import Excel files",
+      "tooltip": "Excel support imports the active worksheet only. The first non-empty row becomes the header row; following non-empty rows become records. Formulas are read as stored values.",
+      "table_prefix": "xlsx_",
+    },
+    {
+      "id": "xml",
+      "title": "XML Import",
+      "step_title": "Choose XML files",
+      "dropzone": "Drop XML or ZIP files here",
+      "empty": "No XML or ZIP files selected yet.",
+      "accept": ".xml,.zip,application/xml,text/xml,application/zip",
+      "extensions": ".xml",
+      "format": "XML",
+      "submit": "Import XML files",
+      "tooltip": "XML support expects a simple table-like document: one root element containing repeated row elements, where each row has child elements that become columns. Attributes, deeply nested structures, mixed content, and multiple unrelated record types are not mapped in this first version.",
+      "table_prefix": "xml_",
+    },
+  ] %}
+  {% for ingestor in file_ingestor_panels %}
+  <section
+    id="{{ ingestor.id }}-ingestion-panel"
+    class="ingestion-workbench-section ingestion-csv-panel"
+    data-ingestion-entry-panel="{{ ingestor.id }}"
+    hidden
+  >
+    <div class="ingestion-workbench-section-header ingestion-csv-panel-header">
+      <div>
+        <h3>{{ ingestor.title }}</h3>
+        <p>
+          Work step by step: choose files, review the format rule, choose a destination, then import.
+          <span
+            class="info-badge"
+            title="{{ ingestor.tooltip }}"
+            aria-label="{{ ingestor.format }} import guidance"
+            data-file-tooltip="{{ ingestor.id }}"
+          >
+            ?
+          </span>
+        </p>
+      </div>
+      <button
+        type="button"
+        class="modal-button modal-button-secondary"
+        data-close-ingestion-entry
+      >
+        Back to ingest types
+      </button>
+    </div>
+
+    <form
+      class="ingestion-csv-form"
+      data-file-ingestion-form
+      data-file-ingestor-id="{{ ingestor.id }}"
+      data-file-format-label="{{ ingestor.format }}"
+      data-file-extensions="{{ ingestor.extensions }}"
+    >
+      <div class="ingestion-csv-steps">
+        <section class="ingestion-csv-step">
+          <div class="ingestion-csv-step-header">
+            <span class="workspace-tags-label">Step 1</span>
+            <h4>{{ ingestor.step_title }}</h4>
+          </div>
+          <label class="ingestion-csv-dropzone" data-file-dropzone>
+            <input
+              type="file"
+              accept="{{ ingestor.accept }}"
+              multiple
+              data-file-input
+              hidden
+            >
+            <strong>{{ ingestor.dropzone }}</strong>
+            <span>or click to browse from this machine</span>
+          </label>
+          <div class="ingestion-csv-file-list" data-file-list>
+            <p class="ingestion-empty">{{ ingestor.empty }}</p>
+          </div>
+        </section>
+
+        <section class="ingestion-csv-step">
+          <div class="ingestion-csv-step-header">
+            <span class="workspace-tags-label">Step 2</span>
+            <h4>Review format rule</h4>
+          </div>
+          <div class="ingestion-csv-preview" data-file-preview-root>
+            <article class="ingestion-csv-preview-card">
+              <div class="ingestion-csv-preview-header">
+                <strong>{{ ingestor.format }}</strong>
+                <span class="ingestion-csv-review-target">{{ ingestor.extensions }}</span>
+              </div>
+              <p class="ingestion-csv-preview-copy">{{ ingestor.tooltip }}</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="ingestion-csv-step">
+          <div class="ingestion-csv-step-header">
+            <span class="workspace-tags-label">Step 3</span>
+            <h4>Choose destination</h4>
+          </div>
+          <div class="ingestion-csv-target-grid">
+            <label class="ingestion-csv-target-card">
+              <input type="radio" name="{{ ingestor.id }}_target_id" value="workspace.local" data-file-target-option checked>
+              <span class="ingestion-csv-target-title">Local Workspace (IndexDB)</span>
+              <span class="ingestion-csv-target-copy">Store the raw files in this browser using IndexedDB.</span>
+            </label>
+            <label class="ingestion-csv-target-card">
+              <input type="radio" name="{{ ingestor.id }}_target_id" value="workspace.s3" data-file-target-option>
+              <span class="ingestion-csv-target-title">Shared Workspace S3</span>
+              <span class="ingestion-csv-target-copy">Upload into a bucket and optional object key prefix in Shared Workspace S3.</span>
+            </label>
+            <label class="ingestion-csv-target-card">
+              <input type="radio" name="{{ ingestor.id }}_target_id" value="pg_oltp" data-file-target-option>
+              <span class="ingestion-csv-target-title">PostgreSQL OLTP</span>
+              <span class="ingestion-csv-target-copy">Create tables in the transactional PostgreSQL instance.</span>
+            </label>
+            <label class="ingestion-csv-target-card">
+              <input type="radio" name="{{ ingestor.id }}_target_id" value="pg_olap" data-file-target-option>
+              <span class="ingestion-csv-target-title">PostgreSQL OLAP</span>
+              <span class="ingestion-csv-target-copy">Create tables in the analytical PostgreSQL instance.</span>
+            </label>
+          </div>
+        </section>
+
+        <section class="ingestion-csv-step">
+          <div class="ingestion-csv-step-header">
+            <span class="workspace-tags-label">Step 4</span>
+            <h4>Configure destination</h4>
+          </div>
+          <div class="ingestion-csv-target-config" data-file-config-root>
+            <div class="ingestion-csv-config-panel" data-file-config-panel="workspace.local">
+              <label class="result-export-field">
+                <span class="result-export-field-label">Local Workspace (IndexDB) folder</span>
+                <input class="modal-input" type="text" data-file-folder-path placeholder="optional/subfolder">
+              </label>
+            </div>
+            <div class="ingestion-csv-config-panel" data-file-config-panel="workspace.s3" hidden>
+              <label class="result-export-field">
+                <span class="result-export-field-label">Bucket</span>
+                <input class="modal-input" type="text" data-file-s3-bucket placeholder="file-imports">
+              </label>
+              <label class="result-export-field">
+                <span class="result-export-field-label ingestion-csv-storage-format-label">
+                  <span>Object key prefix</span>
+                  <span
+                    class="info-badge"
+                    title="Applied as literal S3 key text before the object name. S3 does not create real directories here."
+                    aria-label="Object key prefix guidance"
+                  >
+                    ?
+                  </span>
+                </span>
+                <input class="modal-input" type="text" data-file-s3-prefix placeholder="incoming/2026-04">
+              </label>
+            </div>
+            <div class="ingestion-csv-config-panel" data-file-config-panel="pg_oltp" hidden>
+              <label class="result-export-field">
+                <span class="result-export-field-label">Schema</span>
+                <input class="modal-input" type="text" data-file-schema-name placeholder="public" value="public">
+              </label>
+              <label class="result-export-field">
+                <span class="result-export-field-label">Table prefix</span>
+                <input class="modal-input" type="text" data-file-table-prefix placeholder="{{ ingestor.table_prefix }}">
+              </label>
+            </div>
+            <div class="ingestion-csv-config-panel" data-file-config-panel="pg_olap" hidden>
+              <label class="result-export-field">
+                <span class="result-export-field-label">Schema</span>
+                <input class="modal-input" type="text" data-file-schema-name placeholder="public" value="public">
+              </label>
+              <label class="result-export-field">
+                <span class="result-export-field-label">Table prefix</span>
+                <input class="modal-input" type="text" data-file-table-prefix placeholder="{{ ingestor.table_prefix }}">
+              </label>
+            </div>
+          </div>
+        </section>
+
+        <section class="ingestion-csv-step">
+          <div class="ingestion-csv-step-header">
+            <span class="workspace-tags-label">Step 5</span>
+            <h4>Import and review</h4>
+          </div>
+          <div class="ingestion-csv-review" data-file-review-list>
+            <p class="ingestion-empty">Select files to see the resolved destination names.</p>
+          </div>
+          <div class="ingestion-csv-actions">
+            <button type="submit" class="modal-button" data-file-import-submit disabled>{{ ingestor.submit }}</button>
+            <div class="ingestion-csv-upload-progress" data-file-upload-progress hidden></div>
+          </div>
+          <div class="ingestion-csv-results" data-file-result-list hidden></div>
+        </section>
+      </div>
+    </form>
+  </section>
+  {% endfor %}
 </article>

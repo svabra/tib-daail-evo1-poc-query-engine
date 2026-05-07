@@ -12,6 +12,7 @@ from .version_info import runtime_image_version
 
 DEFAULT_INGESTION_UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024
 DEFAULT_INGESTION_UPLOAD_MAX_BYTES = 30 * 1024 * 1024 * 1024
+DEFAULT_INGESTION_TABULAR_CONVERSION_MAX_BYTES = 512 * 1024 * 1024
 
 WORKBENCH_ENVIRONMENT_VARIABLES = (
     "BDW_ENABLE_FILE_LOGGING",
@@ -548,6 +549,7 @@ class Settings:
     ingestion_upload_max_archive_bytes: int = DEFAULT_INGESTION_UPLOAD_MAX_BYTES
     ingestion_upload_max_csv_bytes: int = DEFAULT_INGESTION_UPLOAD_MAX_BYTES
     ingestion_upload_max_extracted_bytes: int = DEFAULT_INGESTION_UPLOAD_MAX_BYTES
+    ingestion_tabular_conversion_max_bytes: int = DEFAULT_INGESTION_TABULAR_CONVERSION_MAX_BYTES
     ingestion_upload_session_ttl_hours: int = 24
     ingestion_zip_max_entries: int = 100
     ingestion_zip_max_expansion_ratio: float = 100.0
@@ -646,6 +648,13 @@ class Settings:
                 env_int(
                     "BDW_INGESTION_UPLOAD_MAX_EXTRACTED_BYTES",
                     DEFAULT_INGESTION_UPLOAD_MAX_BYTES,
+                ),
+            ),
+            ingestion_tabular_conversion_max_bytes=max(
+                1,
+                env_int(
+                    "BDW_INGESTION_TABULAR_CONVERSION_MAX_BYTES",
+                    DEFAULT_INGESTION_TABULAR_CONVERSION_MAX_BYTES,
                 ),
             ),
             ingestion_upload_session_ttl_hours=max(

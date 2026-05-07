@@ -8,6 +8,7 @@ const UINT16_MAX = 0xffff;
 const UINT32_MAX = 0xffffffff;
 const MAX_ARCHIVE_BYTES = 30 * 1024 * 1024 * 1024;
 const MAX_CSV_BYTES = 30 * 1024 * 1024 * 1024;
+const MAX_TABULAR_CONVERSION_BYTES = 512 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES = 30 * 1024 * 1024 * 1024;
 const MAX_ENTRIES = 100;
 const MAX_EXPANSION_RATIO = 100;
@@ -119,7 +120,23 @@ function parseZip64Extra(extraBytes, entry) {
   return entry;
 }
 
-function safeCsvEntryName(rawName) {
+function normalizeZipReaderOptions(options = {}) {
+  const allowedExtensions = Array.isArray(options.allowedExtensions)
+    ? options.allowedExtensions
+        .map((extension) => String(extension || "").trim().toLowerCase())
+        .filter(Boolean)
+    : [".csv"];
+  return {
+    allowedExtensions: allowedExtensions.length ? allowedExtensions : [".csv"],
+    formatLabel: String(options.formatLabel || "CSV").trim() || "CSV",
+    mimeType: String(options.mimeType || "text/csv").trim() || "application/octet-stream",
+    maxEntryBytes: Number(options.maxEntryBytes || MAX_CSV_BYTES),
+    maxExtractedBytes: Number(options.maxExtractedBytes || MAX_EXTRACTED_BYTES),
+    maxEntries: Number(options.maxEntries || MAX_ENTRIES),
+  };
+}
+
+function safeEntryName(rawName, options) {
   const normalizedName = String(rawName || "").replace(/\\/g, "/").trim();
   if (!normalizedName) {
     throw new Error("ZIP archive contains an entry without a file name.");
@@ -132,15 +149,15 @@ function safeCsvEntryName(rawName) {
     throw new Error(`ZIP archive entry '${rawName}' uses an unsafe path.`);
   }
   const fileName = parts[parts.length - 1];
-  if (!fileName.toLowerCase().endsWith(".csv")) {
+  if (!options.allowedExtensions.some((extension) => fileName.toLowerCase().endsWith(extension))) {
     throw new Error(
-      `ZIP archive entry '${rawName}' is not a CSV file. Archives may contain directories and .csv files only.`
+      `ZIP archive entry '${rawName}' is not a supported ${options.formatLabel} file. Archives may contain directories and ${options.allowedExtensions.join(", ")} files only.`
     );
   }
   return fileName;
 }
 
-function uniqueCsvName(fileName, seen) {
+function uniqueEntryName(fileName, seen) {
   const key = fileName.toLowerCase();
   const nextIndex = seen.get(key) || 0;
   seen.set(key, nextIndex + 1);
@@ -153,7 +170,8 @@ function uniqueCsvName(fileName, seen) {
   return `${stem}_${nextIndex + 1}${suffix}`;
 }
 
-async function readZipEntries(file) {
+async function readZipEntries(file, readerOptions = {}) {
+  const options = normalizeZipReaderOptions(readerOptions);
   const centralDirectory = await readCentralDirectoryInfo(file);
   const buffer = await readSlice(
     file,
@@ -197,7 +215,7 @@ async function readZipEntries(file) {
       if ((mode & 0o170000) === 0o120000) {
         throw new Error(`ZIP archive entry '${rawName}' is a symbolic link.`);
       }
-      const safeName = uniqueCsvName(safeCsvEntryName(rawName), seen);
+      const safeName = uniqueEntryName(safeEntryName(rawName, options), seen);
       const entry = parseZip64Extra(
         new Uint8Array(buffer, extraStart, extraLength),
         {
@@ -209,8 +227,10 @@ async function readZipEntries(file) {
           localHeaderOffset: view.getUint32(offset + 42, true),
         }
       );
-      if (entry.uncompressedSize > MAX_CSV_BYTES) {
-        throw new Error(`ZIP archive entry '${rawName}' exceeds the CSV size limit.`);
+      if (entry.uncompressedSize > options.maxEntryBytes) {
+        throw new Error(
+          `ZIP archive entry '${rawName}' exceeds the ${options.formatLabel} size limit.`
+        );
       }
       if (
         entry.compressedSize > 0 &&
@@ -219,19 +239,19 @@ async function readZipEntries(file) {
         throw new Error(`ZIP archive entry '${rawName}' expands too much to be accepted.`);
       }
       totalUncompressed += entry.uncompressedSize;
-      if (totalUncompressed > MAX_EXTRACTED_BYTES) {
+      if (totalUncompressed > options.maxExtractedBytes) {
         throw new Error("The ZIP archive expands beyond the extracted-size limit.");
       }
       entries.push(entry);
-      if (entries.length > MAX_ENTRIES) {
-        throw new Error("The ZIP archive contains too many CSV files.");
+      if (entries.length > options.maxEntries) {
+        throw new Error(`The ZIP archive contains too many ${options.formatLabel} files.`);
       }
     }
     offset = nextOffset;
   }
 
   if (!entries.length) {
-    throw new Error("The ZIP archive does not contain any CSV files.");
+    throw new Error(`The ZIP archive does not contain any ${options.formatLabel} files.`);
   }
   return entries;
 }
@@ -273,19 +293,57 @@ async function inflateRawBlob(blob, entry) {
   return inflated;
 }
 
-async function extractZipEntry(file, entry) {
+async function extractZipEntry(file, entry, readerOptions = {}) {
+  const options = normalizeZipReaderOptions(readerOptions);
   const data = await entryDataSlice(file, entry);
   if (entry.compressionMethod === 0) {
     if (data.size !== entry.uncompressedSize) {
       throw new Error(`ZIP archive entry '${entry.rawName}' has an invalid stored size.`);
     }
-    return new Blob([data], { type: "text/csv" });
+    return new Blob([data], { type: options.mimeType });
   }
   return inflateRawBlob(data, entry);
 }
 
+export async function buildZipPreviewState(file, options = {}) {
+  const readerOptions = normalizeZipReaderOptions(options);
+  const entries = await readZipEntries(file, readerOptions);
+  return {
+    status: "ready",
+    fileName: file.name,
+    delimiter: "",
+    hasHeader: true,
+    columns: [],
+    rows: [],
+    error: "",
+    archiveEntryCount: entries.length,
+    archiveFormatLabel: readerOptions.formatLabel,
+  };
+}
+
+export async function readFilesFromZip(file, options = {}) {
+  const readerOptions = normalizeZipReaderOptions(options);
+  const entries = await readZipEntries(file, readerOptions);
+  const results = [];
+  let transferredBytes = 0;
+  const totalBytes = entries.reduce((sum, entry) => sum + entry.uncompressedSize, 0);
+  for (const entry of entries) {
+    const blob = await extractZipEntry(file, entry, readerOptions);
+    transferredBytes += blob.size;
+    if (typeof options.onProgress === "function") {
+      options.onProgress({ transferredBytes, totalBytes, fileName: entry.fileName });
+    }
+    results.push({
+      fileName: entry.fileName,
+      blob,
+      sizeBytes: blob.size,
+    });
+  }
+  return results;
+}
+
 export async function buildCsvZipPreviewState(file) {
-  const entries = await readZipEntries(file);
+  const entries = await readZipEntries(file, { formatLabel: "CSV", allowedExtensions: [".csv"] });
   return {
     status: "ready",
     fileName: file.name,
@@ -299,21 +357,19 @@ export async function buildCsvZipPreviewState(file) {
 }
 
 export async function readCsvFilesFromZip(file, { onProgress } = {}) {
-  const entries = await readZipEntries(file);
-  const results = [];
-  let transferredBytes = 0;
-  const totalBytes = entries.reduce((sum, entry) => sum + entry.uncompressedSize, 0);
-  for (const entry of entries) {
-    const blob = await extractZipEntry(file, entry);
-    transferredBytes += blob.size;
-    if (typeof onProgress === "function") {
-      onProgress({ transferredBytes, totalBytes, fileName: entry.fileName });
-    }
-    results.push({
-      fileName: entry.fileName,
-      blob,
-      sizeBytes: blob.size,
-    });
-  }
-  return results;
+  return readFilesFromZip(file, {
+    allowedExtensions: [".csv"],
+    formatLabel: "CSV",
+    mimeType: "text/csv",
+    maxEntryBytes: MAX_CSV_BYTES,
+    maxExtractedBytes: MAX_EXTRACTED_BYTES,
+    onProgress,
+  });
 }
+
+export const FILE_ZIP_READER_LIMITS = {
+  maxArchiveBytes: MAX_ARCHIVE_BYTES,
+  maxLargeFileBytes: MAX_CSV_BYTES,
+  maxExtractedBytes: MAX_EXTRACTED_BYTES,
+  maxTabularConversionBytes: MAX_TABULAR_CONVERSION_BYTES,
+};
