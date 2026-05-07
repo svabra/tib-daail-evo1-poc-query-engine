@@ -3,6 +3,7 @@
 ## TODO
 
 1. [AM-1] Formalize the audience model before introducing real multi-user isolation. See [AM-1] Audience Model below.
+2. [MF-1] Maintainability Foundation: see [MAINTAINABILITY_FOUNDATION_PLAN.md](MAINTAINABILITY_FOUNDATION_PLAN.md).
 
 ### [AM-1] Audience Model
 
