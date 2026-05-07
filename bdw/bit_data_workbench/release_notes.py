@@ -1,9 +1,23 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.7.14. Keep entries concise and
+# Derived from git history through version 0.8.1. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.8.1",
+        "releasedAt": "2026-05-07T14:49:22+02:00",
+        "features": [
+            (
+                "The Ingestion Workbench tiles now render the intended Parquet, JSON, Excel, and XML "
+                "taglines instead of exposing the Python dictionary copy method in the browser."
+            ),
+            (
+                "The ingestion Playwright smoke now checks every non-CSV tile tagline so this template "
+                "lookup regression is caught before release."
+            ),
+        ],
+    },
     {
         "version": "0.7.14",
         "releasedAt": "2026-05-07T14:33:25+02:00",

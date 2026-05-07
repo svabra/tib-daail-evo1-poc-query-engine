@@ -76,12 +76,31 @@ async def open_csv_ingestor(page, timeout_ms: int) -> None:
     if "DuckDB remains the query engine" not in duckdb_guidance:
         raise RuntimeError("Expected Shared Workspace storage format guidance to mention DuckDB.")
     prefix_guidance = (
-        await page.locator('[aria-label="Object key prefix guidance"]').get_attribute("title")
+        await page.locator('#csv-ingestion-panel [aria-label="Object key prefix guidance"]').get_attribute("title")
         or ""
     )
     if "literal S3 key text" not in prefix_guidance:
         raise RuntimeError("Expected object key prefix guidance to explain S3 prefix semantics.")
     await page.locator('[data-csv-target-option][value="workspace.local"]').check()
+
+
+async def assert_ingestion_tile_copy(page, timeout_ms: int) -> None:
+    expected_copy = {
+        "parquet": "Import direct Parquet files or ZIP archives containing Parquet files.",
+        "json": "Import JSON, JSONL, NDJSON, or ZIP archives.",
+        "xlsx": "Import XLSX files or ZIP archives containing XLSX files using the active worksheet.",
+        "xml": "Import simple table-like XML files or ZIP archives containing XML files.",
+    }
+    for ingestor_id, expected in expected_copy.items():
+        tile = page.locator(f'[data-ingestion-tile="{ingestor_id}"]').first
+        await tile.wait_for(state="visible", timeout=timeout_ms)
+        tile_text = (await tile.text_content() or "").strip()
+        if "built-in method copy" in tile_text:
+            raise RuntimeError(f"{ingestor_id} tile rendered a Python dict method: {tile_text!r}")
+        if expected not in tile_text:
+            raise RuntimeError(
+                f"{ingestor_id} tile copy is missing expected text {expected!r}: {tile_text!r}"
+            )
 
 
 async def assert_ingestion_returns_to_landing_after_navigation(page, timeout_ms: int) -> None:
@@ -841,6 +860,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
 
         try:
             await open_ingestion_workbench(page, args.base_url, args.timeout_ms)
+            await assert_ingestion_tile_copy(page, args.timeout_ms)
             await assert_ingestion_returns_to_landing_after_navigation(page, args.timeout_ms)
             await open_csv_ingestor(page, args.timeout_ms)
             await reject_invalid_csv_file(page, args.timeout_ms)
