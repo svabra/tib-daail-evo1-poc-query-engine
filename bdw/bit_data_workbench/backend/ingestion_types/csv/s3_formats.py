@@ -93,20 +93,76 @@ def _convert_csv_file_for_s3_storage(
 
     connection = duckdb.connect(":memory:")
     try:
-        read_options = [f"HEADER = {'TRUE' if has_header else 'FALSE'}"]
-        normalized_delimiter = normalize_csv_delimiter(delimiter)
-        if normalized_delimiter:
-            read_options.append(f"DELIM = {sql_literal(normalized_delimiter)}")
-        source_sql = (
-            f"SELECT * FROM read_csv_auto({sql_literal(source_path.as_posix())}, "
-            f"{', '.join(read_options)})"
-        )
-        if normalized_storage_format == "parquet":
-            copy_options = "FORMAT PARQUET, COMPRESSION ZSTD"
-        else:
-            copy_options = "FORMAT JSON"
-        connection.execute(
-            f"COPY ({source_sql}) TO {sql_literal(target_path.as_posix())} ({copy_options})"
-        )
+        try:
+            _copy_csv_to_storage_format(
+                connection=connection,
+                source_path=source_path,
+                target_path=target_path,
+                storage_format=normalized_storage_format,
+                delimiter=delimiter,
+                has_header=has_header,
+                all_varchar=False,
+            )
+        except duckdb.Error as exc:
+            if not _should_retry_csv_conversion_as_varchar(exc):
+                raise
+            target_path.unlink(missing_ok=True)
+            _copy_csv_to_storage_format(
+                connection=connection,
+                source_path=source_path,
+                target_path=target_path,
+                storage_format=normalized_storage_format,
+                delimiter=delimiter,
+                has_header=has_header,
+                all_varchar=True,
+            )
     finally:
         connection.close()
+
+
+def _copy_csv_to_storage_format(
+    *,
+    connection: duckdb.DuckDBPyConnection,
+    source_path: Path,
+    target_path: Path,
+    storage_format: str,
+    delimiter: str,
+    has_header: bool,
+    all_varchar: bool,
+) -> None:
+    read_options = ", ".join(
+        _csv_reader_options(
+            delimiter=delimiter,
+            has_header=has_header,
+            all_varchar=all_varchar,
+        )
+    )
+    source_sql = (
+        f"SELECT * FROM read_csv_auto({sql_literal(source_path.as_posix())}, "
+        f"{read_options})"
+    )
+    if storage_format == "parquet":
+        copy_options = "FORMAT PARQUET, COMPRESSION ZSTD"
+    else:
+        copy_options = "FORMAT JSON"
+    connection.execute(
+        f"COPY ({source_sql}) TO {sql_literal(target_path.as_posix())} ({copy_options})"
+    )
+
+
+def _csv_reader_options(*, delimiter: str, has_header: bool, all_varchar: bool) -> list[str]:
+    options = [
+        f"HEADER = {'TRUE' if has_header else 'FALSE'}",
+        "SAMPLE_SIZE = -1",
+    ]
+    normalized_delimiter = normalize_csv_delimiter(delimiter)
+    if normalized_delimiter:
+        options.append(f"DELIM = {sql_literal(normalized_delimiter)}")
+    if all_varchar:
+        options.append("ALL_VARCHAR = TRUE")
+    return options
+
+
+def _should_retry_csv_conversion_as_varchar(exc: duckdb.Error) -> bool:
+    message = str(exc).lower()
+    return "conversion error" in message and "csv error" in message

@@ -83,6 +83,14 @@ class S3ObjectDownloadArtifact:
     content_type: str
 
 
+@dataclass(slots=True)
+class S3ObjectDownloadStream:
+    body: object
+    filename: str
+    content_type: str
+    content_length: int | None
+
+
 class S3ExplorerManager:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -268,6 +276,35 @@ class S3ExplorerManager:
             cleanup_dir=temp_dir,
             filename=filename,
             content_type=content_type,
+        )
+
+    def stream_object(
+        self,
+        *,
+        bucket: str,
+        key: str,
+        file_name: str = "",
+    ) -> S3ObjectDownloadStream:
+        self._ensure_configured()
+        normalized_bucket = normalize_s3_bucket_name(bucket)
+        normalized_key = normalize_s3_object_key(key)
+        filename = normalize_s3_object_filename(file_name, fallback_key=normalized_key)
+        response = s3_client(self._settings).get_object(
+            Bucket=normalized_bucket,
+            Key=normalized_key,
+        )
+        content_type = (
+            str(response.get("ContentType") or "").strip()
+            or mimetypes.guess_type(filename)[0]
+            or "application/octet-stream"
+        )
+        raw_content_length = response.get("ContentLength")
+        content_length = int(raw_content_length) if raw_content_length is not None else None
+        return S3ObjectDownloadStream(
+            body=response["Body"],
+            filename=filename,
+            content_type=content_type,
+            content_length=content_length,
         )
 
     def delete_entry(

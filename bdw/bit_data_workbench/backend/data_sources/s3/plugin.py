@@ -51,3 +51,6 @@ class S3DataSourcePlugin(DataSourcePlugin):
 
     def download_object(self, *, bucket: str, key: str, file_name: str = ""):
         return self._explorer.download_object(bucket=bucket, key=key, file_name=file_name)
+
+    def stream_object(self, *, bucket: str, key: str, file_name: str = ""):
+        return self._explorer.stream_object(bucket=bucket, key=key, file_name=file_name)

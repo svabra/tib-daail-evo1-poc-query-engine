@@ -1,9 +1,23 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.8.1. Keep entries concise and
+# Derived from git history through version 0.8.2. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.8.2",
+        "releasedAt": "2026-05-07T15:10:49+02:00",
+        "features": [
+            (
+                "Shared Workspace S3 downloads now stream CSV objects directly from S3 instead of staging "
+                "the full file locally first, making GiB-scale CSV downloads reliable through the browser."
+            ),
+            (
+                "CSV-to-Parquet ingestion now handles late CSV type drift by using full-file DuckDB inference "
+                "and a VARCHAR retry path, with browser smokes covering S3 downloads and Parquet conversion."
+            ),
+        ],
+    },
     {
         "version": "0.8.1",
         "releasedAt": "2026-05-07T14:49:22+02:00",

@@ -911,6 +911,9 @@ class WorkbenchService:
     def download_s3_object(self, *, bucket: str, key: str, file_name: str = ""):
         return self._s3_plugin.download_object(bucket=bucket, key=key, file_name=file_name)
 
+    def stream_s3_object(self, *, bucket: str, key: str, file_name: str = ""):
+        return self._s3_plugin.stream_object(bucket=bucket, key=key, file_name=file_name)
+
     def source_object_ddl(
         self,
         *,

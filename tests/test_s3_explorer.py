@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 from pathlib import Path
 import sys
 from unittest.mock import patch
@@ -21,6 +22,30 @@ class _ConfiguredSettings:
 
     def current_s3_secret_access_key(self) -> str:
         return "secret"
+
+
+class _TrackingBody(io.BytesIO):
+    def __init__(self, payload: bytes) -> None:
+        super().__init__(payload)
+        self.was_closed = False
+
+    def close(self) -> None:
+        self.was_closed = True
+        super().close()
+
+
+class _FakeS3Client:
+    def __init__(self, body: _TrackingBody) -> None:
+        self.body = body
+        self.get_object_calls: list[dict[str, str]] = []
+
+    def get_object(self, **kwargs):
+        self.get_object_calls.append(dict(kwargs))
+        return {
+            "Body": self.body,
+            "ContentLength": len(self.body.getvalue()),
+            "ContentType": "text/csv",
+        }
 
 
 def import_s3_explorer():
@@ -56,3 +81,31 @@ def test_create_bucket_normalizes_valid_bucket_name() -> None:
 
     ensure_s3_bucket.assert_called_once_with(manager._settings, "client-bucket")
     assert created.bucket == "client-bucket"
+
+
+def test_stream_object_returns_s3_body_without_temp_file_download() -> None:
+    explorer = import_s3_explorer()
+    manager = explorer.S3ExplorerManager(_ConfiguredSettings())
+    body = _TrackingBody(b"id,name\n1,alpha\n")
+    fake_client = _FakeS3Client(body)
+
+    with patch.object(explorer, "s3_client", return_value=fake_client), patch.object(
+        explorer,
+        "download_s3_file",
+    ) as download_s3_file:
+        artifact = manager.stream_object(
+            bucket="client-bucket",
+            key="exports/large.csv",
+            file_name="",
+        )
+
+    download_s3_file.assert_not_called()
+    assert fake_client.get_object_calls == [
+        {"Bucket": "client-bucket", "Key": "exports/large.csv"}
+    ]
+    assert artifact.filename == "large.csv"
+    assert artifact.content_type == "text/csv"
+    assert artifact.content_length == len(b"id,name\n1,alpha\n")
+    assert artifact.body.read() == b"id,name\n1,alpha\n"
+    artifact.body.close()
+    assert body.was_closed

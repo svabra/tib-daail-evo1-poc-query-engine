@@ -248,17 +248,42 @@ def download_s3_object(
     key: str = Query(""),
     file_name: str = Query(default="", alias="filename"),
     service: WorkbenchService = Depends(get_workbench_service),
-) -> FileResponse:
+) -> StreamingResponse:
     try:
-        artifact = service.download_s3_object(bucket=bucket, key=key, file_name=file_name)
+        artifact = service.stream_s3_object(bucket=bucket, key=key, file_name=file_name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return FileResponse(
-        path=artifact.local_path,
+    def iter_object_body():
+        try:
+            while True:
+                chunk = artifact.body.read(1024 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            artifact.body.close()
+
+    fallback_filename = (
+        artifact.filename.encode("ascii", "ignore")
+        .decode("ascii")
+        .replace("\\", "_")
+        .replace('"', "_")
+        or "download"
+    )
+    headers = {
+        "Content-Disposition": (
+            f"attachment; filename=\"{fallback_filename}\"; "
+            f"filename*=UTF-8''{quote(artifact.filename, safe='')}"
+        )
+    }
+    if artifact.content_length is not None:
+        headers["Content-Length"] = str(artifact.content_length)
+
+    return StreamingResponse(
+        iter_object_body(),
         media_type=artifact.content_type,
-        filename=artifact.filename,
-        background=BackgroundTask(shutil.rmtree, artifact.cleanup_dir, True),
+        headers=headers,
     )
 
 

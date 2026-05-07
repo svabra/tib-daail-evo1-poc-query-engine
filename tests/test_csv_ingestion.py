@@ -592,6 +592,56 @@ class CsvIngestionManagerTests(TestCase):
             [("id", "BIGINT"), ("name", "VARCHAR")],
         )
 
+    def test_import_csv_files_to_s3_parquet_handles_late_string_type_drift(self) -> None:
+        fake_client = FakeS3Client()
+        manager = CsvIngestionManager(
+            settings=make_settings(),
+            postgres_connection_factory=lambda target: None,
+            s3_client_factory=lambda settings: fake_client,
+        )
+        rows = ["id,DOCO_AuslPositionStatistik\n"]
+        rows.extend(f"{index},{index}\n" for index in range(25_000))
+        rows.append("25000,H\n")
+        upload = FakeUpload("KBPO2020.csv", "".join(rows).encode("utf-8"))
+
+        with patch(
+            "bit_data_workbench.backend.ingestion_types.csv.manager.ensure_s3_bucket"
+        ):
+            payload = manager.import_csv_files(
+                files=[upload],
+                target_id="workspace.s3",
+                bucket="csv-imports",
+                prefix="incoming/april",
+                delimiter=",",
+                has_header=True,
+                storage_format="parquet",
+            )
+
+        self.assertEqual(payload["importedCount"], 1)
+        self.assertEqual(payload["failedCount"], 0)
+        with TemporaryDirectory() as temp_dir:
+            parquet_path = Path(temp_dir) / "uploaded.parquet"
+            parquet_path.write_bytes(fake_client.uploads[0][4])
+            connection = duckdb.connect(":memory:")
+            try:
+                column_type = connection.execute(
+                    f"""
+                    DESCRIBE SELECT DOCO_AuslPositionStatistik
+                    FROM read_parquet('{parquet_path.as_posix()}')
+                    """
+                ).fetchone()[1]
+                last_value = connection.execute(
+                    f"""
+                    SELECT DOCO_AuslPositionStatistik
+                    FROM read_parquet('{parquet_path.as_posix()}')
+                    WHERE CAST(id AS VARCHAR) = '25000'
+                    """
+                ).fetchone()[0]
+            finally:
+                connection.close()
+        self.assertEqual(column_type, "VARCHAR")
+        self.assertEqual(last_value, "H")
+
     def test_import_csv_files_to_s3_converts_csv_to_jsonl_before_upload(self) -> None:
         fake_client = FakeS3Client()
         manager = CsvIngestionManager(

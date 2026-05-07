@@ -46,6 +46,11 @@
       "enabledByDefault": true
     },
     {
+      "id": "s3-csv-download",
+      "script": "playwright_s3_csv_download_smoke.py",
+      "enabledByDefault": false
+    },
+    {
       "id": "local-workspace-query-handoff",
       "script": "playwright_local_workspace_query_handoff_smoke.py",
       "enabledByDefault": true
@@ -58,6 +63,11 @@
     {
       "id": "csv-zip-ingestion-real-backend",
       "script": "playwright_csv_zip_ingestion_real_backend_smoke.py",
+      "enabledByDefault": false
+    },
+    {
+      "id": "csv-to-parquet-real-backend",
+      "script": "playwright_csv_to_parquet_ingestion_real_backend_smoke.py",
       "enabledByDefault": false
     },
     {

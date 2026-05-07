@@ -1,8 +1,9 @@
-from .explorer import S3ExplorerManager, S3ObjectDownloadArtifact
+from .explorer import S3ExplorerManager, S3ObjectDownloadArtifact, S3ObjectDownloadStream
 from .plugin import S3DataSourcePlugin
 
 __all__ = [
     "S3DataSourcePlugin",
     "S3ExplorerManager",
     "S3ObjectDownloadArtifact",
+    "S3ObjectDownloadStream",
 ]
