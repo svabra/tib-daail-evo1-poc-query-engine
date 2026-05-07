@@ -1,0 +1,21 @@
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = [
+    ".local",
+    ".tmp-pytest",
+    ".venv",
+    "bdw/bit_data_workbench/static/vendor",
+    "logs",
+    "pytest-cache-files-*",
+    "workspace",
+]
+
+[tool.ruff.lint]
+select = [
+    "E9",
+    "F",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["bit_data_workbench"]

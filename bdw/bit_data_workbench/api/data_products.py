@@ -1,16 +1,11 @@
 from __future__ import annotations
 
-from typing import Any
-
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from ..backend.data_products import (
-    DEFAULT_PUBLIC_DATA_PRODUCT_LIMIT,
-    MAX_PUBLIC_DATA_PRODUCT_LIMIT,
-)
+from ..backend.data_products import DEFAULT_PUBLIC_DATA_PRODUCT_LIMIT
 from ..backend.service import WorkbenchService
 from ..dependencies import get_workbench_service
 

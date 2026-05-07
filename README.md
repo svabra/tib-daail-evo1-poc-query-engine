@@ -96,6 +96,19 @@ python -m venv .venv
 .\.venv\Scripts\python -m pip install -r bdw\requirements.txt
 ```
 
+For local commit checks, install the development tooling and register the pre-commit hooks:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\pre-commit.exe install
+```
+
+Run the configured checks across the repository:
+
+```powershell
+.\.venv\Scripts\pre-commit.exe run --all-files
+```
+
 Start only the local integration dependencies:
 
 ```bash

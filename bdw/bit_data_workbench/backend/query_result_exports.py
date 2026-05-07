@@ -12,7 +12,6 @@ import duckdb
 from ..config import Settings
 from ..models import QueryJobDefinition, QueryResultExportDefinition
 from .data_exporters import (
-    EXPORT_FORMATS,
     FORMAT_CONTENT_TYPES,
     export_s3_metadata,
     normalize_export_format,

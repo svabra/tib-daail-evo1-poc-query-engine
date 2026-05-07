@@ -1,0 +1,2 @@
+-r bdw/requirements.txt
+pre-commit==4.6.0

@@ -2253,7 +2253,6 @@ class WorkbenchService:
         use_ssl: bool,
         startup_views: list[tuple[str, str, str]],
     ) -> None:
-        configured_url_style = (self.settings.s3_url_style or "").strip().lower() or None
         effective_default_url_style = effective_s3_url_style(
             self.settings,
             endpoint=endpoint,

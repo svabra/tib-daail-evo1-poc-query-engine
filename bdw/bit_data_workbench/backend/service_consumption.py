@@ -1813,7 +1813,6 @@ class ServiceConsumptionMonitor:
         if observed_at is None or observed_at.year != cache.year:
             return
         component_costs = cost_event.get("components") or {}
-        interval_hours = float(cost_event.get("intervalHours") or 0.0)
         container_cpu_chf = float(component_costs.get("containerCpuChf") or 0.0)
         container_ram_chf = float(component_costs.get("containerRamChf") or 0.0)
         container_total_chf = float(
