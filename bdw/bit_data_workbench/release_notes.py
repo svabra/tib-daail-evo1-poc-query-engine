@@ -1,9 +1,25 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.8.3. Keep entries concise and
+# Derived from git history through version 0.8.4. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.8.4",
+        "releasedAt": "2026-05-11T10:12:19+02:00",
+        "features": [
+            (
+                "The Loader Workbench now includes the MWA Abrechnung Multi-Format Loader (3.2), "
+                "which writes paired Abrechnung and Abrechnungs-Ziffern data to PostgreSQL OLTP, "
+                "PostgreSQL Native access, and S3 Parquet, CSV, and JSONL comparison targets."
+            ),
+            (
+                "The MWA S3 Parquet output is sorted for parent-child locality and written with "
+                "ZSTD compression plus fixed row groups so DuckDB benchmark notebooks can scan the "
+                "columnar target separately from CSV and JSONL."
+            ),
+        ],
+    },
     {
         "version": "0.8.3",
         "releasedAt": "2026-05-07T15:10:49+02:00",

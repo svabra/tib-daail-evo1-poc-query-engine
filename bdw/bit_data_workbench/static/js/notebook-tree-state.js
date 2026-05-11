@@ -377,6 +377,26 @@ export function createNotebookTreeState(helpers) {
         notebookId: "pg-vs-s3-multi-table-pg-native",
         folderPath: ["PoC Tests", "Performance Evaluation", "Multi-Table Test"],
       },
+      {
+        notebookId: "mwa-abrechnung-oltp",
+        folderPath: ["PoC Tests", "Performance Evaluation", "MWA Abrechnung (3.2)"],
+      },
+      {
+        notebookId: "mwa-abrechnung-pg-native",
+        folderPath: ["PoC Tests", "Performance Evaluation", "MWA Abrechnung (3.2)"],
+      },
+      {
+        notebookId: "mwa-abrechnung-s3-parquet",
+        folderPath: ["PoC Tests", "Performance Evaluation", "MWA Abrechnung (3.2)"],
+      },
+      {
+        notebookId: "mwa-abrechnung-s3-csv",
+        folderPath: ["PoC Tests", "Performance Evaluation", "MWA Abrechnung (3.2)"],
+      },
+      {
+        notebookId: "mwa-abrechnung-s3-json",
+        folderPath: ["PoC Tests", "Performance Evaluation", "MWA Abrechnung (3.2)"],
+      },
     ];
 
     for (const migration of migrations) {

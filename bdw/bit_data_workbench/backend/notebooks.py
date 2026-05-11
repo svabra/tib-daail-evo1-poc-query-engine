@@ -143,6 +143,10 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         "federal_tax_enforcements_mt",
         "federal_tax_appeals_mt",
     )
+    mwa_object_names = (
+        "mwa_abrechnung_entities",
+        "mwa_abrechnungs_ziffern_entities",
+    )
     preferred_s3_relation = _find_generated_s3_relation_by_object_name(
         catalogs,
         object_names=("vat_smoke",),
@@ -201,12 +205,49 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         schema_name=None,
         object_names=("pg_union_tax_reference_s3",),
     )
+    mwa_postgres_relations = _find_relations_by_object_names(
+        catalogs,
+        catalog_name="pg_oltp",
+        schema_name="public",
+        object_names=mwa_object_names,
+    )
+    mwa_s3_parquet_relations = {
+        object_name: _find_relation_by_object_name(
+            catalogs,
+            catalog_name="workspace",
+            schema_name=None,
+            object_names=(f"{object_name}_parquet",),
+        )
+        for object_name in mwa_object_names
+    }
+    mwa_s3_csv_relations = {
+        object_name: _find_relation_by_object_name(
+            catalogs,
+            catalog_name="workspace",
+            schema_name=None,
+            object_names=(f"{object_name}_csv",),
+        )
+        for object_name in mwa_object_names
+    }
+    mwa_s3_json_relations = {
+        object_name: _find_relation_by_object_name(
+            catalogs,
+            catalog_name="workspace",
+            schema_name=None,
+            object_names=(f"{object_name}_json",),
+        )
+        for object_name in mwa_object_names
+    }
     contest_postgres_native_relation = _strip_catalog_prefix(
         contest_postgres_relation, "pg_oltp"
     )
     multi_table_postgres_native_relations = {
         object_name: _strip_catalog_prefix(relation, "pg_oltp")
         for object_name, relation in multi_table_postgres_relations.items()
+    }
+    mwa_postgres_native_relations = {
+        object_name: _strip_catalog_prefix(relation, "pg_oltp")
+        for object_name, relation in mwa_postgres_relations.items()
     }
 
     return build_static_notebooks(
@@ -220,6 +261,11 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         multi_table_postgres_native_relations=(
             multi_table_postgres_native_relations
         ),
+        mwa_postgres_relations=mwa_postgres_relations,
+        mwa_postgres_native_relations=mwa_postgres_native_relations,
+        mwa_s3_parquet_relations=mwa_s3_parquet_relations,
+        mwa_s3_csv_relations=mwa_s3_csv_relations,
+        mwa_s3_json_relations=mwa_s3_json_relations,
         union_oltp_relation=union_oltp_relation,
         union_olap_relation=union_olap_relation,
         union_oltp_s3_relation=union_oltp_s3_relation,
