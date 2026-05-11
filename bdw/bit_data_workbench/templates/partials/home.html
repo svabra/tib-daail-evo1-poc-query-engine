@@ -30,8 +30,8 @@
       </p>
     </div>
     <div class="home-workbench-grid">
-      <button
-        type="button"
+      <a
+        href="/query-workbench"
         class="home-workbench-card home-workbench-card-featured"
         data-open-query-workbench
       >
@@ -44,9 +44,9 @@
         </span>
         <span class="home-workbench-title">Query Workbench</span>
         <span class="home-workbench-copy">Open notebooks, run SQL, and compare execution behavior.</span>
-      </button>
-      <button
-        type="button"
+      </a>
+      <a
+        href="/data-products"
         class="home-workbench-card home-workbench-card-featured"
         data-open-data-products-workbench
       >
@@ -60,9 +60,9 @@
         </span>
         <span class="home-workbench-title">Data Products Workbench</span>
         <span class="home-workbench-copy">Publish live read-only endpoints from Shared Workspace and PostgreSQL sources.</span>
-      </button>
-      <button
-        type="button"
+      </a>
+      <a
+        href="/query-workbench/data-sources"
         class="home-workbench-card home-workbench-card-compact home-workbench-card-data-sources"
         data-open-query-data-sources
       >
@@ -79,9 +79,9 @@
         </span>
         <span class="home-workbench-title">Data Source Workbench</span>
         <span class="home-workbench-copy">Manage available data sources for shared and local tinkering workflows.</span>
-      </button>
-      <button
-        type="button"
+      </a>
+      <a
+        href="/ingestion-workbench"
         class="home-workbench-card home-workbench-card-compact"
         data-open-ingestion-workbench
       >
@@ -96,9 +96,9 @@
         </span>
         <span class="home-workbench-title">Ingestion Workbench</span>
         <span class="home-workbench-copy">Start user-driven ingestion flows such as drag-and-drop CSV imports into your data sources.</span>
-      </button>
-      <button
-        type="button"
+      </a>
+      <a
+        href="/loader-workbench"
         class="home-workbench-card home-workbench-card-compact"
         data-open-loader-workbench
       >
@@ -112,7 +112,27 @@
         </span>
         <span class="home-workbench-title">Loader Workbench</span>
         <span class="home-workbench-copy">Run the existing server-side loader modules and monitor their job output separately from user ingestion.</span>
-      </button>
+      </a>
+      <a
+        href="/data-exchange"
+        class="home-workbench-card home-workbench-card-compact"
+        data-open-data-exchange-workbench
+      >
+        <span class="home-workbench-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M7 3.2h6.8L17 6.4v13.4H7z"></path>
+            <path d="M13.8 3.2v3.2H17"></path>
+            <path d="M9.2 10h5.6"></path>
+            <path d="M9.2 13h5.6"></path>
+            <path d="M5.1 15.8h9.1"></path>
+            <path d="M8 12.9 5.1 15.8 8 18.7"></path>
+            <path d="M18.9 8.2H9.8"></path>
+            <path d="M16 5.3l2.9 2.9L16 11.1"></path>
+          </svg>
+        </span>
+        <span class="home-workbench-title">DataExchange Workbench</span>
+        <span class="home-workbench-copy">Exchange files through a password-protected S3 drop area without publishing them as data sources.</span>
+      </a>
       <a href="/dataproducts/" class="home-workbench-card home-workbench-card-compact">
         <span class="home-workbench-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24">

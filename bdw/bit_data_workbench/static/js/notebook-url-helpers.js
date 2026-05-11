@@ -88,6 +88,14 @@ export function createNotebookUrlHelpers({ isLocalNotebookId }) {
     window.history.pushState({ mode: "data-products" }, "", "/data-products");
   }
 
+  function pushDataExchangeHistory() {
+    if (window.location.pathname === "/data-exchange") {
+      return;
+    }
+
+    window.history.pushState({ mode: "data-exchange" }, "", "/data-exchange");
+  }
+
   function pushServiceConsumptionHistory() {
     if (window.location.pathname === "/service-consumption") {
       return;
@@ -102,6 +110,7 @@ export function createNotebookUrlHelpers({ isLocalNotebookId }) {
 
   return {
     pushDataProductsHistory,
+    pushDataExchangeHistory,
     notebookUrl,
     pushHomeHistory,
     pushNotebookHistory,

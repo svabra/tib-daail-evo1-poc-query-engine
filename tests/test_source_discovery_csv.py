@@ -95,6 +95,33 @@ class FakeS3Client:
         }
 
 
+class DataExchangeHiddenS3Client:
+    def list_objects_v2(self, **kwargs):
+        bucket = kwargs["Bucket"]
+        prefix = str(kwargs.get("Prefix") or "")
+        contents = []
+        if bucket == "vat-smoke-test":
+            for key in (
+                "--data-exchange--/files/secret/hidden.csv",
+                "incoming/visible.csv",
+            ):
+                if key.startswith(prefix):
+                    contents.append({"Key": key})
+        return {
+            "Contents": contents,
+            "IsTruncated": False,
+        }
+
+    def head_object(self, **kwargs):
+        if kwargs["Key"] == "incoming/visible.csv":
+            return {
+                "ETag": '"visible123"',
+                "ContentLength": 32,
+                "Metadata": {},
+            }
+        raise AssertionError("Hidden DataExchange object should not be inspected.")
+
+
 class CsvS3DiscoveryTests(TestCase):
     def test_discovered_csv_spec_uses_uploaded_csv_metadata_for_query_sql(self) -> None:
         discoverer = S3DataSourceDiscoverer(make_settings())
@@ -109,6 +136,16 @@ class CsvS3DiscoveryTests(TestCase):
         self.assertTrue(spec.csv_has_header)
         self.assertIn("HEADER = TRUE", spec.query_sql)
         self.assertIn("DELIM = ','", spec.query_sql)
+
+    def test_s3_discovery_ignores_data_exchange_prefix_objects(self) -> None:
+        discoverer = S3DataSourceDiscoverer(make_settings())
+
+        specs = discoverer._build_desired_specs(DataExchangeHiddenS3Client(), {"vat-smoke-test"})
+
+        self.assertEqual(len(specs), 1)
+        spec = next(iter(specs.values()))
+        self.assertEqual(spec.display_name, "visible.csv")
+        self.assertNotIn("data-exchange", spec.object_path)
 
     def test_discovered_xml_and_xlsx_specs_materialize_to_queryable_csv_views(self) -> None:
         workbook = Workbook()

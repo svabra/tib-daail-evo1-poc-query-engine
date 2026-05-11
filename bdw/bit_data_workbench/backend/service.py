@@ -51,6 +51,12 @@ from .data_sources.postgres import PostgresDataSourcePlugin
 from .data_sources.s3 import S3DataSourcePlugin
 from .data_sources.s3.explorer import normalize_s3_bucket_name, normalize_s3_object_key
 from .data_products import DataProductManager, DataProductStore
+from .data_exchange import (
+    DataExchangeManager,
+    DataExchangeStore,
+    DataExchangeUploadFileRequest,
+    DataExchangeUploadSessionManager,
+)
 from .data_generation_jobs import DataGenerationJobManager
 from .ingestion_types.csv import (
     CsvIngestionManager,
@@ -144,6 +150,9 @@ class WorkbenchService:
         self._data_product_store = DataProductStore(
             self._data_product_store_path()
         )
+        self._data_exchange_store = DataExchangeStore(
+            self._data_exchange_store_path()
+        )
         self._notebook_events: list[NotebookEventDefinition] = []
         self._notebook_events_version = 0
         self._realtime_facade().initialize_state()
@@ -226,6 +235,14 @@ class WorkbenchService:
             for ingestor_id, spec in FILE_INGESTOR_SPECS.items()
         }
         self._file_upload_completion_threads: list[Thread] = []
+        self._data_exchange_upload_sessions = DataExchangeUploadSessionManager(
+            settings=settings
+        )
+        self._data_exchange = DataExchangeManager(
+            settings=settings,
+            store=self._data_exchange_store,
+        )
+        self._data_exchange_upload_completion_threads: list[Thread] = []
         self._local_workspace_query_sources = LocalWorkspaceQuerySourceManager(
             settings=settings,
         )
@@ -396,6 +413,14 @@ class WorkbenchService:
             if thread.is_alive():
                 thread.join(timeout=0.2)
         self._csv_upload_completion_threads.clear()
+        for thread in list(self._file_upload_completion_threads):
+            if thread.is_alive():
+                thread.join(timeout=0.2)
+        self._file_upload_completion_threads.clear()
+        for thread in list(self._data_exchange_upload_completion_threads):
+            if thread.is_alive():
+                thread.join(timeout=0.2)
+        self._data_exchange_upload_completion_threads.clear()
         with self._lock:
             if self._conn is not None:
                 self._conn.close()
@@ -608,6 +633,222 @@ class WorkbenchService:
         return self._data_products.documentation_payload(
             slug=slug,
             base_url=base_url,
+        )
+
+    def data_exchange_files(self) -> dict[str, object]:
+        return self._data_exchange.list_files()
+
+    def create_data_exchange_folder(
+        self,
+        *,
+        name: str,
+        parent_folder_id: str = "",
+    ) -> dict[str, object]:
+        return self._data_exchange.create_folder(
+            name=name,
+            parent_folder_id=parent_folder_id,
+        )
+
+    def delete_data_exchange_folder(
+        self,
+        *,
+        folder_id: str,
+    ) -> dict[str, object]:
+        return self._data_exchange.delete_folder(folder_id=folder_id)
+
+    def create_data_exchange_upload_session(
+        self,
+        *,
+        files: list[dict[str, object]],
+    ) -> dict[str, object]:
+        requests = [
+            DataExchangeUploadFileRequest(
+                file_name=str(item.get("fileName") or item.get("file_name") or ""),
+                size_bytes=int(item.get("sizeBytes") or item.get("size_bytes") or 0),
+            )
+            for item in files
+            if isinstance(item, dict)
+        ]
+        return self._data_exchange_upload_sessions.create_session(requests)
+
+    def data_exchange_upload_session_state(
+        self,
+        *,
+        session_id: str,
+    ) -> dict[str, object]:
+        return self._data_exchange_upload_sessions.session_state(session_id)
+
+    def append_data_exchange_upload_session_chunk(
+        self,
+        *,
+        session_id: str,
+        file_id: str,
+        chunk_index: int,
+        content_range: str,
+        payload: bytes,
+    ) -> dict[str, object]:
+        return self._data_exchange_upload_sessions.append_chunk(
+            session_id=session_id,
+            file_id=file_id,
+            chunk_index=chunk_index,
+            content_range=content_range,
+            payload=payload,
+        )
+
+    def cancel_data_exchange_upload_session(
+        self,
+        *,
+        session_id: str,
+    ) -> dict[str, object]:
+        return self._data_exchange_upload_sessions.cancel_session(session_id)
+
+    def complete_data_exchange_upload_session(
+        self,
+        *,
+        session_id: str,
+        file_password: str,
+        display_name: str = "",
+        description: str = "",
+        owner_contact: str = "",
+        tags: list[str] | str | None = None,
+        folder_id: str = "",
+    ) -> dict[str, object]:
+        state = self._data_exchange_upload_sessions.start_processing(session_id)
+        should_start_worker = bool(state.pop("processingStarted", False))
+        if should_start_worker:
+            worker = Thread(
+                target=self._complete_data_exchange_upload_session_in_background,
+                kwargs={
+                    "session_id": session_id,
+                    "file_password": file_password,
+                    "display_name": display_name,
+                    "description": description,
+                    "owner_contact": owner_contact,
+                    "tags": tags,
+                    "folder_id": folder_id,
+                },
+                name=f"bdw-data-exchange-upload-complete-{session_id[:8]}",
+                daemon=True,
+            )
+            worker.start()
+            self._data_exchange_upload_completion_threads.append(worker)
+        return state
+
+    def _complete_data_exchange_upload_session_in_background(
+        self,
+        *,
+        session_id: str,
+        file_password: str,
+        display_name: str,
+        description: str,
+        owner_contact: str,
+        tags: list[str] | str | None,
+        folder_id: str,
+    ) -> None:
+        try:
+            sources = self._data_exchange_upload_sessions.source_files(session_id)
+            payload = self._data_exchange.store_uploaded_sources(
+                sources=sources,
+                file_password=file_password,
+                display_name=display_name,
+                description=description,
+                owner_contact=owner_contact,
+                tags=tags,
+                folder_id=folder_id,
+            )
+            self._data_exchange_upload_sessions.finish_processing_success(
+                session_id,
+                payload,
+            )
+        except Exception as exc:
+            logger.exception("DataExchange upload session completion failed: %s", session_id)
+            try:
+                self._data_exchange_upload_sessions.finish_processing_failure(
+                    session_id,
+                    str(exc),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to persist DataExchange upload session failure: %s",
+                    session_id,
+                )
+
+    def update_data_exchange_file_metadata(
+        self,
+        *,
+        file_id: str,
+        file_password: str,
+        display_name: str = "",
+        description: str = "",
+        owner_contact: str = "",
+        tags: list[str] | str | None = None,
+        folder_id: str | None = None,
+    ) -> dict[str, object]:
+        return self._data_exchange.update_metadata(
+            file_id=file_id,
+            file_password=file_password,
+            display_name=display_name,
+            description=description,
+            owner_contact=owner_contact,
+            tags=tags,
+            folder_id=folder_id,
+        )
+
+    def delete_data_exchange_file(
+        self,
+        *,
+        file_id: str,
+        file_password: str,
+    ) -> dict[str, object]:
+        return self._data_exchange.delete_file(
+            file_id=file_id,
+            file_password=file_password,
+        )
+
+    def create_data_exchange_download_token(
+        self,
+        *,
+        file_id: str,
+        file_password: str,
+    ) -> dict[str, object]:
+        return self._data_exchange.create_download_token(
+            file_id=file_id,
+            file_password=file_password,
+        )
+
+    def stream_data_exchange_file(self, *, file_id: str, token: str):
+        return self._data_exchange.stream_download(file_id=file_id, token=token)
+
+    def copy_data_exchange_file_to_shared_s3(
+        self,
+        *,
+        file_id: str,
+        file_password: str,
+        bucket: str = "",
+        prefix: str = "",
+        file_name: str = "",
+    ) -> dict[str, object]:
+        payload = self._data_exchange.copy_to_shared_s3(
+            file_id=file_id,
+            file_password=file_password,
+            bucket=bucket,
+            prefix=prefix,
+            file_name=file_name,
+        )
+        if payload.get("importedCount"):
+            self._data_source_discovery.sync_source("workspace.s3", emit_event=True)
+            payload = self._attach_s3_query_sources_from_discovery(payload)
+        return payload
+
+    def data_exchange_local_workspace_handoff(
+        self,
+        *,
+        file_id: str,
+        file_password: str,
+    ) -> dict[str, object]:
+        return self._data_exchange.local_workspace_handoff(
+            file_id=file_id,
+            file_password=file_password,
         )
 
     def client_connections_state(self) -> dict[str, object]:
@@ -1880,6 +2121,9 @@ class WorkbenchService:
 
     def _data_product_store_path(self) -> Path:
         return self.settings.duckdb_database.parent / "data-products.json"
+
+    def _data_exchange_store_path(self) -> Path:
+        return self.settings.duckdb_database.parent / "data-exchange.json"
 
     def _combined_notebooks(self, catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         return [*build_notebooks(catalogs), *self._shared_notebook_store.list_notebooks()]

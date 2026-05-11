@@ -16,6 +16,7 @@ if str(BDW_ROOT) not in sys.path:
 
 class _ConfiguredSettings:
     s3_endpoint = "http://127.0.0.1:9000"
+    data_exchange_prefix = "--data-exchange--/"
 
     def current_s3_access_key_id(self) -> str:
         return "key"
@@ -46,6 +47,36 @@ class _FakeS3Client:
             "ContentLength": len(self.body.getvalue()),
             "ContentType": "text/csv",
         }
+
+
+class _FakeListingClient:
+    def list_buckets(self):
+        return {
+            "Buckets": [
+                {"Name": "client-bucket"},
+                {"Name": "client-data-exchange"},
+            ]
+        }
+
+    def list_objects_v2(self, **kwargs):
+        bucket = kwargs["Bucket"]
+        prefix = str(kwargs.get("Prefix") or "")
+        delimiter = str(kwargs.get("Delimiter") or "")
+        if bucket != "client-bucket":
+            return {"Contents": [], "CommonPrefixes": [], "IsTruncated": False}
+        if delimiter == "/":
+            return {
+                "CommonPrefixes": [
+                    {"Prefix": "--data-exchange--/"},
+                    {"Prefix": "published/"},
+                ],
+                "Contents": [
+                    {"Key": "--data-exchange--/files/secret/alpha.csv", "Size": 10},
+                    {"Key": "visible.csv", "Size": 20},
+                ],
+                "IsTruncated": False,
+            }
+        return {"Contents": [], "IsTruncated": False}
 
 
 def import_s3_explorer():
@@ -109,3 +140,27 @@ def test_stream_object_returns_s3_body_without_temp_file_download() -> None:
     assert artifact.body.read() == b"id,name\n1,alpha\n"
     artifact.body.close()
     assert body.was_closed
+
+
+def test_snapshot_hides_data_exchange_bucket_and_prefix() -> None:
+    explorer = import_s3_explorer()
+    manager = explorer.S3ExplorerManager(_ConfiguredSettings())
+    fake_client = _FakeListingClient()
+
+    with patch.object(explorer, "s3_client", return_value=fake_client):
+        root_snapshot = manager.snapshot()
+        bucket_snapshot = manager.snapshot(bucket="client-bucket")
+
+    assert [entry.name for entry in root_snapshot.entries] == ["client-bucket"]
+    assert [entry.name for entry in bucket_snapshot.entries] == ["published", "visible.csv"]
+
+
+def test_stream_object_rejects_data_exchange_prefix() -> None:
+    explorer = import_s3_explorer()
+    manager = explorer.S3ExplorerManager(_ConfiguredSettings())
+
+    with pytest.raises(ValueError, match="DataExchange"):
+        manager.stream_object(
+            bucket="client-bucket",
+            key="--data-exchange--/files/secret/alpha.csv",
+        )

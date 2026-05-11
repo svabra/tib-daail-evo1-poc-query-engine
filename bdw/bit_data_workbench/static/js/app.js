@@ -24,6 +24,7 @@ import { createFileIngestionController } from "./ingestion-types/file/index.js";
 import { createDataProductsController } from "./data-products-controller.js";
 import { createDataProductsSampleContracts } from "./data-products-sample-contracts.js";
 import { createDataProductsUi } from "./data-products-ui.js";
+import { createDataExchangeController } from "./data-exchange-controller.js";
 import { createDataSourceExplorerController } from "./data-source-explorers/controller.js";
 import { createEditorAutosizeManager } from "./editor-autosize-manager.js";
 import { createLocalWorkspaceDialogController } from "./local-workspace-dialog-controller.js";
@@ -65,6 +66,7 @@ import {
   dataGenerationMonitorCount,
   dataGenerationMonitorList,
   dataSourceExplorerPageRoot,
+  dataExchangePageRoot,
   dataSourceNodes,
   dataSourcesSection,
   homePageRoot,
@@ -348,6 +350,7 @@ const {
 
 const {
   notebookUrl,
+  pushDataExchangeHistory,
   pushDataProductsHistory,
   pushHomeHistory,
   pushNotebookHistory,
@@ -736,6 +739,7 @@ const {
   closeSettingsMenus,
   getClearVisibleNotifications: () => clearVisibleNotifications,
   getQueryNotificationMenu: queryNotificationMenu,
+  openDataExchangeWorkbench,
   openDataProductsWorkbench,
   openLoaderWorkbench,
   loadQueryWorkbenchDataSourceExplorer,
@@ -790,6 +794,21 @@ const {
   syncOpenLocalWorkspaceMoveDialog,
   syncOpenLocalWorkspaceSaveDialog,
   workspaceNotebookId,
+});
+
+const dataExchangeController = createDataExchangeController({
+  createLocalWorkspaceEntryId,
+  escapeHtml,
+  fetchJsonOrThrow,
+  formatByteCount,
+  formatRelativeTimestamp,
+  openQueryWorkbenchDataSources,
+  refreshSidebar,
+  renderLocalWorkspaceSidebarEntries,
+  saveLocalWorkspaceExport,
+  showConfirmDialog,
+  showMessageDialog,
+  syncLocalWorkspaceEntry,
 });
 
 const {
@@ -1112,6 +1131,10 @@ function currentWorkbenchSection() {
     return "data-products";
   }
 
+  if (dataExchangePageRoot()) {
+    return "data-exchange";
+  }
+
   if (serviceConsumptionPageRoot()) {
     return "service-consumption";
   }
@@ -1166,6 +1189,10 @@ function workbenchTitle(section = currentWorkbenchSection()) {
 
   if (section === "data-products") {
     return "DAAIFL Data Products Workbench";
+  }
+
+  if (section === "data-exchange") {
+    return "DAAIFL DataExchange Workbench";
   }
 
   if (section === "service-consumption") {
@@ -1489,6 +1516,7 @@ function syncShellVisibility() {
   if (
     homePageRoot() ||
     dataProductsPageRoot() ||
+    dataExchangePageRoot() ||
     serviceConsumptionPageRoot() ||
     queryWorkbenchEntryPageRoot() ||
     queryWorkbenchDataSourcesPageRoot() ||
@@ -4683,6 +4711,21 @@ async function loadDataProductsPage({ pushHistory = true } = {}) {
   }
 }
 
+async function loadDataExchangePage({ pushHistory = true } = {}) {
+  const panel = await loadWorkspacePanelPartial("/data-exchange");
+  if (!panel) {
+    return;
+  }
+
+  syncShellVisibility();
+  activateNotebookLink("");
+  applyWorkbenchTitle("data-exchange");
+  dataExchangeController.initializeCurrentPage();
+  if (pushHistory) {
+    pushDataExchangeHistory();
+  }
+}
+
 async function loadHomePage({ pushHistory = true } = {}) {
   const panel = await loadWorkspacePanelPartial("/");
   if (!panel) {
@@ -4712,6 +4755,14 @@ async function openDataProductsWorkbench() {
   }
 
   await loadDataProductsPage();
+}
+
+async function openDataExchangeWorkbench() {
+  if (currentSidebarMode() !== "notebook") {
+    await refreshSidebar("notebook");
+  }
+
+  await loadDataExchangePage();
 }
 
 async function openServiceConsumptionPage() {
@@ -7693,6 +7744,7 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
   syncVisiblePythonCells();
   renderQueryNotificationMenu();
   dataProductsController.initializeCurrentPage();
+  dataExchangeController.initializeCurrentPage();
   serviceConsumptionUi.initializeCurrentPage().catch((error) => {
     console.error("Failed to initialize the service-consumption page after a partial swap.", error);
   });
@@ -7716,6 +7768,17 @@ window.addEventListener("popstate", async () => {
     } catch (error) {
       if (error?.name !== "AbortError") {
         console.error("Failed to restore data products from browser history.", error);
+      }
+    }
+    return;
+  }
+
+  if (window.location.pathname === "/data-exchange") {
+    try {
+      await loadDataExchangePage({ pushHistory: false });
+    } catch (error) {
+      if (error?.name !== "AbortError") {
+        console.error("Failed to restore DataExchange from browser history.", error);
       }
     }
     return;
@@ -7903,6 +7966,12 @@ Promise.allSettled(initialLoadTasks)
 
     if (dataProductsPageRoot()) {
       dataProductsController.initializeCurrentPage();
+      renderQueryNotificationMenu();
+      return;
+    }
+
+    if (dataExchangePageRoot()) {
+      dataExchangeController.initializeCurrentPage();
       renderQueryNotificationMenu();
       return;
     }

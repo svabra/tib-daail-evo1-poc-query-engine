@@ -783,6 +783,8 @@ def loader_workbench_partial(
 
 
 from .data_products import router as data_products_router
+from .data_exchange import router as data_exchange_router
 
 
 router.include_router(data_products_router)
+router.include_router(data_exchange_router)

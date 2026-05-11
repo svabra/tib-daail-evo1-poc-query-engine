@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.8.2. Keep entries concise and
+# Derived from git history through version 0.8.3. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
     {
-        "version": "0.8.2",
+        "version": "0.8.3",
         "releasedAt": "2026-05-07T15:10:49+02:00",
         "features": [
             (

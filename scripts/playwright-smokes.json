@@ -11,6 +11,11 @@
       "enabledByDefault": true
     },
     {
+      "id": "home-workbench-tiles",
+      "script": "playwright_home_tiles_smoke.py",
+      "enabledByDefault": true
+    },
+    {
       "id": "home-workbench-card-sizes",
       "script": "playwright_home_workbench_card_sizes.py",
       "enabledByDefault": true
@@ -133,6 +138,16 @@
     {
       "id": "data-products",
       "script": "playwright_data_products_smoke.py",
+      "enabledByDefault": false
+    },
+    {
+      "id": "data-exchange",
+      "script": "playwright_data_exchange_smoke.py",
+      "enabledByDefault": false
+    },
+    {
+      "id": "data-exchange-sample-tax-upload",
+      "script": "playwright_data_exchange_sample_tax_upload_smoke.py",
       "enabledByDefault": false
     }
   ]

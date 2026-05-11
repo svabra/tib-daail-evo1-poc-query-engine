@@ -18,6 +18,11 @@ import duckdb
 from ..config import Settings
 from ..models import DataSourceDiscoveryEventDefinition, SourceConnectionStatus
 from .ingestion_types.csv.dialect import csv_read_settings_from_s3_metadata
+from .data_exchange import (
+    is_data_exchange_bucket_name,
+    is_data_exchange_key,
+    normalize_data_exchange_prefix,
+)
 from .queryable_files import (
     materialize_queryable_file,
 )
@@ -454,7 +459,7 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
 
         try:
             client = s3_client(self._settings)
-            current_buckets = set(list_s3_buckets(self._settings))
+            current_buckets = self._visible_s3_buckets(set(list_s3_buckets(self._settings)))
             configured_bucket = (self._settings.s3_bucket or "").strip()
 
             if configured_bucket and configured_bucket not in current_buckets:
@@ -470,7 +475,8 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                         fallback_probe = None
 
                 if fallback_probe is not None:
-                    current_buckets.add(configured_bucket)
+                    if not is_data_exchange_bucket_name(configured_bucket):
+                        current_buckets.add(configured_bucket)
                     logger.info(
                         "S3 discovery added configured bucket %r via %s fallback after bucket enumeration returned %d bucket(s).",
                         configured_bucket,
@@ -483,7 +489,7 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                 try:
                     client = s3_client(self._settings)
                     client.head_bucket(Bucket=configured_bucket)
-                    current_buckets = {configured_bucket}
+                    current_buckets = self._visible_s3_buckets({configured_bucket})
                     logger.info(
                         "S3 discovery fell back to configured bucket %r because list_buckets failed: %s",
                         configured_bucket,
@@ -492,7 +498,7 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                 except Exception as head_exc:
                     try:
                         client.list_objects_v2(Bucket=configured_bucket, MaxKeys=1)
-                        current_buckets = {configured_bucket}
+                        current_buckets = self._visible_s3_buckets({configured_bucket})
                         logger.info(
                             "S3 discovery fell back to configured bucket %r via list_objects_v2 because list_buckets failed: %s",
                             configured_bucket,
@@ -780,10 +786,15 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
         buckets: set[str],
     ) -> dict[str, DiscoveredRelationSpec]:
         desired_specs: dict[str, DiscoveredRelationSpec] = {}
-        for bucket in sorted(buckets):
+        exchange_prefix = normalize_data_exchange_prefix(self._settings.data_exchange_prefix)
+        for bucket in sorted(self._visible_s3_buckets(buckets)):
             schema_name = s3_bucket_schema_name(bucket)
             used_names: set[str] = set()
-            keys = sorted(set(iter_s3_keys(client, bucket)))
+            keys = sorted(
+                key
+                for key in set(iter_s3_keys(client, bucket))
+                if not is_data_exchange_key(key, exchange_prefix)
+            )
             key_set = set(keys)
 
             for view_name, data_format, path in self._startup_views:
@@ -905,6 +916,13 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                 )
 
         return desired_specs
+
+    def _visible_s3_buckets(self, buckets: set[str]) -> set[str]:
+        return {
+            bucket
+            for bucket in buckets
+            if str(bucket or "").strip() and not is_data_exchange_bucket_name(bucket)
+        }
 
     def _head_object(
         self,

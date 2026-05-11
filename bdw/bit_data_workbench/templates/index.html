@@ -37,8 +37,8 @@
         </div>
         <div class="topbar-actions">
           <div class="topbar-actions-primary">
-            <button
-              type="button"
+            <a
+              href="/query-workbench"
               class="topbar-action-button topbar-action-button-icon-only topbar-workbench-button"
               data-open-query-workbench
               data-open-query-workbench-navigation="true"
@@ -56,9 +56,9 @@
                   Open notebooks, run SQL, and compare execution behavior.
                 </span>
               </span>
-            </button>
-            <button
-              type="button"
+            </a>
+            <a
+              href="/query-workbench/data-sources"
               class="topbar-action-button topbar-action-button-icon-only topbar-workbench-button"
               data-open-query-data-sources
               aria-label="Data Source Workbench"
@@ -79,9 +79,9 @@
                   Manage available data sources for shared and local tinkering workflows.
                 </span>
               </span>
-            </button>
-            <button
-              type="button"
+            </a>
+            <a
+              href="/data-products"
               class="topbar-action-button topbar-action-button-icon-only topbar-workbench-button"
               data-open-data-products-workbench
               aria-label="Data Products Workbench"
@@ -99,9 +99,9 @@
                   Publish live read-only endpoints from Shared Workspace and PostgreSQL sources.
                 </span>
               </span>
-            </button>
-            <button
-              type="button"
+            </a>
+            <a
+              href="/ingestion-workbench"
               class="topbar-action-button topbar-action-button-icon-only topbar-workbench-button"
               data-open-ingestion-workbench
               aria-label="Ingestion Workbench"
@@ -120,9 +120,31 @@
                   Start user-driven ingestion flows such as drag-and-drop CSV imports into your data sources.
                 </span>
               </span>
-            </button>
-            <button
-              type="button"
+            </a>
+            <a
+              href="/data-exchange"
+              class="topbar-action-button topbar-action-button-icon-only topbar-workbench-button"
+              data-open-data-exchange-workbench
+              aria-label="DataExchange Workbench"
+              aria-description="Exchange files through a password-protected S3 drop area without publishing them as data sources."
+            >
+              <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+                <path d="M4.4 1.9h4.4l2.1 2.1v10.1H4.4z"></path>
+                <path d="M8.8 1.9V4h2.1"></path>
+                <path d="M2.2 10.6h7.1"></path>
+                <path d="M4.5 8.3l-2.3 2.3 2.3 2.3"></path>
+                <path d="M13.8 5.4H6.7"></path>
+                <path d="M11.5 3.1l2.3 2.3-2.3 2.3"></path>
+              </svg>
+              <span class="topbar-workbench-tooltip" aria-hidden="true">
+                <strong class="topbar-workbench-tooltip-title">DataExchange Workbench</strong>
+                <span class="topbar-workbench-tooltip-copy">
+                  Exchange files through a password-protected S3 drop area without publishing them as data sources.
+                </span>
+              </span>
+            </a>
+            <a
+              href="/loader-workbench"
               class="topbar-action-button topbar-action-button-icon-only topbar-workbench-button"
               data-open-loader-workbench
               aria-label="Loader Workbench"
@@ -140,7 +162,7 @@
                   Run the existing server-side loader modules and monitor their job output separately from user ingestion.
                 </span>
               </span>
-            </button>
+            </a>
           </div>
           <div class="topbar-actions-secondary">
             <details class="topbar-notification-menu" data-query-notifications>

@@ -98,6 +98,10 @@ export function dataProductsPageRoot() {
   return document.querySelector("[data-data-products-page]");
 }
 
+export function dataExchangePageRoot() {
+  return document.querySelector("[data-data-exchange-page]");
+}
+
 export function notebookSection() {
   return document.querySelector("[data-notebook-section]");
 }

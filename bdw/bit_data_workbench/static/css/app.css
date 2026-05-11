@@ -1898,6 +1898,7 @@ details:not([open]) > .source-schema > summary::before {
   background: rgba(255, 255, 255, 0.9);
   color: var(--text);
   cursor: pointer;
+  text-decoration: none;
 }
 
 .topbar-action-button-icon-only {
@@ -6488,6 +6489,246 @@ details:not([open]) > .source-schema > summary::before {
   color: var(--accent-deep);
   font-size: 0.82rem;
   white-space: pre-wrap;
+}
+
+.data-exchange-page {
+  display: grid;
+  gap: 18px;
+}
+
+.data-exchange-header {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.data-exchange-panel {
+  padding: 18px;
+  border: 1px solid rgba(11, 68, 121, 0.14);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.data-exchange-upload-launcher[hidden],
+.data-exchange-panel[hidden] {
+  display: none;
+}
+
+.data-exchange-upload-launcher {
+  width: min(100%, 560px);
+}
+
+.data-exchange-upload-form,
+.data-exchange-workbench {
+  display: grid;
+  gap: 14px;
+}
+
+.data-exchange-workbench[hidden] {
+  display: none;
+}
+
+.data-exchange-fields {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.data-exchange-field-wide {
+  grid-column: 1 / -1;
+}
+
+.data-exchange-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 320px);
+  gap: 16px;
+  align-items: end;
+}
+
+.data-exchange-toolbar h3,
+.data-exchange-toolbar p {
+  margin: 0;
+}
+
+.data-exchange-toolbar p,
+.data-exchange-status,
+.data-exchange-description {
+  color: var(--text-muted);
+  font-size: 0.86rem;
+}
+
+.data-exchange-file-list {
+  display: grid;
+  gap: 12px;
+}
+
+.data-exchange-explorer-shell {
+  margin-top: 14px;
+}
+
+.data-exchange-file-row {
+  min-height: 0;
+}
+
+.data-exchange-source-tree {
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.data-exchange-source-tree .source-catalog > summary,
+.data-exchange-source-tree .source-schema > summary {
+  min-height: 34px;
+}
+
+.data-exchange-source-tree .source-object-list {
+  margin-top: 4px;
+}
+
+.data-exchange-source-tree .source-object {
+  width: 100%;
+  min-height: 34px;
+  font: inherit;
+  text-align: left;
+}
+
+.data-exchange-source-tree .source-object-meta small {
+  font-size: 0.68rem;
+}
+
+.data-exchange-source-tree .source-schema-meta small {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.data-exchange-file-icon path {
+  fill: none;
+  stroke: currentColor;
+}
+
+.data-exchange-tree-empty {
+  margin: 8px 0 8px 30px;
+}
+
+.data-exchange-lock {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: 1px solid rgba(11, 68, 121, 0.16);
+  border-radius: var(--radius-control);
+  background: rgba(11, 68, 121, 0.06);
+  color: var(--accent);
+}
+
+.data-exchange-source-tree .data-exchange-lock {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+}
+
+.data-exchange-lock svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.data-exchange-detail-card .data-source-explorer-detail-copy h4 {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.data-exchange-password-note {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+}
+
+.data-source-explorer-action[disabled] {
+  opacity: 0.48;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.data-exchange-file-card {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: rgba(248, 250, 252, 0.72);
+}
+
+.data-exchange-file-card-header {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+
+.data-exchange-file-card-header h4,
+.data-exchange-file-card-header p,
+.data-exchange-description {
+  margin: 0;
+}
+
+.data-exchange-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin: 0;
+}
+
+.data-exchange-facts div {
+  display: grid;
+  gap: 3px;
+}
+
+.data-exchange-facts dt {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.data-exchange-facts dd {
+  margin: 0;
+  font-size: 0.88rem;
+}
+
+.data-exchange-card-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.data-exchange-card-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.data-exchange-card-buttons .modal-button[disabled] {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.data-exchange-dialog .modal-content {
+  max-width: 560px;
+}
+
+@media (max-width: 760px) {
+  .data-exchange-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .data-exchange-file-card-header {
+    display: grid;
+  }
 }
 
 .query-form {

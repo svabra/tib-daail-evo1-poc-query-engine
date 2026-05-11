@@ -20,6 +20,11 @@ from ...s3_storage import (
     remove_s3_bucket,
     s3_client,
 )
+from ...data_exchange import (
+    is_data_exchange_bucket_name,
+    is_data_exchange_key,
+    normalize_data_exchange_prefix,
+)
 
 
 BUCKET_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
@@ -112,6 +117,7 @@ class S3ExplorerManager:
                     selectable=True,
                 )
                 for bucket_name in list_s3_buckets_from_client(client)
+                if not is_data_exchange_bucket_name(bucket_name)
             ]
             return S3ExplorerSnapshot(
                 entries=bucket_entries,
@@ -119,6 +125,30 @@ class S3ExplorerManager:
                 can_create_bucket=True,
                 can_create_folder=False,
                 empty_message="No buckets are available yet. Create one to start saving results.",
+            )
+
+        exchange_prefix = normalize_data_exchange_prefix(self._settings.data_exchange_prefix)
+        if is_data_exchange_bucket_name(normalized_bucket) or is_data_exchange_key(
+            normalized_prefix,
+            exchange_prefix,
+        ):
+            return S3ExplorerSnapshot(
+                bucket=normalized_bucket,
+                prefix=normalized_prefix,
+                path=s3_path(normalized_bucket, normalized_prefix),
+                entries=[],
+                breadcrumbs=[
+                    S3ExplorerBreadcrumb(label="Buckets"),
+                    S3ExplorerBreadcrumb(
+                        label=normalized_bucket,
+                        bucket=normalized_bucket,
+                        prefix="",
+                        path=s3_path(normalized_bucket),
+                    ),
+                ],
+                can_create_bucket=True,
+                can_create_folder=False,
+                empty_message="This S3 location is reserved for DataExchange and is hidden from the explorer.",
             )
 
         response = client.list_objects_v2(
@@ -131,6 +161,8 @@ class S3ExplorerManager:
         for item in response.get("CommonPrefixes") or []:
             child_prefix = normalize_s3_prefix(item.get("Prefix") or "")
             if not child_prefix:
+                continue
+            if is_data_exchange_key(child_prefix, exchange_prefix):
                 continue
             folder_name = PurePosixPath(child_prefix.rstrip("/")).name
             folder_entries.append(
@@ -149,6 +181,8 @@ class S3ExplorerManager:
         for item in response.get("Contents") or []:
             key = str(item.get("Key") or "").strip()
             if not key or key == normalized_prefix or key.endswith("/"):
+                continue
+            if is_data_exchange_key(key, exchange_prefix):
                 continue
             if normalized_prefix and not key.startswith(normalized_prefix):
                 continue
@@ -256,6 +290,11 @@ class S3ExplorerManager:
         self._ensure_configured()
         normalized_bucket = normalize_s3_bucket_name(bucket)
         normalized_key = normalize_s3_object_key(key)
+        if is_data_exchange_bucket_name(normalized_bucket) or is_data_exchange_key(
+            normalized_key,
+            self._settings.data_exchange_prefix,
+        ):
+            raise ValueError("DataExchange files must be downloaded from the DataExchange Workbench.")
         filename = normalize_s3_object_filename(file_name, fallback_key=normalized_key)
         temp_dir = Path(tempfile.mkdtemp(prefix="bdw-s3-object-download-"))
         local_path = temp_dir / filename
@@ -288,6 +327,11 @@ class S3ExplorerManager:
         self._ensure_configured()
         normalized_bucket = normalize_s3_bucket_name(bucket)
         normalized_key = normalize_s3_object_key(key)
+        if is_data_exchange_bucket_name(normalized_bucket) or is_data_exchange_key(
+            normalized_key,
+            self._settings.data_exchange_prefix,
+        ):
+            raise ValueError("DataExchange files must be downloaded from the DataExchange Workbench.")
         filename = normalize_s3_object_filename(file_name, fallback_key=normalized_key)
         response = s3_client(self._settings).get_object(
             Bucket=normalized_bucket,
@@ -320,6 +364,11 @@ class S3ExplorerManager:
 
         if normalized_kind == "file":
             normalized_key = normalize_s3_object_key(prefix)
+            if is_data_exchange_bucket_name(normalized_bucket) or is_data_exchange_key(
+                normalized_key,
+                self._settings.data_exchange_prefix,
+            ):
+                raise ValueError("DataExchange files must be deleted from the DataExchange Workbench.")
             deleted_keys = delete_s3_object_versions(
                 s3_client(self._settings),
                 normalized_bucket,
@@ -338,6 +387,11 @@ class S3ExplorerManager:
             normalized_prefix = normalize_s3_prefix(prefix)
             if not normalized_prefix:
                 raise ValueError("Choose a folder before deleting it.")
+            if is_data_exchange_bucket_name(normalized_bucket) or is_data_exchange_key(
+                normalized_prefix,
+                self._settings.data_exchange_prefix,
+            ):
+                raise ValueError("DataExchange folders must be deleted from the DataExchange Workbench.")
             deleted_keys = delete_s3_prefix(self._settings, normalized_bucket, normalized_prefix)
             return S3ExplorerDeleteResult(
                 entry_kind="folder",
@@ -351,6 +405,8 @@ class S3ExplorerManager:
             )
 
         if normalized_kind == "bucket":
+            if is_data_exchange_bucket_name(normalized_bucket):
+                raise ValueError("DataExchange buckets must be deleted outside the normal explorer.")
             deleted_keys = delete_s3_bucket(self._settings, normalized_bucket)
             bucket_deleted = remove_s3_bucket(self._settings, normalized_bucket)
             if not bucket_deleted:

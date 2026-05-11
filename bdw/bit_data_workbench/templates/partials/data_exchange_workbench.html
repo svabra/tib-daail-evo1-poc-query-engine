@@ -1,0 +1,233 @@
+<article class="workspace-card data-exchange-page" data-data-exchange-page>
+  <header class="workspace-header data-exchange-header">
+    <div class="workspace-title-block">
+      <h2>DataExchange Workbench</h2>
+      <p class="workspace-summary">
+        Exchange files through an S3 drop area without publishing them as data sources.
+      </p>
+    </div>
+  </header>
+
+  <div class="data-exchange-workbench" data-data-exchange-workbench>
+    <button
+      type="button"
+      class="data-source-explorer-launcher data-exchange-upload-launcher"
+      data-data-exchange-show-upload
+    >
+      <span class="data-source-explorer-launcher-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24">
+          <path d="M12 2.5v10.2"></path>
+          <path d="M8.2 6.4 12 2.5l3.8 3.9"></path>
+          <path d="M4.7 13.2v5.2c0 1.2 1 2.1 2.2 2.1h10.2c1.2 0 2.2-.9 2.2-2.1v-5.2"></path>
+          <path d="M8.4 15.5h7.2"></path>
+        </svg>
+      </span>
+      <span class="data-source-explorer-launcher-copy">
+        <strong>Upload files</strong>
+        <span>Add files to the exchange area with optional per-file password protection.</span>
+      </span>
+    </button>
+
+    <section class="data-exchange-panel" data-data-exchange-upload-panel hidden>
+      <div class="ingestion-workbench-section-header">
+        <div>
+          <h3>Upload Files</h3>
+          <p>Files are stored in the exchange area and stay hidden from the normal Data Source Explorer.</p>
+        </div>
+        <button type="button" class="modal-button modal-button-secondary" data-data-exchange-hide-upload>
+          Hide upload
+        </button>
+      </div>
+      <form class="data-exchange-upload-form" data-data-exchange-upload-form>
+        <label class="ingestion-csv-dropzone data-exchange-dropzone" data-data-exchange-dropzone>
+          <input
+            type="file"
+            multiple
+            data-data-exchange-file-input
+          >
+          <strong>Drop files here</strong>
+          <span>CSV, Parquet, JSON, Excel, XML, PDF, ZIP, and other file types are accepted.</span>
+        </label>
+        <div class="data-exchange-file-list" data-data-exchange-selected-files>
+          <p class="ingestion-empty">No files selected yet.</p>
+        </div>
+        <div class="data-exchange-fields">
+          <label class="result-export-field">
+            <span class="result-export-field-label">Display name</span>
+            <input class="modal-input" type="text" data-data-exchange-display-name>
+          </label>
+          <label class="result-export-field">
+            <span class="result-export-field-label">Owner/contact</span>
+            <input class="modal-input" type="text" data-data-exchange-owner-contact>
+          </label>
+          <label class="result-export-field">
+            <span class="result-export-field-label">Folder</span>
+            <select class="modal-input" data-data-exchange-folder>
+              <option value="">Exchange Files</option>
+            </select>
+          </label>
+          <label class="result-export-field data-exchange-field-wide">
+            <span class="result-export-field-label">Description</span>
+            <textarea class="modal-input" rows="3" data-data-exchange-description></textarea>
+          </label>
+          <label class="result-export-field">
+            <span class="result-export-field-label">Tags</span>
+            <input class="modal-input" type="text" placeholder="comma-separated" data-data-exchange-tags>
+          </label>
+          <label class="result-export-field">
+            <span class="result-export-field-label">File password optional</span>
+            <input
+              class="modal-input"
+              type="password"
+              autocomplete="new-password"
+              data-data-exchange-file-password
+            >
+          </label>
+        </div>
+        <div class="ingestion-csv-actions">
+          <button type="button" class="modal-button modal-button-primary" data-data-exchange-upload-submit>
+            Upload to DataExchange
+          </button>
+          <span class="data-exchange-status" data-data-exchange-upload-status></span>
+        </div>
+      </form>
+    </section>
+
+    <section class="data-exchange-panel">
+      <div class="data-exchange-toolbar">
+        <div>
+          <h3>Exchange Browser</h3>
+          <p>Select a file to inspect metadata and perform protected actions.</p>
+        </div>
+        <label class="result-export-field data-exchange-search-field">
+          <span class="result-export-field-label">Search files</span>
+          <input
+            class="modal-input"
+            type="search"
+            data-data-exchange-search
+            placeholder="Filter by name, owner, tag, type, or protection"
+            autocomplete="off"
+          >
+        </label>
+      </div>
+      <div class="data-source-explorer-shell data-exchange-explorer-shell">
+        <section class="data-source-explorer-browser-panel">
+          <div class="data-source-explorer-panel-header">
+            <h4>Files</h4>
+            <p>Exchange storage is hidden from the normal data-source browser.</p>
+          </div>
+          <div class="data-source-explorer-browser" data-data-exchange-file-list>
+            <div class="data-source-explorer-empty">
+              <p>Loading DataExchange files...</p>
+            </div>
+          </div>
+        </section>
+        <aside class="data-source-explorer-detail-panel">
+          <div class="data-source-explorer-panel-header">
+            <h4>Details</h4>
+            <p>Download, edit, delete, or move queryable files into a workspace.</p>
+          </div>
+          <div class="data-source-explorer-detail" data-data-exchange-file-detail>
+            <div class="data-source-explorer-empty">
+              <p>Select a file to view metadata and actions.</p>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </section>
+  </div>
+
+  <dialog class="modal-dialog data-exchange-dialog" data-data-exchange-edit-dialog>
+    <form method="dialog" class="modal-content" data-data-exchange-edit-form>
+      <div class="modal-header">
+        <h3>Edit DataExchange Metadata</h3>
+        <button type="button" class="modal-close" data-data-exchange-edit-cancel aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label class="result-export-field" data-data-exchange-edit-password-field>
+          <span class="result-export-field-label">File password</span>
+          <input class="modal-input" type="password" data-data-exchange-edit-password>
+        </label>
+        <label class="result-export-field">
+          <span class="result-export-field-label">Display name</span>
+          <input class="modal-input" type="text" data-data-exchange-edit-display-name>
+        </label>
+        <label class="result-export-field">
+          <span class="result-export-field-label">Owner/contact</span>
+          <input class="modal-input" type="text" data-data-exchange-edit-owner-contact>
+        </label>
+        <label class="result-export-field">
+          <span class="result-export-field-label">Folder</span>
+          <select class="modal-input" data-data-exchange-edit-folder>
+            <option value="">Exchange Files</option>
+          </select>
+        </label>
+        <label class="result-export-field">
+          <span class="result-export-field-label">Description</span>
+          <textarea class="modal-input" rows="3" data-data-exchange-edit-description></textarea>
+        </label>
+        <label class="result-export-field">
+          <span class="result-export-field-label">Tags</span>
+          <input class="modal-input" type="text" data-data-exchange-edit-tags>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="modal-button modal-button-secondary" data-data-exchange-edit-cancel>Cancel</button>
+        <button type="submit" class="modal-button modal-button-primary">Save metadata</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="modal-dialog data-exchange-dialog" data-data-exchange-copy-dialog>
+    <form method="dialog" class="modal-content" data-data-exchange-copy-form>
+      <div class="modal-header">
+        <h3>Copy to Shared Workspace S3</h3>
+        <button type="button" class="modal-close" data-data-exchange-copy-cancel aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label class="result-export-field" data-data-exchange-copy-password-field>
+          <span class="result-export-field-label">File password</span>
+          <input class="modal-input" type="password" data-data-exchange-copy-password>
+        </label>
+        <label class="result-export-field">
+          <span class="result-export-field-label">Bucket</span>
+          <input class="modal-input" type="text" data-data-exchange-copy-bucket>
+        </label>
+        <label class="result-export-field">
+          <span class="result-export-field-label">Prefix</span>
+          <input class="modal-input" type="text" data-data-exchange-copy-prefix placeholder="incoming/exchange">
+        </label>
+        <label class="result-export-field">
+          <span class="result-export-field-label">File name</span>
+          <input class="modal-input" type="text" data-data-exchange-copy-file-name>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="modal-button modal-button-secondary" data-data-exchange-copy-cancel>Cancel</button>
+        <button type="submit" class="modal-button modal-button-primary">Copy file</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog class="modal-dialog data-exchange-dialog" data-data-exchange-folder-dialog>
+    <form method="dialog" class="modal-content" data-data-exchange-folder-form>
+      <div class="modal-header">
+        <h3>Create DataExchange Folder</h3>
+        <button type="button" class="modal-close" data-data-exchange-folder-cancel aria-label="Close">&times;</button>
+      </div>
+      <div class="modal-body">
+        <p class="data-exchange-description">
+          New folder under <strong data-data-exchange-folder-parent-label>Exchange Files</strong>.
+        </p>
+        <label class="result-export-field">
+          <span class="result-export-field-label">Folder name</span>
+          <input class="modal-input" type="text" data-data-exchange-folder-name>
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="modal-button modal-button-secondary" data-data-exchange-folder-cancel>Cancel</button>
+        <button type="submit" class="modal-button modal-button-primary">Create folder</button>
+      </div>
+    </form>
+  </dialog>
+</article>

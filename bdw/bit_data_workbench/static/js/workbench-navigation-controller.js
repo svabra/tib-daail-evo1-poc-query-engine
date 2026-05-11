@@ -4,6 +4,7 @@ export function createWorkbenchNavigationController(helpers) {
     browseDataSourceInSidebar,
     closeSettingsMenus,
     getClearVisibleNotifications,
+    openDataExchangeWorkbench,
     openDataProductsWorkbench,
     getQueryNotificationMenu,
     openLoaderWorkbench,
@@ -84,6 +85,15 @@ export function createWorkbenchNavigationController(helpers) {
       event.stopPropagation();
       closeNotificationMenu();
       await openDataProductsWorkbench();
+      return true;
+    }
+
+    const openDataExchangeButton = event.target.closest("[data-open-data-exchange-workbench]");
+    if (openDataExchangeButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeNotificationMenu();
+      await openDataExchangeWorkbench();
       return true;
     }
 

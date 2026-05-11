@@ -13,6 +13,7 @@ from .version_info import runtime_image_version
 DEFAULT_INGESTION_UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024
 DEFAULT_INGESTION_UPLOAD_MAX_BYTES = 30 * 1024 * 1024 * 1024
 DEFAULT_INGESTION_TABULAR_CONVERSION_MAX_BYTES = 512 * 1024 * 1024
+DEFAULT_DATA_EXCHANGE_PREFIX = "--data-exchange--/"
 
 WORKBENCH_ENVIRONMENT_VARIABLES = (
     "BDW_ENABLE_FILE_LOGGING",
@@ -41,6 +42,9 @@ WORKBENCH_ENVIRONMENT_VARIABLES = (
     "BDW_INGESTION_ZIP_MAX_ENTRIES",
     "BDW_INGESTION_ZIP_MAX_EXPANSION_RATIO",
     "BDW_INGESTION_COPY_CHUNK_BYTES",
+    "BDW_DATA_EXCHANGE_PREFIX",
+    "BDW_DATA_EXCHANGE_UPLOAD_MAX_BYTES",
+    "BDW_DATA_EXCHANGE_DOWNLOAD_TOKEN_TTL_SECONDS",
     "MAX_RESULT_ROWS",
     "S3_ENDPOINT",
     "S3_BUCKET",
@@ -554,6 +558,9 @@ class Settings:
     ingestion_zip_max_entries: int = 100
     ingestion_zip_max_expansion_ratio: float = 100.0
     ingestion_copy_chunk_bytes: int = 8 * 1024 * 1024
+    data_exchange_prefix: str = DEFAULT_DATA_EXCHANGE_PREFIX
+    data_exchange_upload_max_bytes: int = DEFAULT_INGESTION_UPLOAD_MAX_BYTES
+    data_exchange_download_token_ttl_seconds: int = 300
     _generated_s3_ca_cert_file: Path | None = field(init=False, default=None, repr=False)
 
     @classmethod
@@ -669,6 +676,21 @@ class Settings:
             ingestion_copy_chunk_bytes=max(
                 1024 * 1024,
                 env_int("BDW_INGESTION_COPY_CHUNK_BYTES", 8 * 1024 * 1024),
+            ),
+            data_exchange_prefix=env(
+                "BDW_DATA_EXCHANGE_PREFIX",
+                DEFAULT_DATA_EXCHANGE_PREFIX,
+            ),
+            data_exchange_upload_max_bytes=max(
+                1,
+                env_int(
+                    "BDW_DATA_EXCHANGE_UPLOAD_MAX_BYTES",
+                    DEFAULT_INGESTION_UPLOAD_MAX_BYTES,
+                ),
+            ),
+            data_exchange_download_token_ttl_seconds=max(
+                30,
+                env_int("BDW_DATA_EXCHANGE_DOWNLOAD_TOKEN_TTL_SECONDS", 300),
             ),
             max_result_rows=int(env("MAX_RESULT_ROWS", "200")),
             s3_endpoint=env_optional("S3_ENDPOINT"),
