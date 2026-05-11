@@ -6,7 +6,6 @@ from tempfile import TemporaryDirectory
 from ..backend.s3_storage import (
     delete_s3_bucket,
     duckdb_scan_query,
-    derived_s3_bucket_name,
     ensure_s3_bucket,
     parse_s3_url,
     remove_s3_bucket,
@@ -27,6 +26,7 @@ from .base import (
 from .helpers import (
     TAX_ASSESSMENT_DATASET_COLUMNS,
     approximate_size_gb,
+    loader_tree_bucket_name,
     qualified_name,
     tax_assessment_dataset_select,
     sql_literal,
@@ -51,7 +51,7 @@ class PgVsS3ContestDataGenerator(DataGenerator):
     tags = ("postgres", "s3", "oltp", "contest", "tax", "assessment")
 
     def _loader_bucket_name(self, base_bucket: str) -> str:
-        return derived_s3_bucket_name(base_bucket, "pg-vs-s3-contest")
+        return loader_tree_bucket_name(self.tree_path, "pg-vs-s3-contest")
 
     def run(self, context: DataGeneratorContext) -> DataGeneratorResult:
         settings = context.settings

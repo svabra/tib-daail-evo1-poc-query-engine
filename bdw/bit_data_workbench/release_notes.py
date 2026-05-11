@@ -1,9 +1,25 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.8.4. Keep entries concise and
+# Derived from git history through version 0.8.5. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.8.5",
+        "releasedAt": "2026-05-11T10:42:30+02:00",
+        "features": [
+            (
+                "Performance and SQL-functionality loaders now write S3 targets into buckets named from "
+                "their Loader Workbench notebook structure instead of inheriting the local smoke-test "
+                "bucket prefix."
+            ),
+            (
+                "Only the S3 smoke loader keeps the configured smoke-test bucket lineage, with regression "
+                "coverage for the generated bucket names across smoke, performance, SQL functionality, "
+                "and MWA loader runbooks."
+            ),
+        ],
+    },
     {
         "version": "0.8.4",
         "releasedAt": "2026-05-11T10:12:19+02:00",

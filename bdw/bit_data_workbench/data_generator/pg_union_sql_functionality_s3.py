@@ -7,7 +7,6 @@ from tempfile import TemporaryDirectory
 from ..backend.s3_storage import (
     delete_s3_bucket,
     duckdb_scan_query,
-    derived_s3_bucket_name,
     ensure_s3_bucket,
     parse_s3_url,
     remove_s3_bucket,
@@ -29,6 +28,7 @@ from .helpers import (
     CROSS_DATABASE_UNION_DATASET_COLUMNS,
     approximate_size_gb,
     cross_database_union_dataset_select,
+    loader_tree_bucket_name,
     qualified_name,
     sql_literal,
 )
@@ -51,7 +51,7 @@ class PgUnionSqlFunctionalityS3DataGenerator(DataGenerator):
     tags = ("postgres", "s3", "oltp", "sql", "union", "functionalities")
 
     def _loader_bucket_name(self, base_bucket: str) -> str:
-        return derived_s3_bucket_name(base_bucket, "pg-union-s3-functionality")
+        return loader_tree_bucket_name(self.tree_path, "pg-union-s3-functionality")
 
     def run(self, context: DataGeneratorContext) -> DataGeneratorResult:
         settings = context.settings

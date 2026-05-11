@@ -6,7 +6,6 @@ from tempfile import TemporaryDirectory
 from ..backend.s3_storage import (
     delete_s3_bucket,
     duckdb_scan_query,
-    derived_s3_bucket_name,
     ensure_s3_bucket,
     parse_s3_url,
     remove_s3_bucket,
@@ -24,7 +23,7 @@ from .base import (
     generated_name,
     update_generation_target_status,
 )
-from .helpers import approximate_size_gb, qualified_name, sql_literal
+from .helpers import approximate_size_gb, loader_tree_bucket_name, qualified_name, sql_literal
 
 
 MWA_ABRECHNUNG_TABLE = "mwa_abrechnung_entities"
@@ -328,7 +327,7 @@ class MwaAbrechnungMultiFormatDataGenerator(DataGenerator):
     )
 
     def _loader_bucket_name(self, base_bucket: str) -> str:
-        return derived_s3_bucket_name(base_bucket, "mwa-abrechnung")
+        return loader_tree_bucket_name(self.tree_path, "mwa-abrechnung")
 
     def _row_counts(self, total_rows: int) -> dict[str, int]:
         parent_rows = max(1, total_rows // 4)

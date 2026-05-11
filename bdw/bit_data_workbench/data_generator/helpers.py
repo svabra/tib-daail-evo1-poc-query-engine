@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import re
+
 from .base import BYTES_PER_GB
 
 
@@ -64,6 +67,31 @@ def sql_literal(value: str) -> str:
 
 def qualified_name(*parts: str) -> str:
     return ".".join(sql_identifier(part) for part in parts)
+
+
+def loader_tree_bucket_name(
+    tree_path: tuple[str, ...],
+    fallback: str,
+) -> str:
+    path_segments = [
+        re.sub(r"-{2,}", "-", re.sub(r"[^a-z0-9-]+", "-", segment.strip().lower())).strip("-")
+        for segment in tree_path
+        if segment.strip()
+    ]
+    normalized_fallback = re.sub(
+        r"-{2,}",
+        "-",
+        re.sub(r"[^a-z0-9-]+", "-", fallback.strip().lower()),
+    ).strip("-")
+    bucket_name = "-".join(segment for segment in path_segments if segment) or normalized_fallback
+    bucket_name = bucket_name or "loader"
+    if len(bucket_name) <= 63:
+        return bucket_name
+
+    suffix = hashlib.sha1(bucket_name.encode("utf-8")).hexdigest()[:8]
+    max_base_length = max(3, 63 - len(suffix) - 1)
+    trimmed = bucket_name[:max_base_length].rstrip("-") or "loader"
+    return f"{trimmed}-{suffix}"
 
 
 def approximate_size_gb(row_count: int, approximate_row_bytes: int) -> float:
