@@ -174,11 +174,13 @@ export function sourceObjectS3DownloadDescriptor(sourceObjectRoot) {
 
   const path = String(sourceObjectRoot.dataset.s3Path || "").trim();
   const keySegments = key.split("/").filter(Boolean);
+  const displayName = sourceObjectDisplayName(sourceObjectRoot);
+  const keyFileName = keySegments[keySegments.length - 1] || "";
   return {
     bucket,
     key,
     path,
-    fileName: keySegments[keySegments.length - 1] || sourceObjectDisplayName(sourceObjectRoot),
+    fileName: displayName.includes(".") ? displayName : keyFileName || displayName || "s3-object",
   };
 }
 

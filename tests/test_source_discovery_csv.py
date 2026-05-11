@@ -4,6 +4,7 @@ from io import BytesIO
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest import TestCase
 
 from openpyxl import Workbook
@@ -15,6 +16,7 @@ if str(BDW_ROOT) not in sys.path:
     sys.path.insert(0, str(BDW_ROOT))
 
 
+from bit_data_workbench.backend.service import WorkbenchService  # noqa: E402
 from bit_data_workbench.backend.source_discovery import S3DataSourceDiscoverer  # noqa: E402
 from bit_data_workbench.config import Settings  # noqa: E402
 from bit_data_workbench.version_info import current_repo_version  # noqa: E402
@@ -122,6 +124,47 @@ class DataExchangeHiddenS3Client:
         raise AssertionError("Hidden DataExchange object should not be inspected.")
 
 
+class GeneratedMwaLoaderS3Client:
+    keys = (
+        "generated/mwa_abrechnung_test/csv/mwa_abrechnung_entities/part-00001.csv",
+        "generated/mwa_abrechnung_test/json/mwa_abrechnung_entities/part-00001.jsonl",
+        "generated/mwa_abrechnung_test/parquet/mwa_abrechnung_entities/part-00001.parquet",
+        "generated/mwa_abrechnung_test/parquet/mwa_abrechnung_entities/part-00002.parquet",
+    )
+
+    def list_objects_v2(self, **kwargs):
+        bucket = kwargs["Bucket"]
+        prefix = str(kwargs.get("Prefix") or "")
+        if bucket != "vat-smoke-test":
+            return {"Contents": [], "IsTruncated": False}
+        return {
+            "Contents": [
+                {"Key": key}
+                for key in self.keys
+                if key.startswith(prefix)
+            ],
+            "IsTruncated": False,
+        }
+
+    def head_object(self, **kwargs):
+        if kwargs["Bucket"] != "vat-smoke-test":
+            raise AssertionError("Unexpected generated loader bucket.")
+        key = kwargs["Key"]
+        if key.endswith(".csv"):
+            return {
+                "ETag": '"csv123"',
+                "ContentLength": 128,
+                "Metadata": {},
+            }
+        if key.endswith(".jsonl"):
+            return {
+                "ETag": '"json123"',
+                "ContentLength": 256,
+                "Metadata": {},
+            }
+        raise AssertionError(f"Unexpected generated loader head_object request: {key}")
+
+
 class CsvS3DiscoveryTests(TestCase):
     def test_discovered_csv_spec_uses_uploaded_csv_metadata_for_query_sql(self) -> None:
         discoverer = S3DataSourceDiscoverer(make_settings())
@@ -216,3 +259,56 @@ class CsvS3DiscoveryTests(TestCase):
             self.assertEqual(xlsx_spec.display_name, "tax-office.xlsx")
             self.assertEqual(xlsx_spec.size_bytes, 256)
             self.assertIn("read_csv_auto(", xlsx_spec.query_sql)
+
+    def test_generated_loader_multiformat_outputs_use_file_display_names(self) -> None:
+        discoverer = S3DataSourceDiscoverer(make_settings())
+
+        specs = discoverer._build_desired_specs(
+            GeneratedMwaLoaderS3Client(),
+            {"vat-smoke-test"},
+        )
+        specs_by_relation = {spec.relation_name: spec for spec in specs.values()}
+
+        self.assertNotIn("mwa_abrechnung_test", specs_by_relation)
+
+        csv_spec = specs_by_relation["mwa_abrechnung_entities_csv"]
+        self.assertEqual(csv_spec.display_name, "mwa_abrechnung_entities.csv")
+        self.assertEqual(csv_spec.object_format, "csv")
+        self.assertTrue(csv_spec.object_path.endswith("/part-00001.csv"))
+        self.assertEqual(csv_spec.size_bytes, 128)
+        self.assertTrue(csv_spec.csv_has_header)
+        self.assertIn("read_csv_auto(", csv_spec.query_sql)
+        self.assertIn("HEADER = TRUE", csv_spec.query_sql)
+
+        json_spec = specs_by_relation["mwa_abrechnung_entities_json"]
+        self.assertEqual(json_spec.display_name, "mwa_abrechnung_entities.jsonl")
+        self.assertEqual(json_spec.object_format, "jsonl")
+        self.assertTrue(json_spec.object_path.endswith("/part-00001.jsonl"))
+        self.assertEqual(json_spec.size_bytes, 256)
+        self.assertIn("read_json_auto(", json_spec.query_sql)
+
+        parquet_spec = specs_by_relation["mwa_abrechnung_entities_parquet"]
+        self.assertEqual(parquet_spec.display_name, "mwa_abrechnung_entities.parquet")
+        self.assertEqual(parquet_spec.object_format, "parquet")
+        self.assertTrue(parquet_spec.object_path.endswith("/parquet/mwa_abrechnung_entities/*.parquet"))
+
+    def test_generated_single_objects_are_downloadable_in_workspace_metadata(self) -> None:
+        discoverer = S3DataSourceDiscoverer(make_settings())
+        specs = discoverer._build_desired_specs(
+            GeneratedMwaLoaderS3Client(),
+            {"vat-smoke-test"},
+        )
+        service = object.__new__(WorkbenchService)
+        service._data_source_discovery = SimpleNamespace(
+            s3_relation_specs=lambda: specs,
+        )
+
+        metadata = WorkbenchService._workspace_s3_object_metadata(service)
+        by_display_name = {
+            value["display_name"]: value
+            for value in metadata.values()
+        }
+
+        self.assertTrue(by_display_name["mwa_abrechnung_entities.csv"]["downloadable"])
+        self.assertTrue(by_display_name["mwa_abrechnung_entities.jsonl"]["downloadable"])
+        self.assertFalse(by_display_name["mwa_abrechnung_entities.parquet"]["downloadable"])

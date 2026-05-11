@@ -35,7 +35,7 @@ from .s3_storage import iter_s3_keys, list_s3_buckets, s3_bucket_schema_name, s3
 
 
 logger = logging.getLogger(__name__)
-SUPPORTED_DISCOVERED_S3_FORMATS = {"parquet", "csv", "json", "xml", "xlsx"}
+SUPPORTED_DISCOVERED_S3_FORMATS = {"parquet", "csv", "json", "jsonl", "xml", "xlsx"}
 MAX_SOURCE_EVENT_HISTORY = 40
 
 
@@ -50,9 +50,10 @@ def build_s3_query(
     csv_delimiter: str = "",
     csv_has_header: bool | None = None,
 ) -> str:
-    if data_format == "parquet":
+    normalized_format = str(data_format or "").strip().lower()
+    if normalized_format == "parquet":
         return f"SELECT * FROM read_parquet({sql_literal(path)})"
-    if data_format == "csv":
+    if normalized_format == "csv":
         options: list[str] = []
         if csv_has_header is not None:
             options.append(f"HEADER = {'TRUE' if csv_has_header else 'FALSE'}")
@@ -64,7 +65,7 @@ def build_s3_query(
                 f"{', '.join(options)})"
             )
         return f"SELECT * FROM read_csv_auto({sql_literal(path)})"
-    if data_format == "json":
+    if normalized_format in {"json", "jsonl", "ndjson"}:
         return f"SELECT * FROM read_json_auto({sql_literal(path)})"
     raise ValueError(f"Unsupported S3 discovery format: {data_format}")
 
@@ -97,6 +98,17 @@ def infer_key_format(key: str) -> str | None:
     if lowered.endswith(".xlsx") or lowered.endswith(".xls") or lowered.endswith(".xlsxm"):
         return "xlsx"
     return None
+
+
+def display_file_format_for_key(key: str, fallback_format: str) -> str:
+    suffix = PurePosixPath(key).suffix.lower().lstrip(".")
+    if suffix in {"jsonl", "ndjson"}:
+        return "jsonl"
+    if suffix in {"xls", "xlsx", "xlsxm"}:
+        return "xlsx"
+    if suffix:
+        return suffix
+    return fallback_format
 
 
 def sanitize_relation_name(raw_value: str) -> str:
@@ -704,14 +716,7 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
             pass
 
     def _display_file_format(self, key: str, fallback_format: str) -> str:
-        suffix = PurePosixPath(key).suffix.lower().lstrip(".")
-        if suffix in {"jsonl", "ndjson"}:
-            return "jsonl"
-        if suffix in {"xls", "xlsx", "xlsxm"}:
-            return "xlsx"
-        if suffix:
-            return suffix
-        return fallback_format
+        return display_file_format_for_key(key, fallback_format)
 
     def _read_s3_object_bytes(
         self,
@@ -822,13 +827,107 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                     display_name=view_name,
                 )
 
+            generated_structured_groups: dict[tuple[str, str, str, str, str, str, str], list[str]] = {}
+            for key in key_set:
+                parts = key.split("/")
+                if len(parts) != 5 or parts[0] != "generated":
+                    continue
+                dataset_name, format_name, table_name, file_name = parts[1:]
+                normalized_format_name = format_name.strip().lower()
+                if not dataset_name or not normalized_format_name or not table_name or not file_name:
+                    continue
+
+                reader_format = infer_key_format(file_name)
+                if reader_format not in {"parquet", "csv", "json"}:
+                    continue
+
+                display_format = display_file_format_for_key(file_name, reader_format)
+                relation_format = (
+                    normalized_format_name
+                    if normalized_format_name in {"parquet", "csv", "json"}
+                    else display_format
+                )
+                extension = PurePosixPath(file_name).suffix.lower().lstrip(".") or display_format
+                generated_structured_groups.setdefault(
+                    (
+                        dataset_name,
+                        normalized_format_name,
+                        relation_format,
+                        table_name,
+                        reader_format,
+                        display_format,
+                        extension,
+                    ),
+                    [],
+                ).append(key)
+
+            for (
+                dataset_name,
+                format_name,
+                relation_format,
+                table_name,
+                reader_format,
+                display_format,
+                extension,
+            ), group_keys in sorted(generated_structured_groups.items()):
+                relation_name = choose_unique_relation_name(
+                    f"{table_name}_{relation_format}",
+                    source_hint=f"generated_{dataset_name}_{relation_format}_{table_name}",
+                    used_names=used_names,
+                )
+                sorted_group_keys = sorted(group_keys)
+                if len(sorted_group_keys) == 1:
+                    object_key = sorted_group_keys[0]
+                    object_path = f"s3://{bucket}/{object_key}"
+                    head_response = self._head_object(client, bucket=bucket, key=object_key)
+                    object_size_bytes = int(head_response.get("ContentLength") or 0)
+                    csv_delimiter, csv_has_header = (
+                        self._csv_read_settings_from_head(head_response)
+                        if reader_format == "csv"
+                        else ("", None)
+                    )
+                else:
+                    object_key = ""
+                    object_path = (
+                        f"s3://{bucket}/generated/{dataset_name}/{format_name}/"
+                        f"{table_name}/*.{extension}"
+                    )
+                    object_size_bytes = 0
+                    csv_delimiter, csv_has_header = "", None
+
+                if reader_format == "csv" and csv_has_header is None:
+                    csv_has_header = True
+
+                desired_specs[f"{schema_name}.{relation_name}"] = DiscoveredRelationSpec(
+                    schema_name=schema_name,
+                    relation_name=relation_name,
+                    query_sql=build_s3_query(
+                        display_format,
+                        object_path,
+                        csv_delimiter=csv_delimiter,
+                        csv_has_header=csv_has_header,
+                    ),
+                    object_path=object_path,
+                    object_format=display_format,
+                    display_name=f"{table_name}.{display_format}",
+                    size_bytes=object_size_bytes,
+                    object_revision=(
+                        self._object_revision_from_head(head_response)
+                        if object_key
+                        else "|".join(sorted_group_keys)
+                    ),
+                    csv_delimiter=csv_delimiter,
+                    csv_has_header=csv_has_header,
+                )
+
             generated_datasets = sorted(
                 {
-                    key.split("/", 2)[1]
+                    parts[1]
                     for key in key_set
-                    if key.startswith("generated/")
-                    and key.lower().endswith(".parquet")
-                    and len(key.split("/", 2)) >= 3
+                    for parts in (key.split("/"),)
+                    if len(parts) == 3
+                    and parts[0] == "generated"
+                    and infer_key_format(parts[2]) == "parquet"
                 }
             )
             for dataset_name in generated_datasets:
