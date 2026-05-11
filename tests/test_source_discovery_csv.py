@@ -127,10 +127,20 @@ class DataExchangeHiddenS3Client:
 class GeneratedMwaLoaderS3Client:
     keys = (
         "generated/mwa_abrechnung_test/csv/mwa_abrechnung_entities/part-00001.csv",
+        "generated/mwa_abrechnung_test/csv/mwa_abrechnung_entities/part-00002.csv",
         "generated/mwa_abrechnung_test/json/mwa_abrechnung_entities/part-00001.jsonl",
+        "generated/mwa_abrechnung_test/json/mwa_abrechnung_entities/part-00002.jsonl",
         "generated/mwa_abrechnung_test/parquet/mwa_abrechnung_entities/part-00001.parquet",
         "generated/mwa_abrechnung_test/parquet/mwa_abrechnung_entities/part-00002.parquet",
     )
+    sizes = {
+        "generated/mwa_abrechnung_test/csv/mwa_abrechnung_entities/part-00001.csv": 128,
+        "generated/mwa_abrechnung_test/csv/mwa_abrechnung_entities/part-00002.csv": 96,
+        "generated/mwa_abrechnung_test/json/mwa_abrechnung_entities/part-00001.jsonl": 256,
+        "generated/mwa_abrechnung_test/json/mwa_abrechnung_entities/part-00002.jsonl": 192,
+        "generated/mwa_abrechnung_test/parquet/mwa_abrechnung_entities/part-00001.parquet": 512,
+        "generated/mwa_abrechnung_test/parquet/mwa_abrechnung_entities/part-00002.parquet": 384,
+    }
 
     def list_objects_v2(self, **kwargs):
         bucket = kwargs["Bucket"]
@@ -150,19 +160,19 @@ class GeneratedMwaLoaderS3Client:
         if kwargs["Bucket"] != "vat-smoke-test":
             raise AssertionError("Unexpected generated loader bucket.")
         key = kwargs["Key"]
+        if key not in self.sizes:
+            raise AssertionError(f"Unexpected generated loader head_object request: {key}")
+        metadata = {}
         if key.endswith(".csv"):
-            return {
-                "ETag": '"csv123"',
-                "ContentLength": 128,
-                "Metadata": {},
+            metadata = {
+                "bdw_csv_has_header": "true",
+                "bdw_csv_delimiter": "comma",
             }
-        if key.endswith(".jsonl"):
-            return {
-                "ETag": '"json123"',
-                "ContentLength": 256,
-                "Metadata": {},
-            }
-        raise AssertionError(f"Unexpected generated loader head_object request: {key}")
+        return {
+            "ETag": f'"{Path(key).name}-etag"',
+            "ContentLength": self.sizes[key],
+            "Metadata": metadata,
+        }
 
 
 class CsvS3DiscoveryTests(TestCase):
@@ -274,25 +284,57 @@ class CsvS3DiscoveryTests(TestCase):
         csv_spec = specs_by_relation["mwa_abrechnung_entities_csv"]
         self.assertEqual(csv_spec.display_name, "mwa_abrechnung_entities.csv")
         self.assertEqual(csv_spec.object_format, "csv")
-        self.assertTrue(csv_spec.object_path.endswith("/part-00001.csv"))
-        self.assertEqual(csv_spec.size_bytes, 128)
+        self.assertTrue(csv_spec.object_path.endswith("/csv/mwa_abrechnung_entities/*.csv"))
+        self.assertEqual(csv_spec.size_bytes, 224)
         self.assertTrue(csv_spec.csv_has_header)
+        self.assertEqual(csv_spec.csv_delimiter, ",")
+        self.assertEqual(csv_spec.download_kind, "generated_parts")
+        self.assertEqual(
+            csv_spec.part_prefix,
+            "generated/mwa_abrechnung_test/csv/mwa_abrechnung_entities/",
+        )
+        self.assertEqual(csv_spec.part_file_format, "csv")
+        self.assertEqual(csv_spec.part_count, 2)
+        self.assertEqual(csv_spec.download_filename, "mwa_abrechnung_entities.csv")
+        self.assertTrue(csv_spec.merge_downloadable)
+        self.assertTrue(csv_spec.zip_downloadable)
         self.assertIn("read_csv_auto(", csv_spec.query_sql)
         self.assertIn("HEADER = TRUE", csv_spec.query_sql)
 
         json_spec = specs_by_relation["mwa_abrechnung_entities_json"]
         self.assertEqual(json_spec.display_name, "mwa_abrechnung_entities.jsonl")
         self.assertEqual(json_spec.object_format, "jsonl")
-        self.assertTrue(json_spec.object_path.endswith("/part-00001.jsonl"))
-        self.assertEqual(json_spec.size_bytes, 256)
+        self.assertTrue(json_spec.object_path.endswith("/json/mwa_abrechnung_entities/*.jsonl"))
+        self.assertEqual(json_spec.size_bytes, 448)
+        self.assertEqual(json_spec.download_kind, "generated_parts")
+        self.assertEqual(
+            json_spec.part_prefix,
+            "generated/mwa_abrechnung_test/json/mwa_abrechnung_entities/",
+        )
+        self.assertEqual(json_spec.part_file_format, "jsonl")
+        self.assertEqual(json_spec.part_count, 2)
+        self.assertEqual(json_spec.download_filename, "mwa_abrechnung_entities.jsonl")
+        self.assertTrue(json_spec.merge_downloadable)
+        self.assertTrue(json_spec.zip_downloadable)
         self.assertIn("read_json_auto(", json_spec.query_sql)
 
         parquet_spec = specs_by_relation["mwa_abrechnung_entities_parquet"]
         self.assertEqual(parquet_spec.display_name, "mwa_abrechnung_entities.parquet")
         self.assertEqual(parquet_spec.object_format, "parquet")
         self.assertTrue(parquet_spec.object_path.endswith("/parquet/mwa_abrechnung_entities/*.parquet"))
+        self.assertEqual(parquet_spec.size_bytes, 896)
+        self.assertEqual(parquet_spec.download_kind, "generated_parts")
+        self.assertEqual(
+            parquet_spec.part_prefix,
+            "generated/mwa_abrechnung_test/parquet/mwa_abrechnung_entities/",
+        )
+        self.assertEqual(parquet_spec.part_file_format, "parquet")
+        self.assertEqual(parquet_spec.part_count, 2)
+        self.assertEqual(parquet_spec.download_filename, "mwa_abrechnung_entities.parquet")
+        self.assertFalse(parquet_spec.merge_downloadable)
+        self.assertTrue(parquet_spec.zip_downloadable)
 
-    def test_generated_single_objects_are_downloadable_in_workspace_metadata(self) -> None:
+    def test_generated_parts_expose_download_metadata_in_workspace_metadata(self) -> None:
         discoverer = S3DataSourceDiscoverer(make_settings())
         specs = discoverer._build_desired_specs(
             GeneratedMwaLoaderS3Client(),
@@ -309,6 +351,29 @@ class CsvS3DiscoveryTests(TestCase):
             for value in metadata.values()
         }
 
-        self.assertTrue(by_display_name["mwa_abrechnung_entities.csv"]["downloadable"])
-        self.assertTrue(by_display_name["mwa_abrechnung_entities.jsonl"]["downloadable"])
-        self.assertFalse(by_display_name["mwa_abrechnung_entities.parquet"]["downloadable"])
+        csv_metadata = by_display_name["mwa_abrechnung_entities.csv"]
+        self.assertFalse(csv_metadata["downloadable"])
+        self.assertEqual(csv_metadata["download_kind"], "generated_parts")
+        self.assertEqual(csv_metadata["part_count"], 2)
+        self.assertEqual(csv_metadata["size_bytes"], 224)
+        self.assertEqual(csv_metadata["download_filename"], "mwa_abrechnung_entities.csv")
+        self.assertTrue(csv_metadata["merge_downloadable"])
+        self.assertTrue(csv_metadata["zip_downloadable"])
+
+        json_metadata = by_display_name["mwa_abrechnung_entities.jsonl"]
+        self.assertFalse(json_metadata["downloadable"])
+        self.assertEqual(json_metadata["download_kind"], "generated_parts")
+        self.assertEqual(json_metadata["part_count"], 2)
+        self.assertEqual(json_metadata["size_bytes"], 448)
+        self.assertEqual(json_metadata["download_filename"], "mwa_abrechnung_entities.jsonl")
+        self.assertTrue(json_metadata["merge_downloadable"])
+        self.assertTrue(json_metadata["zip_downloadable"])
+
+        parquet_metadata = by_display_name["mwa_abrechnung_entities.parquet"]
+        self.assertFalse(parquet_metadata["downloadable"])
+        self.assertEqual(parquet_metadata["download_kind"], "generated_parts")
+        self.assertEqual(parquet_metadata["part_count"], 2)
+        self.assertEqual(parquet_metadata["size_bytes"], 896)
+        self.assertEqual(parquet_metadata["download_filename"], "mwa_abrechnung_entities.parquet")
+        self.assertFalse(parquet_metadata["merge_downloadable"])
+        self.assertTrue(parquet_metadata["zip_downloadable"])

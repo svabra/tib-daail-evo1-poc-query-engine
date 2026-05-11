@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 import xml.etree.ElementTree as ET
@@ -84,6 +85,66 @@ class FakeS3Client:
         self.uploads.append((filename, bucket, key, ExtraArgs))
 
 
+class FakeDuckCursor:
+    def __init__(self, rows: list[tuple[int, ...]]) -> None:
+        self.description = [("id",)]
+        self._rows = rows
+        self._offset = 0
+
+    def fetchmany(self, size: int) -> list[tuple[int, ...]]:
+        batch = self._rows[self._offset : self._offset + size]
+        self._offset += len(batch)
+        return batch
+
+
+class FakeDuckConnection:
+    def __init__(self, rows: list[tuple[int, ...]]) -> None:
+        self._rows = rows
+        self.executed_sql: list[str] = []
+        self.closed = False
+
+    def execute(self, sql: str) -> FakeDuckCursor:
+        self.executed_sql.append(sql)
+        return FakeDuckCursor(self._rows)
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakePostgresCursor:
+    def __init__(self, rows: list[tuple[int, ...]]) -> None:
+        self.description = [SimpleNamespace(name="id")]
+        self._rows = rows
+        self._offset = 0
+        self.executed_sql: list[str] = []
+
+    def __enter__(self) -> "FakePostgresCursor":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        return None
+
+    def execute(self, sql: str) -> None:
+        self.executed_sql.append(sql)
+
+    def fetchmany(self, size: int) -> list[tuple[int, ...]]:
+        batch = self._rows[self._offset : self._offset + size]
+        self._offset += len(batch)
+        return batch
+
+
+class FakePostgresConnection:
+    def __init__(self, rows: list[tuple[int, ...]]) -> None:
+        self.cursor_instance = FakePostgresCursor(rows)
+        self.closed = False
+
+    def cursor(self) -> FakePostgresCursor:
+        return self.cursor_instance
+
+    def close(self) -> None:
+        self.closed = True
+
+
 def make_job() -> QueryJobDefinition:
     return QueryJobDefinition(
         job_id="job-1",
@@ -102,6 +163,18 @@ def make_job() -> QueryJobDefinition:
         rows_shown=2,
         truncated=False,
     )
+
+
+def make_truncated_job(*, data_sources: list[str] | None = None) -> QueryJobDefinition:
+    job = make_job()
+    job.sql = "select id from generated_rows"
+    job.columns = ["id"]
+    job.rows = [(value,) for value in range(200)]
+    job.row_count = 250
+    job.rows_shown = 200
+    job.truncated = True
+    job.data_sources = list(data_sources or [])
+    return job
 
 
 def make_manager() -> QueryResultExportManager:
@@ -240,3 +313,62 @@ class QueryResultExportTests(TestCase):
         self.assertEqual(result.key, "results/tax-results.jsonl")
         self.assertEqual(len(fake_client.uploads), 1)
         self.assertEqual(fake_client.uploads[0][1:3], ("exports", "results/tax-results.jsonl"))
+
+    def test_truncated_duckdb_export_reruns_sql_and_writes_all_rows(self) -> None:
+        full_rows = [(value,) for value in range(250)]
+        connection = FakeDuckConnection(full_rows)
+        job = make_truncated_job()
+        manager = QueryResultExportManager(
+            settings=make_settings(),
+            connection_factory=lambda: connection,
+            postgres_connection_factory=lambda alias: None,
+            query_job_resolver=lambda job_id: job,
+        )
+
+        artifact = manager.download(job_id="job-1", export_format="csv")
+
+        self.assertEqual(connection.executed_sql, [job.sql])
+        self.assertTrue(connection.closed)
+        lines = artifact.local_path.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(lines), 251)
+        self.assertEqual(lines[0], "id")
+        self.assertEqual(lines[200], "199")
+        self.assertEqual(lines[250], "249")
+
+    def test_non_truncated_export_uses_cached_rows_without_rerunning_sql(self) -> None:
+        def fail_connection_factory():
+            raise AssertionError("Non-truncated exports should not rerun SQL.")
+
+        manager = QueryResultExportManager(
+            settings=make_settings(),
+            connection_factory=fail_connection_factory,
+            postgres_connection_factory=lambda alias: None,
+            query_job_resolver=lambda job_id: make_job(),
+        )
+
+        artifact = manager.download(job_id="job-1", export_format="csv")
+
+        self.assertEqual(
+            artifact.local_path.read_text(encoding="utf-8").splitlines(),
+            ["id,name", "1,alpha", "2,beta"],
+        )
+
+    def test_truncated_postgres_native_export_reruns_sql_and_writes_all_rows(self) -> None:
+        full_rows = [(value,) for value in range(250)]
+        connection = FakePostgresConnection(full_rows)
+        job = make_truncated_job(data_sources=["pg_oltp_native"])
+        manager = QueryResultExportManager(
+            settings=make_settings(),
+            connection_factory=lambda: None,
+            postgres_connection_factory=lambda alias: connection,
+            query_job_resolver=lambda job_id: job,
+        )
+
+        artifact = manager.download(job_id="job-1", export_format="csv")
+
+        self.assertEqual(connection.cursor_instance.executed_sql, [job.sql])
+        self.assertTrue(connection.closed)
+        lines = artifact.local_path.read_text(encoding="utf-8").splitlines()
+        self.assertEqual(len(lines), 251)
+        self.assertEqual(lines[0], "id")
+        self.assertEqual(lines[-1], "249")

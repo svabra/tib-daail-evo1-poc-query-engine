@@ -205,6 +205,13 @@
                 data-s3-file-format="{{ source_object.s3_file_format }}"
                 data-s3-downloadable="{{ 'true' if source_object.s3_downloadable else 'false' }}"
                 data-s3-size-bytes="{{ source_object.size_bytes }}"
+                data-s3-download-kind="{{ source_object.s3_download_kind }}"
+                data-s3-part-prefix="{{ source_object.s3_part_prefix }}"
+                data-s3-part-file-format="{{ source_object.s3_part_file_format }}"
+                data-s3-part-count="{{ source_object.s3_part_count }}"
+                data-s3-download-filename="{{ source_object.s3_download_filename }}"
+                data-s3-merge-downloadable="{{ 'true' if source_object.s3_merge_downloadable else 'false' }}"
+                data-s3-zip-downloadable="{{ 'true' if source_object.s3_zip_downloadable else 'false' }}"
                 data-published-data-products='{{ source_object_published_products | tojson }}'
               >
                 <span class="source-node-label">
@@ -276,6 +283,26 @@
                           title="Download the underlying S3 object"
                         >
                           Download S3 object
+                        </button>
+                      {% endif %}
+                      {% if source_object.s3_merge_downloadable %}
+                        <button
+                          type="button"
+                          class="workspace-action-menu-item"
+                          data-download-source-s3-generated-merged
+                          title="Download the generated S3 parts as one merged file"
+                        >
+                          Download merged file
+                        </button>
+                      {% endif %}
+                      {% if source_object.s3_zip_downloadable %}
+                        <button
+                          type="button"
+                          class="workspace-action-menu-item"
+                          data-download-source-s3-generated-zip
+                          title="Download the generated S3 parts as a ZIP archive"
+                        >
+                          Download parts as ZIP
                         </button>
                       {% endif %}
                       <button

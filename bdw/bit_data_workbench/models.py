@@ -30,6 +30,13 @@ class SourceObject:
     s3_file_format: str = ""
     s3_downloadable: bool = False
     size_bytes: int = 0
+    s3_download_kind: str = ""
+    s3_part_prefix: str = ""
+    s3_part_file_format: str = ""
+    s3_part_count: int = 0
+    s3_download_filename: str = ""
+    s3_merge_downloadable: bool = False
+    s3_zip_downloadable: bool = False
     published_data_products: list[dict[str, Any]] = field(default_factory=list)
 
 

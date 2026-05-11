@@ -1155,6 +1155,23 @@ class WorkbenchService:
     def stream_s3_object(self, *, bucket: str, key: str, file_name: str = ""):
         return self._s3_plugin.stream_object(bucket=bucket, key=key, file_name=file_name)
 
+    def download_s3_generated_parts(
+        self,
+        *,
+        bucket: str,
+        prefix: str,
+        file_format: str,
+        mode: str = "merged",
+        file_name: str = "",
+    ):
+        return self._s3_plugin.download_generated_parts(
+            bucket=bucket,
+            prefix=prefix,
+            file_format=file_format,
+            mode=mode,
+            file_name=file_name,
+        )
+
     def source_object_ddl(
         self,
         *,
@@ -3156,6 +3173,13 @@ class WorkbenchService:
                     s3_file_format=str(s3_metadata.get("file_format") or ""),
                     s3_downloadable=s3_metadata.get("downloadable") is True,
                     size_bytes=int(s3_metadata.get("size_bytes") or 0),
+                    s3_download_kind=str(s3_metadata.get("download_kind") or ""),
+                    s3_part_prefix=str(s3_metadata.get("part_prefix") or ""),
+                    s3_part_file_format=str(s3_metadata.get("part_file_format") or ""),
+                    s3_part_count=int(s3_metadata.get("part_count") or 0),
+                    s3_download_filename=str(s3_metadata.get("download_filename") or ""),
+                    s3_merge_downloadable=s3_metadata.get("merge_downloadable") is True,
+                    s3_zip_downloadable=s3_metadata.get("zip_downloadable") is True,
                 )
             )
 
@@ -3242,10 +3266,16 @@ class WorkbenchService:
                 bucket_name, object_key = parse_s3_path(object_path)
             except ValueError:
                 continue
-            downloadable = not any(token in object_key for token in "*?[") and not object_key.endswith("/")
+            download_kind = str(getattr(spec, "download_kind", "") or "").strip()
+            generated_parts = download_kind == "generated_parts"
+            downloadable = (
+                not generated_parts
+                and not any(token in object_key for token in "*?[")
+                and not object_key.endswith("/")
+            )
             metadata[relation_id] = {
                 "bucket": bucket_name,
-                "key": object_key,
+                "key": "" if generated_parts else object_key,
                 "path": object_path,
                 "display_name": str(spec.display_name or "").strip()
                 or (
@@ -3256,6 +3286,13 @@ class WorkbenchService:
                 "file_format": str(spec.object_format or "").strip(),
                 "downloadable": downloadable,
                 "size_bytes": int(spec.size_bytes or 0),
+                "download_kind": download_kind or ("object" if downloadable else ""),
+                "part_prefix": str(getattr(spec, "part_prefix", "") or "").strip(),
+                "part_file_format": str(getattr(spec, "part_file_format", "") or "").strip(),
+                "part_count": int(getattr(spec, "part_count", 0) or 0),
+                "download_filename": str(getattr(spec, "download_filename", "") or "").strip(),
+                "merge_downloadable": bool(getattr(spec, "merge_downloadable", False)),
+                "zip_downloadable": bool(getattr(spec, "zip_downloadable", False)),
             }
         return metadata
 

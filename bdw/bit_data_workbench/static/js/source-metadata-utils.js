@@ -184,6 +184,49 @@ export function sourceObjectS3DownloadDescriptor(sourceObjectRoot) {
   };
 }
 
+export function sourceObjectS3GeneratedDownloadDescriptor(sourceObjectRoot, mode = "merged") {
+  if (!(sourceObjectRoot instanceof Element)) {
+    return null;
+  }
+
+  const downloadKind = String(sourceObjectRoot.dataset.s3DownloadKind || "").trim();
+  const bucket = String(sourceObjectRoot.dataset.s3Bucket || "").trim();
+  const prefix = String(sourceObjectRoot.dataset.s3PartPrefix || "").trim();
+  const fileFormat = String(
+    sourceObjectRoot.dataset.s3PartFileFormat ||
+      sourceObjectRoot.dataset.s3FileFormat ||
+      ""
+  ).trim();
+  const normalizedMode = String(mode || "").trim().toLowerCase() || "merged";
+  if (downloadKind !== "generated_parts" || !bucket || !prefix || !fileFormat) {
+    return null;
+  }
+
+  const mergeDownloadable =
+    String(sourceObjectRoot.dataset.s3MergeDownloadable || "").trim().toLowerCase() === "true";
+  const zipDownloadable =
+    String(sourceObjectRoot.dataset.s3ZipDownloadable || "").trim().toLowerCase() === "true";
+  if (normalizedMode === "merged" && !mergeDownloadable) {
+    return null;
+  }
+  if (normalizedMode === "zip" && !zipDownloadable) {
+    return null;
+  }
+  if (!["merged", "zip"].includes(normalizedMode)) {
+    return null;
+  }
+
+  const configuredFileName = String(sourceObjectRoot.dataset.s3DownloadFilename || "").trim();
+  const displayName = sourceObjectDisplayName(sourceObjectRoot);
+  return {
+    bucket,
+    prefix,
+    fileFormat,
+    mode: normalizedMode,
+    fileName: configuredFileName || displayName || "generated-parts",
+  };
+}
+
 export function sourceObjectS3DeleteDescriptor(sourceObjectRoot) {
   const descriptor = sourceObjectS3DownloadDescriptor(sourceObjectRoot);
   if (!descriptor) {

@@ -157,6 +157,13 @@ class DiscoveredRelationSpec:
     object_revision: str = ""
     csv_delimiter: str = ""
     csv_has_header: bool | None = None
+    download_kind: str = ""
+    part_prefix: str = ""
+    part_file_format: str = ""
+    part_count: int = 0
+    download_filename: str = ""
+    merge_downloadable: bool = False
+    zip_downloadable: bool = False
 
 
 @dataclass(slots=True)
@@ -421,8 +428,16 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                 object_format=spec.object_format,
                 display_name=spec.display_name,
                 size_bytes=spec.size_bytes,
+                object_revision=spec.object_revision,
                 csv_delimiter=spec.csv_delimiter,
                 csv_has_header=spec.csv_has_header,
+                download_kind=spec.download_kind,
+                part_prefix=spec.part_prefix,
+                part_file_format=spec.part_file_format,
+                part_count=spec.part_count,
+                download_filename=spec.download_filename,
+                merge_downloadable=spec.merge_downloadable,
+                zip_downloadable=spec.zip_downloadable,
             )
 
     def specs_snapshot(self) -> dict[str, DiscoveredRelationSpec]:
@@ -436,8 +451,16 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                     object_format=spec.object_format,
                     display_name=spec.display_name,
                     size_bytes=spec.size_bytes,
+                    object_revision=spec.object_revision,
                     csv_delimiter=spec.csv_delimiter,
                     csv_has_header=spec.csv_has_header,
+                    download_kind=spec.download_kind,
+                    part_prefix=spec.part_prefix,
+                    part_file_format=spec.part_file_format,
+                    part_count=spec.part_count,
+                    download_filename=spec.download_filename,
+                    merge_downloadable=spec.merge_downloadable,
+                    zip_downloadable=spec.zip_downloadable,
                 )
                 for relation_id, spec in self._current_specs.items()
             }
@@ -876,28 +899,43 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                     used_names=used_names,
                 )
                 sorted_group_keys = sorted(group_keys)
+                part_head_responses = [
+                    (part_key, self._head_object(client, bucket=bucket, key=part_key))
+                    for part_key in sorted_group_keys
+                ]
+                object_size_bytes = sum(
+                    int(head_response.get("ContentLength") or 0)
+                    for _part_key, head_response in part_head_responses
+                )
+                object_revision = "|".join(
+                    f"{part_key}:{self._object_revision_from_head(head_response)}"
+                    for part_key, head_response in part_head_responses
+                ) or "|".join(sorted_group_keys)
+                first_head_response = part_head_responses[0][1] if part_head_responses else {}
                 if len(sorted_group_keys) == 1:
                     object_key = sorted_group_keys[0]
                     object_path = f"s3://{bucket}/{object_key}"
-                    head_response = self._head_object(client, bucket=bucket, key=object_key)
-                    object_size_bytes = int(head_response.get("ContentLength") or 0)
                     csv_delimiter, csv_has_header = (
-                        self._csv_read_settings_from_head(head_response)
+                        self._csv_read_settings_from_head(first_head_response)
                         if reader_format == "csv"
                         else ("", None)
                     )
                 else:
-                    object_key = ""
                     object_path = (
                         f"s3://{bucket}/generated/{dataset_name}/{format_name}/"
                         f"{table_name}/*.{extension}"
                     )
-                    object_size_bytes = 0
-                    csv_delimiter, csv_has_header = "", None
+                    csv_delimiter, csv_has_header = (
+                        self._csv_read_settings_from_head(first_head_response)
+                        if reader_format == "csv"
+                        else ("", None)
+                    )
 
                 if reader_format == "csv" and csv_has_header is None:
                     csv_has_header = True
 
+                part_prefix = f"generated/{dataset_name}/{format_name}/{table_name}/"
+                download_filename = f"{table_name}.{display_format}"
                 desired_specs[f"{schema_name}.{relation_name}"] = DiscoveredRelationSpec(
                     schema_name=schema_name,
                     relation_name=relation_name,
@@ -911,13 +949,16 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                     object_format=display_format,
                     display_name=f"{table_name}.{display_format}",
                     size_bytes=object_size_bytes,
-                    object_revision=(
-                        self._object_revision_from_head(head_response)
-                        if object_key
-                        else "|".join(sorted_group_keys)
-                    ),
+                    object_revision=object_revision,
                     csv_delimiter=csv_delimiter,
                     csv_has_header=csv_has_header,
+                    download_kind="generated_parts",
+                    part_prefix=part_prefix,
+                    part_file_format=display_format,
+                    part_count=len(sorted_group_keys),
+                    download_filename=download_filename,
+                    merge_downloadable=display_format in {"csv", "jsonl", "ndjson"},
+                    zip_downloadable=True,
                 )
 
             generated_datasets = sorted(

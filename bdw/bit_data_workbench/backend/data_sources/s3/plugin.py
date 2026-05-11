@@ -54,3 +54,20 @@ class S3DataSourcePlugin(DataSourcePlugin):
 
     def stream_object(self, *, bucket: str, key: str, file_name: str = ""):
         return self._explorer.stream_object(bucket=bucket, key=key, file_name=file_name)
+
+    def download_generated_parts(
+        self,
+        *,
+        bucket: str,
+        prefix: str,
+        file_format: str,
+        mode: str = "merged",
+        file_name: str = "",
+    ):
+        return self._explorer.download_generated_parts(
+            bucket=bucket,
+            prefix=prefix,
+            file_format=file_format,
+            mode=mode,
+            file_name=file_name,
+        )

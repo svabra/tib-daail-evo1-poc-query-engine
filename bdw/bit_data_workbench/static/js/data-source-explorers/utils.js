@@ -151,6 +151,27 @@ export function sourceObjectElement(descriptor = {}) {
   if (descriptor.s3Downloadable !== undefined) {
     element.dataset.s3Downloadable = descriptor.s3Downloadable ? "true" : "false";
   }
+  if (descriptor.s3DownloadKind) {
+    element.dataset.s3DownloadKind = String(descriptor.s3DownloadKind);
+  }
+  if (descriptor.s3PartPrefix) {
+    element.dataset.s3PartPrefix = String(descriptor.s3PartPrefix);
+  }
+  if (descriptor.s3PartFileFormat) {
+    element.dataset.s3PartFileFormat = String(descriptor.s3PartFileFormat);
+  }
+  if (descriptor.s3PartCount !== undefined) {
+    element.dataset.s3PartCount = String(descriptor.s3PartCount);
+  }
+  if (descriptor.s3DownloadFilename) {
+    element.dataset.s3DownloadFilename = String(descriptor.s3DownloadFilename);
+  }
+  if (descriptor.s3MergeDownloadable !== undefined) {
+    element.dataset.s3MergeDownloadable = descriptor.s3MergeDownloadable ? "true" : "false";
+  }
+  if (descriptor.s3ZipDownloadable !== undefined) {
+    element.dataset.s3ZipDownloadable = descriptor.s3ZipDownloadable ? "true" : "false";
+  }
   return element;
 }
 

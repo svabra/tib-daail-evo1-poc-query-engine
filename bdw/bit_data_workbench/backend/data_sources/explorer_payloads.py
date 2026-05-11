@@ -51,6 +51,13 @@ def _source_object_payload(
         "s3FileFormat": source_object.s3_file_format,
         "s3Downloadable": source_object.s3_downloadable,
         "sizeBytes": int(source_object.size_bytes or 0),
+        "s3DownloadKind": source_object.s3_download_kind,
+        "s3PartPrefix": source_object.s3_part_prefix,
+        "s3PartFileFormat": source_object.s3_part_file_format,
+        "s3PartCount": int(source_object.s3_part_count or 0),
+        "s3DownloadFilename": source_object.s3_download_filename,
+        "s3MergeDownloadable": source_object.s3_merge_downloadable,
+        "s3ZipDownloadable": source_object.s3_zip_downloadable,
     }
     relation = str(source_object.relation or "").strip()
     publication_source: dict[str, object] | None = None

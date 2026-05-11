@@ -193,6 +193,8 @@ class QueryResultExportManager:
     def _has_cached_result_snapshot(self, job: QueryJobDefinition) -> bool:
         if job.status != "completed" or not job.columns:
             return False
+        if job.truncated:
+            return False
         return len(job.rows) == job.rows_shown
 
     def _stream_cached_rows(

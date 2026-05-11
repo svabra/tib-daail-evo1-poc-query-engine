@@ -287,6 +287,60 @@ def download_s3_object(
     )
 
 
+@router.get("/api/s3/generated/download")
+def download_s3_generated_parts(
+    bucket: str = Query(""),
+    prefix: str = Query(""),
+    file_format: str = Query(default="", alias="format"),
+    mode: str = Query("merged"),
+    file_name: str = Query(default="", alias="filename"),
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> Response:
+    try:
+        artifact = service.download_s3_generated_parts(
+            bucket=bucket,
+            prefix=prefix,
+            file_format=file_format,
+            mode=mode,
+            file_name=file_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if artifact.local_path is not None and artifact.cleanup_dir is not None:
+        return FileResponse(
+            path=artifact.local_path,
+            media_type=artifact.content_type,
+            filename=artifact.filename,
+            background=BackgroundTask(shutil.rmtree, artifact.cleanup_dir, True),
+        )
+
+    if artifact.body_iter is None:
+        raise HTTPException(status_code=400, detail="Generated S3 download is unavailable.")
+
+    fallback_filename = (
+        artifact.filename.encode("ascii", "ignore")
+        .decode("ascii")
+        .replace("\\", "_")
+        .replace('"', "_")
+        or "download"
+    )
+    headers = {
+        "Content-Disposition": (
+            f"attachment; filename=\"{fallback_filename}\"; "
+            f"filename*=UTF-8''{quote(artifact.filename, safe='')}"
+        )
+    }
+    if artifact.content_length is not None:
+        headers["Content-Length"] = str(artifact.content_length)
+
+    return StreamingResponse(
+        artifact.body_iter(),
+        media_type=artifact.content_type,
+        headers=headers,
+    )
+
+
 @router.get("/api/source-object-ddl/download")
 def download_source_object_ddl(
     relation: str = Query(""),

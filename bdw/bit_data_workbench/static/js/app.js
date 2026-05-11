@@ -144,6 +144,7 @@ import {
   sourceObjectDisplayKind,
   sourceObjectDisplayName,
   sourceObjectDdlDescriptor,
+  sourceObjectS3GeneratedDownloadDescriptor,
   sourceObjectS3DeleteDescriptor,
   sourceObjectS3DownloadDescriptor,
   sourceQueryDescriptor,
@@ -881,6 +882,7 @@ const {
   downloadQueryResultExport,
   downloadS3ExplorerObject,
   downloadSourceObjectDdl,
+  downloadSourceS3GeneratedParts,
   downloadSourceS3Object,
   loadS3ExplorerNode,
   loadLocalWorkspaceMoveS3ExplorerNode,
@@ -2197,6 +2199,29 @@ function downloadSourceS3Object(sourceObjectRoot) {
   });
   const anchor = document.createElement("a");
   anchor.href = `/api/s3/object/download?${search.toString()}`;
+  anchor.download = descriptor.fileName;
+  anchor.style.display = "none";
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  return true;
+}
+
+function downloadSourceS3GeneratedParts(sourceObjectRoot, mode = "merged") {
+  const descriptor = sourceObjectS3GeneratedDownloadDescriptor(sourceObjectRoot, mode);
+  if (!descriptor) {
+    return false;
+  }
+
+  const search = new URLSearchParams({
+    bucket: descriptor.bucket,
+    prefix: descriptor.prefix,
+    format: descriptor.fileFormat,
+    mode: descriptor.mode,
+    filename: descriptor.fileName,
+  });
+  const anchor = document.createElement("a");
+  anchor.href = `/api/s3/generated/download?${search.toString()}`;
   anchor.download = descriptor.fileName;
   anchor.style.display = "none";
   document.body.appendChild(anchor);

@@ -4,9 +4,11 @@ import mimetypes
 import re
 import shutil
 import tempfile
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from pathlib import PurePosixPath
+from typing import Callable, Iterator
 
 from ....config import Settings
 from ....models import S3ExplorerBreadcrumb, S3ExplorerDeleteResult, S3ExplorerEntry, S3ExplorerSnapshot
@@ -19,6 +21,7 @@ from ...s3_storage import (
     list_s3_buckets_from_client,
     remove_s3_bucket,
     s3_client,
+    iter_s3_keys,
 )
 from ...data_exchange import (
     is_data_exchange_bucket_name,
@@ -94,6 +97,16 @@ class S3ObjectDownloadStream:
     filename: str
     content_type: str
     content_length: int | None
+
+
+@dataclass(slots=True)
+class S3GeneratedDownloadArtifact:
+    filename: str
+    content_type: str
+    content_length: int | None = None
+    body_iter: Callable[[], Iterator[bytes]] | None = None
+    local_path: Path | None = None
+    cleanup_dir: Path | None = None
 
 
 class S3ExplorerManager:
@@ -351,6 +364,78 @@ class S3ExplorerManager:
             content_length=content_length,
         )
 
+    def download_generated_parts(
+        self,
+        *,
+        bucket: str,
+        prefix: str,
+        file_format: str,
+        mode: str = "merged",
+        file_name: str = "",
+    ) -> S3GeneratedDownloadArtifact:
+        self._ensure_configured()
+        normalized_bucket = normalize_s3_bucket_name(bucket)
+        normalized_prefix = normalize_s3_prefix(prefix)
+        if not normalized_prefix:
+            raise ValueError("Choose a generated S3 prefix before downloading.")
+        if is_data_exchange_bucket_name(normalized_bucket) or is_data_exchange_key(
+            normalized_prefix,
+            self._settings.data_exchange_prefix,
+        ):
+            raise ValueError("DataExchange files must be downloaded from the DataExchange Workbench.")
+
+        normalized_format = self._normalize_generated_download_format(file_format)
+        normalized_mode = str(mode or "").strip().lower() or "merged"
+        if normalized_mode not in {"merged", "zip"}:
+            raise ValueError("Generated S3 downloads support merged or zip mode.")
+        if normalized_mode == "merged" and normalized_format not in {"csv", "jsonl"}:
+            raise ValueError("Only generated CSV and JSONL parts can be merged for download.")
+
+        client = s3_client(self._settings)
+        part_keys = self._generated_part_keys(
+            client,
+            bucket=normalized_bucket,
+            prefix=normalized_prefix,
+            file_format=normalized_format,
+        )
+        if not part_keys:
+            raise ValueError("No generated S3 part files were found for this source object.")
+
+        fallback_filename = PurePosixPath(normalized_prefix.rstrip("/")).name or "generated-parts"
+        if normalized_mode == "zip":
+            filename = self._normalize_generated_download_filename(
+                file_name,
+                fallback=f"{fallback_filename}.zip",
+                extension="zip",
+            )
+            return self._zip_generated_parts(
+                client,
+                bucket=normalized_bucket,
+                part_keys=part_keys,
+                filename=filename,
+            )
+
+        filename = self._normalize_generated_download_filename(
+            file_name,
+            fallback=f"{fallback_filename}.{normalized_format}",
+            extension=normalized_format,
+        )
+        content_type = (
+            "text/csv; charset=utf-8"
+            if normalized_format == "csv"
+            else "application/x-ndjson; charset=utf-8"
+        )
+        return S3GeneratedDownloadArtifact(
+            filename=filename,
+            content_type=content_type,
+            body_iter=lambda: self._iter_merged_generated_parts(
+                client,
+                bucket=normalized_bucket,
+                part_keys=part_keys,
+                file_format=normalized_format,
+            ),
+        )
+
     def delete_entry(
         self,
         *,
@@ -438,3 +523,118 @@ class S3ExplorerManager:
             )
         ):
             raise ValueError("S3 must be configured before browsing or saving result files.")
+
+    def _normalize_generated_download_format(self, file_format: str) -> str:
+        normalized = str(file_format or "").strip().lower()
+        if normalized in {"json", "ndjson"}:
+            return "jsonl"
+        if normalized in {"csv", "jsonl", "parquet"}:
+            return normalized
+        raise ValueError("Generated S3 downloads support CSV, JSONL, and Parquet files.")
+
+    def _generated_part_keys(
+        self,
+        client,
+        *,
+        bucket: str,
+        prefix: str,
+        file_format: str,
+    ) -> list[str]:
+        suffix = f".{file_format}"
+        return sorted(
+            key
+            for key in iter_s3_keys(client, bucket, prefix)
+            if key.startswith(prefix)
+            and not key.endswith("/")
+            and PurePosixPath(key).suffix.lower() == suffix
+            and not is_data_exchange_key(key, self._settings.data_exchange_prefix)
+        )
+
+    def _normalize_generated_download_filename(
+        self,
+        file_name: str | None,
+        *,
+        fallback: str,
+        extension: str,
+    ) -> str:
+        candidate = normalize_s3_object_filename(file_name, fallback_key=fallback)
+        if not candidate.lower().endswith(f".{extension}"):
+            stem = re.sub(r"\.[^.]+$", "", candidate).strip() or re.sub(
+                r"\.[^.]+$",
+                "",
+                fallback,
+            ).strip() or "generated-parts"
+            candidate = f"{stem}.{extension}"
+        return candidate
+
+    def _iter_object_lines(self, client, *, bucket: str, key: str) -> Iterator[bytes]:
+        response = client.get_object(Bucket=bucket, Key=key)
+        body = response["Body"]
+        try:
+            iter_lines = getattr(body, "iter_lines", None)
+            if callable(iter_lines):
+                for line in iter_lines(chunk_size=1024 * 1024):
+                    yield bytes(line)
+            else:
+                payload = body.read()
+                for line in bytes(payload).splitlines():
+                    yield line
+        finally:
+            close = getattr(body, "close", None)
+            if callable(close):
+                close()
+
+    def _iter_merged_generated_parts(
+        self,
+        client,
+        *,
+        bucket: str,
+        part_keys: list[str],
+        file_format: str,
+    ) -> Iterator[bytes]:
+        wrote_any_line = False
+        for part_index, key in enumerate(part_keys):
+            for line_index, line in enumerate(self._iter_object_lines(client, bucket=bucket, key=key)):
+                if file_format == "csv" and part_index > 0 and line_index == 0:
+                    continue
+                if file_format == "jsonl" and not line:
+                    continue
+                if wrote_any_line:
+                    yield b"\n"
+                yield line
+                wrote_any_line = True
+        if wrote_any_line:
+            yield b"\n"
+
+    def _zip_generated_parts(
+        self,
+        client,
+        *,
+        bucket: str,
+        part_keys: list[str],
+        filename: str,
+    ) -> S3GeneratedDownloadArtifact:
+        temp_dir = Path(tempfile.mkdtemp(prefix="bdw-s3-generated-download-"))
+        local_path = temp_dir / filename
+        try:
+            with zipfile.ZipFile(local_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+                for key in part_keys:
+                    response = client.get_object(Bucket=bucket, Key=key)
+                    body = response["Body"]
+                    try:
+                        archive.writestr(PurePosixPath(key).name, body.read())
+                    finally:
+                        close = getattr(body, "close", None)
+                        if callable(close):
+                            close()
+        except Exception:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
+
+        return S3GeneratedDownloadArtifact(
+            filename=filename,
+            content_type="application/zip",
+            content_length=local_path.stat().st_size,
+            local_path=local_path,
+            cleanup_dir=temp_dir,
+        )

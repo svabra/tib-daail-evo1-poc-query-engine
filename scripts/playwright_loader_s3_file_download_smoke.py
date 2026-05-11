@@ -3,12 +3,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+from pathlib import Path
 import sys
+import tempfile
 import time
 from uuid import uuid4
 
 import boto3
 from botocore.exceptions import ClientError
+import duckdb
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
@@ -16,8 +19,8 @@ from playwright.async_api import async_playwright
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Verify generated loader S3 CSV/JSONL relations show file-style names "
-            "and expose single-object downloads in the source tree."
+            "Verify generated loader S3 CSV/JSONL/Parquet parts expose download "
+            "actions and truncated query exports download all rows."
         )
     )
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
@@ -88,10 +91,47 @@ def seed_loader_objects(client, bucket_name: str, dataset_name: str) -> None:
     )
     client.put_object(
         Bucket=bucket_name,
+        Key=f"generated/{dataset_name}/csv/mwa_abrechnung_entities/part-00002.csv",
+        Body=b"id_,status\n2,4\n",
+        ContentType="text/csv",
+    )
+    client.put_object(
+        Bucket=bucket_name,
         Key=f"generated/{dataset_name}/json/mwa_abrechnung_entities/part-00001.jsonl",
         Body=b'{"id_":1,"status":3}\n',
         ContentType="application/x-ndjson",
     )
+    client.put_object(
+        Bucket=bucket_name,
+        Key=f"generated/{dataset_name}/json/mwa_abrechnung_entities/part-00002.jsonl",
+        Body=b'{"id_":2,"status":4}\n',
+        ContentType="application/x-ndjson",
+    )
+    with tempfile.TemporaryDirectory(prefix="bdw-pw-parquet-") as temp_dir:
+        part_one = Path(temp_dir) / "part-00001.parquet"
+        part_two = Path(temp_dir) / "part-00002.parquet"
+        connection = duckdb.connect(":memory:")
+        try:
+            connection.execute(
+                f"COPY (SELECT 1 AS id_, 3 AS status) TO '{part_one.as_posix()}' (FORMAT PARQUET)"
+            )
+            connection.execute(
+                f"COPY (SELECT 2 AS id_, 4 AS status) TO '{part_two.as_posix()}' (FORMAT PARQUET)"
+            )
+        finally:
+            connection.close()
+        client.put_object(
+            Bucket=bucket_name,
+            Key=f"generated/{dataset_name}/parquet/mwa_abrechnung_entities/part-00001.parquet",
+            Body=part_one.read_bytes(),
+            ContentType="application/octet-stream",
+        )
+        client.put_object(
+            Bucket=bucket_name,
+            Key=f"generated/{dataset_name}/parquet/mwa_abrechnung_entities/part-00002.parquet",
+            Body=part_two.read_bytes(),
+            ContentType="application/octet-stream",
+        )
 
 
 async def ensure_details_open(page, selector: str) -> None:
@@ -159,12 +199,19 @@ async def wait_for_loader_object(page, bucket_name: str, object_name: str, timeo
     )
 
 
-async def download_from_source_object(page, object_locator, expected_filename: str, timeout_ms: int) -> None:
+async def download_from_source_object(
+    page,
+    object_locator,
+    *,
+    action_selector: str,
+    expected_suffix: str,
+    timeout_ms: int,
+) -> str:
     await object_locator.scroll_into_view_if_needed()
     await object_locator.hover()
     menu = object_locator.locator("[data-source-action-menu]").first
     await menu.evaluate("node => node.setAttribute('open', '')")
-    download_button = object_locator.locator("[data-download-source-s3-object]").first
+    download_button = object_locator.locator(action_selector).first
     await download_button.wait_for(
         state="visible",
         timeout=timeout_ms,
@@ -172,11 +219,97 @@ async def download_from_source_object(page, object_locator, expected_filename: s
     async with page.expect_download(timeout=timeout_ms) as download_info:
         await download_button.click(force=True)
     download = await download_info.value
-    if download.suggested_filename != expected_filename:
+    if not download.suggested_filename.endswith(expected_suffix):
         raise AssertionError(
-            f"Unexpected download filename for {expected_filename}: "
+            f"Unexpected download filename suffix {expected_suffix!r}: "
             f"{download.suggested_filename!r}"
         )
+    return download.suggested_filename
+
+
+async def write_query_sql(page, sql: str, timeout_ms: int) -> None:
+    cell = page.locator("[data-query-cell]:visible").first
+    await cell.wait_for(state="visible", timeout=timeout_ms)
+    await cell.evaluate(
+        """
+        (cell, sql) => {
+          if (!(cell instanceof HTMLElement)) {
+            throw new Error("The visible query cell could not be located.");
+          }
+          const textarea = cell.querySelector("[data-editor-source]");
+          if (!(textarea instanceof HTMLTextAreaElement)) {
+            throw new Error("The first query editor source could not be located.");
+          }
+          textarea.value = sql;
+          textarea.dispatchEvent(new Event("input", { bubbles: true }));
+          textarea.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        """,
+        sql,
+    )
+
+
+async def run_truncated_query_and_download_all_rows(page, timeout_ms: int) -> None:
+    await write_query_sql(page, "select range as id from range(250)", timeout_ms)
+    cell = page.locator("[data-query-cell]:visible").first
+    await cell.locator("[data-query-form]").wait_for(state="visible", timeout=timeout_ms)
+
+    async with page.expect_response(
+        lambda response: response.request.method == "POST"
+        and response.url.endswith("/api/query-jobs"),
+        timeout=timeout_ms,
+    ):
+        await cell.evaluate(
+            """
+            (cell) => {
+              const form = cell.querySelector("[data-query-form]");
+              if (!(form instanceof HTMLFormElement)) {
+                throw new Error("The visible query form could not be located.");
+              }
+              form.requestSubmit();
+            }
+            """
+        )
+
+    result_root = cell.locator("[data-cell-result]")
+    await result_root.wait_for(state="visible", timeout=timeout_ms)
+    await page.wait_for_function(
+        """
+        (cell) => {
+          const result = cell.querySelector("[data-cell-result]");
+          return Boolean(result?.textContent?.includes("200 row(s) shown"));
+        }
+        """,
+        arg=await cell.element_handle(),
+        timeout=timeout_ms,
+    )
+
+    export_menu = cell.locator("[data-result-action-menu]").first
+    await export_menu.wait_for(state="visible", timeout=timeout_ms)
+    await export_menu.evaluate("node => node.setAttribute('open', '')")
+    await export_menu.locator("[data-result-export-download]").click(force=True)
+
+    download_dialog = page.locator("[data-result-download-dialog]").first
+    await download_dialog.wait_for(state="visible", timeout=timeout_ms)
+    await download_dialog.locator("[data-export-format-select]").select_option("csv")
+    await download_dialog.locator("[data-result-download-file-name]").fill("full-query-export.csv")
+
+    async with page.expect_download(timeout=timeout_ms) as download_info:
+        await download_dialog.locator("[data-result-download-submit]").click(force=True)
+    download = await download_info.value
+    if not download.suggested_filename.endswith(".csv"):
+        raise AssertionError(f"Unexpected query export filename: {download.suggested_filename!r}")
+
+    downloaded_path = await download.path()
+    if not downloaded_path:
+        raise AssertionError("The query export download did not produce a readable local path.")
+    lines = Path(downloaded_path).read_text(encoding="utf-8").splitlines()
+    if len(lines) <= 201:
+        raise AssertionError(
+            f"Expected full query export to contain more than 200 data rows; got {len(lines) - 1}."
+        )
+    if lines[0] != "id" or lines[-1] != "249":
+        raise AssertionError(f"Unexpected full query export content: first={lines[:2]!r}, last={lines[-2:]!r}")
 
 
 async def run_smoke(args: argparse.Namespace) -> int:
@@ -208,26 +341,52 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 "mwa_abrechnung_entities_json",
                 args.timeout_ms,
             )
+            parquet_object = await wait_for_loader_object(
+                page,
+                bucket_name,
+                "mwa_abrechnung_entities_parquet",
+                args.timeout_ms,
+            )
 
             csv_display = await csv_object.get_attribute("data-source-object-display-name")
             json_display = await json_object.get_attribute("data-source-object-display-name")
+            parquet_display = await parquet_object.get_attribute("data-source-object-display-name")
             if csv_display != "mwa_abrechnung_entities.csv":
                 raise AssertionError(f"Unexpected CSV display name: {csv_display!r}")
             if json_display != "mwa_abrechnung_entities.jsonl":
                 raise AssertionError(f"Unexpected JSONL display name: {json_display!r}")
+            if parquet_display != "mwa_abrechnung_entities.parquet":
+                raise AssertionError(f"Unexpected Parquet display name: {parquet_display!r}")
+            if await csv_object.get_attribute("data-s3-part-count") != "2":
+                raise AssertionError("CSV generated source did not report two S3 part files.")
+            if await json_object.get_attribute("data-s3-part-count") != "2":
+                raise AssertionError("JSONL generated source did not report two S3 part files.")
+            if await parquet_object.get_attribute("data-s3-part-count") != "2":
+                raise AssertionError("Parquet generated source did not report two S3 part files.")
 
             await download_from_source_object(
                 page,
                 csv_object,
-                "mwa_abrechnung_entities.csv",
-                args.timeout_ms,
+                action_selector="[data-download-source-s3-generated-merged]",
+                expected_suffix=".csv",
+                timeout_ms=args.timeout_ms,
             )
             await download_from_source_object(
                 page,
                 json_object,
-                "mwa_abrechnung_entities.jsonl",
-                args.timeout_ms,
+                action_selector="[data-download-source-s3-generated-merged]",
+                expected_suffix=".jsonl",
+                timeout_ms=args.timeout_ms,
             )
+            await download_from_source_object(
+                page,
+                parquet_object,
+                action_selector="[data-download-source-s3-generated-zip]",
+                expected_suffix=".zip",
+                timeout_ms=args.timeout_ms,
+            )
+
+            await run_truncated_query_and_download_all_rows(page, args.timeout_ms)
         except (AssertionError, PlaywrightTimeoutError, RuntimeError) as exc:
             print(str(exc), file=sys.stderr)
             for message in console_messages:

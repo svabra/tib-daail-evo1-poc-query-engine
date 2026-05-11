@@ -22,6 +22,7 @@ export function createSourceSidebarClickController(helpers) {
     downloadQueryResultExport,
     downloadS3ExplorerObject,
     downloadSourceObjectDdl,
+    downloadSourceS3GeneratedParts,
     downloadSourceS3Object,
     loadS3ExplorerNode,
     loadLocalWorkspaceMoveS3ExplorerNode,
@@ -653,6 +654,46 @@ export function createSourceSidebarClickController(helpers) {
         await showMessageDialog({
           title: "S3 download unavailable",
           copy: "This source object does not point to a single downloadable S3 object.",
+        });
+      }
+      return true;
+    }
+
+    const downloadSourceS3GeneratedMergedButton = event.target.closest(
+      "[data-download-source-s3-generated-merged]"
+    );
+    if (downloadSourceS3GeneratedMergedButton) {
+      event.preventDefault();
+      closeSourceActionMenus();
+
+      const downloaded = downloadSourceS3GeneratedParts(
+        downloadSourceS3GeneratedMergedButton.closest("[data-source-object]"),
+        "merged"
+      );
+      if (downloaded === false) {
+        await showMessageDialog({
+          title: "S3 download unavailable",
+          copy: "This source object does not expose mergeable generated S3 parts.",
+        });
+      }
+      return true;
+    }
+
+    const downloadSourceS3GeneratedZipButton = event.target.closest(
+      "[data-download-source-s3-generated-zip]"
+    );
+    if (downloadSourceS3GeneratedZipButton) {
+      event.preventDefault();
+      closeSourceActionMenus();
+
+      const downloaded = downloadSourceS3GeneratedParts(
+        downloadSourceS3GeneratedZipButton.closest("[data-source-object]"),
+        "zip"
+      );
+      if (downloaded === false) {
+        await showMessageDialog({
+          title: "S3 download unavailable",
+          copy: "This source object does not expose generated S3 parts for ZIP download.",
         });
       }
       return true;

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import io
 from pathlib import Path
+import shutil
 import sys
+import zipfile
 from unittest.mock import patch
 
 import pytest
@@ -77,6 +79,37 @@ class _FakeListingClient:
                 "IsTruncated": False,
             }
         return {"Contents": [], "IsTruncated": False}
+
+
+class _FakeGeneratedPartsClient:
+    objects = {
+        "generated/mwa/csv/table/part-00001.csv": b"id,name\n1,alpha\n2,beta\n",
+        "generated/mwa/csv/table/part-00002.csv": b"id,name\n3,gamma\n",
+        "generated/mwa/json/table/part-00001.jsonl": b'{"id":1}\n',
+        "generated/mwa/json/table/part-00002.jsonl": b'{"id":2}\n\n',
+    }
+
+    def list_objects_v2(self, **kwargs):
+        bucket = kwargs["Bucket"]
+        prefix = str(kwargs.get("Prefix") or "")
+        if bucket != "client-bucket":
+            return {"Contents": [], "IsTruncated": False}
+        return {
+            "Contents": [
+                {"Key": key, "Size": len(payload)}
+                for key, payload in self.objects.items()
+                if key.startswith(prefix)
+            ],
+            "IsTruncated": False,
+        }
+
+    def get_object(self, **kwargs):
+        key = kwargs["Key"]
+        payload = self.objects[key]
+        return {
+            "Body": io.BytesIO(payload),
+            "ContentLength": len(payload),
+        }
 
 
 def import_s3_explorer():
@@ -164,3 +197,70 @@ def test_stream_object_rejects_data_exchange_prefix() -> None:
             bucket="client-bucket",
             key="--data-exchange--/files/secret/alpha.csv",
         )
+
+
+def test_download_generated_csv_parts_merges_sorted_parts_and_single_header() -> None:
+    explorer = import_s3_explorer()
+    manager = explorer.S3ExplorerManager(_ConfiguredSettings())
+    fake_client = _FakeGeneratedPartsClient()
+
+    with patch.object(explorer, "s3_client", return_value=fake_client):
+        artifact = manager.download_generated_parts(
+            bucket="client-bucket",
+            prefix="generated/mwa/csv/table/",
+            file_format="csv",
+            mode="merged",
+            file_name="table.csv",
+        )
+
+    assert artifact.filename == "table.csv"
+    assert artifact.content_type == "text/csv; charset=utf-8"
+    assert artifact.body_iter is not None
+    assert b"".join(artifact.body_iter()) == b"id,name\n1,alpha\n2,beta\n3,gamma\n"
+
+
+def test_download_generated_jsonl_parts_merges_valid_jsonl_lines() -> None:
+    explorer = import_s3_explorer()
+    manager = explorer.S3ExplorerManager(_ConfiguredSettings())
+    fake_client = _FakeGeneratedPartsClient()
+
+    with patch.object(explorer, "s3_client", return_value=fake_client):
+        artifact = manager.download_generated_parts(
+            bucket="client-bucket",
+            prefix="generated/mwa/json/table/",
+            file_format="json",
+            mode="merged",
+            file_name="table.jsonl",
+        )
+
+    assert artifact.filename == "table.jsonl"
+    assert artifact.content_type == "application/x-ndjson; charset=utf-8"
+    assert artifact.body_iter is not None
+    assert b"".join(artifact.body_iter()) == b'{"id":1}\n{"id":2}\n'
+
+
+def test_download_generated_parts_zip_contains_original_part_files() -> None:
+    explorer = import_s3_explorer()
+    manager = explorer.S3ExplorerManager(_ConfiguredSettings())
+    fake_client = _FakeGeneratedPartsClient()
+
+    with patch.object(explorer, "s3_client", return_value=fake_client):
+        artifact = manager.download_generated_parts(
+            bucket="client-bucket",
+            prefix="generated/mwa/csv/table/",
+            file_format="csv",
+            mode="zip",
+            file_name="table.csv",
+        )
+
+    try:
+        assert artifact.filename == "table.zip"
+        assert artifact.content_type == "application/zip"
+        assert artifact.local_path is not None
+        with zipfile.ZipFile(artifact.local_path) as archive:
+            assert archive.namelist() == ["part-00001.csv", "part-00002.csv"]
+            assert archive.read("part-00001.csv") == b"id,name\n1,alpha\n2,beta\n"
+            assert archive.read("part-00002.csv") == b"id,name\n3,gamma\n"
+    finally:
+        if artifact.cleanup_dir is not None:
+            shutil.rmtree(artifact.cleanup_dir, ignore_errors=True)
