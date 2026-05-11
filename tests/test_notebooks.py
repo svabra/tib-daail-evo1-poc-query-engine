@@ -184,6 +184,10 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             "Run the PostgreSQL OLTP VAT Smoke Loader",
             notebooks["postgres-smoke-test"].cells[0].sql,
         )
+        self.assertIn(
+            "Run the MWA Abrechnung Multi-Format Loader (3.2)",
+            notebooks["mwa-abrechnung-s3-parquet"].cells[0].sql,
+        )
 
     def test_build_notebooks_uses_discovered_relations_for_smoke_presets(
         self,
@@ -247,6 +251,137 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
         self.assertIn(
             "FROM pg_oltp.public.vat_smoke_test_reference",
             notebooks["postgres-smoke-test"].cells[0].sql,
+        )
+
+    def test_build_notebooks_includes_mwa_multi_format_presets(
+        self,
+    ) -> None:
+        (
+            _,
+            build_notebooks,
+            _,
+            _,
+            source_catalog_type,
+            source_object_type,
+            source_schema_type,
+        ) = import_notebook_helpers()
+
+        catalogs = [
+            source_catalog_type(
+                name="pg_oltp",
+                schemas=[
+                    source_schema_type(
+                        name="public",
+                        objects=[
+                            source_object_type(
+                                name="mwa_abrechnung_entities",
+                                kind="table",
+                                relation="pg_oltp.public.mwa_abrechnung_entities",
+                            ),
+                            source_object_type(
+                                name="mwa_abrechnungs_ziffern_entities",
+                                kind="table",
+                                relation="pg_oltp.public.mwa_abrechnungs_ziffern_entities",
+                            ),
+                        ],
+                    )
+                ],
+            ),
+            source_catalog_type(
+                name="workspace",
+                schemas=[
+                    source_schema_type(
+                        name="mwa",
+                        objects=[
+                            source_object_type(
+                                name="mwa_abrechnung_entities_parquet",
+                                kind="view",
+                                relation="workspace.mwa.mwa_abrechnung_entities_parquet",
+                            ),
+                            source_object_type(
+                                name="mwa_abrechnungs_ziffern_entities_parquet",
+                                kind="view",
+                                relation=(
+                                    "workspace.mwa."
+                                    "mwa_abrechnungs_ziffern_entities_parquet"
+                                ),
+                            ),
+                            source_object_type(
+                                name="mwa_abrechnung_entities_csv",
+                                kind="view",
+                                relation="workspace.mwa.mwa_abrechnung_entities_csv",
+                            ),
+                            source_object_type(
+                                name="mwa_abrechnungs_ziffern_entities_csv",
+                                kind="view",
+                                relation="workspace.mwa.mwa_abrechnungs_ziffern_entities_csv",
+                            ),
+                            source_object_type(
+                                name="mwa_abrechnung_entities_json",
+                                kind="view",
+                                relation="workspace.mwa.mwa_abrechnung_entities_json",
+                            ),
+                            source_object_type(
+                                name="mwa_abrechnungs_ziffern_entities_json",
+                                kind="view",
+                                relation="workspace.mwa.mwa_abrechnungs_ziffern_entities_json",
+                            ),
+                        ],
+                    )
+                ],
+            ),
+        ]
+
+        notebooks = {
+            notebook.notebook_id: notebook
+            for notebook in build_notebooks(catalogs)
+        }
+
+        self.assertEqual(
+            notebooks["mwa-abrechnung-oltp"].cells[0].data_sources,
+            ["pg_oltp"],
+        )
+        self.assertEqual(
+            notebooks["mwa-abrechnung-oltp"].title,
+            "MWA Abrechnung (3.2) OLTP via DuckDB",
+        )
+        self.assertEqual(
+            notebooks["mwa-abrechnung-oltp"].tree_path,
+            ("PoC Tests", "Performance Evaluation", "MWA Abrechnung (3.2)"),
+        )
+        self.assertIn(
+            "FROM pg_oltp.public.mwa_abrechnung_entities",
+            notebooks["mwa-abrechnung-oltp"].cells[0].sql,
+        )
+        self.assertEqual(
+            notebooks["mwa-abrechnung-pg-native"].cells[0].data_sources,
+            ["pg_oltp_native"],
+        )
+        self.assertIn(
+            "FROM public.mwa_abrechnung_entities",
+            notebooks["mwa-abrechnung-pg-native"].cells[0].sql,
+        )
+        self.assertIn(
+            "FROM workspace.mwa.mwa_abrechnung_entities_parquet",
+            notebooks["mwa-abrechnung-s3-parquet"].cells[0].sql,
+        )
+        self.assertIn(
+            "FROM workspace.mwa.mwa_abrechnung_entities_csv",
+            notebooks["mwa-abrechnung-s3-csv"].cells[0].sql,
+        )
+        self.assertIn(
+            "FROM workspace.mwa.mwa_abrechnung_entities_json",
+            notebooks["mwa-abrechnung-s3-json"].cells[0].sql,
+        )
+        self.assertEqual(
+            {
+                notebooks["mwa-abrechnung-oltp"].linked_generator_id,
+                notebooks["mwa-abrechnung-pg-native"].linked_generator_id,
+                notebooks["mwa-abrechnung-s3-parquet"].linked_generator_id,
+                notebooks["mwa-abrechnung-s3-csv"].linked_generator_id,
+                notebooks["mwa-abrechnung-s3-json"].linked_generator_id,
+            },
+            {"mwa_abrechnung_multi_format_loader"},
         )
 
     def test_build_notebooks_includes_immutable_python_demo_presets(

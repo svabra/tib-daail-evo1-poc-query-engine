@@ -230,6 +230,85 @@ def _build_multi_table_performance_sql(
     )
 
 
+def _build_mwa_abrechnung_performance_sql(
+    *,
+    abrechnung_relation: str,
+    ziffern_relation: str,
+) -> str:
+    return (
+        "-- Approximation: summarize MWA Abrechnung submissions with their ziffer totals.\n"
+        "-- Logic: join Abrechnung parent rows to Abrechnungs-Ziffern children and aggregate by quarter, status, and approval readiness.\n"
+        "-- Result: rank the MWA segments with the largest submitted turnover and tax totals.\n"
+        "WITH scoped_abrechnungen AS (\n"
+        "  SELECT\n"
+        "    id_,\n"
+        "    status,\n"
+        "    CAST(date_trunc('quarter', einreiche_datum) AS DATE) AS submission_quarter,\n"
+        "    contact_role,\n"
+        "    is_approved,\n"
+        "    is_ready_for_audit,\n"
+        "    is_sub_form1056_needed,\n"
+        "    tax_period_refer,\n"
+        "    partner_id,\n"
+        "    CAST(CAST(rounded_total AS DOUBLE PRECISION) AS DECIMAL(18,2)) AS rounded_total_chf\n"
+        f"  FROM {abrechnung_relation}\n"
+        "  WHERE deleted_at IS NULL\n"
+        "    AND einreiche_datum >= TIMESTAMP '2024-01-01 00:00:00'\n"
+        "),\n"
+        "ziffer_rollup AS (\n"
+        "  SELECT\n"
+        "    abrechnung_refer,\n"
+        "    COUNT(*) AS ziffer_count,\n"
+        "    CAST(SUM(umsatz) AS DECIMAL(18,2)) AS umsatz_total,\n"
+        "    CAST(SUM(steuer) AS DECIMAL(18,2)) AS steuer_total,\n"
+        "    CAST(AVG(satz) AS DECIMAL(18,2)) AS avg_satz,\n"
+        "    SUM(CASE WHEN satz_editable = 'true' THEN 1 ELSE 0 END) AS editable_ziffer_count\n"
+        f"  FROM {ziffern_relation}\n"
+        "  WHERE deleted_at IS NULL\n"
+        "  GROUP BY abrechnung_refer\n"
+        "),\n"
+        "joined_abrechnungen AS (\n"
+        "  SELECT\n"
+        "    a.status,\n"
+        "    a.submission_quarter,\n"
+        "    a.contact_role,\n"
+        "    a.is_approved,\n"
+        "    a.is_ready_for_audit,\n"
+        "    a.is_sub_form1056_needed,\n"
+        "    a.tax_period_refer,\n"
+        "    a.partner_id,\n"
+        "    a.rounded_total_chf,\n"
+        "    COALESCE(z.ziffer_count, 0) AS ziffer_count,\n"
+        "    COALESCE(z.umsatz_total, 0) AS umsatz_total,\n"
+        "    COALESCE(z.steuer_total, 0) AS steuer_total,\n"
+        "    COALESCE(z.avg_satz, 0) AS avg_satz,\n"
+        "    COALESCE(z.editable_ziffer_count, 0) AS editable_ziffer_count\n"
+        "  FROM scoped_abrechnungen AS a\n"
+        "  LEFT JOIN ziffer_rollup AS z\n"
+        "    ON z.abrechnung_refer = a.id_\n"
+        ")\n"
+        "SELECT\n"
+        "  submission_quarter,\n"
+        "  status,\n"
+        "  is_approved,\n"
+        "  is_ready_for_audit,\n"
+        "  is_sub_form1056_needed,\n"
+        "  COUNT(*) AS abrechnung_count,\n"
+        "  SUM(ziffer_count) AS ziffer_count,\n"
+        "  CAST(SUM(rounded_total_chf) AS DECIMAL(18,2)) AS rounded_total_chf,\n"
+        "  CAST(SUM(umsatz_total) AS DECIMAL(18,2)) AS umsatz_total,\n"
+        "  CAST(SUM(steuer_total) AS DECIMAL(18,2)) AS steuer_total,\n"
+        "  CAST(AVG(avg_satz) AS DECIMAL(18,2)) AS avg_satz,\n"
+        "  SUM(editable_ziffer_count) AS editable_ziffer_count,\n"
+        "  COUNT(DISTINCT partner_id) AS partner_count\n"
+        "FROM joined_abrechnungen\n"
+        "GROUP BY submission_quarter, status, is_approved, is_ready_for_audit, is_sub_form1056_needed\n"
+        "HAVING COUNT(*) >= 10\n"
+        "ORDER BY rounded_total_chf DESC, steuer_total DESC, abrechnung_count DESC\n"
+        "LIMIT 40;"
+    )
+
+
 def build_static_notebooks(
     *,
     preferred_s3_relation: str | None,
@@ -240,6 +319,11 @@ def build_static_notebooks(
     multi_table_postgres_relations: dict[str, str | None],
     multi_table_s3_relations: dict[str, str | None],
     multi_table_postgres_native_relations: dict[str, str | None],
+    mwa_postgres_relations: dict[str, str | None],
+    mwa_postgres_native_relations: dict[str, str | None],
+    mwa_s3_parquet_relations: dict[str, str | None],
+    mwa_s3_csv_relations: dict[str, str | None],
+    mwa_s3_json_relations: dict[str, str | None],
     union_oltp_relation: str | None,
     union_olap_relation: str | None,
     union_oltp_s3_relation: str | None,
@@ -506,6 +590,49 @@ def build_static_notebooks(
         )
         if all(multi_table_postgres_native_relations.values())
         else multi_table_status_sql
+    )
+    mwa_status_sql = (
+        "SELECT 'Run the MWA Abrechnung Multi-Format Loader (3.2) from the Loader Workbench first.' AS status;"
+    )
+    mwa_postgres_sql = (
+        _build_mwa_abrechnung_performance_sql(
+            abrechnung_relation=mwa_postgres_relations["mwa_abrechnung_entities"],
+            ziffern_relation=mwa_postgres_relations["mwa_abrechnungs_ziffern_entities"],
+        )
+        if all(mwa_postgres_relations.values())
+        else mwa_status_sql
+    )
+    mwa_postgres_native_sql = (
+        _build_mwa_abrechnung_performance_sql(
+            abrechnung_relation=mwa_postgres_native_relations["mwa_abrechnung_entities"],
+            ziffern_relation=mwa_postgres_native_relations["mwa_abrechnungs_ziffern_entities"],
+        )
+        if all(mwa_postgres_native_relations.values())
+        else mwa_status_sql
+    )
+    mwa_s3_parquet_sql = (
+        _build_mwa_abrechnung_performance_sql(
+            abrechnung_relation=mwa_s3_parquet_relations["mwa_abrechnung_entities"],
+            ziffern_relation=mwa_s3_parquet_relations["mwa_abrechnungs_ziffern_entities"],
+        )
+        if all(mwa_s3_parquet_relations.values())
+        else mwa_status_sql
+    )
+    mwa_s3_csv_sql = (
+        _build_mwa_abrechnung_performance_sql(
+            abrechnung_relation=mwa_s3_csv_relations["mwa_abrechnung_entities"],
+            ziffern_relation=mwa_s3_csv_relations["mwa_abrechnungs_ziffern_entities"],
+        )
+        if all(mwa_s3_csv_relations.values())
+        else mwa_status_sql
+    )
+    mwa_s3_json_sql = (
+        _build_mwa_abrechnung_performance_sql(
+            abrechnung_relation=mwa_s3_json_relations["mwa_abrechnung_entities"],
+            ziffern_relation=mwa_s3_json_relations["mwa_abrechnungs_ziffern_entities"],
+        )
+        if all(mwa_s3_json_relations.values())
+        else mwa_status_sql
     )
     cross_database_union_sql = (
         "-- Approximation: compare how the same tax-position reference shape behaves across OLTP and OLAP.\n"
@@ -976,6 +1103,91 @@ def build_static_notebooks(
             tags=["performance", "multi-table", "contest", "postgres", "native"],
             tree_path=("PoC Tests", "Performance Evaluation", "Multi-Table Test"),
             linked_generator_id="pg_vs_s3_multi_table_loader",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="mwa-abrechnung-oltp",
+            title="MWA Abrechnung (3.2) OLTP via DuckDB",
+            summary="Aggregates generated MWA Abrechnung and Abrechnungs-Ziffern records from PostgreSQL OLTP through DuckDB.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="mwa-abrechnung-oltp-cell-1",
+                    data_sources=["pg_oltp"],
+                    sql=mwa_postgres_sql,
+                )
+            ],
+            tags=["performance", "mwa", "abrechnung", "postgres", "oltp"],
+            tree_path=("PoC Tests", "Performance Evaluation", "MWA Abrechnung (3.2)"),
+            linked_generator_id="mwa_abrechnung_multi_format_loader",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="mwa-abrechnung-pg-native",
+            title="MWA Abrechnung (3.2) OLTP via Native",
+            summary="Runs the same MWA Abrechnung aggregation directly inside PostgreSQL OLTP, without DuckDB.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="mwa-abrechnung-pg-native-cell-1",
+                    data_sources=["pg_oltp_native"],
+                    sql=mwa_postgres_native_sql,
+                )
+            ],
+            tags=["performance", "mwa", "abrechnung", "postgres", "native"],
+            tree_path=("PoC Tests", "Performance Evaluation", "MWA Abrechnung (3.2)"),
+            linked_generator_id="mwa_abrechnung_multi_format_loader",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="mwa-abrechnung-s3-parquet",
+            title="MWA Abrechnung (3.2) S3 Parquet via DuckDB",
+            summary="Runs the MWA Abrechnung aggregation against the Parquet S3 views, using columnar storage as the primary object-storage benchmark.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="mwa-abrechnung-s3-parquet-cell-1",
+                    data_sources=["workspace.s3"],
+                    sql=mwa_s3_parquet_sql,
+                )
+            ],
+            tags=["performance", "mwa", "abrechnung", "s3", "parquet"],
+            tree_path=("PoC Tests", "Performance Evaluation", "MWA Abrechnung (3.2)"),
+            linked_generator_id="mwa_abrechnung_multi_format_loader",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="mwa-abrechnung-s3-csv",
+            title="MWA Abrechnung (3.2) S3 CSV via DuckDB",
+            summary="Runs the MWA Abrechnung aggregation against the CSV S3 views to compare text parsing overhead against Parquet.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="mwa-abrechnung-s3-csv-cell-1",
+                    data_sources=["workspace.s3"],
+                    sql=mwa_s3_csv_sql,
+                )
+            ],
+            tags=["performance", "mwa", "abrechnung", "s3", "csv"],
+            tree_path=("PoC Tests", "Performance Evaluation", "MWA Abrechnung (3.2)"),
+            linked_generator_id="mwa_abrechnung_multi_format_loader",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="mwa-abrechnung-s3-json",
+            title="MWA Abrechnung (3.2) S3 JSONL via DuckDB",
+            summary="Runs the MWA Abrechnung aggregation against the JSONL S3 views to compare row-oriented JSON parsing against Parquet.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="mwa-abrechnung-s3-json-cell-1",
+                    data_sources=["workspace.s3"],
+                    sql=mwa_s3_json_sql,
+                )
+            ],
+            tags=["performance", "mwa", "abrechnung", "s3", "json"],
+            tree_path=("PoC Tests", "Performance Evaluation", "MWA Abrechnung (3.2)"),
+            linked_generator_id="mwa_abrechnung_multi_format_loader",
             can_edit=False,
             can_delete=False,
         ),
