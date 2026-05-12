@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.8.8. Keep entries concise and
+# Derived from git history through version 0.8.9. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
     {
-        "version": "0.8.8",
-        "releasedAt": "2026-05-12T14:31:53+02:00",
+        "version": "0.8.9",
+        "releasedAt": "2026-05-12T14:33:30+02:00",
         "features": [
             (
                 "Shared notebook folders now store their Public or Private visibility in the hidden "
