@@ -19,6 +19,7 @@ from ..models import (
     NotebookDefinition,
     NotebookEventDefinition,
     NotebookVersionDefinition,
+    QueryExplainDefinition,
     QueryResult,
     SourceCatalog,
     SourceConnectionStatus,
@@ -43,6 +44,7 @@ from .s3_storage import (
     s3_verify_value,
     upload_s3_file,
 )
+from .s3_download_jobs import S3DownloadJobManager
 from .data_sources import DataSourceCreateRequest, DataSourceDeleteRequest, DataSourcePlugin
 from .data_sources.ddl import SourceDdlDownload, synthetic_source_ddl
 from .data_sources.explorer_payloads import build_data_source_explorer_payload
@@ -74,7 +76,7 @@ from .local_workspace_query_sources import LocalWorkspaceQuerySourceManager
 from .local_workspace_transfers import LocalWorkspaceTransferManager
 from .python_execution import KernelSessionManager, PythonJobManager
 from .query_analysis import analyze_query_touches, build_relation_index
-from .query_jobs import QueryJobManager
+from .query_jobs import QueryJobManager, is_read_only_sql
 from .query_result_exports import QueryResultExportManager
 from .realtime_facade import WorkbenchRealtimeFacade
 from .runtime_connections import normalize_postgres_host, open_postgres_native_connection
@@ -117,6 +119,7 @@ REALTIME_TOPIC_ORDER = (
     "query-jobs",
     "python-jobs",
     "data-generation-jobs",
+    "download-jobs",
     "data-source-events",
     "service-consumption",
     "notebook-events",
@@ -170,9 +173,8 @@ class WorkbenchService:
         self._startup_threads: list[Thread] = []
         self._csv_upload_completion_threads: list[Thread] = []
         self._query_jobs = QueryJobManager(
+            settings=settings,
             max_result_rows=settings.max_result_rows,
-            connection_factory=self._create_worker_connection,
-            postgres_connection_factory=self._create_postgres_native_connection,
             notebook_title_resolver=self._resolve_notebook_title,
             metadata_refresher=self.refresh_metadata_state,
             state_change_callback=lambda snapshot: self._publish_realtime_snapshot(
@@ -223,6 +225,13 @@ class WorkbenchService:
             metadata_refresher=self.refresh_metadata_state,
             state_change_callback=lambda snapshot: self._publish_realtime_snapshot(
                 "data-generation-jobs",
+                snapshot,
+            ),
+        )
+        self._s3_download_jobs = S3DownloadJobManager(
+            settings=settings,
+            state_change_callback=lambda snapshot: self._publish_realtime_snapshot(
+                "download-jobs",
                 snapshot,
             ),
         )
@@ -319,6 +328,11 @@ class WorkbenchService:
         self._set_realtime_snapshot(
             "data-generation-jobs",
             self._data_generation_jobs.state_payload(),
+            notify=False,
+        )
+        self._set_realtime_snapshot(
+            "download-jobs",
+            self._s3_download_jobs.state_payload(),
             notify=False,
         )
         self._set_realtime_snapshot(
@@ -1127,6 +1141,10 @@ class WorkbenchService:
         data_sources: list[str] | None = None,
     ) -> dict[str, object]:
         query_analysis = self._analyze_query(sql)
+        bytes_touched_estimate = self._estimate_query_touched_bytes(
+            touched_relations=query_analysis.touched_relations,
+            touched_buckets=query_analysis.touched_buckets,
+        )
         snapshot = self._query_jobs.start_job(
             sql=sql,
             notebook_id=notebook_id,
@@ -1135,6 +1153,89 @@ class WorkbenchService:
             data_sources=data_sources,
             touched_relations=query_analysis.touched_relations,
             touched_buckets=query_analysis.touched_buckets,
+            bytes_touched_estimate=bytes_touched_estimate,
+        )
+        return snapshot.payload
+
+    def explain_query(
+        self,
+        *,
+        sql: str,
+        data_sources: list[str] | None = None,
+    ) -> dict[str, object]:
+        normalized_sql = str(sql or "").strip()
+        if not normalized_sql:
+            raise ValueError("Provide a SQL statement before explaining the query.")
+        query_analysis = self._analyze_query(normalized_sql)
+        bytes_touched_estimate = self._estimate_query_touched_bytes(
+            touched_relations=query_analysis.touched_relations,
+            touched_buckets=query_analysis.touched_buckets,
+        )
+        use_postgres_native = any(
+            str(source_id or "").strip().lower() == "pg_oltp_native"
+            for source_id in (data_sources or [])
+        )
+        connection = (
+            self._create_postgres_native_connection("oltp")
+            if use_postgres_native
+            else self._create_worker_connection()
+        )
+        try:
+            if use_postgres_native:
+                with connection.cursor() as cursor:
+                    cursor.execute(f"EXPLAIN {normalized_sql}")
+                    plan_rows = [tuple(row) for row in cursor.fetchall()]
+            else:
+                plan_rows = [tuple(row) for row in connection.execute(f"EXPLAIN {normalized_sql}").fetchall()]
+        finally:
+            try:
+                connection.close()
+            except Exception:
+                pass
+
+        plan_text = "\n".join(
+            str(row[1] if len(row) > 1 else row[0])
+            for row in plan_rows
+        )
+        result = QueryExplainDefinition(
+            engine="postgres-native" if use_postgres_native else "duckdb",
+            plan_text=plan_text,
+            plan_rows=plan_rows,
+            touched_relations=query_analysis.touched_relations,
+            touched_buckets=query_analysis.touched_buckets,
+            bytes_touched_estimate=bytes_touched_estimate,
+            runtime_estimate=self._estimate_query_runtime(
+                touched_relations=query_analysis.touched_relations,
+                bytes_touched_estimate=bytes_touched_estimate,
+            ),
+            warnings=[] if is_read_only_sql(normalized_sql) else ["Analyze is disabled for statements that are not read-only SELECT queries."],
+        )
+        return result.payload
+
+    def start_query_analyze_job(
+        self,
+        *,
+        sql: str,
+        notebook_id: str,
+        notebook_title: str,
+        cell_id: str,
+        data_sources: list[str] | None = None,
+    ) -> dict[str, object]:
+        query_analysis = self._analyze_query(sql)
+        bytes_touched_estimate = self._estimate_query_touched_bytes(
+            touched_relations=query_analysis.touched_relations,
+            touched_buckets=query_analysis.touched_buckets,
+        )
+        snapshot = self._query_jobs.start_job(
+            sql=sql,
+            notebook_id=notebook_id,
+            notebook_title=notebook_title,
+            cell_id=cell_id,
+            data_sources=data_sources,
+            touched_relations=query_analysis.touched_relations,
+            touched_buckets=query_analysis.touched_buckets,
+            bytes_touched_estimate=bytes_touched_estimate,
+            workload_type="analyze",
         )
         return snapshot.payload
 
@@ -1244,6 +1345,30 @@ class WorkbenchService:
             mode=mode,
             file_name=file_name,
         )
+
+    def start_s3_generated_zip_download_job(
+        self,
+        *,
+        bucket: str,
+        prefix: str,
+        file_format: str,
+        file_name: str = "",
+    ) -> dict[str, object]:
+        return self._s3_download_jobs.start_generated_zip_job(
+            bucket=bucket,
+            prefix=prefix,
+            file_format=file_format,
+            file_name=file_name,
+        )
+
+    def s3_download_jobs_state(self) -> dict[str, object]:
+        return self._s3_download_jobs.state_payload()
+
+    def s3_download_job_snapshot(self, job_id: str) -> dict[str, object]:
+        return self._s3_download_jobs.snapshot(job_id)
+
+    def cancel_s3_download_job(self, job_id: str) -> dict[str, object]:
+        return self._s3_download_jobs.cancel_job(job_id)
 
     def source_object_ddl(
         self,
@@ -2056,6 +2181,48 @@ class WorkbenchService:
         with self._lock:
             relation_index = build_relation_index(self._catalogs)
         return analyze_query_touches(sql, relation_index=relation_index)
+
+    def _estimate_query_touched_bytes(
+        self,
+        *,
+        touched_relations: list[str],
+        touched_buckets: list[str],
+    ) -> int | None:
+        relation_set = {str(value or "").strip().lower() for value in touched_relations if str(value or "").strip()}
+        bucket_set = {str(value or "").strip().lower() for value in touched_buckets if str(value or "").strip()}
+        if not relation_set and not bucket_set:
+            return None
+
+        total = 0
+        matched = False
+        with self._lock:
+            catalogs = list(self._catalogs)
+        for catalog in catalogs:
+            for schema in catalog.schemas:
+                for source_object in schema.objects:
+                    relation = str(source_object.relation or "").strip().lower()
+                    bucket = str(source_object.s3_bucket or "").strip().lower()
+                    if (relation and relation in relation_set) or (bucket and bucket in bucket_set):
+                        size_bytes = int(source_object.size_bytes or 0)
+                        if size_bytes > 0:
+                            total += size_bytes
+                            matched = True
+        return total if matched else None
+
+    def _estimate_query_runtime(
+        self,
+        *,
+        touched_relations: list[str],
+        bytes_touched_estimate: int | None,
+    ) -> str:
+        _ = touched_relations
+        if not bytes_touched_estimate:
+            return "Unknown"
+        if bytes_touched_estimate < 25 * 1024 * 1024:
+            return "Likely seconds for local DuckDB-backed sources."
+        if bytes_touched_estimate < 1024 * 1024 * 1024:
+            return "Likely seconds to minutes depending on filters and storage."
+        return "Potentially minutes for large scans; use Analyze for measured operator timing."
 
     def _python_execution_context(
         self,

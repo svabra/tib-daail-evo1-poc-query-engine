@@ -7076,6 +7076,15 @@ details:not([open]) > .source-schema > summary::before {
   border-style: solid;
 }
 
+.query-plan-output {
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+  color: var(--text);
+  text-align: left;
+  white-space: pre-wrap;
+}
+
 .data-products-page {
   display: grid;
   gap: 22px;

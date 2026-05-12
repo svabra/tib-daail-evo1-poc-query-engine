@@ -7,6 +7,10 @@ export function normalizeQueryJob(job) {
 
   const firstRowMs = Number(job.firstRowMs);
   const fetchMs = Number(job.fetchMs);
+  const cpuPercent = Number(job.cpuPercent);
+  const memoryRssBytes = Number(job.memoryRssBytes);
+  const peakMemoryRssBytes = Number(job.peakMemoryRssBytes);
+  const bytesTouchedEstimate = Number(job.bytesTouchedEstimate);
 
   return {
     ...job,
@@ -22,6 +26,16 @@ export function normalizeQueryJob(job) {
       : [],
     firstRowMs: Number.isFinite(firstRowMs) ? Math.max(0, firstRowMs) : null,
     fetchMs: Number.isFinite(fetchMs) ? Math.max(0, fetchMs) : null,
+    workloadType: String(job.workloadType || "query").trim() || "query",
+    engine: String(job.engine || job.backendName || "duckdb").trim() || "duckdb",
+    cpuPercent: Number.isFinite(cpuPercent) ? Math.max(0, cpuPercent) : null,
+    memoryRssBytes: Number.isFinite(memoryRssBytes) ? Math.max(0, memoryRssBytes) : null,
+    peakMemoryRssBytes: Number.isFinite(peakMemoryRssBytes) ? Math.max(0, peakMemoryRssBytes) : null,
+    bytesTouchedEstimate: Number.isFinite(bytesTouchedEstimate) ? Math.max(0, bytesTouchedEstimate) : null,
+    planText: String(job.planText || ""),
+    planRows: Array.isArray(job.planRows) ? job.planRows : [],
+    runtimeEstimate: String(job.runtimeEstimate || ""),
+    warnings: Array.isArray(job.warnings) ? job.warnings : [],
   };
 }
 
@@ -38,7 +52,7 @@ export function queryJobStatusCopy(job) {
     case "queued":
       return "Queued";
     case "running":
-      return "Running";
+      return job.workloadType === "analyze" ? "Analyzing" : "Running";
     case "completed":
       return "Completed";
     case "cancelled":

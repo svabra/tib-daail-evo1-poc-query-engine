@@ -37,6 +37,16 @@ class _TrackingBody(io.BytesIO):
         super().close()
 
 
+class _ChunkTrackingBody(io.BytesIO):
+    def __init__(self, payload: bytes) -> None:
+        super().__init__(payload)
+        self.read_sizes: list[int] = []
+
+    def read(self, size: int = -1) -> bytes:
+        self.read_sizes.append(size)
+        return super().read(size)
+
+
 class _FakeS3Client:
     def __init__(self, body: _TrackingBody) -> None:
         self.body = body
@@ -109,6 +119,20 @@ class _FakeGeneratedPartsClient:
         return {
             "Body": io.BytesIO(payload),
             "ContentLength": len(payload),
+        }
+
+
+class _ChunkTrackingGeneratedPartsClient(_FakeGeneratedPartsClient):
+    def __init__(self) -> None:
+        self.bodies: list[_ChunkTrackingBody] = []
+
+    def get_object(self, **kwargs):
+        key = kwargs["Key"]
+        body = _ChunkTrackingBody(self.objects[key])
+        self.bodies.append(body)
+        return {
+            "Body": body,
+            "ContentLength": len(self.objects[key]),
         }
 
 
@@ -199,6 +223,12 @@ def test_stream_object_rejects_data_exchange_prefix() -> None:
         )
 
 
+def test_normalize_s3_object_key_preserves_object_name_spaces() -> None:
+    explorer = import_s3_explorer()
+
+    assert explorer.normalize_s3_object_key(" exports /April File.csv ") == " exports /April File.csv "
+
+
 def test_download_generated_csv_parts_merges_sorted_parts_and_single_header() -> None:
     explorer = import_s3_explorer()
     manager = explorer.S3ExplorerManager(_ConfiguredSettings())
@@ -261,6 +291,29 @@ def test_download_generated_parts_zip_contains_original_part_files() -> None:
             assert archive.namelist() == ["part-00001.csv", "part-00002.csv"]
             assert archive.read("part-00001.csv") == b"id,name\n1,alpha\n2,beta\n"
             assert archive.read("part-00002.csv") == b"id,name\n3,gamma\n"
+    finally:
+        if artifact.cleanup_dir is not None:
+            shutil.rmtree(artifact.cleanup_dir, ignore_errors=True)
+
+
+def test_download_generated_parts_zip_streams_part_bodies_in_chunks() -> None:
+    explorer = import_s3_explorer()
+    manager = explorer.S3ExplorerManager(_ConfiguredSettings())
+    fake_client = _ChunkTrackingGeneratedPartsClient()
+
+    with patch.object(explorer, "s3_client", return_value=fake_client):
+        artifact = manager.download_generated_parts(
+            bucket="client-bucket",
+            prefix="generated/mwa/csv/table/",
+            file_format="csv",
+            mode="zip",
+            file_name="table.zip",
+        )
+
+    try:
+        assert fake_client.bodies
+        assert all(body.read_sizes for body in fake_client.bodies)
+        assert all(size == 1024 * 1024 for body in fake_client.bodies for size in body.read_sizes[:-1])
     finally:
         if artifact.cleanup_dir is not None:
             shutil.rmtree(artifact.cleanup_dir, ignore_errors=True)

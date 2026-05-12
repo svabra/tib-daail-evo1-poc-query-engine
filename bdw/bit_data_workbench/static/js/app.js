@@ -181,6 +181,9 @@ let dataGeneratorsCatalog = [];
 let dataGenerationJobsStateVersion = null;
 let dataGenerationJobsSnapshot = [];
 let dataGenerationJobsSummary = { runningCount: 0, totalCount: 0 };
+let downloadJobsStateVersion = null;
+let downloadJobsSnapshot = [];
+let downloadJobsSummary = { runningCount: 0, totalCount: 0 };
 let selectedIngestionRunbookId = "";
 let spotlightIngestionRunbookId = "";
 let ingestionRunbookSpotlightHandle = null;
@@ -247,7 +250,7 @@ const localWorkspaceFolderStorageKey = "bdw.localWorkspaceFolders.v1";
 const localWorkspaceCatalogSourceId = "workspace.local";
 const localWorkspaceSchemaKey = "workspace_local::saved-results";
 const localWorkspaceRelationPrefix = "workspace.local.saved_results.";
-const unassignedFolderName = "Unassigned";
+const unassignedFolderName = "Unassigned Notebooks";
 const sharedNotebookFolderName = "Shared Notebooks";
 const localNotebookPrefix = "local-notebook-";
 const sharedNotebookPrefix = "shared-notebook-";
@@ -572,6 +575,7 @@ const { renderHomePage } = createHomeUi({
   formatQueryDuration,
   formatRelativeTimestamp,
   getDataGenerationJobsSnapshot: () => dataGenerationJobsSnapshot,
+  getDownloadJobsSnapshot: () => downloadJobsSnapshot,
   homePageRoot,
   homeRecentIngestionsRoot,
   homeRecentNotebooksRoot,
@@ -1100,6 +1104,14 @@ const {
   notificationItemKey,
   queryJobTerminalStatuses,
   queryNotificationItemMarkup,
+  downloadNotificationItemMarkup: (job) => `
+    <button type="button" class="topbar-notification-item" title="S3 download job">
+      <span class="topbar-notification-item-status${["queued", "running"].includes(job.status) ? " is-live" : ""}">Download: ${escapeHtml(job.status || "Running")}</span>
+      <span class="topbar-notification-item-title">${escapeHtml(job.filename || "S3 ZIP archive")}</span>
+      <span class="topbar-notification-item-copy">${escapeHtml(job.message || job.path || "")}</span>
+      <span class="topbar-notification-item-copy topbar-notification-item-copy-secondary">${escapeHtml(job.path || "")}</span>
+    </button>
+  `,
   resolveSelectedIngestionRunbookId,
   sidebarQueryCounts,
   dataGeneratorCardMarkup,
@@ -2218,10 +2230,35 @@ function downloadSourceS3Object(sourceObjectRoot) {
   return true;
 }
 
-function downloadSourceS3GeneratedParts(sourceObjectRoot, mode = "merged") {
+async function downloadSourceS3GeneratedParts(sourceObjectRoot, mode = "merged") {
   const descriptor = sourceObjectS3GeneratedDownloadDescriptor(sourceObjectRoot, mode);
   if (!descriptor) {
     return false;
+  }
+  if (descriptor.mode === "zip") {
+    const response = await window.fetch("/api/s3/generated/zip-jobs", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        bucket: descriptor.bucket,
+        prefix: descriptor.prefix,
+        format: descriptor.fileFormat,
+        filename: descriptor.fileName,
+      }),
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload?.detail || "The ZIP download job could not be started.");
+    }
+    const payload = await response.json();
+    await showMessageDialog({
+      title: "ZIP download started",
+      copy: `Preparing ${payload.filename || "the ZIP archive"} as a visible S3 object in ${payload.path || payload.bucket}.`,
+    });
+    return true;
   }
 
   const search = new URLSearchParams({
@@ -4450,6 +4487,23 @@ async function loadDataSourceEventsState() {
   applyDataSourceEventsState(await response.json());
 }
 
+function applyDownloadJobsState(snapshot) {
+  downloadJobsStateVersion = snapshot?.version ?? null;
+  downloadJobsSummary = snapshot?.summary ?? { runningCount: 0, totalCount: 0 };
+  downloadJobsSnapshot = Array.isArray(snapshot?.jobs) ? snapshot.jobs : [];
+  renderQueryNotificationMenu();
+}
+
+async function loadDownloadJobsState() {
+  const response = await window.fetch("/api/s3/download-jobs", {
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load download jobs: ${response.status}`);
+  }
+  applyDownloadJobsState(await response.json());
+}
+
 async function loadNotebookEventsState() {
   const response = await window.fetch("/api/notebooks/state", {
     headers: {
@@ -4483,6 +4537,9 @@ function applyRealtimeTopicSnapshot(topic, snapshot) {
       break;
     case "data-generation-jobs":
       applyDataGenerationJobsState(snapshot);
+      break;
+    case "download-jobs":
+      applyDownloadJobsState(snapshot);
       break;
     case "data-source-events":
       applyDataSourceEventsState(snapshot);
@@ -4931,6 +4988,9 @@ function ensureRealtimeEventsEventSource() {
   if (dataGenerationJobsStateVersion !== null) {
     params.set("dataGenerationJobsVersion", String(dataGenerationJobsStateVersion));
   }
+  if (downloadJobsStateVersion !== null) {
+    params.set("downloadJobsVersion", String(downloadJobsStateVersion));
+  }
   if (dataSourceEventsStateVersion !== null) {
     params.set("dataSourceEventsVersion", String(dataSourceEventsStateVersion));
   }
@@ -4952,6 +5012,7 @@ function ensureRealtimeEventsEventSource() {
     "query-jobs",
     "python-jobs",
     "data-generation-jobs",
+    "download-jobs",
     "data-source-events",
     "service-consumption",
     "notebook-events",
@@ -4985,6 +5046,13 @@ function ensureRealtimeEventsEventSource() {
     if (dataGenerationJobsStateVersion !== null) {
       refreshTasks.push(
         loadDataGenerationJobsState().catch(() => {
+          // Ignore transient reconnect issues.
+        })
+      );
+    }
+    if (downloadJobsStateVersion !== null) {
+      refreshTasks.push(
+        loadDownloadJobsState().catch(() => {
           // Ignore transient reconnect issues.
         })
       );
@@ -5237,6 +5305,70 @@ async function openNotebookForQueryJob(notebookId, cellId = "") {
   }
 }
 
+function refreshQueryJobUntilSettled(jobId, { maxAttempts = 120, intervalMs = 500 } = {}) {
+  const normalizedJobId = String(jobId || "").trim();
+  if (!normalizedJobId) {
+    return;
+  }
+
+  let attempts = 0;
+  let settledRefreshes = 0;
+  const refresh = async () => {
+    attempts += 1;
+    try {
+      const response = await window.fetch("/api/query-jobs", {
+        headers: { Accept: "application/json" },
+      });
+      if (!response.ok) {
+        throw new Error(`Query job refresh failed with status ${response.status}.`);
+      }
+      const payload = await response.json();
+      applyQueryJobsState(payload);
+      const job = normalizeQueryJob(
+        Array.isArray(payload?.jobs)
+          ? payload.jobs.find((candidate) => String(candidate?.jobId || "") === normalizedJobId)
+          : null
+      );
+      renderQueryJobSnapshotForLiveCell(job);
+      if (job && !queryJobIsRunning(job)) {
+        settledRefreshes += 1;
+        if (settledRefreshes >= 8) {
+          return;
+        }
+      } else {
+        settledRefreshes = 0;
+      }
+    } catch (error) {
+      console.error("Failed to refresh query job state.", error);
+    }
+
+    if (attempts < maxAttempts) {
+      window.setTimeout(refresh, intervalMs);
+    }
+  };
+
+  window.setTimeout(refresh, intervalMs);
+}
+
+function renderQueryJobSnapshotForLiveCell(job) {
+  if (!job?.cellId) {
+    return;
+  }
+
+  const cells = Array.from(
+    document.querySelectorAll(`[data-query-cell][data-cell-id="${escapeSelectorValue(job.cellId)}"]`)
+  );
+  const cellRoot =
+    cells.find((candidate) => {
+      const workspaceRoot = candidate.closest("[data-workspace-notebook]");
+      return !job.notebookId || workspaceNotebookId(workspaceRoot) === job.notebookId;
+    }) || cells[0];
+  const resultRoot = cellRoot?.querySelector("[data-cell-result]");
+  if (resultRoot) {
+    resultRoot.outerHTML = queryResultPanelMarkup(job.cellId, job);
+  }
+}
+
 async function startQueryJobForForm(form) {
   if (formCellLanguage(form) === "python") {
     await startPythonJobForForm(form);
@@ -5346,6 +5478,146 @@ async function startQueryJobForForm(form) {
     getQueryState: currentQueryState,
     incrementRunningCount: true,
   });
+  renderQueryJobSnapshotForLiveCell(snapshot);
+  refreshQueryJobUntilSettled(snapshot.jobId);
+}
+
+function queryPlanDialogCopy(payload, fallbackSql = "") {
+  const lines = [];
+  const engine = String(payload?.engine || "duckdb").trim();
+  if (engine) {
+    lines.push(`Engine: ${engine}`);
+  }
+  if (payload?.runtimeEstimate) {
+    lines.push(`Runtime estimate: ${payload.runtimeEstimate}`);
+  }
+  if (Number(payload?.bytesTouchedEstimate || 0) > 0) {
+    lines.push(`Estimated touched bytes: ${Number(payload.bytesTouchedEstimate).toLocaleString()}`);
+  }
+  if (Array.isArray(payload?.touchedRelations) && payload.touchedRelations.length) {
+    lines.push(`Relations: ${payload.touchedRelations.join(", ")}`);
+  }
+  if (Array.isArray(payload?.touchedBuckets) && payload.touchedBuckets.length) {
+    lines.push(`Buckets: ${payload.touchedBuckets.join(", ")}`);
+  }
+  if (Array.isArray(payload?.warnings) && payload.warnings.length) {
+    lines.push(`Warnings: ${payload.warnings.join(" ")}`);
+  }
+  const planText = String(payload?.planText || "").trim();
+  lines.push("", planText || `No plan text returned for: ${fallbackSql}`);
+  return lines.join("\n");
+}
+
+async function explainQueryForCell(cellRoot) {
+  if (!(cellRoot instanceof Element)) {
+    return;
+  }
+  if (cellLanguageForCellRoot(cellRoot) === "python") {
+    await showMessageDialog({
+      title: "Explain unavailable",
+      copy: "Explain is available for SQL cells.",
+    });
+    return;
+  }
+  const editorSource = cellRoot.querySelector("[data-editor-source]");
+  const sql = editorSource?.value ?? "";
+  try {
+    const preparedQuery = await prepareLocalWorkspaceQuerySql(sql);
+    const response = await window.fetch("/api/query-jobs/explain", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        sql: preparedQuery.sql,
+        dataSources: selectedDataSourcesForCell(cellRoot),
+      }),
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload?.detail || "The query could not be explained.");
+    }
+    const payload = await response.json();
+    await showMessageDialog({
+      title: "Query Explain",
+      copy: queryPlanDialogCopy(payload, sql),
+      actionLabel: "Close",
+    });
+  } catch (error) {
+    await showMessageDialog({
+      title: "Explain failed",
+      copy: error instanceof Error ? error.message : "The query could not be explained.",
+    });
+  }
+}
+
+async function startAnalyzeJobForCell(cellRoot) {
+  const form = cellRoot?.querySelector("[data-query-form]");
+  if (!(form instanceof HTMLFormElement)) {
+    return;
+  }
+  if (cellLanguageForCellRoot(cellRoot) === "python") {
+    await showMessageDialog({
+      title: "Analyze unavailable",
+      copy: "Analyze is available for SQL cells.",
+    });
+    return;
+  }
+
+  const workspaceRoot = form.closest("[data-workspace-notebook]");
+  const notebookId = workspaceNotebookId(workspaceRoot);
+  const cellId = cellRoot?.dataset.cellId;
+  const existingJob = queryJobForCell(notebookId, cellId);
+  if (queryJobIsRunning(existingJob)) {
+    return;
+  }
+
+  const formData = new FormData(form);
+  const editorSource = cellRoot.querySelector("[data-editor-source]");
+  const originalSql = editorSource?.value ?? "";
+  let executionSql = originalSql;
+  try {
+    const preparedQuery = await prepareLocalWorkspaceQuerySql(originalSql);
+    executionSql = preparedQuery.sql;
+  } catch (error) {
+    await showMessageDialog({
+      title: "Analyze failed",
+      copy: error instanceof Error ? error.message : "The Local Workspace sources could not be prepared.",
+    });
+    return;
+  }
+
+  formData.set("sql", executionSql);
+  formData.set("notebook_id", notebookId);
+  formData.set("cell_id", cellId);
+  formData.set("notebook_title", currentWorkspaceNotebookTitle(workspaceRoot));
+  formData.set("data_sources", selectedDataSourcesForCell(cellRoot).join("||"));
+  const response = await window.fetch("/api/query-jobs/analyze", {
+    method: "POST",
+    body: formData,
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => ({}));
+    await showMessageDialog({
+      title: "Analyze failed",
+      copy: payload?.detail || "The analyze job could not be started.",
+    });
+    return;
+  }
+  const snapshot = normalizeQueryJob(await response.json());
+  if (!snapshot) {
+    return;
+  }
+  applyOptimisticQueryJobSnapshot({
+    snapshot,
+    applyQueryJobsState,
+    getQueryState: currentQueryState,
+    incrementRunningCount: true,
+  });
+  renderQueryJobSnapshotForLiveCell(snapshot);
+  refreshQueryJobUntilSettled(snapshot.jobId);
 }
 
 async function startPythonJobForForm(form) {
@@ -7475,6 +7747,20 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const explainQueryButton = event.target.closest("[data-explain-query]");
+  if (explainQueryButton) {
+    event.preventDefault();
+    await explainQueryForCell(explainQueryButton.closest("[data-query-cell]"));
+    return;
+  }
+
+  const analyzeQueryButton = event.target.closest("[data-analyze-query]");
+  if (analyzeQueryButton) {
+    event.preventDefault();
+    await startAnalyzeJobForCell(analyzeQueryButton.closest("[data-query-cell]"));
+    return;
+  }
+
   const cancelCellButton = event.target.closest("[data-cancel-query]");
   if (cancelCellButton) {
     event.preventDefault();
@@ -8039,6 +8325,9 @@ const initialLoadTasks = [
   }),
   loadDataGenerationJobsState().catch((error) => {
     console.error("Failed to load data generation jobs.", error);
+  }),
+  loadDownloadJobsState().catch((error) => {
+    console.error("Failed to load download jobs.", error);
   }),
   loadDataSourceEventsState().catch((error) => {
     console.error("Failed to load data source events.", error);

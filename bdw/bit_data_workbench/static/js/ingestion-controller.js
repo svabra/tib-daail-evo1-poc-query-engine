@@ -12,6 +12,7 @@ export function createIngestionController(helpers) {
     getDataGenerationJobsSnapshot,
     getDataGenerationTerminalStatuses,
     getDismissedNotificationKeys,
+    getDownloadJobsSnapshot,
     getQueryJobsSnapshot,
     getQueryJobTerminalStatuses,
     ingestionGeneratorById,
@@ -24,6 +25,7 @@ export function createIngestionController(helpers) {
     notificationItemKey,
     queryJobTerminalStatuses,
     queryNotificationItemMarkup,
+    downloadNotificationItemMarkup,
     resolveSelectedIngestionRunbookId,
     sidebarQueryCounts,
     dataGeneratorCardMarkup,
@@ -244,8 +246,16 @@ export function createIngestionController(helpers) {
       dismissible: getDataGenerationTerminalStatuses().has(job.status),
       markup: dataGenerationNotificationItemMarkup(job),
     }));
+    const downloadNotifications = (getDownloadJobsSnapshot?.() ?? []).map((job) => ({
+      type: "download",
+      job,
+      updatedAt: job.updatedAt,
+      dismissalKey: notificationItemKey("download", job),
+      dismissible: ["completed", "failed", "cancelled"].includes(job.status),
+      markup: downloadNotificationItemMarkup(job),
+    }));
 
-    return [...dataGenerationNotifications, ...queryNotifications]
+    return [...downloadNotifications, ...dataGenerationNotifications, ...queryNotifications]
       .filter((item) => !getDismissedNotificationKeys().has(item.dismissalKey))
       .sort((left, right) => Date.parse(right.updatedAt || "") - Date.parse(left.updatedAt || ""));
   }

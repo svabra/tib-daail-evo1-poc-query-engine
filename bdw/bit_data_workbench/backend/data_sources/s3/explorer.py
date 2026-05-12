@@ -67,9 +67,8 @@ def s3_path(bucket: str, prefix: str = "") -> str:
 
 
 def normalize_s3_object_key(key: str | None) -> str:
-    raw_value = str(key or "").strip().replace("\\", "/")
-    parts = [segment.strip() for segment in raw_value.split("/") if segment.strip()]
-    normalized = "/".join(parts)
+    raw_value = str(key or "").replace("\\", "/")
+    normalized = raw_value.lstrip("/")
     if not normalized or normalized.endswith("/"):
         raise ValueError("Choose a concrete S3 object before downloading.")
     if any(token in normalized for token in "*?["):
@@ -658,7 +657,12 @@ class S3ExplorerManager:
                     response = client.get_object(Bucket=bucket, Key=key)
                     body = response["Body"]
                     try:
-                        archive.writestr(PurePosixPath(key).name, body.read())
+                        with archive.open(PurePosixPath(key).name, "w", force_zip64=True) as member:
+                            while True:
+                                chunk = body.read(1024 * 1024)
+                                if not chunk:
+                                    break
+                                member.write(chunk)
                     finally:
                         close = getattr(body, "close", None)
                         if callable(close):

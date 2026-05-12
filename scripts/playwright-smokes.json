@@ -6,6 +6,11 @@
       "enabledByDefault": true
     },
     {
+      "id": "query-explain-analyze",
+      "script": "playwright_query_explain_analyze_smoke.py",
+      "enabledByDefault": false
+    },
+    {
       "id": "home-navigation",
       "script": "playwright_home_navigation_smoke.py",
       "enabledByDefault": true
@@ -53,6 +58,11 @@
     {
       "id": "s3-csv-download",
       "script": "playwright_s3_csv_download_smoke.py",
+      "enabledByDefault": false
+    },
+    {
+      "id": "s3-delete-zip-job",
+      "script": "playwright_s3_delete_zip_job_smoke.py",
       "enabledByDefault": false
     },
     {

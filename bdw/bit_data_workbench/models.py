@@ -578,6 +578,18 @@ class QueryJobDefinition:
     touched_relations: list[str] = field(default_factory=list)
     touched_buckets: list[str] = field(default_factory=list)
     backend_name: str = "duckdb"
+    workload_type: str = "query"
+    engine: str = "duckdb"
+    process_id: int | None = None
+    cpu_percent: float | None = None
+    memory_rss_bytes: int | None = None
+    peak_memory_rss_bytes: int | None = None
+    bytes_touched_estimate: int | None = None
+    rows_scanned_estimate: int | None = None
+    plan_text: str = ""
+    plan_rows: list[tuple[Any, ...]] = field(default_factory=list)
+    runtime_estimate: str = ""
+    warnings: list[str] = field(default_factory=list)
     can_cancel: bool = False
 
     @property
@@ -609,7 +621,44 @@ class QueryJobDefinition:
             "touchedRelations": list(self.touched_relations),
             "touchedBuckets": list(self.touched_buckets),
             "backendName": self.backend_name,
+            "workloadType": self.workload_type,
+            "engine": self.engine,
+            "processId": self.process_id,
+            "cpuPercent": self.cpu_percent,
+            "memoryRssBytes": self.memory_rss_bytes,
+            "peakMemoryRssBytes": self.peak_memory_rss_bytes,
+            "bytesTouchedEstimate": self.bytes_touched_estimate,
+            "rowsScannedEstimate": self.rows_scanned_estimate,
+            "planText": self.plan_text,
+            "planRows": [list(row) for row in self.plan_rows],
+            "runtimeEstimate": self.runtime_estimate,
+            "warnings": list(self.warnings),
             "canCancel": self.can_cancel,
+        }
+
+
+@dataclass(slots=True)
+class QueryExplainDefinition:
+    engine: str
+    plan_text: str
+    plan_rows: list[tuple[Any, ...]] = field(default_factory=list)
+    touched_relations: list[str] = field(default_factory=list)
+    touched_buckets: list[str] = field(default_factory=list)
+    bytes_touched_estimate: int | None = None
+    runtime_estimate: str = ""
+    warnings: list[str] = field(default_factory=list)
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {
+            "engine": self.engine,
+            "planText": self.plan_text,
+            "planRows": [list(row) for row in self.plan_rows],
+            "touchedRelations": list(self.touched_relations),
+            "touchedBuckets": list(self.touched_buckets),
+            "bytesTouchedEstimate": self.bytes_touched_estimate,
+            "runtimeEstimate": self.runtime_estimate,
+            "warnings": list(self.warnings),
         }
 
 
