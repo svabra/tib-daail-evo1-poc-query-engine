@@ -1,22 +1,22 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.8.7. Keep entries concise and
+# Derived from git history through version 0.8.8. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
     {
-        "version": "0.8.7",
-        "releasedAt": "2026-05-11T14:45:25+02:00",
+        "version": "0.8.8",
+        "releasedAt": "2026-05-12T14:31:53+02:00",
         "features": [
             (
-                "Generated loader S3 CSV and JSONL outputs now appear in the Shared Workspace "
-                "source tree with file-style names such as table.csv and table.jsonl instead "
-                "of only DuckDB view-style relation labels."
+                "Shared notebook folders now store their Public or Private visibility in the hidden "
+                "S3 shared-notebooks bucket, keeping folder visibility synchronized across users "
+                "without exposing the storage bucket in Shared Workspace explorers."
             ),
             (
-                "Single-object generated CSV and JSONL relations now expose the S3 download action "
-                "and download with the displayed file name, with a Playwright regression covering "
-                "the sidebar behavior."
+                "New notebooks inherit the visibility of their parent folder, default root creates "
+                "land in Shared Notebooks, and notebook/folder badges now clearly show Public / "
+                "Shared or Private / Local with tooltip context."
             ),
         ],
     },
