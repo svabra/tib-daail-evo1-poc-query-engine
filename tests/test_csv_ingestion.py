@@ -37,6 +37,7 @@ from bit_data_workbench.backend.ingestion_types.csv.validation import (  # noqa:
     validate_csv_file,
 )
 from bit_data_workbench.config import Settings  # noqa: E402
+from bit_data_workbench.backend.s3_hidden import shared_notebooks_bucket_name  # noqa: E402
 from bit_data_workbench.version_info import current_repo_version  # noqa: E402
 
 
@@ -306,6 +307,38 @@ class CsvIngestionManagerTests(TestCase):
             },
         )
         self.assertEqual(payload["imports"][0]["storageFormat"], "csv")
+
+    def test_import_to_shared_notebooks_bucket_is_rejected_in_s3_target(self) -> None:
+        settings = make_settings()
+        target_bucket = shared_notebooks_bucket_name(settings)
+        fake_client = FakeS3Client()
+        manager = CsvIngestionManager(
+            settings=settings,
+            postgres_connection_factory=lambda target: None,
+            s3_client_factory=lambda settings: fake_client,
+        )
+        upload = FakeUpload("shared-notebooks.csv", b"id,name\n1,alpha\n")
+
+        with patch(
+            "bit_data_workbench.backend.ingestion_types.csv.manager.ensure_s3_bucket"
+        ) as ensure_bucket:
+            payload = manager.import_csv_files(
+                files=[upload],
+                target_id="workspace.s3",
+                bucket=target_bucket,
+                delimiter=",",
+                has_header=True,
+            )
+
+        ensure_bucket.assert_not_called()
+        self.assertEqual(payload["importedCount"], 0)
+        self.assertEqual(payload["failedCount"], 1)
+        self.assertEqual(payload["imports"][0]["fileName"], "shared-notebooks.csv")
+        self.assertIn(
+            "shared notebook storage bucket is reserved",
+            payload["imports"][0]["error"],
+        )
+        self.assertEqual(fake_client.uploads, [])
 
     def test_import_zip_files_to_s3_extracts_multiple_csv_entries(self) -> None:
         fake_client = FakeS3Client()

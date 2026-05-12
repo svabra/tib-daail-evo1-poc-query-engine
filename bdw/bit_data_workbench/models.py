@@ -369,6 +369,7 @@ class NotebookFolder:
     notebooks: list[NotebookDefinition] = field(default_factory=list)
     can_edit: bool = True
     can_delete: bool = True
+    is_shared: bool = False
 
     @property
     def notebook_count(self) -> int:

@@ -20,6 +20,7 @@ from bit_data_workbench.backend.ingestion_types.common import (  # noqa: E402
     ArchivePolicy,
     extract_archive_files,
 )
+from bit_data_workbench.backend.s3_hidden import shared_notebooks_bucket_name
 from bit_data_workbench.backend.ingestion_types.common.uploads import (  # noqa: E402
     IngestionLocalSource,
 )
@@ -217,6 +218,38 @@ class FileIngestionManagerTests(TestCase):
                 [upload[2] for upload in fake_s3.uploads],
                 ["stage/json/alpha.jsonl", "stage/json/beta.jsonl", "stage/json/gamma.ndjson"],
             )
+
+    def test_import_to_shared_notebooks_bucket_is_rejected_in_s3_target(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "alpha.jsonl"
+            source.write_text('{"id":1,"name":"alpha"}\n', encoding="utf-8")
+            settings = make_settings()
+            target_bucket = shared_notebooks_bucket_name(settings)
+            fake_s3 = FakeS3Client()
+            manager = FileIngestionManager(
+                settings=settings,
+                spec=FILE_INGESTOR_SPECS["json"],
+                postgres_connection_factory=lambda target: None,
+                s3_client_factory=lambda app_settings: fake_s3,
+            )
+
+            with patch(
+                "bit_data_workbench.backend.ingestion_types.tabular.manager.ensure_s3_bucket"
+            ) as ensure_bucket:
+                payload = manager.import_sources(
+                    sources=[IngestionLocalSource(file_name="alpha.jsonl", local_path=source)],
+                    target_id="workspace.s3",
+                    bucket=target_bucket,
+                    prefix="stage/json",
+                )
+
+            ensure_bucket.assert_not_called()
+            self.assertEqual(payload["importedCount"], 0)
+            self.assertEqual(payload["failedCount"], 1)
+            self.assertEqual(payload["imports"][0]["fileName"], "alpha.jsonl")
+            self.assertIn("shared notebook storage bucket is reserved", payload["imports"][0]["error"])
+            self.assertEqual(fake_s3.uploads, [])
 
     def test_mixed_format_zip_imports_valid_members_and_reports_invalid_member(self) -> None:
         with TemporaryDirectory() as temp_dir:

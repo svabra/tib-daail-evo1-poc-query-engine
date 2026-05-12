@@ -13,6 +13,7 @@ from ....config import Settings
 from ...queryable_files import materialize_queryable_file
 from ...s3_storage import ensure_s3_bucket, s3_client, upload_s3_file
 from ...sql_utils import sql_identifier, sql_literal
+from ...s3_hidden import reject_hidden_s3_bucket
 from ..common import (
     ArchivePolicy,
     IngestionLocalSource,
@@ -395,6 +396,7 @@ class FileIngestionManager:
             raise ValueError(
                 f"Provide a bucket or configure S3_BUCKET before importing {self._spec.format_label} files."
             )
+        reject_hidden_s3_bucket(normalized_bucket, self._settings)
 
         normalized_prefix = "/".join(
             segment for segment in str(prefix or "").split("/") if str(segment).strip()

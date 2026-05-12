@@ -64,6 +64,20 @@ class SharedNotebookUpsertPayload(BaseModel):
     versions: list[NotebookVersionPayload] = Field(default_factory=list)
 
 
+class SharedNotebookFolderPayload(BaseModel):
+    path: list[str] = Field(default_factory=list)
+    display_name: str = Field(default="", alias="displayName")
+    is_public: bool = Field(default=False, alias="isPublic")
+    can_edit: bool = Field(default=True, alias="canEdit")
+    can_delete: bool = Field(default=True, alias="canDelete")
+
+
+class SharedNotebookFolderVisibilityPayload(BaseModel):
+    path: list[str] = Field(default_factory=list)
+    display_name: str = Field(default="", alias="displayName")
+    is_public: bool = Field(alias="isPublic")
+
+
 class S3BucketCreatePayload(BaseModel):
     bucket_name: str = Field(validation_alias="bucketName", serialization_alias="bucketName")
 
@@ -1271,6 +1285,49 @@ def upsert_shared_notebook(
             cells=[cell.model_dump(by_alias=True) for cell in payload.cells],
             versions=[version.model_dump(by_alias=True) for version in payload.versions],
             origin_client_id=str(workbench_client_id or "").strip(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(result))
+
+
+@router.get("/api/notebooks/shared/folders")
+def list_shared_notebook_folders(
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return JSONResponse(jsonable_encoder({"folders": service.list_shared_notebook_folders()}))
+
+
+@router.post("/api/notebooks/shared/folders")
+def upsert_shared_notebook_folder(
+    payload: SharedNotebookFolderPayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        result = service.upsert_shared_notebook_folder(
+            path=list(payload.path),
+            display_name=payload.display_name,
+            is_public=payload.is_public,
+            can_edit=payload.can_edit,
+            can_delete=payload.can_delete,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(result))
+
+
+@router.patch("/api/notebooks/shared/folders/visibility")
+def set_shared_notebook_folder_visibility(
+    payload: SharedNotebookFolderVisibilityPayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        result = service.set_shared_notebook_folder_visibility(
+            path=list(payload.path),
+            is_public=payload.is_public,
+            display_name=payload.display_name,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

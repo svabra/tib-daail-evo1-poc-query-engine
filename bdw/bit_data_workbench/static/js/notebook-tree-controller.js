@@ -11,6 +11,7 @@ export function createNotebookTreeController(helpers) {
     dropTargetAcceptsNotebookDrop,
     folderCanDelete,
     folderCanEdit,
+    folderIsShared,
     folderLabel,
     getDraggedNotebook,
     isUnassignedFolder,
@@ -20,12 +21,15 @@ export function createNotebookTreeController(helpers) {
     resolveAddTarget,
     resolveDropTarget,
     resolveNotebookCreateTarget,
+    setFolderShared,
     setDraggedNotebook,
+    setSharedNotebookFolderVisibility,
     showConfirmDialog,
     showFolderNameDialog,
     syncRootUnassignedFolder,
     unassignedFolderName,
     updateFolderCounts,
+    upsertSharedNotebookFolder,
   } = helpers;
 
   async function handleCreateNotebookClick(event) {
@@ -41,7 +45,7 @@ export function createNotebookTreeController(helpers) {
     }
 
     const target = resolveNotebookCreateTarget(createNotebookButton);
-    createNotebook(target);
+    await createNotebook(target);
     return true;
   }
 
@@ -76,6 +80,11 @@ export function createNotebookTreeController(helpers) {
       summary.dataset.searchableItem = nextName;
     }
     persistNotebookTree();
+    try {
+      await upsertSharedNotebookFolder(folder);
+    } catch (error) {
+      console.error("Failed to save renamed notebook folder metadata.", error);
+    }
     applySidebarSearchFilter();
     return true;
   }
@@ -143,17 +152,54 @@ export function createNotebookTreeController(helpers) {
     const nextFolderId = deriveFolderId(folderName, parentFolder?.dataset.folderId || "");
     const nextFolderPolicy = defaultFolderPermissions(nextFolderId);
 
-    target.appendChild(
-      createFolderNode(folderName, {
-        open: true,
-        folderId: nextFolderId,
-        canEdit: nextFolderPolicy.canEdit,
-        canDelete: nextFolderPolicy.canDelete,
-      })
-    );
+    const folder = createFolderNode(folderName, {
+      open: true,
+      folderId: nextFolderId,
+      canEdit: nextFolderPolicy.canEdit,
+      canDelete: nextFolderPolicy.canDelete,
+      isShared: false,
+    });
+    target.appendChild(folder);
     updateFolderCounts();
     persistNotebookTree();
+    try {
+      await upsertSharedNotebookFolder(folder, { isPublic: false });
+    } catch (error) {
+      console.error("Failed to save new notebook folder metadata.", error);
+    }
     applySidebarSearchFilter();
+    return true;
+  }
+
+  async function handleToggleFolderSharedClick(event) {
+    const toggleButton = event.target.closest("[data-toggle-folder-shared]");
+    if (!toggleButton) {
+      return false;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const folder = toggleButton.closest("[data-tree-folder]");
+    if (!folder) {
+      return true;
+    }
+
+    const previousValue = folderIsShared(folder);
+    const nextValue = !previousValue;
+    setFolderShared(folder, nextValue);
+    persistNotebookTree();
+
+    try {
+      await setSharedNotebookFolderVisibility(folder, nextValue);
+    } catch (error) {
+      setFolderShared(folder, previousValue);
+      persistNotebookTree();
+      console.error("Failed to update notebook folder visibility.", error);
+      window.alert("The folder visibility could not be saved.");
+      return true;
+    }
+
     return true;
   }
 
@@ -248,6 +294,7 @@ export function createNotebookTreeController(helpers) {
     handleNotebookDragStart,
     handleNotebookDrop,
     handleNotebookTreeToggle,
+    handleToggleFolderSharedClick,
     handleRenameFolderClick,
   };
 }

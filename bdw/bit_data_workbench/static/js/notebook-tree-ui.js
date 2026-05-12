@@ -14,6 +14,7 @@ export function createNotebookTreeUi(helpers) {
     persistNotebookDraft,
     readStoredNotebookTree,
     renderEmptyWorkspace,
+    sharedNotebookFolderName,
     unassignedFolderName,
     updateLastNotebookId,
     visibleNotebookLinks,
@@ -54,9 +55,49 @@ export function createNotebookTreeUi(helpers) {
     button.title = allowed ? enabledTitle : disabledTitle;
   }
 
+  function folderVisibilityLabel(isShared) {
+    return isShared ? "Public" : "Private";
+  }
+
+  function folderVisibilityTitle(isShared) {
+    return isShared
+      ? "Public folder. New notebooks created here start shared."
+      : "Private folder. New notebooks created here stay local.";
+  }
+
+  function folderIsShared(folder) {
+    if (!(folder instanceof Element)) {
+      return false;
+    }
+
+    return folder.dataset.folderShared === "true";
+  }
+
+  function syncFolderVisibilityButton(folder) {
+    const button = folder?.querySelector(":scope > summary [data-toggle-folder-shared]");
+    if (!button) {
+      return;
+    }
+
+    const isShared = folderIsShared(folder);
+    button.textContent = folderVisibilityLabel(isShared);
+    button.title = folderVisibilityTitle(isShared);
+    button.setAttribute("aria-label", isShared ? "Mark folder private" : "Mark folder public");
+    button.setAttribute("aria-pressed", isShared ? "true" : "false");
+  }
+
+  function setFolderShared(folder, isShared) {
+    if (!(folder instanceof Element)) {
+      return;
+    }
+
+    folder.dataset.folderShared = isShared ? "true" : "false";
+    syncFolderVisibilityButton(folder);
+  }
+
   function createFolderNode(
     name,
-    { open = false, folderId = "", canEdit = true, canDelete = true } = {}
+    { open = false, folderId = "", canEdit = true, canDelete = true, isShared = false } = {}
   ) {
     const folder = document.createElement("details");
     folder.className = "tree-folder";
@@ -65,6 +106,7 @@ export function createNotebookTreeUi(helpers) {
     folder.dataset.folderId = folderId || "";
     folder.dataset.canEdit = String(canEdit);
     folder.dataset.canDelete = String(canDelete);
+    folder.dataset.folderShared = isShared ? "true" : "false";
 
     const summary = document.createElement("summary");
     summary.className = "tree-folder-summary";
@@ -76,6 +118,15 @@ export function createNotebookTreeUi(helpers) {
 
     const tools = document.createElement("span");
     tools.className = "tree-folder-tools";
+
+    const visibilityButton = document.createElement("button");
+    visibilityButton.type = "button";
+    visibilityButton.className = "tree-add-button tree-add-button-inline";
+    visibilityButton.dataset.toggleFolderShared = "";
+    visibilityButton.textContent = folderVisibilityLabel(isShared);
+    visibilityButton.title = folderVisibilityTitle(isShared);
+    visibilityButton.setAttribute("aria-label", isShared ? "Mark folder private" : "Mark folder public");
+    visibilityButton.setAttribute("aria-pressed", isShared ? "true" : "false");
 
     const createNotebookButton = document.createElement("button");
     createNotebookButton.type = "button";
@@ -132,7 +183,7 @@ export function createNotebookTreeUi(helpers) {
     count.className = "tree-folder-count";
     count.textContent = "0";
 
-    tools.append(createNotebookButton, renameButton, deleteButton, addButton, count);
+    tools.append(visibilityButton, createNotebookButton, renameButton, deleteButton, addButton, count);
     summary.append(label, tools);
     folder.append(summary);
 
@@ -247,6 +298,35 @@ export function createNotebookTreeUi(helpers) {
     return folder;
   }
 
+  function ensureRootSharedNotebooksFolder() {
+    const root = notebookTreeRoot();
+    if (!root) {
+      return null;
+    }
+
+    const existing =
+      Array.from(root.querySelectorAll(":scope > [data-tree-folder]")).find(
+        (folder) => folderLabel(folder)?.textContent?.trim() === sharedNotebookFolderName
+      ) ?? null;
+    if (existing) {
+      setFolderShared(existing, true);
+      existing.open = true;
+      return existing;
+    }
+
+    const folderId = deriveFolderId(sharedNotebookFolderName);
+    const permissions = defaultFolderPermissions(folderId);
+    const folder = createFolderNode(sharedNotebookFolderName, {
+      open: true,
+      folderId,
+      canEdit: permissions.canEdit,
+      canDelete: permissions.canDelete,
+      isShared: true,
+    });
+    root.appendChild(folder);
+    return folder;
+  }
+
   function collectFolderNotebooks(folder) {
     return Array.from(folder.querySelectorAll("[data-draggable-notebook]"));
   }
@@ -330,6 +410,7 @@ export function createNotebookTreeUi(helpers) {
         systemFolder: node.dataset.systemFolder || null,
         canEdit: node.dataset.canEdit !== "false",
         canDelete: node.dataset.canDelete !== "false",
+        isShared: node.dataset.folderShared === "true",
         children: children
           ? Array.from(children.children)
               .map((child) => serializeTreeNode(child))
@@ -361,7 +442,30 @@ export function createNotebookTreeUi(helpers) {
     writeStoredNotebookTree(state);
   }
 
-  function renderStoredTreeNode(nodeState, notebookLookup, parentFolderId = "") {
+  function collectServerFolderMetadata(root) {
+    const metadata = new Map();
+    root.querySelectorAll("[data-tree-folder]").forEach((folder) => {
+      const folderId = folder.dataset.folderId || "";
+      if (!folderId) {
+        return;
+      }
+
+      metadata.set(folderId, {
+        canEdit: folder.dataset.canEdit !== "false",
+        canDelete: folder.dataset.canDelete !== "false",
+        isShared: folder.dataset.folderShared === "true",
+        systemFolder: folder.dataset.systemFolder || null,
+      });
+    });
+    return metadata;
+  }
+
+  function renderStoredTreeNode(
+    nodeState,
+    notebookLookup,
+    parentFolderId = "",
+    serverFolderMetadata = new Map(),
+  ) {
     if (!nodeState || typeof nodeState !== "object") {
       return null;
     }
@@ -385,27 +489,41 @@ export function createNotebookTreeUi(helpers) {
     if (nodeState.type === "folder") {
       const resolvedFolderId = nodeState.folderId || deriveFolderId(nodeState.name || "Folder", parentFolderId);
       const fallbackPolicy = defaultFolderPermissions(resolvedFolderId);
+      const serverPolicy = serverFolderMetadata.get(resolvedFolderId) ?? {};
       const folder = createFolderNode(nodeState.name || "Folder", {
         open: Boolean(nodeState.open),
         folderId: resolvedFolderId,
         canEdit: fallbackPolicy.canEdit
-          ? typeof nodeState.canEdit === "boolean"
-            ? nodeState.canEdit
-            : true
+          ? typeof serverPolicy.canEdit === "boolean"
+            ? serverPolicy.canEdit
+            : typeof nodeState.canEdit === "boolean"
+              ? nodeState.canEdit
+              : true
           : false,
         canDelete: fallbackPolicy.canDelete
-          ? typeof nodeState.canDelete === "boolean"
-            ? nodeState.canDelete
-            : true
+          ? typeof serverPolicy.canDelete === "boolean"
+            ? serverPolicy.canDelete
+            : typeof nodeState.canDelete === "boolean"
+              ? nodeState.canDelete
+              : true
           : false,
+        isShared:
+          typeof serverPolicy.isShared === "boolean"
+            ? serverPolicy.isShared
+            : nodeState.isShared === true,
       });
-      if (nodeState.systemFolder) {
-        folder.dataset.systemFolder = nodeState.systemFolder;
+      if (serverPolicy.systemFolder || nodeState.systemFolder) {
+        folder.dataset.systemFolder = serverPolicy.systemFolder || nodeState.systemFolder;
       }
       const container = directChildrenContainer(folder);
 
       for (const child of nodeState.children ?? []) {
-        const renderedChild = renderStoredTreeNode(child, notebookLookup, resolvedFolderId);
+        const renderedChild = renderStoredTreeNode(
+          child,
+          notebookLookup,
+          resolvedFolderId,
+          serverFolderMetadata,
+        );
         if (renderedChild) {
           container.appendChild(renderedChild);
         }
@@ -476,8 +594,16 @@ export function createNotebookTreeUi(helpers) {
       return [];
     }
 
+    return treeFolderPath(notebook.closest("[data-tree-folder]"));
+  }
+
+  function treeFolderPath(folder) {
+    if (!(folder instanceof Element)) {
+      return [];
+    }
+
     const path = [];
-    let currentFolder = notebook.closest("[data-tree-folder]");
+    let currentFolder = folder;
 
     while (currentFolder) {
       const label = folderLabel(currentFolder)?.textContent?.trim();
@@ -522,6 +648,7 @@ export function createNotebookTreeUi(helpers) {
           folderId,
           canEdit: permissions.canEdit,
           canDelete: permissions.canDelete,
+          isShared: false,
         });
         container.appendChild(folder);
       } else {
@@ -559,6 +686,7 @@ export function createNotebookTreeUi(helpers) {
 
     const storedTree = readStoredNotebookTree();
     if (storedTree) {
+      const serverFolderMetadata = collectServerFolderMetadata(treeRoot);
       const notebookLookup = new Map(
         Array.from(treeRoot.querySelectorAll("[data-draggable-notebook]")).map((notebook) => [
           notebook.dataset.notebookId,
@@ -571,7 +699,12 @@ export function createNotebookTreeUi(helpers) {
       const fragment = document.createDocumentFragment();
 
       for (const nodeState of storedTree) {
-        const renderedNode = renderStoredTreeNode(nodeState, notebookLookup);
+        const renderedNode = renderStoredTreeNode(
+          nodeState,
+          notebookLookup,
+          "",
+          serverFolderMetadata,
+        );
         if (renderedNode) {
           fragment.appendChild(renderedNode);
         }
@@ -650,9 +783,11 @@ export function createNotebookTreeUi(helpers) {
     deleteTreeFolder,
     directChildrenContainer,
     dropTargetAcceptsNotebookDrop,
+    ensureRootSharedNotebooksFolder,
     ensureRootUnassignedFolder,
     folderCanDelete,
     folderCanEdit,
+    folderIsShared,
     folderLabel,
     initializeNotebookTree,
     isUnassignedFolder,
@@ -660,10 +795,12 @@ export function createNotebookTreeUi(helpers) {
     resolveAddTarget,
     resolveDropTarget,
     rootUnassignedFolder,
+    setFolderShared,
     syncRootUnassignedFolder,
     updateFolderCounts,
     updateNotebookSectionCount,
     notebookDefaultFolderPath,
     revealNotebookBranch,
+    treeFolderPath,
   };
 }

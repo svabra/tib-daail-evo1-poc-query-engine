@@ -45,6 +45,7 @@ WORKBENCH_ENVIRONMENT_VARIABLES = (
     "BDW_DATA_EXCHANGE_PREFIX",
     "BDW_DATA_EXCHANGE_UPLOAD_MAX_BYTES",
     "BDW_DATA_EXCHANGE_DOWNLOAD_TOKEN_TTL_SECONDS",
+    "BDW_SHARED_NOTEBOOKS_BUCKET",
     "MAX_RESULT_ROWS",
     "S3_ENDPOINT",
     "S3_BUCKET",
@@ -561,6 +562,7 @@ class Settings:
     data_exchange_prefix: str = DEFAULT_DATA_EXCHANGE_PREFIX
     data_exchange_upload_max_bytes: int = DEFAULT_INGESTION_UPLOAD_MAX_BYTES
     data_exchange_download_token_ttl_seconds: int = 300
+    shared_notebooks_bucket: str | None = None
     _generated_s3_ca_cert_file: Path | None = field(init=False, default=None, repr=False)
 
     @classmethod
@@ -692,6 +694,7 @@ class Settings:
                 30,
                 env_int("BDW_DATA_EXCHANGE_DOWNLOAD_TOKEN_TTL_SECONDS", 300),
             ),
+            shared_notebooks_bucket=env_optional("BDW_SHARED_NOTEBOOKS_BUCKET"),
             max_result_rows=int(env("MAX_RESULT_ROWS", "200")),
             s3_endpoint=env_optional("S3_ENDPOINT"),
             s3_bucket=env_optional("S3_BUCKET"),

@@ -248,6 +248,7 @@ const localWorkspaceCatalogSourceId = "workspace.local";
 const localWorkspaceSchemaKey = "workspace_local::saved-results";
 const localWorkspaceRelationPrefix = "workspace.local.saved_results.";
 const unassignedFolderName = "Unassigned";
+const sharedNotebookFolderName = "Shared Notebooks";
 const localNotebookPrefix = "local-notebook-";
 const sharedNotebookPrefix = "shared-notebook-";
 const localCellPrefix = "local-cell-";
@@ -598,9 +599,11 @@ const {
   deleteTreeFolder,
   directChildrenContainer,
   dropTargetAcceptsNotebookDrop,
+  ensureRootSharedNotebooksFolder,
   ensureRootUnassignedFolder,
   folderCanDelete,
   folderCanEdit,
+  folderIsShared,
   folderLabel,
   initializeNotebookTree,
   isUnassignedFolder,
@@ -610,7 +613,9 @@ const {
   resolveAddTarget,
   resolveDropTarget,
   rootUnassignedFolder,
+  setFolderShared,
   syncRootUnassignedFolder,
+  treeFolderPath,
   updateFolderCounts,
   updateNotebookSectionCount,
 } = createNotebookTreeUi({
@@ -629,6 +634,7 @@ const {
   persistNotebookDraft,
   readStoredNotebookTree,
   renderEmptyWorkspace,
+  sharedNotebookFolderName,
   unassignedFolderName,
   updateLastNotebookId: writeLastNotebookId,
   visibleNotebookLinks,
@@ -1006,6 +1012,7 @@ const {
   handleNotebookDragStart,
   handleNotebookDrop,
   handleNotebookTreeToggle,
+  handleToggleFolderSharedClick,
   handleRenameFolderClick,
 } = createNotebookTreeController({
   applySidebarSearchFilter,
@@ -1019,6 +1026,7 @@ const {
   dropTargetAcceptsNotebookDrop,
   folderCanDelete,
   folderCanEdit,
+  folderIsShared,
   folderLabel,
   getDraggedNotebook: () => draggedNotebook,
   isUnassignedFolder,
@@ -1028,14 +1036,17 @@ const {
   resolveAddTarget,
   resolveDropTarget,
   resolveNotebookCreateTarget,
+  setFolderShared,
   setDraggedNotebook: (notebook) => {
     draggedNotebook = notebook;
   },
+  setSharedNotebookFolderVisibility,
   showConfirmDialog,
   showFolderNameDialog,
   syncRootUnassignedFolder,
   unassignedFolderName,
   updateFolderCounts,
+  upsertSharedNotebookFolder,
 });
 
 const {
@@ -2281,6 +2292,16 @@ function defaultLocalNotebookTitle() {
   return `Untitled Notebook ${localNotebookCount + 1}`;
 }
 
+function notebookVisibilityLabel(shared) {
+  return shared ? "Public / Shared" : "Private / Local";
+}
+
+function notebookVisibilityTitle(shared) {
+  return shared
+    ? "Shared with connected users and stored on the server."
+    : "Private to this browser workspace.";
+}
+
 function createNotebookLinkElement(notebookId, metadata) {
   const link = document.createElement("a");
   link.href = notebookUrl(notebookId) || "#";
@@ -2317,12 +2338,11 @@ function createNotebookLinkElement(notebookId, metadata) {
   title.textContent = metadata.title;
   titleRow.append(title);
 
-  if (metadata.shared) {
-    const sharedBadge = document.createElement("small");
-    sharedBadge.className = "notebook-sharing-pill";
-    sharedBadge.textContent = "Shared";
-    titleRow.append(sharedBadge);
-  }
+  const sharedBadge = document.createElement("small");
+  sharedBadge.className = "notebook-sharing-pill";
+  sharedBadge.textContent = notebookVisibilityLabel(metadata.shared);
+  sharedBadge.title = notebookVisibilityTitle(metadata.shared);
+  titleRow.append(sharedBadge);
 
   const tools = document.createElement("span");
   tools.className = "notebook-item-tools";
@@ -2574,10 +2594,84 @@ function removeNotebookFromStoredTreeState(notebookId) {
 function insertNotebookIntoStoredTreePath(notebookId, folderPath) {
   const notebookNode = { type: "notebook", notebookId };
   const currentTree = readStoredNotebookTree() ?? [];
-  const nextTree = Array.isArray(folderPath) && folderPath.length
-    ? insertNotebookIntoStoredFolderPath(currentTree, notebookNode, folderPath)
-    : { state: [...currentTree, notebookNode], changed: true };
+  const normalizedFolderPath = Array.isArray(folderPath)
+    ? folderPath.map((segment) => String(segment ?? "").trim()).filter(Boolean)
+    : [];
+
+  const removal = removeNotebookFromStoredTree(currentTree, notebookId);
+  const treeAfterRemoval = removal.nodes;
+
+  if (normalizedFolderPath.length === 0) {
+    writeStoredNotebookTree([
+      ...(Array.isArray(treeAfterRemoval) ? treeAfterRemoval : []),
+      notebookNode,
+    ]);
+    return;
+  }
+
+  const nextTree = ensureNotebookInFolderPathState(
+    treeAfterRemoval,
+    notebookId,
+    normalizedFolderPath,
+  );
   writeStoredNotebookTree(nextTree.state);
+}
+
+function sharedNotebookFolderPayload(folder, overrides = {}) {
+  const folderPath = treeFolderPath(folder);
+  return {
+    path: folderPath,
+    displayName: folderPath[folderPath.length - 1] || "",
+    isPublic: overrides.isPublic ?? folderIsShared(folder),
+    canEdit: folder?.dataset?.canEdit !== "false",
+    canDelete: folder?.dataset?.canDelete !== "false",
+  };
+}
+
+async function upsertSharedNotebookFolder(folder, overrides = {}) {
+  const payload = sharedNotebookFolderPayload(folder, overrides);
+  if (!payload.path.length) {
+    return null;
+  }
+
+  const response = await window.fetch("/api/notebooks/shared/folders", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to save notebook folder metadata: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+async function setSharedNotebookFolderVisibility(folder, isPublic) {
+  const payload = sharedNotebookFolderPayload(folder, { isPublic });
+  if (!payload.path.length) {
+    return null;
+  }
+
+  const response = await window.fetch("/api/notebooks/shared/folders/visibility", {
+    method: "PATCH",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      path: payload.path,
+      displayName: payload.displayName,
+      isPublic,
+    }),
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to update notebook folder visibility: ${response.status}`);
+  }
+
+  return response.json();
 }
 
 async function syncSharedNotebookNow(notebookId) {
@@ -2868,15 +2962,13 @@ function updateSidebarNotebookLink(link, metadata) {
   }
 
   let sharedBadge = link.querySelector(".notebook-sharing-pill");
-  if (metadata.shared && !sharedBadge) {
+  if (!sharedBadge) {
     sharedBadge = document.createElement("small");
     sharedBadge.className = "notebook-sharing-pill";
-    sharedBadge.textContent = "Shared";
     titleNode?.after(sharedBadge);
   }
-  if (!metadata.shared && sharedBadge) {
-    sharedBadge.remove();
-  }
+  sharedBadge.textContent = notebookVisibilityLabel(metadata.shared);
+  sharedBadge.title = notebookVisibilityTitle(metadata.shared);
 
   const summaryNode = link.querySelector(".notebook-summary");
   if (summaryNode) {
@@ -3486,7 +3578,7 @@ function renderLocalNotebookWorkspace(notebookId, options = {}) {
 }
 
 function defaultNotebookCreateTarget() {
-  return directChildrenContainer(ensureRootUnassignedFolder());
+  return directChildrenContainer(ensureRootSharedNotebooksFolder());
 }
 
 function resolveNotebookCreateTarget(button) {
@@ -3496,16 +3588,14 @@ function resolveNotebookCreateTarget(button) {
     return directChildrenContainer(folder);
   }
 
-  const unassignedFolder = ensureRootUnassignedFolder();
-  return directChildrenContainer(unassignedFolder);
+  const sharedFolder = ensureRootSharedNotebooksFolder();
+  return directChildrenContainer(sharedFolder);
 }
 
-function createNotebook(targetContainer, initialMetadata = {}) {
-  if (!targetContainer) {
-    return null;
-  }
-
+async function createNotebook(targetContainer, initialMetadata = {}) {
   const notebookId = `${localNotebookPrefix}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  const targetFolder = targetContainer?.closest("[data-tree-folder]") ?? null;
+  const inheritedShared = Boolean(initialMetadata.shared ?? folderIsShared(targetFolder));
   const metadata = {
     title: initialMetadata.title ?? defaultLocalNotebookTitle(),
     summary: initialMetadata.summary ?? "Describe this notebook.",
@@ -3513,19 +3603,26 @@ function createNotebook(targetContainer, initialMetadata = {}) {
     tags: normalizeTags(initialMetadata.tags ?? []),
     canEdit: true,
     canDelete: true,
+    shared: inheritedShared,
     deleted: false,
     versions: [],
   };
   metadata.versions = [createInitialNotebookVersion(notebookId, metadata)];
 
   persistNotebookDraft(notebookId, metadata);
-  const link = createNotebookLinkElement(notebookId, metadata);
-  targetContainer.appendChild(link);
-  updateFolderCounts();
-  updateNotebookSectionCount();
-  persistNotebookTree();
+  if (targetContainer) {
+    const link = createNotebookLinkElement(notebookId, metadata);
+    targetContainer.appendChild(link);
+    updateFolderCounts();
+    updateNotebookSectionCount();
+    persistNotebookTree();
+  }
   applyNotebookMetadata();
   renderLocalNotebookWorkspace(notebookId, { scrollToTop: true });
+  if (metadata.shared) {
+    const result = await shareNotebook(notebookId);
+    return result?.notebook?.notebookId || notebookId;
+  }
   return notebookId;
 }
 
@@ -3896,6 +3993,7 @@ function applyWorkspaceMetadata(metaRoot, metadata) {
   if (sharedToggle) {
     sharedToggle.classList.toggle("is-on", metadata.shared === true);
     sharedToggle.setAttribute("aria-pressed", metadata.shared === true ? "true" : "false");
+    sharedToggle.title = notebookVisibilityTitle(metadata.shared === true);
     sharedToggle.disabled = !metadata.canEdit && metadata.shared !== true;
   }
 
@@ -7424,6 +7522,10 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  if (await handleToggleFolderSharedClick(event)) {
+    return;
+  }
+
   if (await handleDeleteFolderClick(event)) {
     return;
   }
@@ -8028,6 +8130,11 @@ Promise.allSettled(initialLoadTasks)
       }
 
       renderHomePage();
+      renderQueryNotificationMenu();
+      return;
+    }
+
+    if (queryWorkbenchEntryPageRoot()) {
       renderQueryNotificationMenu();
       return;
     }

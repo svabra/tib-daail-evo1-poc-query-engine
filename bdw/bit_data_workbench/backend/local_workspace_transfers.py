@@ -7,6 +7,7 @@ import tempfile
 
 from ..config import Settings
 from .data_sources.s3.explorer import normalize_s3_bucket_name, normalize_s3_prefix, s3_path
+from .s3_hidden import reject_hidden_s3_bucket
 from .s3_storage import ensure_s3_bucket, s3_client, upload_s3_file
 
 
@@ -119,6 +120,7 @@ class LocalWorkspaceTransferManager:
             )
 
         normalized_bucket = normalize_s3_bucket_name(bucket)
+        reject_hidden_s3_bucket(normalized_bucket, self._settings)
         normalized_prefix = normalize_s3_prefix(prefix)
         normalized_file_name = normalize_local_workspace_transfer_filename(
             file_name,

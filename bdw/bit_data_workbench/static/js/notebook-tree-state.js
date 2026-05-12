@@ -46,6 +46,7 @@ export function createNotebookTreeState(helpers) {
       open: true,
       canEdit: permissions.canEdit,
       canDelete: permissions.canDelete,
+      isShared: false,
       children: [],
     };
   }
@@ -179,6 +180,7 @@ export function createNotebookTreeState(helpers) {
             ...createStoredFolderState(folderName, parentFolderId),
             canEdit: fallbackPolicy.canEdit,
             canDelete: fallbackPolicy.canDelete,
+            isShared: false,
           };
 
     if (!folderState.open) {
@@ -259,6 +261,7 @@ export function createNotebookTreeState(helpers) {
     } else {
       nextNodes.push({
         ...createStoredFolderState(folderName),
+        isShared: false,
         children: [notebookNode],
       });
     }
@@ -326,6 +329,21 @@ export function createNotebookTreeState(helpers) {
 
     (Array.isArray(nodes) ? nodes : []).forEach((node) => visit(node));
     return notebookIds;
+  }
+
+  function findStoredFolderMetadata(nodes, folderPath) {
+    const folder = findStoredFolderPathState(nodes, folderPath);
+    if (!folder) {
+      return null;
+    }
+
+    return {
+      folderId: folder.folderId || "",
+      name: folder.name || "",
+      isShared: folder.isShared === true,
+      canEdit: folder.canEdit !== false,
+      canDelete: folder.canDelete !== false,
+    };
   }
 
   function migrateStoredNotebookTree(state) {
@@ -483,6 +501,7 @@ export function createNotebookTreeState(helpers) {
     defaultFolderPermissions,
     deriveFolderId,
     ensureNotebookInFolderPathState,
+    findStoredFolderMetadata,
     readStoredNotebookTree,
     removeNotebookFromStoredTree,
     writeStoredNotebookTree,

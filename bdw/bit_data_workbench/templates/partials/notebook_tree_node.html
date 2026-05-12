@@ -7,6 +7,7 @@
     data-folder-id="{{ node.folder_id }}"
     data-can-edit="{{ 'true' if node.can_edit else 'false' }}"
     data-can-delete="{{ 'true' if node.can_delete else 'false' }}"
+    data-folder-shared="{{ 'true' if node.is_shared else 'false' }}"
   {% endif %}
 >
   <summary
@@ -16,6 +17,16 @@
     <span class="tree-folder-label">{{ node.name }}</span>
     <span class="tree-folder-tools">
       {% if notebook_browser_manage %}
+        <button
+          type="button"
+          class="tree-add-button tree-add-button-inline"
+          data-toggle-folder-shared
+          title="{{ 'Public folder. New notebooks created here start shared.' if node.is_shared else 'Private folder. New notebooks created here stay local.' }}"
+          aria-label="{{ 'Mark folder private' if node.is_shared else 'Mark folder public' }}"
+          aria-pressed="{{ 'true' if node.is_shared else 'false' }}"
+        >
+          {{ "Public" if node.is_shared else "Private" }}
+        </button>
         <button
           type="button"
           class="tree-add-button tree-add-button-inline{% if not node.can_edit %} is-action-disabled{% endif %}"
@@ -100,9 +111,10 @@
       >
         <span class="notebook-title-row">
           <span class="notebook-title">{{ notebook.title }}</span>
-          {% if notebook.shared %}
-            <small class="notebook-sharing-pill">Shared</small>
-          {% endif %}
+          <small
+            class="notebook-sharing-pill"
+            title="{{ 'Shared with connected users and stored on the server.' if notebook.shared else 'Private to this browser workspace.' }}"
+          >{{ "Public / Shared" if notebook.shared else "Private / Local" }}</small>
           {% if notebook_browser_manage %}
             <span class="notebook-item-tools">
               <button

@@ -56,14 +56,15 @@
             class="workspace-sharing-toggle{% if active_notebook.shared %} is-on{% endif %}"
             data-notebook-shared-toggle
             aria-pressed="{{ 'true' if active_notebook.shared else 'false' }}"
+            title="{{ 'Shared with connected users and stored on the server.' if active_notebook.shared else 'Private to this browser workspace.' }}"
             {% if not active_notebook.can_edit and not active_notebook.shared %}disabled{% endif %}
           >
             <span class="workspace-sharing-toggle-switch" aria-hidden="true">
               <span class="workspace-sharing-toggle-thumb"></span>
             </span>
             <span class="workspace-sharing-toggle-copy">
-              Shared with all users
-              <small>Stores this notebook on the server and announces it to connected users.</small>
+              {{ "Public / Shared" if active_notebook.shared else "Private / Local" }}
+              <small>{{ "Stores this notebook on the server and announces it to connected users." if active_notebook.shared else "Keeps this notebook local to this workspace." }}</small>
             </span>
           </button>
         {% endif %}

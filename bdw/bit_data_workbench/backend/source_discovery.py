@@ -19,10 +19,10 @@ from ..config import Settings
 from ..models import DataSourceDiscoveryEventDefinition, SourceConnectionStatus
 from .ingestion_types.csv.dialect import csv_read_settings_from_s3_metadata
 from .data_exchange import (
-    is_data_exchange_bucket_name,
     is_data_exchange_key,
     normalize_data_exchange_prefix,
 )
+from .s3_hidden import is_hidden_s3_bucket_name
 from .queryable_files import (
     materialize_queryable_file,
 )
@@ -510,7 +510,7 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                         fallback_probe = None
 
                 if fallback_probe is not None:
-                    if not is_data_exchange_bucket_name(configured_bucket):
+                    if not is_hidden_s3_bucket_name(configured_bucket, self._settings):
                         current_buckets.add(configured_bucket)
                     logger.info(
                         "S3 discovery added configured bucket %r via %s fallback after bucket enumeration returned %d bucket(s).",
@@ -1061,7 +1061,7 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
         return {
             bucket
             for bucket in buckets
-            if str(bucket or "").strip() and not is_data_exchange_bucket_name(bucket)
+            if str(bucket or "").strip() and not is_hidden_s3_bucket_name(bucket, self._settings)
         }
 
     def _head_object(

@@ -90,7 +90,15 @@ from .service_consumption import (
     SERVICE_CONSUMPTION_DEFAULT_WINDOW,
     ServiceConsumptionMonitor,
 )
-from .shared_notebooks import SharedNotebookStore, normalize_notebook_cell_language
+from .shared_notebooks import (
+    S3SharedNotebookStore,
+    SHARED_NOTEBOOK_DEFAULT_FOLDER_PATH,
+    SharedNotebookFolder,
+    SharedNotebookStore,
+    default_shared_notebook_folder,
+    normalize_folder_path,
+    normalize_notebook_cell_language,
+)
 from .source_discovery import (
     DataSourceDiscoveryManager,
     S3DataSourceDiscoverer,
@@ -144,9 +152,10 @@ class WorkbenchService:
         self._conn: duckdb.DuckDBPyConnection | None = None
         self._catalogs: list[SourceCatalog] = []
         self._notebooks: list[NotebookDefinition] = []
-        self._shared_notebook_store = SharedNotebookStore(
+        self._local_shared_notebook_store = SharedNotebookStore(
             self._shared_notebook_store_path()
         )
+        self._shared_notebook_store = S3SharedNotebookStore(settings)
         self._data_product_store = DataProductStore(
             self._data_product_store_path()
         )
@@ -346,6 +355,8 @@ class WorkbenchService:
         self._log_startup_section("Ensure DuckDB directories exist")
         self.settings.duckdb_database.parent.mkdir(parents=True, exist_ok=True)
         self.settings.duckdb_extension_directory.mkdir(parents=True, exist_ok=True)
+        self._log_startup_section("Initialize shared notebook storage")
+        self._initialize_shared_notebook_store()
         self._log_startup_section("Open primary DuckDB connection")
         conn = self._create_connection(startup_context=True, run_s3_startup_diagnostics=False)
 
@@ -461,7 +472,10 @@ class WorkbenchService:
 
     def notebook_tree(self):
         with self._lock:
-            return build_notebook_tree(self._notebooks)
+            return build_notebook_tree(
+                self._notebooks,
+                folder_metadata=self._shared_notebook_folders(),
+            )
 
     def notebook_events_state(self) -> dict[str, object]:
         with self._condition:
@@ -959,6 +973,7 @@ class WorkbenchService:
         )
 
         with self._condition:
+            self._ensure_shared_folder_metadata_locked(normalized_tree_path)
             refreshed, action = self._shared_notebook_store.upsert_notebook(notebook)
             self._rebuild_notebooks_locked()
             self._append_notebook_event_locked(
@@ -969,6 +984,64 @@ class WorkbenchService:
             return {
                 "action": action,
                 "notebook": refreshed.payload,
+            }
+
+    def list_shared_notebook_folders(self) -> list[dict[str, object]]:
+        return [folder.payload for folder in self._shared_notebook_folders()]
+
+    def upsert_shared_notebook_folder(
+        self,
+        *,
+        path: list[str],
+        display_name: str = "",
+        is_public: bool = False,
+        can_edit: bool = True,
+        can_delete: bool = True,
+    ) -> dict[str, object]:
+        normalized_path = normalize_folder_path(path)
+        if not normalized_path:
+            raise ValueError("Notebook folder path is required.")
+
+        existing = self._shared_notebook_folder_by_path(normalized_path)
+        folder = SharedNotebookFolder(
+            path=normalized_path,
+            display_name=str(display_name or "").strip()
+            or (existing.name if existing is not None else normalized_path[-1]),
+            is_public=bool(is_public),
+            can_edit=bool(can_edit),
+            can_delete=bool(can_delete),
+            updated_at=datetime.now(UTC).isoformat(),
+            version=existing.version if existing is not None else 1,
+        )
+        with self._condition:
+            refreshed, action = self._shared_notebook_store.upsert_folder(folder)
+            self._rebuild_notebooks_locked()
+            return {
+                "action": action,
+                "folder": refreshed.payload,
+            }
+
+    def set_shared_notebook_folder_visibility(
+        self,
+        *,
+        path: list[str],
+        is_public: bool,
+        display_name: str = "",
+    ) -> dict[str, object]:
+        normalized_path = normalize_folder_path(path)
+        if not normalized_path:
+            raise ValueError("Notebook folder path is required.")
+
+        with self._condition:
+            refreshed, action = self._shared_notebook_store.set_folder_visibility(
+                path=normalized_path,
+                is_public=bool(is_public),
+                display_name=display_name,
+            )
+            self._rebuild_notebooks_locked()
+            return {
+                "action": action,
+                "folder": refreshed.payload,
             }
 
     def delete_shared_notebook(
@@ -2136,6 +2209,18 @@ class WorkbenchService:
     def _shared_notebook_store_path(self) -> Path:
         return self.settings.duckdb_database.parent / "shared-notebooks.json"
 
+    def _initialize_shared_notebook_store(self) -> None:
+        initialize = getattr(self._shared_notebook_store, "initialize", None)
+        if not callable(initialize):
+            return
+        initialize(migrate_from=self._local_shared_notebook_store)
+        ensure_default_folders = getattr(self._shared_notebook_store, "ensure_default_folders", None)
+        if callable(ensure_default_folders):
+            try:
+                ensure_default_folders()
+            except ValueError:
+                pass
+
     def _data_product_store_path(self) -> Path:
         return self.settings.duckdb_database.parent / "data-products.json"
 
@@ -2147,6 +2232,52 @@ class WorkbenchService:
 
     def _rebuild_notebooks_locked(self) -> None:
         self._notebooks = self._combined_notebooks(self._catalogs)
+
+    def _shared_notebook_folders(self) -> list[SharedNotebookFolder]:
+        list_folders = getattr(self._shared_notebook_store, "list_folders", None)
+        folders = list_folders() if callable(list_folders) else []
+        if any(folder.path == SHARED_NOTEBOOK_DEFAULT_FOLDER_PATH for folder in folders):
+            return folders
+        return [default_shared_notebook_folder(), *folders]
+
+    def _shared_notebook_folder_by_path(
+        self,
+        path: tuple[str, ...],
+    ) -> SharedNotebookFolder | None:
+        normalized_path = normalize_folder_path(path)
+        return next(
+            (
+                folder
+                for folder in self._shared_notebook_folders()
+                if folder.path == normalized_path
+            ),
+            None,
+        )
+
+    def _ensure_shared_folder_metadata_locked(self, path: tuple[str, ...]) -> None:
+        normalized_path = normalize_folder_path(path)
+        if not normalized_path:
+            return
+
+        if self._shared_notebook_folder_by_path(normalized_path) is not None:
+            return
+
+        upsert_folder = getattr(self._shared_notebook_store, "upsert_folder", None)
+        if not callable(upsert_folder):
+            return
+
+        is_default_shared_folder = normalized_path == SHARED_NOTEBOOK_DEFAULT_FOLDER_PATH
+        upsert_folder(
+            SharedNotebookFolder(
+                path=normalized_path,
+                display_name=normalized_path[-1],
+                is_public=is_default_shared_folder,
+                can_edit=True,
+                can_delete=True,
+                updated_at=datetime.now(UTC).isoformat(),
+                version=1,
+            )
+        )
 
     def _notebook_events_state_locked(self) -> dict[str, object]:
         return {

@@ -74,7 +74,10 @@
             >
               <span class="query-entry-shared-title-row">
                 <span class="query-entry-shared-title">{{ notebook.title }}</span>
-                <small class="notebook-sharing-pill">Shared</small>
+                <small
+                  class="notebook-sharing-pill"
+                  title="Shared with connected users and stored on the server."
+                >Public / Shared</small>
               </span>
               <span class="query-entry-shared-summary">{{ notebook.summary or "No description saved." }}</span>
             </a>

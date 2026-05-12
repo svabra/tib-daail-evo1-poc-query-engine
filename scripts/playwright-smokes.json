@@ -66,6 +66,11 @@
       "enabledByDefault": true
     },
     {
+      "id": "shared-notebook",
+      "script": "playwright_shared_notebook_smoke.py",
+      "enabledByDefault": false
+    },
+    {
       "id": "ingestion-s3-query-handoff",
       "script": "playwright_ingestion_s3_query_handoff_smoke.py",
       "enabledByDefault": false

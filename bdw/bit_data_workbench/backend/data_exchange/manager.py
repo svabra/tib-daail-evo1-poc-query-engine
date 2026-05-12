@@ -12,6 +12,7 @@ from boto3.s3.transfer import TransferConfig
 
 from ...config import Settings
 from ..ingestion_types.common.uploads import IngestionLocalSource
+from ..s3_hidden import is_data_exchange_bucket_name, reject_hidden_s3_bucket
 from ..s3_storage import ensure_s3_bucket, s3_client, upload_s3_file
 from .registry import DataExchangeFileRecord, DataExchangeFolderRecord, DataExchangeStore
 from .security import hash_password, verify_password
@@ -26,7 +27,6 @@ DATA_EXCHANGE_QUERYABLE_EXTENSIONS = {
     "xlsx",
     "xml",
 }
-DATA_EXCHANGE_BUCKET_MARKERS = ("--data-exchange--", "data-exchange")
 
 
 def utc_now_iso() -> str:
@@ -46,13 +46,6 @@ def is_data_exchange_key(key: str, prefix: str | None = None) -> bool:
         normalized_key == normalized_prefix.rstrip("/")
         or normalized_key.startswith(normalized_prefix)
     )
-
-
-def is_data_exchange_bucket_name(bucket_name: str) -> bool:
-    normalized = str(bucket_name or "").strip().lower()
-    if not normalized:
-        return False
-    return any(marker in normalized for marker in DATA_EXCHANGE_BUCKET_MARKERS)
 
 
 def normalize_tags(tags: list[str] | str | None) -> list[str]:
@@ -400,6 +393,7 @@ class DataExchangeManager:
         target_bucket = str(bucket or "").strip() or str(self._settings.s3_bucket or "").strip()
         if not target_bucket:
             raise ValueError("Choose a Shared Workspace S3 bucket.")
+        reject_hidden_s3_bucket(target_bucket, self._settings)
         target_name = safe_storage_file_name(file_name or record.file_name)
         normalized_prefix = "/".join(
             segment.strip()

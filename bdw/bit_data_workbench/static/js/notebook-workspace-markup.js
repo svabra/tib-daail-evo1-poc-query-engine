@@ -248,13 +248,14 @@ export function createNotebookWorkspaceMarkup(helpers) {
                 class="workspace-sharing-toggle${metadata.shared ? " is-on" : ""}"
                 data-notebook-shared-toggle
                 aria-pressed="${metadata.shared ? "true" : "false"}"
+                title="${metadata.shared ? "Shared with connected users and stored on the server." : "Private to this browser workspace."}"
               >
                 <span class="workspace-sharing-toggle-switch" aria-hidden="true">
                   <span class="workspace-sharing-toggle-thumb"></span>
                 </span>
-                <span class="workspace-sharing-toggle-copy">
-                  Shared with all users
-                  <small>Stores this notebook on the server and announces it to connected users.</small>
+              <span class="workspace-sharing-toggle-copy">
+                  ${metadata.shared ? "Public / Shared" : "Private / Local"}
+                  <small>${metadata.shared ? "Stores this notebook on the server and announces it to connected users." : "Keeps this notebook local to this browser workspace."}</small>
                 </span>
               </button>
               <div class="workspace-tag-toolbar">

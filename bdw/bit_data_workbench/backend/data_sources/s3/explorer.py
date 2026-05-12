@@ -24,9 +24,14 @@ from ...s3_storage import (
     iter_s3_keys,
 )
 from ...data_exchange import (
-    is_data_exchange_bucket_name,
     is_data_exchange_key,
     normalize_data_exchange_prefix,
+)
+from ...s3_hidden import (
+    is_data_exchange_bucket_name,
+    is_hidden_s3_bucket_name,
+    is_shared_notebooks_bucket_name,
+    reject_hidden_s3_bucket,
 )
 
 
@@ -130,7 +135,7 @@ class S3ExplorerManager:
                     selectable=True,
                 )
                 for bucket_name in list_s3_buckets_from_client(client)
-                if not is_data_exchange_bucket_name(bucket_name)
+                if not is_hidden_s3_bucket_name(bucket_name, self._settings)
             ]
             return S3ExplorerSnapshot(
                 entries=bucket_entries,
@@ -141,7 +146,32 @@ class S3ExplorerManager:
             )
 
         exchange_prefix = normalize_data_exchange_prefix(self._settings.data_exchange_prefix)
-        if is_data_exchange_bucket_name(normalized_bucket) or is_data_exchange_key(
+        if is_hidden_s3_bucket_name(normalized_bucket, self._settings):
+            reserved_for = (
+                "shared notebook storage"
+                if is_shared_notebooks_bucket_name(normalized_bucket, self._settings)
+                else "DataExchange"
+            )
+            return S3ExplorerSnapshot(
+                bucket=normalized_bucket,
+                prefix=normalized_prefix,
+                path=s3_path(normalized_bucket, normalized_prefix),
+                entries=[],
+                breadcrumbs=[
+                    S3ExplorerBreadcrumb(label="Buckets"),
+                    S3ExplorerBreadcrumb(
+                        label=normalized_bucket,
+                        bucket=normalized_bucket,
+                        prefix="",
+                        path=s3_path(normalized_bucket),
+                    ),
+                ],
+                can_create_bucket=True,
+                can_create_folder=False,
+                empty_message=f"This S3 bucket is reserved for {reserved_for} and is hidden from the explorer.",
+            )
+
+        if is_data_exchange_key(
             normalized_prefix,
             exchange_prefix,
         ):
@@ -257,6 +287,7 @@ class S3ExplorerManager:
     def create_bucket(self, bucket_name: str) -> S3ExplorerEntry:
         self._ensure_configured()
         normalized_bucket_name = normalize_s3_bucket_name(bucket_name)
+        reject_hidden_s3_bucket(normalized_bucket_name, self._settings)
         ensure_s3_bucket(self._settings, normalized_bucket_name)
         return S3ExplorerEntry(
             entry_kind="bucket",
@@ -278,6 +309,7 @@ class S3ExplorerManager:
         normalized_bucket = str(bucket or "").strip()
         if not normalized_bucket:
             raise ValueError("Choose a bucket before creating a folder.")
+        reject_hidden_s3_bucket(normalized_bucket, self._settings)
         normalized_prefix = normalize_s3_prefix(prefix)
         normalized_folder_name = normalize_s3_folder_name(folder_name)
         child_prefix = normalize_s3_prefix(f"{normalized_prefix}{normalized_folder_name}")
@@ -302,8 +334,9 @@ class S3ExplorerManager:
     ) -> S3ObjectDownloadArtifact:
         self._ensure_configured()
         normalized_bucket = normalize_s3_bucket_name(bucket)
+        reject_hidden_s3_bucket(normalized_bucket, self._settings)
         normalized_key = normalize_s3_object_key(key)
-        if is_data_exchange_bucket_name(normalized_bucket) or is_data_exchange_key(
+        if is_data_exchange_key(
             normalized_key,
             self._settings.data_exchange_prefix,
         ):
@@ -339,8 +372,9 @@ class S3ExplorerManager:
     ) -> S3ObjectDownloadStream:
         self._ensure_configured()
         normalized_bucket = normalize_s3_bucket_name(bucket)
+        reject_hidden_s3_bucket(normalized_bucket, self._settings)
         normalized_key = normalize_s3_object_key(key)
-        if is_data_exchange_bucket_name(normalized_bucket) or is_data_exchange_key(
+        if is_data_exchange_key(
             normalized_key,
             self._settings.data_exchange_prefix,
         ):
@@ -375,10 +409,11 @@ class S3ExplorerManager:
     ) -> S3GeneratedDownloadArtifact:
         self._ensure_configured()
         normalized_bucket = normalize_s3_bucket_name(bucket)
+        reject_hidden_s3_bucket(normalized_bucket, self._settings)
         normalized_prefix = normalize_s3_prefix(prefix)
         if not normalized_prefix:
             raise ValueError("Choose a generated S3 prefix before downloading.")
-        if is_data_exchange_bucket_name(normalized_bucket) or is_data_exchange_key(
+        if is_data_exchange_key(
             normalized_prefix,
             self._settings.data_exchange_prefix,
         ):
@@ -446,6 +481,7 @@ class S3ExplorerManager:
         self._ensure_configured()
         normalized_kind = str(entry_kind or "").strip().lower()
         normalized_bucket = normalize_s3_bucket_name(bucket)
+        reject_hidden_s3_bucket(normalized_bucket, self._settings)
 
         if normalized_kind == "file":
             normalized_key = normalize_s3_object_key(prefix)

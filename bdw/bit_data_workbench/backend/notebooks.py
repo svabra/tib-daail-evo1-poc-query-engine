@@ -357,36 +357,93 @@ def build_completion_schema(catalogs: list[SourceCatalog]) -> dict[str, object]:
     return schema
 
 
-def build_notebook_tree(notebooks: list[NotebookDefinition]) -> list[NotebookFolder]:
+def _folder_id_for_path(path_key: tuple[str, ...]) -> str:
+    return "-".join(part.lower().replace(" ", "-") for part in path_key)
+
+
+def _folder_path_from_metadata(folder: object) -> tuple[str, ...]:
+    path = getattr(folder, "path", ())
+    if not isinstance(path, (list, tuple)):
+        return ()
+    return tuple(str(segment).strip() for segment in path if str(segment).strip())
+
+
+def _folder_metadata_by_path(folder_metadata: Iterable[object]) -> dict[tuple[str, ...], object]:
+    metadata_by_path: dict[tuple[str, ...], object] = {}
+    for folder in folder_metadata:
+        path = _folder_path_from_metadata(folder)
+        if path:
+            metadata_by_path[path] = folder
+    return metadata_by_path
+
+
+def build_notebook_tree(
+    notebooks: list[NotebookDefinition],
+    *,
+    folder_metadata: Iterable[object] = (),
+) -> list[NotebookFolder]:
     roots: list[NotebookFolder] = []
     folder_index: dict[tuple[str, ...], NotebookFolder] = {}
     protected_roots = {"PoC Tests"}
+    metadata_by_path = _folder_metadata_by_path(folder_metadata)
 
-    for notebook in notebooks:
-        if not notebook.tree_path:
-            continue
-
+    def ensure_folder_path(path: Iterable[str]) -> NotebookFolder | None:
         path_key: tuple[str, ...] = ()
         parent_folder: NotebookFolder | None = None
 
-        for segment in notebook.tree_path:
+        for segment in path:
             path_key = (*path_key, segment)
             folder = folder_index.get(path_key)
+            folder_metadata_entry = metadata_by_path.get(path_key)
             if folder is None:
                 is_protected_path = bool(path_key) and path_key[0] in protected_roots
                 folder = NotebookFolder(
-                    folder_id="-".join(part.lower().replace(" ", "-") for part in path_key),
-                    name=segment,
-                    can_edit=not is_protected_path,
-                    can_delete=not is_protected_path,
+                    folder_id=_folder_id_for_path(path_key),
+                    name=str(getattr(folder_metadata_entry, "name", "") or segment),
+                    can_edit=(
+                        False
+                        if is_protected_path
+                        else bool(getattr(folder_metadata_entry, "can_edit", True))
+                    ),
+                    can_delete=(
+                        False
+                        if is_protected_path
+                        else bool(getattr(folder_metadata_entry, "can_delete", True))
+                    ),
+                    is_shared=bool(getattr(folder_metadata_entry, "is_public", False)),
                 )
                 folder_index[path_key] = folder
                 if parent_folder is None:
                     roots.append(folder)
                 else:
                     parent_folder.folders.append(folder)
+            elif folder_metadata_entry is not None:
+                is_protected_path = bool(path_key) and path_key[0] in protected_roots
+                folder.name = str(getattr(folder_metadata_entry, "name", "") or folder.name)
+                folder.can_edit = (
+                    False
+                    if is_protected_path
+                    else bool(getattr(folder_metadata_entry, "can_edit", folder.can_edit))
+                )
+                folder.can_delete = (
+                    False
+                    if is_protected_path
+                    else bool(getattr(folder_metadata_entry, "can_delete", folder.can_delete))
+                )
+                folder.is_shared = bool(getattr(folder_metadata_entry, "is_public", folder.is_shared))
             parent_folder = folder
 
-        parent_folder.notebooks.append(notebook)
+        return parent_folder
+
+    for folder_path in sorted(metadata_by_path, key=lambda value: (len(value), value)):
+        ensure_folder_path(folder_path)
+
+    for notebook in notebooks:
+        if not notebook.tree_path:
+            continue
+
+        parent_folder = ensure_folder_path(notebook.tree_path)
+        if parent_folder is not None:
+            parent_folder.notebooks.append(notebook)
 
     return roots

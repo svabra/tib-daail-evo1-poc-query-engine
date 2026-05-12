@@ -14,18 +14,33 @@ if str(BDW_ROOT) not in sys.path:
 
 def import_shared_notebook_components():
     from bit_data_workbench.backend.service import WorkbenchService
+    from bit_data_workbench.backend.shared_notebooks import (
+        SharedNotebookFolder,
+        deserialize_folder,
+        serialize_folder,
+    )
     from bit_data_workbench.models import (
         NotebookCellDefinition,
         NotebookDefinition,
     )
 
-    return WorkbenchService, NotebookCellDefinition, NotebookDefinition
+    return (
+        WorkbenchService,
+        NotebookCellDefinition,
+        NotebookDefinition,
+        SharedNotebookFolder,
+        deserialize_folder,
+        serialize_folder,
+    )
 
 
 class InMemorySharedNotebookStore:
-    def __init__(self, notebooks=None):
+    def __init__(self, notebooks=None, folders=None):
         self._notebooks = {
             notebook.notebook_id: notebook for notebook in (notebooks or [])
+        }
+        self._folders = {
+            tuple(folder.path): folder for folder in (folders or [])
         }
 
     def list_notebooks(self):
@@ -43,13 +58,38 @@ class InMemorySharedNotebookStore:
     def delete_notebook(self, notebook_id):
         return self._notebooks.pop(notebook_id)
 
+    def list_folders(self):
+        return list(self._folders.values())
 
-def build_shared_notebook_service(existing_notebooks=None):
-    WorkbenchService, _, _ = import_shared_notebook_components()
+    def upsert_folder(self, folder):
+        action = "updated" if tuple(folder.path) in self._folders else "created"
+        self._folders[tuple(folder.path)] = folder
+        return folder, action
+
+    def set_folder_visibility(self, *, path, is_public, display_name=""):
+        _, _, _, folder_type, _, _ = import_shared_notebook_components()
+        normalized_path = tuple(str(segment).strip() for segment in path if str(segment).strip())
+        existing = self._folders.get(normalized_path)
+        folder = folder_type(
+            path=normalized_path,
+            display_name=display_name or (existing.name if existing else normalized_path[-1]),
+            is_public=is_public,
+            can_edit=True if existing is None else existing.can_edit,
+            can_delete=True if existing is None else existing.can_delete,
+            updated_at="2026-05-12T00:00:00+00:00",
+            version=1 if existing is None else existing.version + 1,
+        )
+        return self.upsert_folder(folder)
+
+
+def build_shared_notebook_service(existing_notebooks=None, existing_folders=None):
+    WorkbenchService, _, _, _, _, _ = import_shared_notebook_components()
     service = WorkbenchService.__new__(WorkbenchService)
+    service._lock = threading.RLock()
     service._condition = threading.Condition()
     service._shared_notebook_store = InMemorySharedNotebookStore(
-        existing_notebooks
+        existing_notebooks,
+        existing_folders,
     )
     rebuild_calls: list[str] = []
     appended_events: list[dict[str, object]] = []
@@ -61,6 +101,31 @@ def build_shared_notebook_service(existing_notebooks=None):
 
 
 class SharedNotebookServiceTests(unittest.TestCase):
+    def test_folder_manifest_serialization_round_trip(self) -> None:
+        _, _, _, folder_type, deserialize_folder, serialize_folder = (
+            import_shared_notebook_components()
+        )
+        folder = folder_type(
+            path=("Team", "Analysis"),
+            display_name="Analysis",
+            is_public=True,
+            can_edit=False,
+            can_delete=False,
+            updated_at="2026-05-12T08:00:00+00:00",
+            version=3,
+        )
+
+        serialized = serialize_folder(folder)
+        restored = deserialize_folder(serialized)
+
+        self.assertIsNotNone(restored)
+        self.assertEqual(restored.path, ("Team", "Analysis"))
+        self.assertEqual(restored.name, "Analysis")
+        self.assertTrue(restored.is_public)
+        self.assertFalse(restored.can_edit)
+        self.assertFalse(restored.can_delete)
+        self.assertEqual(restored.version, 3)
+
     def test_upsert_shared_notebook_normalizes_defaults_and_emits_event(
         self,
     ) -> None:
@@ -148,7 +213,7 @@ class SharedNotebookServiceTests(unittest.TestCase):
     def test_upsert_reuses_existing_tree_path_and_delete_emits_deleted_event(
         self,
     ) -> None:
-        _, notebook_cell_type, notebook_type = (
+        _, notebook_cell_type, notebook_type, _, _, _ = (
             import_shared_notebook_components()
         )
         existing_notebook = notebook_type(
@@ -254,6 +319,60 @@ class SharedNotebookServiceTests(unittest.TestCase):
 
         self.assertEqual(notebook["cells"][0]["language"], "python")
         self.assertEqual(notebook["versions"][0]["cells"][0]["language"], "python")
+
+    def test_shared_folder_visibility_does_not_change_existing_notebooks(self) -> None:
+        _, notebook_cell_type, notebook_type, folder_type, _, _ = (
+            import_shared_notebook_components()
+        )
+        existing_notebook = notebook_type(
+            notebook_id="local-a",
+            title="Local A",
+            summary="Local",
+            cells=[notebook_cell_type(cell_id="cell-a", sql="select 1")],
+            tree_path=("Team",),
+            shared=False,
+        )
+        existing_folder = folder_type(
+            path=("Team",),
+            display_name="Team",
+            is_public=False,
+        )
+        service, _, _ = build_shared_notebook_service(
+            [existing_notebook],
+            [existing_folder],
+        )
+        service._catalogs = []
+        service._notebooks = [existing_notebook]
+
+        result = service.set_shared_notebook_folder_visibility(
+            path=["Team"],
+            is_public=True,
+        )
+
+        self.assertTrue(result["folder"]["isPublic"])
+        self.assertFalse(existing_notebook.shared)
+
+    def test_shared_folder_metadata_marks_tree_folder_public(self) -> None:
+        _, notebook_cell_type, notebook_type, folder_type, _, _ = (
+            import_shared_notebook_components()
+        )
+        notebook = notebook_type(
+            notebook_id="shared-a",
+            title="Shared A",
+            summary="Shared",
+            cells=[notebook_cell_type(cell_id="cell-a", sql="select 1")],
+            tree_path=("Team",),
+            shared=True,
+        )
+        folder = folder_type(path=("Team",), display_name="Team", is_public=True)
+        service, _, _ = build_shared_notebook_service([notebook], [folder])
+        service._notebooks = [notebook]
+
+        tree = service.notebook_tree()
+        team_folder = next(folder for folder in tree if folder.name == "Team")
+
+        self.assertTrue(team_folder.is_shared)
+        self.assertEqual(team_folder.notebooks[0].notebook_id, "shared-a")
 
 
 if __name__ == "__main__":
