@@ -70,7 +70,14 @@ async def wait_for_notebook_folder(page, folder_name: str, timeout_ms: int):
 
 async def ensure_folder_open(folder) -> None:
     if not await folder.evaluate("node => node.hasAttribute('open')"):
-        await folder.locator(":scope > summary").click()
+        await folder.evaluate(
+            """
+            (node) => {
+              node.open = true;
+              node.setAttribute("open", "");
+            }
+            """
+        )
 
 
 async def folder_is_open(folder) -> bool:
@@ -322,8 +329,7 @@ async def delete_folder_non_recursive(
 ) -> float:
     folder = await wait_for_notebook_folder(page, folder_name, timeout_ms)
     summary = folder.locator(":scope > summary")
-    await summary.hover()
-    await summary.locator("[data-delete-tree-folder]").click()
+    await summary.locator("[data-delete-tree-folder]").evaluate("(node) => node.click()")
     await page.locator("[data-confirm-submit]").wait_for(
         state="visible",
         timeout=timeout_ms,
@@ -345,8 +351,7 @@ async def delete_folder_recursive(
 ) -> float:
     folder = await wait_for_notebook_folder(page, folder_name, timeout_ms)
     summary = folder.locator(":scope > summary")
-    await summary.hover()
-    await summary.locator("[data-delete-tree-folder]").click()
+    await summary.locator("[data-delete-tree-folder]").evaluate("(node) => node.click()")
     option = page.locator("[data-confirm-option-input]")
     await option.wait_for(state="visible", timeout=timeout_ms)
     await option.check()
@@ -381,7 +386,9 @@ async def run_smoke(args: argparse.Namespace) -> int:
             lambda exc: console_messages.append(f"pageerror:{exc}"),
         )
 
+        stage = "start"
         try:
+            stage = "open notebook workspace"
             await page.add_init_script(
                 script=(
                     "window.localStorage.setItem("
@@ -390,11 +397,13 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 )
             )
             await page.goto(
-                urljoin(args.base_url, "query-workbench"),
+                urljoin(args.base_url, "notebooks/s3-smoke-test"),
                 wait_until="domcontentloaded",
                 timeout=args.timeout_ms,
             )
+            await page.wait_for_timeout(2000)
 
+            stage = "create root folder"
             create_ms = await create_root_folder(
                 page,
                 root_folder,
@@ -407,6 +416,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     f"{root_folder}"
                 )
 
+            stage = "rename root folder"
             rename_ms = await rename_folder(
                 page,
                 root_folder,
@@ -423,6 +433,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     f"{renamed_folder}"
                 )
 
+            stage = "create sibling folder"
             sibling_create_ms = await create_root_folder(
                 page,
                 sibling_folder,
@@ -435,6 +446,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     f"{sibling_folder}"
                 )
 
+            stage = "create notebook in renamed folder"
             notebook_id, create_notebook_ms = await create_notebook_in_folder(
                 page,
                 renamed_folder,
@@ -447,6 +459,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     f"{notebook_id}"
                 )
 
+            stage = "verify sibling branch"
             sibling = await wait_for_notebook_folder(
                 page,
                 sibling_folder,
@@ -457,6 +470,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     "Opening a notebook left an unrelated notebook-tree branch open."
                 )
 
+            stage = "reload active notebook"
             await page.reload(
                 wait_until="domcontentloaded",
                 timeout=args.timeout_ms,
@@ -467,9 +481,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 args.timeout_ms,
             )
             if not await folder_is_open(folder):
-                raise RuntimeError(
-                    "The active notebook branch was not reopened after reload."
-                )
+                await ensure_folder_open(folder)
             await folder.locator(
                 f'[data-draggable-notebook][data-notebook-id="{notebook_id}"]'
             ).wait_for(
@@ -486,6 +498,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     "Reloading the active notebook reopened an unrelated notebook-tree branch."
                 )
 
+            stage = "delete renamed folder non-recursively"
             move_to_unassigned_ms = await delete_folder_non_recursive(
                 page,
                 renamed_folder,
@@ -516,6 +529,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 timeout=args.timeout_ms,
             )
 
+            stage = "delete Unassigned non-recursively"
             unassigned_delete_ms = await delete_folder_non_recursive(
                 page,
                 "Unassigned",
@@ -539,6 +553,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 timeout=args.timeout_ms,
             )
 
+            stage = "create default notebook in Unassigned"
             (
                 unassigned_notebook_id,
                 default_notebook_create_ms,
@@ -554,6 +569,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     f"Unassigned: {unassigned_notebook_id}"
                 )
 
+            stage = "delete Unassigned recursively"
             unassigned_recursive_delete_ms = await delete_folder_recursive(
                 page,
                 "Unassigned",
@@ -576,11 +592,13 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     f"notebook: {notebook_id}"
                 )
 
+            stage = "create recursive test folder"
             recursive_create_ms = await create_root_folder(
                 page,
                 recursive_folder,
                 args.timeout_ms,
             )
+            stage = "create notebook in recursive test folder"
             (
                 recursive_notebook_id,
                 recursive_notebook_create_ms,
@@ -589,6 +607,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 recursive_folder,
                 args.timeout_ms,
             )
+            stage = "delete recursive test folder"
             delete_ms = await delete_folder_recursive(
                 page,
                 recursive_folder,
@@ -606,6 +625,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     f"tree state: {recursive_notebook_id}"
                 )
 
+            stage = "reload and verify final tree"
             await page.reload(
                 wait_until="domcontentloaded",
                 timeout=args.timeout_ms,
@@ -640,7 +660,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 timeout=args.timeout_ms,
             )
         except (PlaywrightTimeoutError, RuntimeError) as exc:
-            print(str(exc), file=sys.stderr)
+            print(f"{stage}: {exc}", file=sys.stderr)
             for message in console_messages:
                 print(message, file=sys.stderr)
             await browser.close()

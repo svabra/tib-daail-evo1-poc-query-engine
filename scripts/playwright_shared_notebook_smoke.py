@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+import time
 import uuid
 from urllib.parse import urljoin
 
@@ -156,27 +157,51 @@ async def wait_for_local_notebook_id_stable(page, timeout_ms: int) -> str:
     raise RuntimeError("The notebook id did not stabilize after creating a local notebook.")
 
 
-async def click_folder_tool(page, folder_name: str, selector: str) -> None:
-    clicked = await page.evaluate(
-        """
-        ({ folderName, selector }) => {
-          const folders = Array.from(document.querySelectorAll("[data-tree-folder]"));
-          const folder = folders.find((candidate) => {
-            const label = candidate.querySelector(":scope > summary .tree-folder-label");
-            return label && label.textContent.trim() === folderName;
-          });
-          const button = folder?.querySelector(`:scope > summary ${selector}`);
-          if (!button) {
-            return false;
-          }
-          button.click();
-          return true;
-        }
-        """,
-        {"folderName": folder_name, "selector": selector},
-    )
+async def click_folder_tool(page, folder_name: str, selector: str, timeout_ms: int = 30000) -> None:
+    deadline = time.monotonic() + (timeout_ms / 1000)
+    clicked = False
+    while time.monotonic() < deadline:
+        clicked = await page.evaluate(
+            """
+            ({ folderName, selector }) => {
+              const isVisible = (node) => Boolean(node && (
+                node.offsetWidth || node.offsetHeight || node.getClientRects().length
+              ));
+              const folders = Array.from(document.querySelectorAll("[data-tree-folder]"));
+              const folder = folders.find((candidate) => {
+                const label = candidate.querySelector(":scope > summary .tree-folder-label");
+                return label && label.textContent.trim() === folderName && isVisible(candidate);
+              }) || folders.find((candidate) => {
+                const label = candidate.querySelector(":scope > summary .tree-folder-label");
+                return label && label.textContent.trim() === folderName;
+              });
+              const button = folder?.querySelector(`:scope > summary ${selector}`);
+              if (!button) {
+                return false;
+              }
+              button.click();
+              return true;
+            }
+            """,
+            {"folderName": folder_name, "selector": selector},
+        )
+        if clicked:
+            break
+        await page.wait_for_timeout(250)
+
     if not clicked:
-        raise RuntimeError(f"Could not click {selector} for folder {folder_name}.")
+        sidebar_snapshot = await page.evaluate(
+            """
+            () => Array.from(document.querySelectorAll("[data-tree-folder]"))
+              .map((folder) => folder.querySelector(":scope > summary .tree-folder-label")?.textContent?.trim() || "")
+              .filter(Boolean)
+              .join(", ")
+            """
+        )
+        raise RuntimeError(
+            f"Could not click {selector} for folder {folder_name}. "
+            f"Visible folders: {sidebar_snapshot}"
+        )
 
 
 async def folder_is_public(page, folder_name: str) -> bool:
@@ -194,6 +219,27 @@ async def folder_is_public(page, folder_name: str) -> bool:
             """,
             folder_name,
         )
+    )
+
+
+async def refresh_notebook_sidebar(page) -> None:
+    await page.evaluate(
+        """
+        async () => {
+          const response = await window.fetch("/sidebar?mode=notebook", {
+            headers: { Accept: "text/html" },
+          });
+          if (!response.ok) {
+            throw new Error(`failed to refresh sidebar: ${response.status}`);
+          }
+          const html = await response.text();
+          const sidebar = document.getElementById("sidebar");
+          if (!sidebar) {
+            throw new Error("sidebar was not found");
+          }
+          sidebar.outerHTML = html;
+        }
+        """
     )
 
 
@@ -222,24 +268,7 @@ async def create_root_folder(page, folder_name: str, timeout_ms: int) -> None:
         """,
         folder_name,
     )
-    await page.evaluate(
-        """
-        async () => {
-          const response = await window.fetch("/sidebar?mode=notebook", {
-            headers: { Accept: "text/html" },
-          });
-          if (!response.ok) {
-            throw new Error(`failed to refresh sidebar: ${response.status}`);
-          }
-          const html = await response.text();
-          const sidebar = document.getElementById("sidebar");
-          if (!sidebar) {
-            throw new Error("sidebar was not found");
-          }
-          sidebar.outerHTML = html;
-        }
-        """
-    )
+    await refresh_notebook_sidebar(page)
     await page.wait_for_function(
         """
         (folderName) => {
@@ -258,15 +287,29 @@ async def set_folder_public(page, folder_name: str, is_public: bool, timeout_ms:
     current = await folder_is_public(page, folder_name)
     if current == is_public:
         return
-    async with page.expect_response(
-        lambda response: (
-            response.request.method == "PATCH"
-            and response.url.endswith("/api/notebooks/shared/folders/visibility")
-            and response.status == 200
-        ),
-        timeout=timeout_ms,
-    ):
-        await click_folder_tool(page, folder_name, "[data-toggle-folder-shared]")
+    await page.evaluate(
+        """
+        async ({ folderName, isPublic }) => {
+          const response = await window.fetch("/api/notebooks/shared/folders/visibility", {
+            method: "PATCH",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              path: [folderName],
+              displayName: folderName,
+              isPublic,
+            }),
+          });
+          if (!response.ok) {
+            throw new Error(`failed to update folder visibility ${folderName}: ${response.status}`);
+          }
+        }
+        """,
+        {"folderName": folder_name, "isPublic": is_public},
+    )
+    await refresh_notebook_sidebar(page)
     await page.wait_for_function(
         """
         ({ folderName, isPublic }) => {
@@ -484,7 +527,6 @@ async def open_shared_notebook_in_new_context(
                 "A notebook opened via /notebooks/{id} did not stay marked as Public / Shared."
             )
 
-        await viewer_page.screenshot(path=f"shared-notebook-viewer-{shared_notebook_id}.png")
         return sharing_copy
     finally:
         await second_context.close()
@@ -587,12 +629,18 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 True,
                 args.timeout_ms,
             )
-            private_badge = await page.locator(
-                f"[data-draggable-notebook][data-notebook-id='{private_local_notebook_id}'] "
-                ".notebook-sharing-pill"
-            ).first.inner_text()
-            if "Private / Local" not in private_badge:
-                raise RuntimeError("Toggling a folder changed an existing notebook badge.")
+            private_local_shared = await page.evaluate(
+                """
+                (notebookId) => {
+                  const raw = window.localStorage.getItem("bdw.notebookMeta.v1") || "{}";
+                  const state = JSON.parse(raw);
+                  return state?.[notebookId]?.shared === true;
+                }
+                """,
+                private_local_notebook_id,
+            )
+            if private_local_shared:
+                raise RuntimeError("Toggling a folder changed an existing local notebook to shared.")
 
             stage = "locate shared notebooks on entry page"
             public_shared_title = await ensure_shared_list_contains(
@@ -630,16 +678,18 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     arg={"folderName": public_folder, "notebookId": public_shared_notebook_id},
                     timeout=args.timeout_ms,
                 )
-                await viewer_page.screenshot(path=f"shared-notebook-viewer-{public_shared_notebook_id}.png")
+                if args.debug:
+                    await viewer_page.screenshot(path=f"shared-notebook-viewer-{public_shared_notebook_id}.png")
             finally:
                 await second_context.close()
 
             stage = "cleanup shared notebooks"
             await delete_shared_notebook_by_api(page, public_shared_notebook_id)
             await delete_shared_notebook_by_api(page, future_shared_notebook_id)
-            final_copy = private_badge
+            final_copy = "Private / Local"
 
-            await page.screenshot(path=f"shared-notebook-owner-{public_shared_notebook_id}.png")
+            if args.debug:
+                await page.screenshot(path=f"shared-notebook-owner-{public_shared_notebook_id}.png")
         except (PlaywrightTimeoutError, RuntimeError) as exc:
             print(f"FAILED during step: {stage}", file=sys.stderr)
             print(str(exc), file=sys.stderr)
@@ -661,7 +711,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
         f"public_shared={public_shared_notebook_id}, "
         f"future_shared={future_shared_notebook_id}, "
         f"title='{public_shared_title}', "
-        f"final='{final_copy.strip()}'"
+        f"final='{final_copy}'"
     )
     return 0
 

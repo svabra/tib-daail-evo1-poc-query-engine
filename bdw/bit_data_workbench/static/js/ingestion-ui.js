@@ -236,7 +236,7 @@ export function createIngestionUi(helpers) {
               dataGenerationJobStatusCopy(job)
             )}</span>
             ${
-              dataGenerationJobIsRunning(job)
+              dataGenerationJobIsRunning(job) && job.canCancel
                 ? `<button type="button" class="ingestion-job-cancel" data-cancel-data-generation-job="${escapeHtml(job.jobId)}">Cancel</button>`
                 : ""
             }
@@ -331,7 +331,9 @@ export function createIngestionUi(helpers) {
         <div class="query-monitor-item-actions">
           ${
             running
-              ? `<button type="button" class="query-monitor-cancel" data-cancel-data-generation-job="${escapeHtml(job.jobId)}">Cancel</button>`
+              ? job.canCancel
+                ? `<button type="button" class="query-monitor-cancel" data-cancel-data-generation-job="${escapeHtml(job.jobId)}">Cancel</button>`
+                : `<span class="query-monitor-cancel is-cancelling">Cancelling</span>`
               : ""
           }
           <div class="query-monitor-timestamps">

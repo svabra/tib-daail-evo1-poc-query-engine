@@ -7,6 +7,12 @@ export function normalizeQueryJob(job) {
 
   const firstRowMs = Number(job.firstRowMs);
   const fetchMs = Number(job.fetchMs);
+  const progress = Number(job.progress);
+  const processId = Number(job.processId);
+  const cpuPercent = Number(job.cpuPercent);
+  const memoryRssBytes = Number(job.memoryRssBytes);
+  const peakMemoryRssBytes = Number(job.peakMemoryRssBytes);
+  const workerExitCode = Number(job.workerExitCode);
 
   return {
     ...job,
@@ -22,6 +28,17 @@ export function normalizeQueryJob(job) {
       : [],
     firstRowMs: Number.isFinite(firstRowMs) ? Math.max(0, firstRowMs) : null,
     fetchMs: Number.isFinite(fetchMs) ? Math.max(0, fetchMs) : null,
+    progress: Number.isFinite(progress) ? Math.max(0, Math.min(1, progress)) : null,
+    executionMode: String(job.executionMode ?? "").trim(),
+    processId: Number.isFinite(processId) && processId > 0 ? Math.round(processId) : null,
+    cpuPercent: Number.isFinite(cpuPercent) ? Math.max(0, cpuPercent) : null,
+    memoryRssBytes: Number.isFinite(memoryRssBytes) ? Math.max(0, Math.round(memoryRssBytes)) : null,
+    peakMemoryRssBytes: Number.isFinite(peakMemoryRssBytes)
+      ? Math.max(0, Math.round(peakMemoryRssBytes))
+      : null,
+    cancellationPhase: String(job.cancellationPhase ?? "").trim(),
+    cancellationRequestedAt: String(job.cancellationRequestedAt ?? "").trim(),
+    workerExitCode: Number.isFinite(workerExitCode) ? Math.round(workerExitCode) : null,
   };
 }
 

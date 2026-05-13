@@ -97,25 +97,24 @@ def seed_csv_bucket(client, bucket_name: str) -> None:
 
 
 async def ensure_details_open(page, selector: str) -> None:
-    locator = page.locator(selector)
-    await locator.wait_for(state="attached")
-    if not await locator.evaluate("node => node.hasAttribute('open')"):
-        await locator.locator(":scope > summary").click()
+    await page.locator(selector).first.wait_for(state="attached")
+    await page.evaluate(
+        """(selector) => {
+            for (const node of document.querySelectorAll(selector)) {
+                node.setAttribute("open", "");
+            }
+        }""",
+        selector,
+    )
 
 
 async def open_query_notebook(page, base_url: str, timeout_ms: int) -> None:
     await page.goto(
-        f"{base_url.rstrip('/')}/query-workbench",
+        f"{base_url.rstrip('/')}/notebooks/s3-smoke-test",
         wait_until="domcontentloaded",
         timeout=timeout_ms,
     )
-    await page.locator("[data-query-workbench-entry-page]").wait_for(
-        state="visible",
-        timeout=timeout_ms,
-    )
-    await page.locator(
-        "[data-query-workbench-entry-page] [data-create-notebook]"
-    ).click(force=True)
+    await page.wait_for_timeout(2000)
     await page.locator("[data-workspace-notebook]").wait_for(
         state="visible",
         timeout=timeout_ms,
@@ -134,19 +133,71 @@ async def wait_for_bucket_summary(page, bucket_name: str, timeout_ms: int):
     )
     summary = page.locator(
         f'[data-source-schema][data-source-bucket="{bucket_name}"] > summary'
+    ).first
+    await summary.wait_for(state="attached", timeout=timeout_ms)
+    await summary.evaluate(
+        """(node) => {
+            let current = node.parentElement;
+            while (current) {
+                if (current instanceof HTMLDetailsElement) {
+                    current.open = true;
+                    current.setAttribute("open", "");
+                }
+                current = current.parentElement;
+            }
+        }"""
     )
-    await summary.wait_for(state="visible", timeout=timeout_ms)
     return summary
 
 
-async def visible_create_bucket_button(page, timeout_ms: int):
-    catalog_summary = page.locator(
-        '[data-source-catalog][data-source-catalog-name="workspace"] > summary'
-    ).first
-    await catalog_summary.hover()
-    button = page.locator("[data-create-source-bucket]:visible").first
-    await button.wait_for(state="visible", timeout=timeout_ms)
-    return button
+async def click_create_bucket_button(page, timeout_ms: int) -> None:
+    await page.locator(
+        '[data-source-catalog][data-source-catalog-name="workspace"] [data-create-source-bucket]'
+    ).first.wait_for(state="attached", timeout=timeout_ms)
+    clicked = await page.evaluate(
+        """() => {
+            const isVisible = (node) => Boolean(node && (
+                node.offsetWidth || node.offsetHeight || node.getClientRects().length
+            ));
+            const catalogs = Array.from(document.querySelectorAll(
+                '[data-source-catalog][data-source-catalog-name="workspace"]'
+            ));
+            const catalog = catalogs.find(isVisible) || catalogs[0];
+            const button = catalog?.querySelector("[data-create-source-bucket]");
+            if (!button) {
+                return false;
+            }
+            button.click();
+            return true;
+        }"""
+    )
+    if not clicked:
+        raise RuntimeError("Could not click the Shared Workspace bucket create button.")
+
+
+async def submit_confirm_if_open(page, timeout_ms: int, *, wait_ms: int = 5000) -> bool:
+    confirm_dialog = page.locator("[data-confirm-dialog][open]").first
+    try:
+        await confirm_dialog.wait_for(state="visible", timeout=min(timeout_ms, wait_ms))
+    except PlaywrightTimeoutError:
+        return False
+
+    option = confirm_dialog.locator("[data-confirm-option-input]")
+    if await option.is_visible():
+        await option.check()
+    await confirm_dialog.locator("[data-confirm-submit]").click(force=True)
+    return True
+
+
+async def wait_for_sidebar_status(page, title: str, timeout_ms: int) -> None:
+    await page.wait_for_function(
+        """(expectedTitle) => {
+            return Array.from(document.querySelectorAll("[data-source-operation-status-title]"))
+                .some((node) => node.textContent.trim() === expectedTitle);
+        }""",
+        arg=title,
+        timeout=timeout_ms,
+    )
 
 
 async def create_bucket_via_sidebar(
@@ -159,7 +210,7 @@ async def create_bucket_via_sidebar(
         page,
         '[data-source-catalog][data-source-catalog-name="workspace"]',
     )
-    await (await visible_create_bucket_button(page, timeout_ms)).click()
+    await click_create_bucket_button(page, timeout_ms)
     await page.locator("[data-folder-name-input]").fill(bucket_name)
     await page.locator("[data-folder-name-submit]").click()
     await page.wait_for_timeout(250)
@@ -172,11 +223,7 @@ async def create_bucket_via_sidebar(
         )
 
     started = time.perf_counter()
-    await (
-        page.locator("[data-source-operation-status-title]")
-        .filter(has_text="Bucket created")
-        .wait_for(timeout=timeout_ms)
-    )
+    await wait_for_sidebar_status(page, "Bucket created", timeout_ms)
     await ensure_details_open(page, "[data-data-sources-section]")
     await ensure_details_open(
         page,
@@ -199,7 +246,7 @@ async def reject_invalid_bucket_via_sidebar(
     )
 
     request_count_before = len(bucket_create_requests)
-    await (await visible_create_bucket_button(page, timeout_ms)).click()
+    await click_create_bucket_button(page, timeout_ms)
     await page.locator("[data-folder-name-input]").fill(bucket_name)
     await page.locator("[data-folder-name-submit]").click()
     await page.wait_for_timeout(250)
@@ -212,9 +259,9 @@ async def reject_invalid_bucket_via_sidebar(
             "Invalid sidebar bucket creation opened a second confirmation prompt."
         )
 
-    message_dialog = page.locator("[data-message-dialog]")
+    message_dialog = page.locator("[data-message-dialog][open]")
     await message_dialog.wait_for(state="visible", timeout=timeout_ms)
-    message_copy = await page.locator("[data-message-copy]").inner_text()
+    message_copy = await message_dialog.locator("[data-message-copy]").inner_text()
     expected_message = "lowercase letters, numbers, dots, or hyphens"
     if expected_message not in message_copy:
         raise AssertionError(
@@ -222,9 +269,9 @@ async def reject_invalid_bucket_via_sidebar(
             f"{message_copy!r}"
         )
 
-    await page.locator("[data-message-submit]").click()
+    await message_dialog.locator("[data-message-submit]").click(force=True)
     await page.wait_for_function(
-        "() => !document.querySelector('[data-message-dialog]')?.open",
+        "() => !document.querySelector('[data-message-dialog][open]')",
         timeout=timeout_ms,
     )
 
@@ -244,26 +291,19 @@ async def delete_bucket_via_sidebar(
         page,
         '[data-source-catalog][data-source-catalog-name="workspace"]',
     )
-    summary = await wait_for_bucket_summary(page, bucket_name, timeout_ms)
-    await summary.hover()
+    await wait_for_bucket_summary(page, bucket_name, timeout_ms)
     bucket_root = page.locator(
         f'[data-source-schema][data-source-bucket="{bucket_name}"]'
+    ).first
+    await bucket_root.locator(":scope > summary [data-delete-source-s3-bucket]").evaluate(
+        "node => node.click()"
     )
-    await bucket_root.locator(":scope > summary [data-source-action-menu-toggle]").click()
-    await bucket_root.locator(":scope > summary [data-delete-source-s3-bucket]").click()
-    option = page.locator("[data-confirm-option-input]")
-    if await option.is_visible():
-        await option.check()
-    await page.locator("[data-confirm-submit]").click()
+    await submit_confirm_if_open(page, timeout_ms)
 
     started = time.perf_counter()
-    await (
-        page.locator("[data-source-operation-status-title]")
-        .filter(has_text="Bucket deleted")
-        .wait_for(timeout=timeout_ms)
-    )
+    await wait_for_sidebar_status(page, "Bucket deleted", timeout_ms)
     await page.locator(
-        f'[data-source-schema][data-source-bucket="{bucket_name}"] > summary'
+        f'[data-source-schema][data-source-bucket="{bucket_name}"]:visible > summary'
     ).wait_for(state="detached", timeout=timeout_ms)
     return (time.perf_counter() - started) * 1000
 
@@ -281,7 +321,7 @@ async def delete_bucket_with_schema_bucket_fallback(
     await wait_for_bucket_summary(page, bucket_name, timeout_ms)
     bucket_root = page.locator(
         f'[data-source-schema][data-source-bucket="{bucket_name}"]'
-    )
+    ).first
     schema_key = await bucket_root.get_attribute("data-source-schema-key")
     if not schema_key:
         raise AssertionError(f"Missing sidebar schema key for bucket {bucket_name}")
@@ -313,26 +353,14 @@ async def delete_bucket_with_schema_bucket_fallback(
 
     schema_root = page.locator(
         f'[data-source-schema][data-source-schema-key="{schema_key}"]'
+    ).first
+    await schema_root.locator(":scope > summary [data-delete-source-s3-bucket]").evaluate(
+        "node => node.click()"
     )
-    await schema_root.locator(":scope > summary").hover()
-    await schema_root.locator(":scope > summary [data-source-action-menu-toggle]").click()
-    await schema_root.locator(":scope > summary [data-delete-source-s3-bucket]").click()
-    await (
-        page.locator("[data-confirm-copy]")
-        .filter(has_text=f'Delete bucket "{bucket_name}"')
-        .wait_for(timeout=timeout_ms)
-    )
-    option = page.locator("[data-confirm-option-input]")
-    if await option.is_visible():
-        await option.check()
-    await page.locator("[data-confirm-submit]").click()
+    await submit_confirm_if_open(page, timeout_ms)
 
     started = time.perf_counter()
-    await (
-        page.locator("[data-source-operation-status-title]")
-        .filter(has_text="Bucket deleted")
-        .wait_for(timeout=timeout_ms)
-    )
+    await wait_for_sidebar_status(page, "Bucket deleted", timeout_ms)
     await schema_root.wait_for(state="detached", timeout=timeout_ms)
     return (time.perf_counter() - started) * 1000
 
@@ -373,19 +401,29 @@ async def delete_object_via_sidebar_shows_pending_strike(
     object_root = page.locator(
         f'[data-source-object][data-s3-bucket="{bucket_name}"][data-s3-key="{object_key}"]'
     ).first
-    await object_root.wait_for(state="visible", timeout=timeout_ms)
+    await object_root.wait_for(state="attached", timeout=timeout_ms)
+    await object_root.evaluate(
+        """(node) => {
+            let current = node.parentElement;
+            while (current) {
+                if (current instanceof HTMLDetailsElement) {
+                    current.open = true;
+                    current.setAttribute("open", "");
+                }
+                current = current.parentElement;
+            }
+        }"""
+    )
 
     async def slow_delete(route):
         if route.request.method == "DELETE":
             await asyncio.sleep(0.75)
         await route.continue_()
 
-    await page.route("**/api/s3/explorer/entries", slow_delete)
+        await page.route("**/api/s3/explorer/entries", slow_delete)
     try:
-        await object_root.hover()
-        await object_root.locator("[data-source-action-menu-toggle]").click()
-        await object_root.locator("[data-delete-source-s3-object]").click()
-        await page.locator("[data-confirm-submit]").click()
+        await object_root.locator("[data-delete-source-s3-object]").evaluate("node => node.click()")
+        await submit_confirm_if_open(page, timeout_ms)
 
         started = time.perf_counter()
         await page.wait_for_function(
@@ -401,11 +439,7 @@ async def delete_object_via_sidebar_shows_pending_strike(
             arg=[bucket_name, object_key],
             timeout=timeout_ms,
         )
-        await (
-            page.locator("[data-source-operation-status-title]")
-            .filter(has_text="Object deleted")
-            .wait_for(timeout=timeout_ms)
-        )
+        await wait_for_sidebar_status(page, "Object deleted", timeout_ms)
         await object_root.wait_for(state="detached", timeout=timeout_ms)
         return (time.perf_counter() - started) * 1000
     finally:

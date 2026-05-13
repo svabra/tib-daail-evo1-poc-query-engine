@@ -31,7 +31,7 @@ async def ensure_query_notebook(page, base_url: str, timeout_ms: int) -> None:
         wait_until="domcontentloaded",
         timeout=timeout_ms,
     )
-    await page.wait_for_timeout(250)
+    await page.wait_for_timeout(2000)
     query_cells = page.locator("[data-query-cell]:visible")
     if await query_cells.count():
         await query_cells.first.wait_for(state="visible", timeout=timeout_ms)

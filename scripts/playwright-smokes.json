@@ -6,6 +6,11 @@
       "enabledByDefault": true
     },
     {
+      "id": "query-monitor-process",
+      "script": "playwright_query_monitor_process_smoke.py",
+      "enabledByDefault": true
+    },
+    {
       "id": "home-navigation",
       "script": "playwright_home_navigation_smoke.py",
       "enabledByDefault": true

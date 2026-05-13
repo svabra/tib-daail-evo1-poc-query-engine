@@ -52,6 +52,14 @@ export function createQueryUi(helpers) {
       return "Run this cell to inspect the selected data sources.";
     }
 
+    if (job.status === "cancelled") {
+      return "Query cancelled successfully.";
+    }
+
+    if (job.cancellationPhase) {
+      return queryCancellationCopy(job);
+    }
+
     if (job.rowsShown > 0) {
       if (job.truncated) {
         return `${job.rowsShown} row(s) shown. The result was truncated for the UI.`;
@@ -66,9 +74,86 @@ export function createQueryUi(helpers) {
     return job.message || "Statement executed successfully.";
   }
 
+  function queryCancellationCopy(job) {
+    switch (job?.cancellationPhase) {
+      case "requested":
+        return "Cancellation requested.";
+      case "interrupting":
+        return "Interrupting the query.";
+      case "terminating":
+        return "Stopping the query worker process.";
+      case "killing":
+        return "Hard-stopping the query worker process.";
+      case "cancelled":
+        return "Query cancelled successfully.";
+      default:
+        return "Cancelling query.";
+    }
+  }
+
+  function formatQueryByteCount(value) {
+    const bytes = Number(value);
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+      return "0 B";
+    }
+    if (bytes < 1024) {
+      return `${Math.round(bytes)} B`;
+    }
+    if (bytes < 1024 * 1024) {
+      return `${(bytes / 1024).toFixed(bytes >= 10 * 1024 ? 0 : 1)} KB`;
+    }
+    if (bytes < 1024 * 1024 * 1024) {
+      return `${(bytes / (1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+    }
+    return `${(bytes / (1024 * 1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 * 1024 ? 0 : 1)} GB`;
+  }
+
+  function queryProcessMetricStripMarkup(job, { compact = false } = {}) {
+    if (!job) {
+      return "";
+    }
+
+    const metrics = [];
+    if (job.processId) {
+      metrics.push(["PID", String(job.processId)]);
+    }
+    if (typeof job.cpuPercent === "number") {
+      metrics.push(["CPU", `${job.cpuPercent.toFixed(job.cpuPercent >= 10 ? 0 : 1)}%`]);
+    }
+    if (typeof job.memoryRssBytes === "number") {
+      metrics.push(["RAM", formatQueryByteCount(job.memoryRssBytes)]);
+    }
+    if (typeof job.peakMemoryRssBytes === "number") {
+      metrics.push(["Peak", formatQueryByteCount(job.peakMemoryRssBytes)]);
+    }
+    if (!metrics.length) {
+      return "";
+    }
+
+    const compactClass = compact ? " query-process-metric-strip-compact" : "";
+    return `
+      <div class="query-process-metric-strip${compactClass}">
+        ${metrics
+          .map(
+            ([label, value]) => `
+              <span class="query-process-metric">
+                <strong>${escapeHtml(label)}</strong>
+                <span>${escapeHtml(value)}</span>
+              </span>
+            `
+          )
+          .join("")}
+      </div>
+    `;
+  }
+
   function queryProgressActivityCopy(job) {
     if (!job || !queryJobIsRunning(job)) {
       return "Query activity is idle.";
+    }
+
+    if (job.cancellationPhase) {
+      return queryCancellationCopy(job);
     }
 
     if (job.status === "queued") {
@@ -104,19 +189,21 @@ export function createQueryUi(helpers) {
         ? Math.max(0, Math.min(100, job.progress * 100))
         : null;
     const backendCopy = escapeHtml(job.backendName || "VMTP DUCKDB");
-    const progressLabel = escapeHtml(job.progressLabel || "Running...");
+    const progressLabel = escapeHtml(job.cancellationPhase ? queryCancellationCopy(job) : job.progressLabel || "Running...");
+    const metricsMarkup = queryProcessMetricStripMarkup(job);
 
     if (progressValue === null) {
       return `
         <div class="query-progress-card query-progress-card-indeterminate">
           <div class="query-progress-copy">
             <strong>${progressLabel}</strong>
-            <span>${backendCopy}</span>
+            <span>${backendCopy}${job.executionMode ? ` | ${escapeHtml(job.executionMode)}` : ""}</span>
           </div>
           <div class="query-progress-status">
             <span class="query-progress-status-dot" aria-hidden="true"></span>
             <span>${escapeHtml(queryProgressActivityCopy(job))}</span>
           </div>
+          ${metricsMarkup}
         </div>
       `;
     }
@@ -130,6 +217,7 @@ export function createQueryUi(helpers) {
         <div class="query-progress-track">
           <span style="width:${progressValue}%;"></span>
         </div>
+        ${metricsMarkup}
       </div>
     `;
   }
@@ -271,7 +359,14 @@ export function createQueryUi(helpers) {
     const showExportActions = job.status === "completed" && job.columns.length > 0;
     const rowsBadge = queryRowsShownLabel(job);
     const showRowsBadge = queryJobIsRunning(job) || Number(job.rowsShown || 0) > 0 || Boolean(job.truncated);
-    const resultBody = job.error
+    const resultBody = job.status === "cancelled"
+      ? `
+          <div class="result-empty result-empty-cancelled">
+            <p>${escapeHtml(queryCancellationCopy({ ...job, cancellationPhase: "cancelled" }))}</p>
+            ${queryProcessMetricStripMarkup(job)}
+          </div>
+        `
+      : job.error
       ? `
           <div class="result-error">
             <strong>${escapeHtml(job.status === "cancelled" ? "Query cancelled." : "Query failed.")}</strong>
@@ -512,8 +607,26 @@ export function createQueryUi(helpers) {
 
   function queryMonitorItemMarkup(job) {
     const running = queryJobIsRunning(job);
+    const cancelling = running && Boolean(job.cancellationPhase);
     const rowsCopy = job.rowsShown > 0 ? `${job.rowsShown} row(s)` : "No rows yet";
     const timestamp = job.startedAt || job.updatedAt;
+    const progressValue =
+      typeof job.progress === "number" && Number.isFinite(job.progress)
+        ? Math.max(0, Math.min(100, job.progress * 100))
+        : null;
+    const progressMarkup = running
+      ? `
+          <div class="query-monitor-progress">
+            <div class="query-monitor-progress-copy">
+              <span>${escapeHtml(cancelling ? queryCancellationCopy(job) : job.progressLabel || "Running...")}</span>
+              <span>${progressValue === null ? "Progress unavailable" : `${Math.round(progressValue)}%`}</span>
+            </div>
+            <div class="query-progress-track">
+              <span style="width:${progressValue === null ? 100 : progressValue}%;"></span>
+            </div>
+          </div>
+        `
+      : "";
     return `
       <article class="query-monitor-item query-monitor-item-${escapeHtml(job.status)}" data-query-job-id="${escapeHtml(job.jobId)}">
         <div class="query-monitor-item-copy">
@@ -531,11 +644,17 @@ export function createQueryUi(helpers) {
             <span data-query-monitor-duration data-job-id="${escapeHtml(job.jobId)}">${escapeHtml(formatQueryDuration(queryJobElapsedMs(job)))}</span>
             <span>${escapeHtml(rowsCopy)}</span>
           </div>
+          ${queryProcessMetricStripMarkup(job, { compact: true })}
+          ${progressMarkup}
           ${queryMonitorInsightStripMarkup(job)}
           <p class="query-monitor-sql">${escapeHtml(job.sql)}</p>
         </div>
         <div class="query-monitor-item-actions">
-          ${running ? `<button type="button" class="query-monitor-cancel" data-cancel-query-job="${escapeHtml(job.jobId)}">Cancel</button>` : ""}
+          ${running
+            ? cancelling
+              ? `<button type="button" class="query-monitor-cancel is-cancelling" disabled>Cancelling...</button>`
+              : `<button type="button" class="query-monitor-cancel" data-cancel-query-job="${escapeHtml(job.jobId)}">Cancel</button>`
+            : ""}
           <span class="query-monitor-updated">${escapeHtml(formatQueryTimestamp(timestamp))}</span>
         </div>
       </article>
@@ -544,6 +663,7 @@ export function createQueryUi(helpers) {
 
   function queryNotificationItemMarkup(job) {
     const rowsLabel = queryRowsShownLabel(job);
+    const statusLabel = job.cancellationPhase ? queryCancellationCopy(job) : queryJobStatusCopy(job);
     return `
       <button
         type="button"
@@ -552,7 +672,7 @@ export function createQueryUi(helpers) {
         data-open-query-cell="${escapeHtml(job.cellId)}"
         title="Open ${escapeHtml(job.notebookTitle)}"
       >
-        <span class="topbar-notification-item-status${queryJobIsRunning(job) ? " is-live" : ""}">${escapeHtml(queryJobStatusCopy(job))}</span>
+        <span class="topbar-notification-item-status${queryJobIsRunning(job) ? " is-live" : ""}">${escapeHtml(statusLabel)}</span>
         <span class="topbar-notification-item-title">${escapeHtml(job.notebookTitle)}</span>
         <span class="topbar-notification-item-copy" data-query-notification-copy data-job-id="${escapeHtml(job.jobId)}" data-query-copy-suffix="${escapeHtml(rowsLabel)}">${escapeHtml(formatQueryDuration(queryJobElapsedMs(job)))} | ${escapeHtml(rowsLabel)}</span>
         <span class="topbar-notification-item-copy topbar-notification-item-copy-secondary">${escapeHtml(queryJobEventDateTimeCopy(job))}</span>

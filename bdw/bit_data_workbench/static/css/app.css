@@ -466,6 +466,47 @@ body.sidebar-collapsed .sidebar-resizer::before {
   margin-top: 2px;
 }
 
+.query-process-metric-strip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.query-process-metric-strip-compact {
+  gap: 6px;
+}
+
+.query-process-metric {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 7px;
+  border-radius: var(--radius-pill);
+  background: rgba(47, 62, 78, 0.07);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  line-height: 1.25;
+}
+
+.query-process-metric strong {
+  color: var(--text);
+}
+
+.query-monitor-progress {
+  display: grid;
+  gap: 5px;
+}
+
+.query-monitor-progress-copy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 0.73rem;
+}
+
 .query-insight-pill {
   display: inline-flex;
   align-items: center;
@@ -551,6 +592,14 @@ body.sidebar-collapsed .sidebar-resizer::before {
   font-size: 0.78rem;
   font-weight: 700;
   cursor: pointer;
+}
+
+.query-monitor-cancel:disabled,
+.query-monitor-cancel.is-cancelling {
+  border-color: rgba(123, 138, 153, 0.26);
+  background: rgba(237, 242, 247, 0.9);
+  color: #6b7785;
+  cursor: wait;
 }
 
 .query-monitor-updated {
@@ -6789,6 +6838,14 @@ details:not([open]) > .source-schema > summary::before {
 
 .query-cancel-button:hover {
   background: rgba(170, 37, 20, 0.1);
+}
+
+.query-cancel-button:disabled,
+.query-cancel-button.is-cancelling {
+  border-color: rgba(123, 138, 153, 0.26);
+  background: rgba(237, 242, 247, 0.9);
+  color: #6b7785;
+  cursor: wait;
 }
 
 .editor-frame {

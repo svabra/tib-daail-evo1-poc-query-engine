@@ -381,7 +381,7 @@ export function createDataExchangeController(helpers) {
       return;
     }
     if (!visibleFiles.some((file) => file.fileId === selectedFileId)) {
-      selectedFileId = visibleFiles[0].fileId || "";
+      selectedFileId = visibleFiles[0]?.fileId || "";
     }
     root.innerHTML = `
       <div class="source-tree data-exchange-source-tree" data-source-tree-scope="data-exchange">

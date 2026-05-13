@@ -329,10 +329,11 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 )
             )
             await page.goto(
-                urljoin(args.base_url, "query-workbench"),
+                urljoin(args.base_url, "notebooks/s3-smoke-test"),
                 wait_until="domcontentloaded",
                 timeout=args.timeout_ms,
             )
+            await page.wait_for_timeout(2000)
 
             create_source_ms = await create_root_folder(
                 page,

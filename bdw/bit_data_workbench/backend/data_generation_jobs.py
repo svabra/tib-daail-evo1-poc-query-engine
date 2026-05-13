@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import inspect
 import threading
 import time
 import uuid
@@ -37,13 +38,14 @@ class DataGenerationJobManager:
         *,
         settings: Settings,
         registry: DataGeneratorRegistry,
-        connection_factory: Callable[[], object],
+        connection_factory: Callable[..., object],
         metadata_refresher: Callable[[], None],
         state_change_callback: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._settings = settings
         self._registry = registry
         self._connection_factory = connection_factory
+        self._connection_factory_accepts_job_controls = self._accepts_job_connection_controls(connection_factory)
         self._metadata_refresher = metadata_refresher
         self._state_change_callback = state_change_callback
         self._lock = threading.RLock()
@@ -121,6 +123,7 @@ class DataGenerationJobManager:
             record.snapshot.updated_at = utc_now_iso()
             record.snapshot.progress_label = "Cancelling..."
             record.snapshot.message = "Cancellation requested."
+            record.snapshot.can_cancel = False
             self._touch_locked()
             return record.snapshot
 
@@ -145,7 +148,14 @@ class DataGenerationJobManager:
             settings=self._settings,
             job_id=job_id,
             requested_size_gb=snapshot.requested_size_gb,
-            connection_factory=self._connection_factory,
+            connection_factory=self._connection_factory_for_job(
+                job_id,
+                wait_progress_label="Waiting for active queries...",
+                wait_message=(
+                    "Waiting for active queries to finish before cleaning generated loader data."
+                ),
+                cancellable=False,
+            ),
             progress_callback=lambda **changes: self._patch_job(job_id, **changes),
             is_cancelled=lambda: False,
         )
@@ -209,7 +219,15 @@ class DataGenerationJobManager:
                 settings=self._settings,
                 job_id=job_id,
                 requested_size_gb=record.snapshot.requested_size_gb,
-                connection_factory=self._connection_factory,
+                connection_factory=self._connection_factory_for_job(
+                    job_id,
+                    wait_progress_label="Waiting for active queries...",
+                    wait_message=(
+                        "Waiting for active queries to finish before this loader can open "
+                        "an exclusive DuckDB connection."
+                    ),
+                    cancellable=True,
+                ),
                 progress_callback=lambda **changes: self._patch_job(job_id, **changes),
                 is_cancelled=lambda: self._is_cancelled(job_id),
             )
@@ -279,6 +297,57 @@ class DataGenerationJobManager:
     def _is_cancelled(self, job_id: str) -> bool:
         with self._condition:
             return bool(self._jobs.get(job_id) and self._jobs[job_id].cancel_requested)
+
+    def _connection_factory_for_job(
+        self,
+        job_id: str,
+        *,
+        wait_progress_label: str,
+        wait_message: str,
+        cancellable: bool,
+    ) -> Callable[[], object]:
+        waiting_reported = False
+
+        def is_cancelled() -> bool:
+            return cancellable and self._is_cancelled(job_id)
+
+        def report_waiting() -> None:
+            nonlocal waiting_reported
+            if waiting_reported or is_cancelled():
+                return
+            waiting_reported = True
+            self._patch_job(
+                job_id,
+                progress_label=wait_progress_label,
+                message=wait_message,
+            )
+
+        def open_connection() -> object:
+            if not self._connection_factory_accepts_job_controls:
+                return self._connection_factory()
+            try:
+                return self._connection_factory(
+                    is_cancelled=is_cancelled,
+                    waiting_callback=report_waiting,
+                )
+            except Exception as exc:
+                if is_cancelled():
+                    raise DataGenerationCancelled() from exc
+                raise
+
+        return open_connection
+
+    @staticmethod
+    def _accepts_job_connection_controls(factory: Callable[..., object]) -> bool:
+        try:
+            signature = inspect.signature(factory)
+        except (TypeError, ValueError):
+            return False
+
+        for parameter in signature.parameters.values():
+            if parameter.kind == inspect.Parameter.VAR_KEYWORD:
+                return True
+        return "is_cancelled" in signature.parameters and "waiting_callback" in signature.parameters
 
     def _patch_job(self, job_id: str, **changes: Any) -> None:
         with self._condition:

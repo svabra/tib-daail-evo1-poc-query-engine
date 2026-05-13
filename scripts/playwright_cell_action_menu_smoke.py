@@ -28,13 +28,15 @@ async def create_notebook(page, base_url: str, timeout_ms: int) -> None:
         wait_until="domcontentloaded",
         timeout=timeout_ms,
     )
-    await page.wait_for_timeout(250)
+    await page.wait_for_timeout(2000)
     if await page.locator("[data-query-cell]").count():
         return
 
-    create_button = page.locator(
-        "[data-notebook-section] > summary [data-create-notebook]"
-    )
+    create_button = page.locator("[data-query-workbench-entry-page] [data-create-notebook]")
+    if not await create_button.count():
+        create_button = page.locator(
+            "[data-notebook-section] > summary [data-create-notebook]"
+        )
     await create_button.wait_for(state="visible", timeout=timeout_ms)
     await create_button.click(force=True)
 

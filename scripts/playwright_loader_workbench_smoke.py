@@ -84,6 +84,38 @@ async def start_loader_and_assert_job(page, timeout_ms: int) -> tuple[str, str]:
     return generator_id, job_id
 
 
+async def wait_for_loader_terminal_state(page, job_id: str, timeout_ms: int) -> str:
+    job_card = page.locator(
+        f'[data-data-generation-job-card][data-job-id="{job_id}"]'
+    )
+    await job_card.wait_for(state="visible", timeout=timeout_ms)
+
+    await page.wait_for_function(
+        """
+        (jobId) => {
+          const card = document.querySelector(
+            `[data-data-generation-job-card][data-job-id="${CSS.escape(jobId)}"]`
+          );
+          const status = card?.querySelector(".ingestion-job-status")?.textContent?.trim();
+          return ["Completed", "Failed", "Cancelled"].includes(status);
+        }
+        """,
+        arg=job_id,
+        timeout=timeout_ms,
+    )
+
+    status = (
+        await job_card.locator(".ingestion-job-status").first.text_content()
+        or ""
+    ).strip()
+    card_text = await job_card.inner_text()
+    if status not in {"Completed", "Failed", "Cancelled"}:
+        raise RuntimeError(f"Loader job {job_id} did not reach a terminal state.")
+    if "Preparing data generation." in card_text and status == "Running":
+        raise RuntimeError(f"Loader job {job_id} is still stuck preparing.")
+    return status
+
+
 async def run_smoke(args: argparse.Namespace) -> int:
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=args.headless)
@@ -108,6 +140,11 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 page,
                 args.timeout_ms,
             )
+            terminal_status = await wait_for_loader_terminal_state(
+                page,
+                job_id,
+                args.timeout_ms,
+            )
         except (PlaywrightTimeoutError, RuntimeError) as exc:
             print(str(exc), file=sys.stderr)
             for message in console_messages:
@@ -119,7 +156,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
 
     print(
         "Playwright loader workbench smoke passed "
-        f"for loader {generator_id} and job {job_id}."
+        f"for loader {generator_id} and job {job_id} ({terminal_status})."
     )
     return 0
 

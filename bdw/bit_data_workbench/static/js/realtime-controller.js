@@ -300,6 +300,7 @@ export function createRealtimeController(helpers) {
     const notebookId = workspaceNotebookId(workspaceRoot);
     const cellId = cellRoot.dataset.cellId;
     const job = queryJobForCell(notebookId, cellId);
+    const cancelling = queryJobIsRunning(job) && Boolean(job?.cancellationPhase);
     const runButton = cellRoot.querySelector("[data-run-cell]");
     const cancelButton = cellRoot.querySelector("[data-cancel-query]");
     const resultRoot = cellRoot.querySelector("[data-cell-result]");
@@ -311,7 +312,7 @@ export function createRealtimeController(helpers) {
         runButton.disabled = true;
         runButton.classList.add("is-running");
         runButton.innerHTML =
-          '<span class="query-button-spinner" aria-hidden="true"></span><span class="query-button-running-copy">Running ...</span>';
+          `<span class="query-button-spinner" aria-hidden="true"></span><span class="query-button-running-copy">${cancelling ? "Cancelling ..." : "Running ..."}</span>`;
       } else {
         runButton.disabled = false;
         runButton.classList.remove("is-running");
@@ -323,11 +324,17 @@ export function createRealtimeController(helpers) {
       cancelButton.hidden = !queryJobIsRunning(job);
       cancelButton.dataset.jobId = job?.jobId || "";
       cancelButton.dataset.jobKind = "query";
-      cancelButton.disabled = !queryJobIsRunning(job);
+      cancelButton.disabled = !queryJobIsRunning(job) || cancelling;
+      cancelButton.textContent = cancelling ? "Cancelling..." : "Cancel";
+      cancelButton.classList.toggle("is-cancelling", cancelling);
     }
 
     if (resultRoot) {
       resultRoot.outerHTML = queryResultPanelMarkup(cellId, job);
+    } else if (cellId) {
+      cellRoot
+        .querySelector("[data-query-form]")
+        ?.insertAdjacentHTML("afterend", queryResultPanelMarkup(cellId, job));
     }
   }
 

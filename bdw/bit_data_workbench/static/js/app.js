@@ -1816,6 +1816,7 @@ function normalizeDataGenerationJob(job) {
     targetRelation: String(job.targetRelation ?? "").trim(),
     targetPath: String(job.targetPath ?? "").trim(),
     writtenTargets,
+    canCancel: Boolean(job.canCancel),
     canCleanup: Boolean(job.canCleanup),
   };
 }
@@ -2006,7 +2007,12 @@ function dataGenerationJobCopy(job) {
       : dataGenerationJobIsRunning(job)
         ? "Starting"
         : "0 rows";
-  return `${formatQueryDuration(dataGenerationJobElapsedMs(job))} | ${sizeCopy} | ${rowsCopy}`;
+  const metricCopy = `${formatQueryDuration(dataGenerationJobElapsedMs(job))} | ${sizeCopy} | ${rowsCopy}`;
+  const messageCopy = String(job.message || "").trim();
+  if (messageCopy && (dataGenerationJobIsRunning(job) || ["cancelled", "failed"].includes(job.status))) {
+    return `${messageCopy} | ${metricCopy}`;
+  }
+  return metricCopy;
 }
 
 function firstAvailableIngestionRunbookId() {
@@ -3578,7 +3584,7 @@ function renderLocalNotebookWorkspace(notebookId, options = {}) {
 }
 
 function defaultNotebookCreateTarget() {
-  return directChildrenContainer(ensureRootSharedNotebooksFolder());
+  return directChildrenContainer(ensureRootUnassignedFolder());
 }
 
 function resolveNotebookCreateTarget(button) {
@@ -3588,8 +3594,7 @@ function resolveNotebookCreateTarget(button) {
     return directChildrenContainer(folder);
   }
 
-  const sharedFolder = ensureRootSharedNotebooksFolder();
-  return directChildrenContainer(sharedFolder);
+  return directChildrenContainer(ensureRootUnassignedFolder());
 }
 
 async function createNotebook(targetContainer, initialMetadata = {}) {
@@ -3912,12 +3917,15 @@ function applyWorkspaceCellState(workspaceRoot, cell, index, editable, totalCell
   updateWorkspaceCellEditor(cellRoot, cell.sql);
 
   const resultRoot = cellRoot.querySelector("[data-cell-result]");
+  const job = cellLanguage === "python" ? pythonJobForCell(notebookId, cell.cellId) : queryJobForCell(notebookId, cell.cellId);
+  const resultMarkup =
+    cellLanguage === "python"
+      ? pythonResultPanelMarkup(cell.cellId, job)
+      : queryResultPanelMarkup(cell.cellId, job);
   if (resultRoot) {
-    const job = cellLanguage === "python" ? pythonJobForCell(notebookId, cell.cellId) : queryJobForCell(notebookId, cell.cellId);
-    resultRoot.outerHTML =
-      cellLanguage === "python"
-        ? pythonResultPanelMarkup(cell.cellId, job)
-        : queryResultPanelMarkup(cell.cellId, job);
+    resultRoot.outerHTML = resultMarkup;
+  } else {
+    cellRoot.querySelector("[data-query-form]")?.insertAdjacentHTML("afterend", resultMarkup);
   }
 }
 
@@ -7213,9 +7221,16 @@ async function restoreLastNotebook() {
   }
 }
 
-document.body.addEventListener(
+document.addEventListener(
   "submit",
   async (event) => {
+    const queryForm = event.target.closest("[data-query-form]");
+    if (queryForm) {
+      event.preventDefault();
+      await startQueryJobForForm(queryForm);
+      return;
+    }
+
     if (await dataProductsController.handleSubmit(event)) {
       return;
     }
@@ -7442,13 +7457,7 @@ document.body.addEventListener(
       return;
     }
 
-    const form = event.target.closest("[data-query-form]");
-    if (!form) {
-      return;
-    }
-
-    event.preventDefault();
-    await startQueryJobForForm(form);
+    return;
   },
   true
 );
@@ -8135,6 +8144,13 @@ Promise.allSettled(initialLoadTasks)
     }
 
     if (queryWorkbenchEntryPageRoot()) {
+      const storedNotebookId = readLastNotebookId();
+      if (storedNotebookId && !notebookMetadata(storedNotebookId).deleted) {
+        restoreLastNotebook().catch((error) => {
+          console.error("Failed to restore the last active notebook from the Query Workbench entry.", error);
+        });
+        return;
+      }
       renderQueryNotificationMenu();
       return;
     }

@@ -39,15 +39,15 @@ async def ensure_details_open(page, selector: str) -> None:
     locator = page.locator(selector)
     await locator.wait_for(state="attached")
     if not await locator.evaluate("node => node.hasAttribute('open')"):
-        await locator.locator(":scope > summary").click()
+        await locator.evaluate("node => node.setAttribute('open', '')")
 
 
 async def ensure_sidebar_expanded(page) -> None:
     toggle = page.locator("[data-sidebar-toggle]").first
-    await toggle.wait_for(state="visible")
+    await toggle.wait_for(state="attached")
     expanded = await toggle.get_attribute("aria-expanded")
     if expanded == "false":
-        await toggle.click()
+        await toggle.click(force=True)
 
 
 async def ensure_local_workspace_open(page) -> None:
@@ -172,7 +172,19 @@ async def read_local_workspace_entry(page, entry_id: str):
 async def wait_for_local_workspace_file(page, entry_id: str, timeout_ms: int):
     await ensure_local_workspace_open(page)
     locator = page.locator(f'[data-local-workspace-entry-id="{entry_id}"]')
-    await locator.wait_for(state="visible", timeout=timeout_ms)
+    await locator.wait_for(state="attached", timeout=timeout_ms)
+    await locator.evaluate(
+        """(node) => {
+            let current = node.parentElement;
+            while (current) {
+                if (current instanceof HTMLDetailsElement) {
+                    current.open = true;
+                    current.setAttribute("open", "");
+                }
+                current = current.parentElement;
+            }
+        }"""
+    )
     return locator
 
 
@@ -185,9 +197,7 @@ async def move_local_workspace_file(
     timeout_ms: int,
 ) -> float:
     file_node = await wait_for_local_workspace_file(page, entry_id, timeout_ms)
-    await file_node.hover()
-    await file_node.locator("[data-source-action-menu-toggle]").click()
-    await file_node.locator("[data-move-local-workspace-object]").click()
+    await file_node.locator("[data-move-local-workspace-object]").evaluate("node => node.click()")
     await page.locator("[data-local-workspace-move-folder-path]").fill(destination_folder)
     await page.locator("[data-local-workspace-move-file-name]").fill(moved_file_name)
 
@@ -222,10 +232,11 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 script=f'window.localStorage.setItem("{SIDEBAR_COLLAPSED_KEY}", "false");'
             )
             await page.goto(
-                urljoin(args.base_url, "query-workbench"),
+                urljoin(args.base_url, "notebooks/s3-smoke-test"),
                 wait_until="domcontentloaded",
                 timeout=args.timeout_ms,
             )
+            await page.wait_for_timeout(2000)
             await seed_local_workspace_entry(
                 page,
                 entry_id=entry_id,

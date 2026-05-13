@@ -578,6 +578,14 @@ class QueryJobDefinition:
     touched_relations: list[str] = field(default_factory=list)
     touched_buckets: list[str] = field(default_factory=list)
     backend_name: str = "duckdb"
+    execution_mode: str = ""
+    process_id: int | None = None
+    cpu_percent: float | None = None
+    memory_rss_bytes: int | None = None
+    peak_memory_rss_bytes: int | None = None
+    cancellation_phase: str | None = None
+    cancellation_requested_at: str | None = None
+    worker_exit_code: int | None = None
     can_cancel: bool = False
 
     @property
@@ -609,6 +617,14 @@ class QueryJobDefinition:
             "touchedRelations": list(self.touched_relations),
             "touchedBuckets": list(self.touched_buckets),
             "backendName": self.backend_name,
+            "executionMode": self.execution_mode,
+            "processId": self.process_id,
+            "cpuPercent": self.cpu_percent,
+            "memoryRssBytes": self.memory_rss_bytes,
+            "peakMemoryRssBytes": self.peak_memory_rss_bytes,
+            "cancellationPhase": self.cancellation_phase,
+            "cancellationRequestedAt": self.cancellation_requested_at,
+            "workerExitCode": self.worker_exit_code,
             "canCancel": self.can_cancel,
         }
 

@@ -28,6 +28,13 @@ async def open_query_workbench(page, base_url: str, timeout_ms: int) -> None:
         wait_until="domcontentloaded",
         timeout=timeout_ms,
     )
+    await page.wait_for_timeout(2000)
+    if await page.locator("[data-query-workbench-entry-page]").count():
+        create_button = page.locator(
+            "[data-query-workbench-entry-page] [data-create-notebook]"
+        ).first
+        await create_button.wait_for(state="visible", timeout=timeout_ms)
+        await create_button.click(force=True)
     await page.locator("[data-sidebar]").wait_for(
         state="visible",
         timeout=timeout_ms,

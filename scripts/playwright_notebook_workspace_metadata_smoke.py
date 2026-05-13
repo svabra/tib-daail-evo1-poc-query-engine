@@ -39,7 +39,14 @@ async def open_query_workbench(page, args: argparse.Namespace) -> None:
         wait_until="domcontentloaded",
         timeout=args.timeout_ms,
     )
-    await page.locator("[data-sidebar]").wait_for(
+    await page.wait_for_timeout(2000)
+    if await page.locator("[data-query-workbench-entry-page]").count():
+        create_button = page.locator(
+            "[data-query-workbench-entry-page] [data-create-notebook]"
+        ).first
+        await create_button.wait_for(state="visible", timeout=args.timeout_ms)
+        await create_button.click(force=True)
+    await page.locator("[data-workspace-notebook]").wait_for(
         state="visible",
         timeout=args.timeout_ms,
     )
@@ -275,6 +282,22 @@ async def assert_reload_persists_state(
     expected_tag: str,
 ) -> None:
     await page.reload(wait_until="domcontentloaded", timeout=args.timeout_ms)
+    try:
+        await page.wait_for_function(
+            """
+            (notebookId) => {
+              const meta = document.querySelector("[data-notebook-meta]");
+              return Boolean(meta && meta.dataset.notebookId === notebookId);
+            }
+            """,
+            arg=notebook_id,
+            timeout=2000,
+        )
+    except PlaywrightTimeoutError:
+        notebook_link = page.locator(f'[data-notebook-id="{notebook_id}"]').first
+        await notebook_link.wait_for(state="attached", timeout=args.timeout_ms)
+        await notebook_link.evaluate("(node) => node.click()")
+
     await page.wait_for_function(
         """
         (notebookId) => {
@@ -318,36 +341,45 @@ async def run_smoke(args: argparse.Namespace) -> int:
             lambda exc: console_messages.append(f"pageerror:{exc}"),
         )
 
+        stage = "start"
         try:
+            stage = "open query workbench"
             await open_query_workbench(page, args)
+            stage = "create notebook"
             notebook_id, create_ms = await create_notebook(page, args.timeout_ms)
+            stage = "update summary"
             summary_ms = await update_summary(
                 page,
                 notebook_id,
                 original_summary,
                 args.timeout_ms,
             )
+            stage = "add tag"
             tag_ms = await add_tag(
                 page,
                 notebook_id,
                 notebook_tag,
                 args.timeout_ms,
             )
+            stage = "save version"
             saved_version_id, expected_version_count, version_save_ms = await save_version(
                 page,
                 args.timeout_ms,
             )
+            stage = "mutate summary"
             mutate_summary_ms = await update_summary(
                 page,
                 notebook_id,
                 modified_summary,
                 args.timeout_ms,
             )
+            stage = "remove tag"
             remove_tag_ms = await remove_tag(
                 page,
                 notebook_tag,
                 args.timeout_ms,
             )
+            stage = "load version"
             version_load_ms = await load_version_and_assert_restore(
                 page,
                 notebook_id,
@@ -356,6 +388,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 notebook_tag,
                 args.timeout_ms,
             )
+            stage = "reload and verify"
             await assert_reload_persists_state(
                 page,
                 args,
@@ -370,7 +403,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     "Notebook version count changed unexpectedly after loading a saved version."
                 )
         except (PlaywrightTimeoutError, RuntimeError, json.JSONDecodeError) as exc:
-            print(str(exc), file=sys.stderr)
+            print(f"{stage}: {exc}", file=sys.stderr)
             for message in console_messages:
                 print(message, file=sys.stderr)
             await browser.close()

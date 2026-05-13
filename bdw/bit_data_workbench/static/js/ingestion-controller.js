@@ -227,7 +227,7 @@ export function createIngestionController(helpers) {
   function collectVisibleNotifications() {
     const activeNotebookId = currentWorkspaceNotebookId();
     const queryNotifications = getQueryJobsSnapshot()
-      .filter((job) => job.notebookId !== activeNotebookId)
+      .filter((job) => job.notebookId !== activeNotebookId || job.cancellationPhase || job.status === "cancelled")
       .map((job) => ({
         type: "query",
         job,

@@ -26,6 +26,7 @@ def create_duckdb_worker_connection(
     settings: Settings,
     *,
     database_path: Path | str | None = None,
+    read_only: bool = False,
 ) -> duckdb.DuckDBPyConnection:
     target_database = database_path or settings.duckdb_database
     if isinstance(target_database, Path):
@@ -44,7 +45,7 @@ def create_duckdb_worker_connection(
             connection_target = normalized_target
     settings.duckdb_extension_directory.mkdir(parents=True, exist_ok=True)
 
-    connection = duckdb.connect(connection_target)
+    connection = duckdb.connect(connection_target, read_only=read_only)
     connection.execute(
         f"SET extension_directory = {sql_literal(settings.duckdb_extension_directory.as_posix())}"
     )
@@ -52,7 +53,7 @@ def create_duckdb_worker_connection(
     _ensure_extension(connection, "httpfs")
     _ensure_extension(connection, "postgres")
     _bootstrap_s3(connection, settings)
-    _bootstrap_postgres(connection, settings)
+    _bootstrap_postgres(connection, settings, read_only=read_only)
     return connection
 
 
@@ -196,6 +197,8 @@ def _s3_secret_options(
 def _bootstrap_postgres(
     connection: duckdb.DuckDBPyConnection,
     settings: Settings,
+    *,
+    read_only: bool = False,
 ) -> None:
     if not all(
         (
@@ -223,7 +226,7 @@ def _bootstrap_postgres(
             connection,
             alias="pg_oltp",
             secret_name="bdw_pg_oltp",
-            read_only=False,
+            read_only=read_only,
         )
 
     if settings.pg_olap_database:
@@ -239,7 +242,7 @@ def _bootstrap_postgres(
             connection,
             alias="pg_olap",
             secret_name="bdw_pg_olap",
-            read_only=False,
+            read_only=read_only,
         )
 
 

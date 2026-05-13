@@ -134,11 +134,12 @@ async def main() -> None:
             record = await listed_file(context, args, display_name)
             file_id = str(record.get("fileId") or "")
             file_name = str(record.get("fileName") or "")
+            bucket_name = str(record.get("bucket") or args.bucket)
             if file_name != sample_path.name:
                 raise RuntimeError(f"Unexpected uploaded file name: {file_name!r}")
 
             object_key = exchange_object_key(args, file_id, file_name)
-            stored = s3_client(args).get_object(Bucket=args.bucket, Key=object_key)["Body"].read()
+            stored = s3_client(args).get_object(Bucket=bucket_name, Key=object_key)["Body"].read()
             if stored != sample_bytes:
                 raise RuntimeError("S3 stored payload does not match sample_tax_data.csv.")
 

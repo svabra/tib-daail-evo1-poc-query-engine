@@ -138,22 +138,16 @@ async def ensure_details_open(page, selector: str) -> None:
     locator = page.locator(selector)
     await locator.wait_for(state="attached")
     if not await locator.evaluate("node => node.hasAttribute('open')"):
-        await locator.locator(":scope > summary").click()
+        await locator.evaluate("node => node.setAttribute('open', '')")
 
 
 async def open_query_notebook(page, base_url: str, timeout_ms: int) -> None:
     await page.goto(
-        f"{base_url.rstrip('/')}/query-workbench",
+        f"{base_url.rstrip('/')}/notebooks/s3-smoke-test",
         wait_until="domcontentloaded",
         timeout=timeout_ms,
     )
-    await page.locator("[data-query-workbench-entry-page]").wait_for(
-        state="visible",
-        timeout=timeout_ms,
-    )
-    await page.locator(
-        "[data-query-workbench-entry-page] [data-create-notebook]"
-    ).click(force=True)
+    await page.wait_for_timeout(2000)
     await page.locator("[data-workspace-notebook]").wait_for(
         state="visible",
         timeout=timeout_ms,
@@ -287,9 +281,9 @@ async def run_truncated_query_and_download_all_rows(page, timeout_ms: int) -> No
     export_menu = cell.locator("[data-result-action-menu]").first
     await export_menu.wait_for(state="visible", timeout=timeout_ms)
     await export_menu.evaluate("node => node.setAttribute('open', '')")
-    await export_menu.locator("[data-result-export-download]").click(force=True)
+    await export_menu.locator("[data-result-export-download]").evaluate("node => node.click()")
 
-    download_dialog = page.locator("[data-result-download-dialog]").first
+    download_dialog = page.locator("[data-result-download-dialog][open]").first
     await download_dialog.wait_for(state="visible", timeout=timeout_ms)
     await download_dialog.locator("[data-export-format-select]").select_option("csv")
     await download_dialog.locator("[data-result-download-file-name]").fill("full-query-export.csv")

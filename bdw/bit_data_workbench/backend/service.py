@@ -4,11 +4,12 @@ import logging
 import time
 import threading
 import uuid
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from threading import RLock, Thread
-from typing import Any
+from typing import Any, Callable
 
 import duckdb
 
@@ -74,7 +75,11 @@ from .local_workspace_query_sources import LocalWorkspaceQuerySourceManager
 from .local_workspace_transfers import LocalWorkspaceTransferManager
 from .python_execution import KernelSessionManager, PythonJobManager
 from .query_analysis import analyze_query_touches, build_relation_index
-from .query_jobs import QueryJobManager
+from .query_jobs import (
+    DuckDBQueryAccessCoordinator,
+    QUERY_EXECUTION_DUCKDB_WRITE,
+    QueryJobManager,
+)
 from .query_result_exports import QueryResultExportManager
 from .realtime_facade import WorkbenchRealtimeFacade
 from .runtime_connections import normalize_postgres_host, open_postgres_native_connection
@@ -144,6 +149,31 @@ def normalize_port(value: str, variable_name: str) -> str:
     return value
 
 
+class _CoordinatedDuckDBConnection:
+    def __init__(self, connection: duckdb.DuckDBPyConnection, release_callback) -> None:
+        self._connection = connection
+        self._release_callback = release_callback
+        self._closed = False
+
+    def __getattr__(self, name: str):
+        return getattr(self._connection, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._connection.close()
+        finally:
+            self._release_callback()
+
+
 class WorkbenchService:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
@@ -169,16 +199,17 @@ class WorkbenchService:
         self._source_options: list[dict[str, str]] = []
         self._startup_threads: list[Thread] = []
         self._csv_upload_completion_threads: list[Thread] = []
+        self._duckdb_query_access = DuckDBQueryAccessCoordinator()
         self._query_jobs = QueryJobManager(
+            settings=settings,
             max_result_rows=settings.max_result_rows,
-            connection_factory=self._create_worker_connection,
-            postgres_connection_factory=self._create_postgres_native_connection,
             notebook_title_resolver=self._resolve_notebook_title,
             metadata_refresher=self.refresh_metadata_state,
             state_change_callback=lambda snapshot: self._publish_realtime_snapshot(
                 "query-jobs",
                 snapshot,
             ),
+            access_coordinator=self._duckdb_query_access,
         )
         self._kernel_sessions = KernelSessionManager()
         self._python_jobs = PythonJobManager(
@@ -357,16 +388,12 @@ class WorkbenchService:
         self.settings.duckdb_extension_directory.mkdir(parents=True, exist_ok=True)
         self._log_startup_section("Initialize shared notebook storage")
         self._initialize_shared_notebook_store()
-        self._log_startup_section("Open primary DuckDB connection")
-        conn = self._create_connection(startup_context=True, run_s3_startup_diagnostics=False)
-
-        with self._lock:
-            self._conn = conn
-        self._log_startup("Startup step complete: primary DuckDB connection is ready")
+        self._log_startup_section("Open startup DuckDB connection")
         self._log_startup_section("Refresh initial metadata state")
         try:
-            with self._lock:
-                self._refresh_state()
+            with self._duckdb_connection(startup_context=True, run_s3_startup_diagnostics=False) as conn:
+                with self._lock:
+                    self._refresh_state(conn)
         except Exception as exc:
             with self._lock:
                 self._set_minimal_state()
@@ -412,6 +439,7 @@ class WorkbenchService:
     def stop(self) -> None:
         self._log_startup_section("Shutdown workbench service")
         self._log_startup("Workbench shutdown begin")
+        self._query_jobs.shutdown()
         self._service_consumption.stop()
         self._data_source_discovery.stop()
         self._kernel_sessions.shutdown_all()
@@ -1711,19 +1739,20 @@ class WorkbenchService:
         csv_delimiter: str = "",
         csv_has_header: bool = True,
     ) -> dict[str, object]:
-        with self._lock:
-            result = self._local_workspace_query_sources.sync_source(
-                conn=self._require_connection(),
-                client_id=client_id,
-                entry_id=entry_id,
-                logical_relation=relation,
-                file_name=file_name,
-                export_format=export_format,
-                mime_type=mime_type,
-                file_bytes=file_bytes,
-                csv_delimiter=csv_delimiter,
-                csv_has_header=csv_has_header,
-            )
+        with self._duckdb_connection() as conn:
+            with self._lock:
+                result = self._local_workspace_query_sources.sync_source(
+                    conn=conn,
+                    client_id=client_id,
+                    entry_id=entry_id,
+                    logical_relation=relation,
+                    file_name=file_name,
+                    export_format=export_format,
+                    mime_type=mime_type,
+                    file_bytes=file_bytes,
+                    csv_delimiter=csv_delimiter,
+                    csv_has_header=csv_has_header,
+                )
         return result.payload
 
     def delete_local_workspace_query_source(
@@ -1732,19 +1761,21 @@ class WorkbenchService:
         client_id: str,
         entry_id: str,
     ) -> None:
-        with self._lock:
-            self._local_workspace_query_sources.delete_source(
-                conn=self._require_connection(),
-                client_id=client_id,
-                entry_id=entry_id,
-            )
+        with self._duckdb_connection() as conn:
+            with self._lock:
+                self._local_workspace_query_sources.delete_source(
+                    conn=conn,
+                    client_id=client_id,
+                    entry_id=entry_id,
+                )
 
     def clear_local_workspace_query_sources(self, *, client_id: str) -> None:
-        with self._lock:
-            self._local_workspace_query_sources.clear_client_sources(
-                conn=self._require_connection(),
-                client_id=client_id,
-            )
+        with self._duckdb_connection() as conn:
+            with self._lock:
+                self._local_workspace_query_sources.clear_client_sources(
+                    conn=conn,
+                    client_id=client_id,
+                )
 
     def move_local_workspace_export_to_s3(
         self,
@@ -1771,12 +1802,13 @@ class WorkbenchService:
         normalized_entry_id = str(entry_id or "").strip()
         if normalized_client_id and normalized_entry_id:
             try:
-                with self._lock:
-                    self._local_workspace_query_sources.delete_source(
-                        conn=self._require_connection(),
-                        client_id=normalized_client_id,
-                        entry_id=normalized_entry_id,
-                    )
+                with self._duckdb_connection() as conn:
+                    with self._lock:
+                        self._local_workspace_query_sources.delete_source(
+                            conn=conn,
+                            client_id=normalized_client_id,
+                            entry_id=normalized_entry_id,
+                        )
             except Exception:
                 logger.warning(
                     "Local Workspace move cleanup failed for client_id=%r entry_id=%r after upload to %s",
@@ -1834,9 +1866,9 @@ class WorkbenchService:
                 ORDER BY ordinal_position
             """
             parameters = [schema_name, object_name]
-            with self._lock:
-                conn = self._require_connection()
-                rows = conn.execute(query, parameters).fetchall()
+            with self._duckdb_connection() as conn:
+                with self._lock:
+                    rows = conn.execute(query, parameters).fetchall()
         else:
             raise KeyError(f"Unsupported source object relation: {relation}")
 
@@ -1864,9 +1896,9 @@ class WorkbenchService:
         else:
             reader_sql = f"read_csv_auto({sql_literal(path)})"
 
-        with self._lock:
-            conn = self._require_connection()
-            rows = conn.execute(f"DESCRIBE SELECT * FROM {reader_sql}").fetchall()
+        with self._duckdb_connection() as conn:
+            with self._lock:
+                rows = conn.execute(f"DESCRIBE SELECT * FROM {reader_sql}").fetchall()
         return [
             SourceField(
                 name=str(row[0] or "").strip() or f"column_{index + 1}",
@@ -1882,28 +1914,28 @@ class WorkbenchService:
 
         started = time.perf_counter()
         try:
-            with self._lock:
-                conn = self._require_connection()
-                cursor = conn.execute(query)
-                columns = [column[0] for column in cursor.description] if cursor.description else []
-                rows: list[tuple[object, ...]] = []
-                truncated = False
-                row_count = 0
-                message = "Statement executed successfully."
+            with self._duckdb_connection() as conn:
+                with self._lock:
+                    cursor = conn.execute(query)
+                    columns = [column[0] for column in cursor.description] if cursor.description else []
+                    rows: list[tuple[object, ...]] = []
+                    truncated = False
+                    row_count = 0
+                    message = "Statement executed successfully."
 
-                if columns:
-                    batch = cursor.fetchmany(self.settings.max_result_rows + 1)
-                    truncated = len(batch) > self.settings.max_result_rows
-                    rows = [tuple(item) for item in batch[: self.settings.max_result_rows]]
-                    row_count = len(rows)
-                    message = f"{row_count} row(s) shown."
-                    if truncated:
-                        message = (
-                            f"{self.settings.max_result_rows} row(s) shown. "
-                            "The result was truncated for the UI."
-                        )
+                    if columns:
+                        batch = cursor.fetchmany(self.settings.max_result_rows + 1)
+                        truncated = len(batch) > self.settings.max_result_rows
+                        rows = [tuple(item) for item in batch[: self.settings.max_result_rows]]
+                        row_count = len(rows)
+                        message = f"{row_count} row(s) shown."
+                        if truncated:
+                            message = (
+                                f"{self.settings.max_result_rows} row(s) shown. "
+                                "The result was truncated for the UI."
+                            )
 
-                self._refresh_state()
+                    self._refresh_state(conn)
 
             return QueryResult(
                 sql=sql,
@@ -1915,9 +1947,10 @@ class WorkbenchService:
                 duration_ms=(time.perf_counter() - started) * 1000,
             )
         except Exception as exc:
-            with self._lock:
-                if self._conn is not None:
-                    self._refresh_state()
+            try:
+                self.refresh_metadata_state()
+            except Exception:
+                pass
             return QueryResult(
                 sql=sql,
                 error=str(exc),
@@ -1925,37 +1958,58 @@ class WorkbenchService:
             )
 
     def refresh_metadata_state(self) -> None:
-        with self._lock:
-            if self._conn is None:
-                return
-            self._refresh_state()
+        with self._duckdb_connection() as conn:
+            with self._lock:
+                self._refresh_state(conn)
 
     def _require_connection(self) -> duckdb.DuckDBPyConnection:
         if self._conn is None:
             raise RuntimeError("The workbench service has not been initialized.")
         return self._conn
 
-    def _create_worker_connection(self) -> duckdb.DuckDBPyConnection:
-        with self._lock:
-            if self._conn is not None:
-                worker_connection = self._conn.cursor()
-                if self._worker_connection_ready(worker_connection):
-                    return worker_connection
-                try:
-                    self._bootstrap_integrations(worker_connection)
-                except Exception:
-                    logger.warning(
-                        "Worker connection bootstrap retry failed; opening a fresh DuckDB connection instead.",
-                        exc_info=True,
-                    )
-                else:
-                    if self._worker_connection_ready(worker_connection):
-                        return worker_connection
-                try:
-                    worker_connection.close()
-                except Exception:
-                    pass
-        return self._create_connection()
+    @contextmanager
+    def _duckdb_connection(
+        self,
+        *,
+        startup_context: bool = False,
+        run_s3_startup_diagnostics: bool = False,
+    ):
+        connection = self._create_worker_connection(
+            startup_context=startup_context,
+            run_s3_startup_diagnostics=run_s3_startup_diagnostics,
+        )
+        try:
+            yield connection
+        finally:
+            connection.close()
+
+    def _create_worker_connection(
+        self,
+        *,
+        startup_context: bool = False,
+        run_s3_startup_diagnostics: bool = False,
+        is_cancelled: Callable[[], bool] | None = None,
+        waiting_callback: Callable[[], None] | None = None,
+    ) -> duckdb.DuckDBPyConnection:
+        acquired = self._duckdb_query_access.acquire(
+            QUERY_EXECUTION_DUCKDB_WRITE,
+            is_cancelled or (lambda: False),
+            on_waiting=waiting_callback,
+        )
+        if not acquired:
+            raise RuntimeError("DuckDB connection acquisition cancelled.")
+        try:
+            connection = self._create_connection(
+                startup_context=startup_context,
+                run_s3_startup_diagnostics=run_s3_startup_diagnostics,
+            )
+        except Exception:
+            self._duckdb_query_access.release(QUERY_EXECUTION_DUCKDB_WRITE)
+            raise
+        return _CoordinatedDuckDBConnection(
+            connection,
+            lambda: self._duckdb_query_access.release(QUERY_EXECUTION_DUCKDB_WRITE),
+        )
 
     def _worker_connection_ready(
         self,
@@ -3231,8 +3285,7 @@ class WorkbenchService:
 
         conn.execute(f"ATTACH OR REPLACE '' AS {sql_identifier(alias)} ({', '.join(options)})")
 
-    def _refresh_state(self) -> None:
-        conn = self._require_connection()
+    def _refresh_state(self, conn: duckdb.DuckDBPyConnection) -> None:
         source_statuses = self._data_source_discovery.source_statuses()
         workspace_s3_objects = self._workspace_s3_object_metadata()
         workspace_rows = conn.execute(
@@ -3447,21 +3500,21 @@ class WorkbenchService:
         raise ValueError(f"Unsupported PostgreSQL source: {source_id}")
 
     def _drop_workspace_schema_objects(self, schema_name: str) -> int:
-        with self._lock:
-            conn = self._require_connection()
-            rows = conn.execute(
-                """
-                SELECT table_name, table_type
-                FROM information_schema.tables
-                WHERE table_catalog NOT IN ('pg_oltp', 'pg_olap') AND table_schema = ?
-                ORDER BY CASE WHEN table_type = 'VIEW' THEN 0 ELSE 1 END, table_name
-                """,
-                [schema_name],
-            ).fetchall()
-            for table_name, table_type in rows:
-                relation = qualified_name(schema_name, table_name)
-                if str(table_type).upper() == "VIEW":
-                    conn.execute(f"DROP VIEW IF EXISTS {relation} CASCADE")
-                else:
-                    conn.execute(f"DROP TABLE IF EXISTS {relation} CASCADE")
-            return len(rows)
+        with self._duckdb_connection() as conn:
+            with self._lock:
+                rows = conn.execute(
+                    """
+                    SELECT table_name, table_type
+                    FROM information_schema.tables
+                    WHERE table_catalog NOT IN ('pg_oltp', 'pg_olap') AND table_schema = ?
+                    ORDER BY CASE WHEN table_type = 'VIEW' THEN 0 ELSE 1 END, table_name
+                    """,
+                    [schema_name],
+                ).fetchall()
+                for table_name, table_type in rows:
+                    relation = qualified_name(schema_name, table_name)
+                    if str(table_type).upper() == "VIEW":
+                        conn.execute(f"DROP VIEW IF EXISTS {relation} CASCADE")
+                    else:
+                        conn.execute(f"DROP TABLE IF EXISTS {relation} CASCADE")
+                return len(rows)

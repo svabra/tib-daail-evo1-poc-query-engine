@@ -1,9 +1,34 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.8.11. Keep entries concise and
+# Derived from git history through version 0.8.12. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.8.12",
+        "releasedAt": "2026-05-13T18:00:03+02:00",
+        "features": [
+            (
+                "Query execution now runs through a process-oriented manager so simultaneous "
+                "queries can run independently, expose worker PID, CPU, RAM, peak RAM, and DuckDB "
+                "progress in the Query Monitor, and be hard-stopped when cancellation is requested."
+            ),
+            (
+                "Query cancellation now reports clear progress through the Query Monitor, message "
+                "center, and notebook result panel, including the final successful cancellation state."
+            ),
+            (
+                "Loader jobs now report when they are waiting for active DuckDB queries, can be "
+                "cancelled cleanly while waiting, and keep the Loader Workbench from getting stuck in "
+                "Preparing after query contention."
+            ),
+            (
+                "Regression coverage now verifies simultaneous process-backed queries, loader "
+                "cancellation behavior, Query in new notebook handoff, Local Workspace handoff, "
+                "DataExchange uploads, S3 sidebar operations, and the full Playwright smoke suite."
+            ),
+        ],
+    },
     {
         "version": "0.8.11",
         "releasedAt": "2026-05-13T11:12:06+02:00",

@@ -117,10 +117,20 @@ async def import_csv_to_postgres(page, timeout_ms: int) -> str:
 async def assert_sidebar_ddl_download(page, relation: str, timeout_ms: int) -> None:
     selected_source = page.locator(
         f'[data-source-object].is-selected[data-source-option-id="pg_oltp"][data-source-object-relation="{relation}"]'
+    ).first
+    await selected_source.wait_for(state="attached", timeout=timeout_ms)
+    await selected_source.evaluate(
+        """(node) => {
+            let current = node.parentElement;
+            while (current) {
+                if (current instanceof HTMLDetailsElement) {
+                    current.open = true;
+                    current.setAttribute("open", "");
+                }
+                current = current.parentElement;
+            }
+        }"""
     )
-    await selected_source.wait_for(state="visible", timeout=timeout_ms)
-    await selected_source.hover()
-    await selected_source.locator("[data-source-action-menu-toggle]").click(force=True)
 
     async with page.expect_download(timeout=timeout_ms) as download_info:
         await selected_source.locator("[data-download-source-ddl]").evaluate("node => node.click()")

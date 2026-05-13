@@ -38,7 +38,14 @@ async def ensure_details_open(page, selector: str) -> None:
     locator = page.locator(selector)
     await locator.wait_for(state="attached")
     if not await locator.evaluate("node => node.hasAttribute('open')"):
-        await locator.locator(":scope > summary").click()
+        await locator.evaluate(
+            """
+            (node) => {
+              node.open = true;
+              node.setAttribute("open", "");
+            }
+            """
+        )
 
 
 async def ensure_sidebar_expanded(page) -> None:
@@ -60,7 +67,7 @@ async def wait_for_local_workspace_folder(page, folder_path: str, timeout_ms: in
     folder = page.locator(
         f'[data-local-workspace-folder-node][data-local-workspace-folder-path="{folder_path}"]'
     )
-    await folder.wait_for(state="visible", timeout=timeout_ms)
+    await folder.wait_for(state="attached", timeout=timeout_ms)
     return folder
 
 
@@ -108,9 +115,8 @@ async def create_subfolder(page, parent_path: str, child_name: str, timeout_ms: 
     if not await parent_folder.evaluate("node => node.hasAttribute('open')"):
         await parent_folder.locator(":scope > summary").click()
     summary = parent_folder.locator(":scope > summary")
-    await summary.hover()
-    await summary.locator("[data-source-action-menu-toggle]").click()
-    await summary.locator("[data-create-local-workspace-folder-path]").click()
+    await summary.locator("[data-source-action-menu-toggle]").evaluate("(node) => node.click()")
+    await summary.locator("[data-create-local-workspace-folder-path]").evaluate("(node) => node.click()")
     await page.locator("[data-folder-name-input]").fill(child_name)
     await page.locator("[data-folder-name-submit]").click()
     await page.locator("[data-confirm-submit]").click()
@@ -129,9 +135,8 @@ async def create_subfolder(page, parent_path: str, child_name: str, timeout_ms: 
 async def delete_folder(page, folder_path: str, timeout_ms: int) -> float:
     folder = await wait_for_local_workspace_folder(page, folder_path, timeout_ms)
     summary = folder.locator(":scope > summary")
-    await summary.hover()
-    await summary.locator("[data-source-action-menu-toggle]").click()
-    await summary.locator("[data-delete-local-workspace-folder-path]").click()
+    await summary.locator("[data-source-action-menu-toggle]").evaluate("(node) => node.click()")
+    await summary.locator("[data-delete-local-workspace-folder-path]").evaluate("(node) => node.click()")
     await page.locator("[data-confirm-submit]").click()
 
     started = time.perf_counter()
@@ -170,10 +175,11 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 )
             )
             await page.goto(
-                urljoin(args.base_url, "query-workbench"),
+                urljoin(args.base_url, "notebooks/s3-smoke-test"),
                 wait_until="domcontentloaded",
                 timeout=args.timeout_ms,
             )
+            await page.wait_for_timeout(2000)
             await ensure_sidebar_expanded(page)
 
             create_root_ms = await create_root_folder(page, root_folder, args.timeout_ms)
