@@ -9,11 +9,13 @@ export function createSourceQueryActions(helpers) {
     getCurrentSidebarMode,
     getNotebookMetadata,
     getNotebookTreeRoot,
+    isLocalWorkspaceSourceObject = () => false,
     refreshSidebar,
     requestCellRun,
     selectSourceObject,
     setActiveCellId,
     setNotebookCells,
+    setSelectedSourceObjectState = () => {},
   } = helpers;
 
   async function loadSourceObjectFields(sourceObjectRoot) {
@@ -33,7 +35,7 @@ export function createSourceQueryActions(helpers) {
       return false;
     }
 
-    const fields = await loadSourceObjectFields(sourceObjectRoot);
+    const fields = await loadFieldsForSourceQuery(sourceObjectRoot);
     if (!fields) {
       return null;
     }
@@ -56,6 +58,14 @@ export function createSourceQueryActions(helpers) {
     return insertSourceQueryIntoCurrentNotebook(sourceObjectRoot, { runImmediately: true });
   }
 
+  async function loadFieldsForSourceQuery(sourceObjectRoot) {
+    if (isLocalWorkspaceSourceObject(sourceObjectRoot)) {
+      setSelectedSourceObjectState(sourceObjectRoot);
+      return [];
+    }
+    return loadSourceObjectFields(sourceObjectRoot);
+  }
+
   async function querySourceInNewNotebook(sourceObjectRoot) {
     const sourceDescriptor = sourceQueryDescriptor(sourceObjectRoot);
     if (!sourceDescriptor) {
@@ -71,7 +81,7 @@ export function createSourceQueryActions(helpers) {
       return null;
     }
 
-    const fields = await loadSourceObjectFields(sourceObjectRoot);
+    const fields = await loadFieldsForSourceQuery(sourceObjectRoot);
     if (!fields) {
       return null;
     }

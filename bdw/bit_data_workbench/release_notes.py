@@ -1,9 +1,35 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.8.12. Keep entries concise and
+# Derived from git history through version 0.8.13. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.8.13",
+        "releasedAt": "2026-05-13T22:19:03+02:00",
+        "features": [
+            (
+                "Query in new notebook now generates readable logical aliases for Local Workspace "
+                "and Shared Workspace objects, such as local.folder.file.csv and s3.bucket.file.csv, "
+                "while keeping internal DuckDB relation names hidden."
+            ),
+            (
+                "Readable aliases are validated before execution, rewritten to physical relations "
+                "only inside the execution path, and remain backward-compatible with existing "
+                "workspace.local.saved_results notebooks."
+            ),
+            (
+                "Run Cell now checks source existence at click time, blocks missing Local Workspace "
+                "or S3 aliases with clear UI copy, and shows Query completed briefly once a query "
+                "finishes instead of staying on Starting query."
+            ),
+            (
+                "Regression coverage now verifies readable Local Workspace and S3 handoffs, source "
+                "validation blocking, legacy Local Workspace SQL compatibility, and the completion "
+                "state in the notebook validation badge."
+            ),
+        ],
+    },
     {
         "version": "0.8.12",
         "releasedAt": "2026-05-13T18:00:03+02:00",

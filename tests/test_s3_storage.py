@@ -297,6 +297,19 @@ class _BootstrapFlowClient:
 
 
 class S3StorageTests(unittest.TestCase):
+    def test_s3_bucket_schema_name_keeps_simple_bucket_name_readable(self) -> None:
+        s3_storage = import_s3_storage()
+
+        self.assertEqual(s3_storage.s3_bucket_schema_name("test"), "test")
+
+    def test_s3_bucket_schema_name_hashes_normalized_bucket_names(self) -> None:
+        s3_storage = import_s3_storage()
+
+        self.assertEqual(
+            s3_storage.s3_bucket_schema_name("vat-smoke-test"),
+            "vat_smoke_test_e93f1988",
+        )
+
     def test_content_md5_header_value_matches_expected_fixture(self) -> None:
         s3_storage = import_s3_storage()
         self.assertEqual(

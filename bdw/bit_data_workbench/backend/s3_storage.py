@@ -665,13 +665,17 @@ def duckdb_scan_query(data_format: str, paths: Sequence[str]) -> str:
 
 
 def s3_bucket_schema_name(bucket_name: str) -> str:
-    normalized = re.sub(r"[^a-zA-Z0-9_]+", "_", str(bucket_name).strip()).strip("_").lower()
+    raw_bucket_name = str(bucket_name).strip()
+    normalized = re.sub(r"[^a-zA-Z0-9_]+", "_", raw_bucket_name).strip("_").lower()
     if not normalized:
         normalized = "s3_bucket"
     if normalized[0].isdigit():
         normalized = f"s3_{normalized}"
 
-    suffix = hashlib.sha1(str(bucket_name).encode("utf-8")).hexdigest()[:8]
+    if normalized == raw_bucket_name.lower() and len(normalized) <= 56:
+        return normalized
+
+    suffix = hashlib.sha1(raw_bucket_name.encode("utf-8")).hexdigest()[:8]
     max_base_length = max(1, 56 - len(suffix) - 1)
     base = normalized[:max_base_length].rstrip("_") or "s3_bucket"
     return f"{base}_{suffix}"

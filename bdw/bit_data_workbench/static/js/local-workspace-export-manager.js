@@ -85,14 +85,26 @@ export function createLocalWorkspaceExportManager({
       const transaction = database.transaction(exportStoreName, "readwrite");
       const store = transaction.objectStore(exportStoreName);
       const request = store.clear();
+      let settled = false;
 
-      request.onsuccess = () => {
+      const rejectOnce = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        reject(transaction.error || request.error || new Error("Could not clear Local Workspace files."));
+      };
+
+      transaction.oncomplete = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         resolve();
       };
-
-      request.onerror = () => {
-        reject(request.error || new Error("Could not clear Local Workspace files."));
-      };
+      transaction.onerror = rejectOnce;
+      transaction.onabort = rejectOnce;
+      request.onerror = rejectOnce;
     });
   }
 
@@ -154,14 +166,26 @@ export function createLocalWorkspaceExportManager({
       const transaction = database.transaction(exportStoreName, "readwrite");
       const store = transaction.objectStore(exportStoreName);
       const request = store.put(normalizedEntry);
+      let settled = false;
 
-      request.onsuccess = () => {
+      const rejectOnce = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        reject(transaction.error || request.error || new Error("Could not save the Local Workspace file."));
+      };
+
+      transaction.oncomplete = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         resolve(normalizedEntry);
       };
-
-      request.onerror = () => {
-        reject(request.error || new Error("Could not save the Local Workspace file."));
-      };
+      transaction.onerror = rejectOnce;
+      transaction.onabort = rejectOnce;
+      request.onerror = rejectOnce;
     });
   }
 
@@ -176,14 +200,26 @@ export function createLocalWorkspaceExportManager({
       const transaction = database.transaction(exportStoreName, "readwrite");
       const store = transaction.objectStore(exportStoreName);
       const request = store.delete(normalizedEntryId);
+      let settled = false;
 
-      request.onsuccess = () => {
+      const rejectOnce = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        reject(transaction.error || request.error || new Error("Could not delete the Local Workspace file."));
+      };
+
+      transaction.oncomplete = () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
         resolve();
       };
-
-      request.onerror = () => {
-        reject(request.error || new Error("Could not delete the Local Workspace file."));
-      };
+      transaction.onerror = rejectOnce;
+      transaction.onabort = rejectOnce;
+      request.onerror = rejectOnce;
     });
   }
 

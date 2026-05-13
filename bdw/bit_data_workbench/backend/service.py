@@ -74,7 +74,19 @@ from .ingestion_types.tabular import (
 from .local_workspace_query_sources import LocalWorkspaceQuerySourceManager
 from .local_workspace_transfers import LocalWorkspaceTransferManager
 from .python_execution import KernelSessionManager, PythonJobManager
-from .query_analysis import analyze_query_touches, build_relation_index
+from .query_analysis import (
+    KnownRelationReference,
+    analyze_query_touches,
+    build_relation_index,
+    normalize_relation_key,
+)
+from .query_aliases import (
+    normalize_relation_key as normalize_query_alias_key,
+    rewrite_query_aliases,
+    s3_query_alias,
+    unique_query_aliases,
+)
+from .query_source_validation import QUERY_SOURCE_INVALID, validate_query_sources
 from .query_jobs import (
     DuckDBQueryAccessCoordinator,
     QUERY_EXECUTION_DUCKDB_WRITE,
@@ -1153,10 +1165,27 @@ class WorkbenchService:
         notebook_title: str,
         cell_id: str,
         data_sources: list[str] | None = None,
+        local_relation_map: dict[str, str] | None = None,
+        display_sql: str = "",
     ) -> dict[str, object]:
-        query_analysis = self._analyze_query(sql)
+        user_sql = str(display_sql or sql or "")
+        relation_index = self._query_source_relation_index(local_relation_map=local_relation_map)
+        source_validation = self.validate_query_sources(
+            sql=user_sql,
+            data_sources=data_sources,
+            local_relation_map=local_relation_map,
+            relation_index=relation_index,
+        )
+        if source_validation.get("status") == QUERY_SOURCE_INVALID:
+            raise ValueError(
+                str(source_validation.get("message") or "Referenced source(s) were not found.")
+            )
+
+        execution_sql = self._rewrite_query_source_aliases(user_sql, relation_index, local_relation_map)
+        query_analysis = self._analyze_query(user_sql, relation_index=relation_index)
         snapshot = self._query_jobs.start_job(
-            sql=sql,
+            sql=user_sql,
+            execution_sql=execution_sql,
             notebook_id=notebook_id,
             notebook_title=notebook_title,
             cell_id=cell_id,
@@ -1165,6 +1194,68 @@ class WorkbenchService:
             touched_buckets=query_analysis.touched_buckets,
         )
         return snapshot.payload
+
+    def validate_query_sources(
+        self,
+        *,
+        sql: str,
+        data_sources: list[str] | None = None,
+        local_relation_map: dict[str, str] | None = None,
+        relation_index: dict[str, KnownRelationReference] | None = None,
+    ) -> dict[str, object]:
+        if relation_index is None:
+            relation_index = self._query_source_relation_index(local_relation_map=local_relation_map)
+        else:
+            relation_index = dict(relation_index)
+            self._add_local_relation_aliases(relation_index, local_relation_map)
+        return validate_query_sources(
+            sql,
+            relation_index=relation_index,
+            data_sources=data_sources or [],
+        ).payload
+
+    def _query_source_relation_index(
+        self,
+        *,
+        local_relation_map: dict[str, str] | None = None,
+    ) -> dict[str, KnownRelationReference]:
+        with self._lock:
+            relation_index = build_relation_index(self._catalogs)
+        self._add_local_relation_aliases(relation_index, local_relation_map)
+        return relation_index
+
+    @staticmethod
+    def _add_local_relation_aliases(
+        relation_index: dict[str, KnownRelationReference],
+        local_relation_map: dict[str, str] | None = None,
+    ) -> None:
+        for logical_relation, physical_relation in (local_relation_map or {}).items():
+            normalized_physical_relation = str(physical_relation or "").strip()
+            if not normalized_physical_relation:
+                continue
+            entry = KnownRelationReference(relation=normalized_physical_relation)
+            for alias in {str(logical_relation or "").strip(), normalized_physical_relation}:
+                normalized_alias = normalize_relation_key(alias)
+                if normalized_alias:
+                    relation_index.setdefault(normalized_alias, entry)
+
+    @staticmethod
+    def _rewrite_query_source_aliases(
+        sql: str,
+        relation_index: dict[str, KnownRelationReference],
+        local_relation_map: dict[str, str] | None = None,
+    ) -> str:
+        alias_map = {
+            key: value.relation
+            for key, value in relation_index.items()
+            if key.startswith("s3.") and str(value.relation or "").strip()
+        }
+        for logical_relation, physical_relation in (local_relation_map or {}).items():
+            normalized_alias = normalize_query_alias_key(logical_relation)
+            normalized_physical = str(physical_relation or "").strip()
+            if normalized_alias and normalized_physical:
+                alias_map[normalized_alias] = normalized_physical
+        return rewrite_query_aliases(sql, alias_map)
 
     def start_python_job(
         self,
@@ -1521,18 +1612,44 @@ class WorkbenchService:
         payload: dict[str, object],
         normalized_target_id: str,
     ) -> dict[str, object]:
-        if payload.get("importedCount"):
-            if normalized_target_id == "workspace.s3":
-                self._data_source_discovery.sync_source("workspace.s3", emit_event=True)
-            else:
-                self.refresh_metadata_state()
-            payload = attach_query_sources_to_csv_imports(
-                payload,
+        if not payload.get("importedCount"):
+            return payload
+        if normalized_target_id == "workspace.s3":
+            return self._finalize_s3_import_payload(payload)
+
+        self.refresh_metadata_state()
+        payload = attach_query_sources_to_csv_imports(
+            payload,
+            list(getattr(self, "_catalogs", []) or []),
+        )
+        return payload
+
+    def _finalize_s3_import_payload(self, payload: dict[str, object]) -> dict[str, object]:
+        next_payload = payload
+        for attempt in range(5):
+            self._data_source_discovery.sync_source("workspace.s3", emit_event=True)
+            next_payload = attach_query_sources_to_csv_imports(
+                next_payload,
                 list(getattr(self, "_catalogs", []) or []),
             )
-            if normalized_target_id == "workspace.s3":
-                payload = self._attach_s3_query_sources_from_discovery(payload)
-        return payload
+            next_payload = self._attach_s3_query_sources_from_discovery(next_payload)
+            if not self._s3_import_payload_has_missing_query_sources(next_payload):
+                return next_payload
+            if attempt < 4:
+                time.sleep(0.5)
+        return next_payload
+
+    @staticmethod
+    def _s3_import_payload_has_missing_query_sources(payload: dict[str, object]) -> bool:
+        for item in payload.get("imports", []) or []:
+            if not isinstance(item, dict):
+                continue
+            if (
+                str(item.get("status") or "").strip().lower() == "imported"
+                and not isinstance(item.get("querySource"), dict)
+            ):
+                return True
+        return False
 
     def create_file_upload_session(
         self,
@@ -1707,12 +1824,21 @@ class WorkbenchService:
                     parts = relation_id.split(".", 1)
                     schema_name = schema_name or parts[0]
                     relation_name = relation_name or (parts[1] if len(parts) > 1 else relation_id)
+                try:
+                    alias_bucket, alias_key = parse_s3_path(str(getattr(spec, "object_path", "") or ""))
+                except ValueError:
+                    alias_bucket, alias_key = str(next_item.get("bucket") or ""), ""
                 query_source = {
                     "sourceId": "workspace.s3",
                     "catalogName": "workspace",
                     "schemaName": schema_name,
                     "schemaLabel": str(next_item.get("bucket") or schema_name),
                     "relation": relation_id,
+                    "queryAlias": s3_query_alias(
+                        bucket=str(next_item.get("bucket") or alias_bucket),
+                        key=str(next_item.get("objectKey") or alias_key),
+                        display_name=str(getattr(spec, "display_name", "") or ""),
+                    ),
                     "name": str(getattr(spec, "display_name", "") or relation_name),
                 }
                 next_item["querySource"] = query_source
@@ -2106,9 +2232,15 @@ class WorkbenchService:
                     return notebook.title
         return None
 
-    def _analyze_query(self, sql: str):
-        with self._lock:
-            relation_index = build_relation_index(self._catalogs)
+    def _analyze_query(
+        self,
+        sql: str,
+        *,
+        relation_index: dict[str, KnownRelationReference] | None = None,
+    ):
+        if relation_index is None:
+            with self._lock:
+                relation_index = build_relation_index(self._catalogs)
         return analyze_query_touches(sql, relation_index=relation_index)
 
     def _python_execution_context(
@@ -3351,6 +3483,7 @@ class WorkbenchService:
                     kind="view" if table_type.upper() == "VIEW" else "table",
                     relation=relation_id,
                     display_name=str(s3_metadata.get("display_name") or table_name),
+                    query_alias=str(s3_metadata.get("query_alias") or ""),
                     s3_bucket=s3_bucket,
                     s3_key=str(s3_metadata.get("key") or ""),
                     s3_path=str(s3_metadata.get("path") or ""),
@@ -3442,6 +3575,7 @@ class WorkbenchService:
 
     def _workspace_s3_object_metadata(self) -> dict[str, dict[str, object]]:
         metadata: dict[str, dict[str, object]] = {}
+        alias_candidates: list[tuple[str, str]] = []
         for relation_id, spec in self._data_source_discovery.s3_relation_specs().items():
             object_path = str(spec.object_path or "").strip()
             if not object_path:
@@ -3452,11 +3586,28 @@ class WorkbenchService:
                 continue
             download_kind = str(getattr(spec, "download_kind", "") or "").strip()
             generated_parts = download_kind == "generated_parts"
+            if generated_parts:
+                part_prefix = str(getattr(spec, "part_prefix", "") or "").strip().strip("/")
+                part_filename = (
+                    str(getattr(spec, "download_filename", "") or "").strip()
+                    or str(spec.display_name or "").strip()
+                    or relation_id.split(".", 1)[-1]
+                )
+                object_key_for_alias = f"{part_prefix}/{part_filename}" if part_prefix else part_filename
+            else:
+                object_key_for_alias = object_key
+            query_alias = s3_query_alias(
+                bucket=bucket_name,
+                key=object_key_for_alias,
+                display_name=str(spec.display_name or "").strip()
+                or str(getattr(spec, "download_filename", "") or "").strip(),
+            )
             downloadable = (
                 not generated_parts
                 and not any(token in object_key for token in "*?[")
                 and not object_key.endswith("/")
             )
+            alias_candidates.append((relation_id, query_alias))
             metadata[relation_id] = {
                 "bucket": bucket_name,
                 "key": "" if generated_parts else object_key,
@@ -3478,6 +3629,10 @@ class WorkbenchService:
                 "merge_downloadable": bool(getattr(spec, "merge_downloadable", False)),
                 "zip_downloadable": bool(getattr(spec, "zip_downloadable", False)),
             }
+        query_aliases = unique_query_aliases(alias_candidates)
+        for relation_id, query_alias in query_aliases.items():
+            if relation_id in metadata:
+                metadata[relation_id]["query_alias"] = query_alias
         return metadata
 
     def _drop_catalog_schema_objects(self, catalog_name: str, schema_name: str) -> int:

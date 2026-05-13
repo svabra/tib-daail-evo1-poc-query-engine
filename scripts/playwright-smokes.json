@@ -31,6 +31,11 @@
       "enabledByDefault": true
     },
     {
+      "id": "query-source-validation",
+      "script": "playwright_query_source_validation_smoke.py",
+      "enabledByDefault": true
+    },
+    {
       "id": "notebook-tree-folders",
       "script": "playwright_notebook_tree_folders_smoke.py",
       "enabledByDefault": true

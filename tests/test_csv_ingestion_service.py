@@ -4,6 +4,7 @@ from pathlib import Path
 import sys
 from types import SimpleNamespace
 from unittest import TestCase
+from unittest.mock import patch
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -150,6 +151,67 @@ class CsvIngestionServiceTests(TestCase):
         self.assertEqual(
             payload["imports"][0]["querySource"]["relation"],
             "vat_smoke_test.vat_smoke",
+        )
+        self.assertEqual(
+            payload["imports"][0]["querySource"]["queryAlias"],
+            "s3.vat_smoke_test.incoming.vat_smoke.parquet",
+        )
+        self.assertNotIn("queryUnavailableReason", payload["imports"][0])
+
+    def test_import_csv_files_waits_for_delayed_s3_query_source(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._csv_ingestion = SimpleNamespace(
+            import_csv_files=lambda **_kwargs: {
+                "targetId": "workspace.s3",
+                "importedCount": 1,
+                "failedCount": 0,
+                "imports": [
+                    {
+                        "fileName": "federal_tax_data_10gb.csv",
+                        "status": "imported",
+                        "bucket": "test",
+                        "path": "s3://test/federal_tax_data_10gb.csv",
+                    }
+                ],
+            }
+        )
+        service._catalogs = []
+        calls: list[tuple[str, object]] = []
+        specs: dict[str, SimpleNamespace] = {}
+
+        def sync_source(source_id, emit_event=True):
+            calls.append((source_id, emit_event))
+            if len(calls) == 2:
+                specs["test.federal_tax_data_10gb"] = SimpleNamespace(
+                    schema_name="test",
+                    relation_name="federal_tax_data_10gb",
+                    object_path="s3://test/federal_tax_data_10gb.csv",
+                    display_name="federal_tax_data_10gb.csv",
+                )
+
+        service._data_source_discovery = SimpleNamespace(
+            sync_source=sync_source,
+            s3_relation_specs=lambda: dict(specs),
+        )
+        service.refresh_metadata_state = lambda: calls.append(("refresh", None))
+
+        with patch("bit_data_workbench.backend.service.time.sleep", lambda _seconds: None):
+            payload = service.import_csv_files(
+                files=[],
+                target_id="workspace.s3",
+                bucket="test",
+                storage_format="csv",
+            )
+
+        self.assertEqual(calls, [("workspace.s3", True), ("workspace.s3", True)])
+        self.assertEqual(payload["firstQuerySource"]["sourceId"], "workspace.s3")
+        self.assertEqual(
+            payload["imports"][0]["querySource"]["relation"],
+            "test.federal_tax_data_10gb",
+        )
+        self.assertEqual(
+            payload["imports"][0]["querySource"]["queryAlias"],
+            "s3.test.federal_tax_data_10gb.csv",
         )
         self.assertNotIn("queryUnavailableReason", payload["imports"][0])
 

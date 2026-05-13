@@ -107,6 +107,20 @@ class QueryResultDownloadExportPayload(BaseModel):
     settings: dict[str, object] = Field(default_factory=dict)
 
 
+class QuerySourceValidationPayload(BaseModel):
+    sql: str = ""
+    data_sources: list[str] = Field(
+        default_factory=list,
+        validation_alias="dataSources",
+        serialization_alias="dataSources",
+    )
+    local_relations: dict[str, str] = Field(
+        default_factory=dict,
+        validation_alias="localRelations",
+        serialization_alias="localRelations",
+    )
+
+
 class LocalWorkspaceQuerySourceDeletePayload(BaseModel):
     entry_id: str = Field(validation_alias="entryId", serialization_alias="entryId")
 
@@ -1093,22 +1107,57 @@ def python_jobs_state(service: WorkbenchService = Depends(get_workbench_service)
     return JSONResponse(jsonable_encoder(service.python_jobs_state()))
 
 
+@router.post("/api/query-sources/validate")
+def validate_query_sources(
+    payload: QuerySourceValidationPayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return JSONResponse(
+        jsonable_encoder(
+            service.validate_query_sources(
+                sql=payload.sql,
+                data_sources=payload.data_sources,
+                local_relation_map={
+                    str(key): str(value)
+                    for key, value in payload.local_relations.items()
+                    if str(key).strip() and str(value).strip()
+                },
+            )
+        )
+    )
+
+
 @router.post("/api/query-jobs")
 def start_query_job(
     sql: str = Form(""),
+    display_sql: str = Form("", alias="displaySql"),
     notebook_id: str = Form(""),
     notebook_title: str = Form(""),
     cell_id: str = Form(""),
     data_sources: str = Form(""),
+    local_relations: str = Form(default="{}", alias="localRelations"),
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> JSONResponse:
     try:
+        try:
+            local_relation_map = json.loads(local_relations or "{}")
+        except json.JSONDecodeError as exc:
+            raise ValueError("The Local Workspace relation map is not valid JSON.") from exc
+        if not isinstance(local_relation_map, dict):
+            raise ValueError("The Local Workspace relation map must be a JSON object.")
+
         snapshot = service.start_query_job(
             sql=sql,
             notebook_id=notebook_id,
             notebook_title=notebook_title,
             cell_id=cell_id,
             data_sources=[source for source in data_sources.split("||") if source.strip()],
+            local_relation_map={
+                str(key): str(value)
+                for key, value in local_relation_map.items()
+                if str(key).strip() and str(value).strip()
+            },
+            display_sql=display_sql,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

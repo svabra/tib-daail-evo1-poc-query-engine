@@ -1,4 +1,5 @@
 import { truncateSourceNavigationLabel } from "./source-navigation-labels.js";
+import { localWorkspaceQueryAliases } from "./query-alias-utils.js";
 
 export function createLocalWorkspaceSidebarUi(helpers) {
   const {
@@ -55,7 +56,7 @@ export function createLocalWorkspaceSidebarUi(helpers) {
     return root;
   }
 
-  function localWorkspaceEntryMarkup(entry) {
+  function localWorkspaceEntryMarkup(entry, queryAlias = "") {
     const relation = localWorkspaceRelation(entry.id);
     const formatLabel = String(entry.exportFormat || "file").toUpperCase();
     const displayPath = localWorkspaceDisplayPath(entry.folderPath, entry.fileName);
@@ -65,11 +66,12 @@ export function createLocalWorkspaceSidebarUi(helpers) {
     return `
       <li
         class="source-object source-object-file"
-        data-searchable-item="${escapeHtml(entry.fileName)} ${escapeHtml(displayPath)} ${escapeHtml(formatLabel)}"
+        data-searchable-item="${escapeHtml(entry.fileName)} ${escapeHtml(displayPath)} ${escapeHtml(formatLabel)} ${escapeHtml(queryAlias)}"
         data-source-object
         data-source-object-kind="file"
         data-source-object-name="${escapeHtml(entry.fileName)}"
         data-source-object-relation="${escapeHtml(relation)}"
+        data-source-object-query-alias="${escapeHtml(queryAlias)}"
         data-source-option-id="${escapeHtml(getLocalWorkspaceCatalogSourceId())}"
         data-local-workspace-entry-id="${escapeHtml(entry.id)}"
         data-local-workspace-folder-path="${escapeHtml(entry.folderPath)}"
@@ -200,17 +202,17 @@ export function createLocalWorkspaceSidebarUi(helpers) {
     return segments.join(" | ");
   }
 
-  function localWorkspaceFolderMarkup(node, openPaths = new Set()) {
+  function localWorkspaceFolderMarkup(node, openPaths = new Set(), queryAliases = new Map()) {
     const normalizedFolderPath = normalizeLocalWorkspaceFolderPath(node.path);
     const truncatedFolderName = truncateSourceNavigationLabel(node.name);
     const childFolderMarkup = Array.from(node.folders.values())
       .sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }))
-      .map((childNode) => localWorkspaceFolderMarkup(childNode, openPaths))
+      .map((childNode) => localWorkspaceFolderMarkup(childNode, openPaths, queryAliases))
       .join("");
     const fileMarkup = node.entries
       .slice()
       .sort((left, right) => left.fileName.localeCompare(right.fileName, undefined, { sensitivity: "base" }))
-      .map((entry) => localWorkspaceEntryMarkup(entry))
+      .map((entry) => localWorkspaceEntryMarkup(entry, queryAliases.get(entry.id) || ""))
       .join("");
     const shouldOpen = openPaths.size
       ? openPaths.has(normalizedFolderPath)
@@ -276,14 +278,15 @@ export function createLocalWorkspaceSidebarUi(helpers) {
 
   function localWorkspaceSchemaMarkup(entries, folderPaths, open = false, openPaths = new Set()) {
     const tree = buildLocalWorkspaceTree(entries, folderPaths);
+    const queryAliases = localWorkspaceQueryAliases(entries);
     const folderMarkup = Array.from(tree.folders.values())
       .sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: "base" }))
-      .map((node) => localWorkspaceFolderMarkup(node, openPaths))
+      .map((node) => localWorkspaceFolderMarkup(node, openPaths, queryAliases))
       .join("");
     const rootFileMarkup = tree.entries
       .slice()
       .sort((left, right) => left.fileName.localeCompare(right.fileName, undefined, { sensitivity: "base" }))
-      .map((entry) => localWorkspaceEntryMarkup(entry))
+      .map((entry) => localWorkspaceEntryMarkup(entry, queryAliases.get(entry.id) || ""))
       .join("");
     return `
       <details

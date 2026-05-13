@@ -77,6 +77,7 @@ class CsvIngestionLinkTests(TestCase):
                                 name="vat_smoke",
                                 kind="view",
                                 relation="vat_smoke_test_bucket.vat_smoke",
+                                query_alias="s3.vat_smoke_test_bucket.incoming.vat_smoke.csv",
                                 s3_bucket="vat-smoke-test-bucket",
                                 s3_key="incoming/vat_smoke.csv",
                                 s3_path="s3://vat-smoke-test-bucket/incoming/vat_smoke.csv",
@@ -111,4 +112,8 @@ class CsvIngestionLinkTests(TestCase):
         self.assertEqual(
             payload["imports"][0]["querySource"]["schemaLabel"],
             "vat-smoke-test-bucket",
+        )
+        self.assertEqual(
+            payload["imports"][0]["querySource"]["queryAlias"],
+            "s3.vat_smoke_test_bucket.incoming.vat_smoke.csv",
         )

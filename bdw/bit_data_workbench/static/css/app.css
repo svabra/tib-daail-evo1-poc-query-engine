@@ -6804,6 +6804,11 @@ details:not([open]) > .source-schema > summary::before {
   cursor: default;
 }
 
+.run-button:disabled:not(.is-running) {
+  background: rgba(123, 138, 153, 0.22);
+  color: #5f6d7b;
+}
+
 .run-button.is-running,
 .run-button.is-running:hover {
   background: rgba(123, 138, 153, 0.22);
@@ -6895,6 +6900,45 @@ details:not([open]) > .source-schema > summary::before {
 .editor-shell .cm-scroller {
   height: 100%;
   overflow: auto;
+}
+
+.query-source-validation {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  min-height: 30px;
+  max-width: 100%;
+  padding: 6px 10px;
+  border: 1px solid rgba(192, 202, 212, 0.9);
+  border-radius: var(--radius-control);
+  background: rgba(247, 249, 251, 0.96);
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.query-source-validation[hidden] {
+  display: none;
+}
+
+.query-source-validation.is-checking,
+.query-source-validation.is-starting {
+  border-color: rgba(11, 68, 121, 0.22);
+  background: rgba(236, 245, 252, 0.96);
+  color: var(--accent-strong);
+}
+
+.query-source-validation.is-valid {
+  border-color: rgba(41, 124, 74, 0.24);
+  background: rgba(235, 248, 240, 0.96);
+  color: #246c42;
+}
+
+.query-source-validation.is-invalid {
+  border-color: rgba(170, 37, 20, 0.24);
+  background: rgba(255, 242, 240, 0.96);
+  color: #8f1f11;
 }
 
 .result-panel {

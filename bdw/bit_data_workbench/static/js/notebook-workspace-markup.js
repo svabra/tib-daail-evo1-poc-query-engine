@@ -164,6 +164,9 @@ export function createNotebookWorkspaceMarkup(helpers) {
           <div class="editor-frame" data-editor-root data-editor-name="sql-${escapeHtml(cell.cellId)}" data-editor-language="${escapeHtml(cellLanguage)}">
             <textarea name="sql" data-editor-source data-default-sql="${escapeHtml(cell.sql)}" data-editor-language="${escapeHtml(cellLanguage)}" rows="${preferredSqlEditorRows(cell.sql)}" spellcheck="false">${escapeHtml(cell.sql)}</textarea>
           </div>
+          <div class="query-source-validation" data-query-source-validation data-query-source-validation-status="unchecked" aria-live="polite" ${cellLanguage === "python" ? "hidden" : ""}>
+            <span data-query-source-validation-message>No source references found. Sources will be checked before execution.</span>
+          </div>
         </form>
         ${cellLanguage === "python" ? pythonResultPanelMarkup(cell.cellId, null) : queryResultPanelMarkup(cell.cellId, null)}
       </article>

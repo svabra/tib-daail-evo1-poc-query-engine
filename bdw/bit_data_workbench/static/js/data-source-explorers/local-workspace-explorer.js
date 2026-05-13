@@ -4,6 +4,7 @@ import {
   explorerEmptyStateMarkup,
   sourceObjectElement,
 } from "./utils.js";
+import { localWorkspaceQueryAliases } from "../query-alias-utils.js";
 
 export function createLocalWorkspaceDataSourceExplorer(helpers) {
   const {
@@ -88,8 +89,10 @@ export function createLocalWorkspaceDataSourceExplorer(helpers) {
     if (!entry) {
       return null;
     }
+    const queryAlias = localWorkspaceQueryAliases(state.entries).get(entry.id) || "";
     return sourceObjectElement({
       relation: localWorkspaceRelation(entry.id),
+      queryAlias,
       name: entry.fileName,
       displayName: entry.fileName,
       kind: "file",

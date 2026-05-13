@@ -398,7 +398,9 @@ export function sourceQueryDescriptor(sourceObjectRoot) {
     return null;
   }
 
-  const relation = sourceObjectRoot.dataset.sourceObjectRelation?.trim();
+  const physicalRelation = sourceObjectRoot.dataset.sourceObjectRelation?.trim() || "";
+  const queryAlias = sourceObjectRoot.dataset.sourceObjectQueryAlias?.trim() || "";
+  const relation = queryAlias || physicalRelation;
   if (!relation) {
     return null;
   }
@@ -406,6 +408,8 @@ export function sourceQueryDescriptor(sourceObjectRoot) {
   return {
     name: sourceObjectDisplayName(sourceObjectRoot),
     relation,
+    physicalRelation,
+    queryAlias,
     sourceId: sourceObjectRoot.dataset.sourceOptionId?.trim() || "",
   };
 }

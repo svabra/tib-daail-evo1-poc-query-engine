@@ -192,12 +192,13 @@
               {% set source_object_published_products = source_object.published_data_products | default([], true) %}
               <li
                 class="source-object source-object-{{ source_object.kind | replace(' ', '-') }}"
-                data-searchable-item="{{ source_object_display_name }} {{ source_object.name }} {{ source_object.relation }}"
+                data-searchable-item="{{ source_object_display_name }} {{ source_object.name }} {{ source_object.relation }} {{ source_object.query_alias }}"
                 data-source-object
                 data-source-object-kind="{{ source_object.kind }}"
                 data-source-object-name="{{ source_object.name }}"
                 data-source-object-display-name="{{ source_object_display_name }}"
                 data-source-object-relation="{{ source_object.relation }}"
+                data-source-object-query-alias="{{ source_object.query_alias }}"
                 data-source-option-id="{{ source_option_id }}"
                 data-s3-bucket="{{ source_object.s3_bucket }}"
                 data-s3-key="{{ source_object.s3_key }}"

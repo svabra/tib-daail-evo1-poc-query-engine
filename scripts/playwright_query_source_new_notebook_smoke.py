@@ -66,7 +66,11 @@ async def query_source_in_new_notebook(page, timeout_ms: int) -> tuple[str, str,
         """
         () => {
             const sourceObjects = Array.from(document.querySelectorAll('[data-source-object]'));
-            const firstVisible = sourceObjects.find((node) => node instanceof HTMLElement && node.offsetParent !== null);
+            const firstVisible = sourceObjects.find((node) => {
+                return node instanceof HTMLElement
+                    && node.offsetParent !== null
+                    && node.querySelector('[data-query-source-new]');
+            });
             if (!(firstVisible instanceof HTMLElement)) {
                 return null;
             }
@@ -79,6 +83,7 @@ async def query_source_in_new_notebook(page, timeout_ms: int) -> tuple[str, str,
 
             return {
                 relation: String(firstVisible.dataset.sourceObjectRelation || '').trim(),
+                queryAlias: String(firstVisible.dataset.sourceObjectQueryAlias || '').trim(),
                 name: String(firstVisible.dataset.sourceObjectName || '').trim(),
             };
         }
@@ -90,6 +95,7 @@ async def query_source_in_new_notebook(page, timeout_ms: int) -> tuple[str, str,
     relation = str(first_visible_source.get("relation") or "").strip()
     if not relation:
         raise RuntimeError("The first source object did not expose a queryable relation.")
+    expected_sql_relation = str(first_visible_source.get("queryAlias") or relation).strip()
 
     previous_notebook_id = (
         await page.locator("[data-notebook-meta]").first.get_attribute("data-notebook-id")
@@ -116,7 +122,7 @@ async def query_source_in_new_notebook(page, timeout_ms: int) -> tuple[str, str,
         """,
         arg={
             "previousNotebookId": previous_notebook_id,
-            "expectedRelation": relation,
+            "expectedRelation": expected_sql_relation,
         },
         timeout=timeout_ms,
     )
@@ -130,9 +136,9 @@ async def query_source_in_new_notebook(page, timeout_ms: int) -> tuple[str, str,
         )
 
     sql_text = await page.locator("[data-query-cell] [data-editor-source]").first.input_value()
-    if relation not in sql_text:
+    if expected_sql_relation not in sql_text:
         raise RuntimeError(
-            "The new notebook query did not target the selected source relation."
+            "The new notebook query did not target the selected source alias/relation."
         )
 
     return relation, notebook_id, sql_text

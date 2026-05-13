@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import re
 import sys
 from uuid import uuid4
 
@@ -38,6 +39,16 @@ def s3_client(args: argparse.Namespace):
     )
 
 
+def normalize_alias_segment(value: str, fallback: str = "item") -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower())
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    if not normalized:
+        normalized = fallback
+    if normalized[0].isdigit():
+        normalized = f"n_{normalized}"
+    return normalized
+
+
 async def open_csv_ingestion(page, base_url: str, timeout_ms: int) -> None:
     await page.goto(
         f"{base_url.rstrip('/')}/ingestion-workbench",
@@ -61,11 +72,22 @@ async def open_csv_ingestion(page, base_url: str, timeout_ms: int) -> None:
     await form.wait_for(state="visible", timeout=timeout_ms)
 
 
-async def import_csv_to_s3(page, args: argparse.Namespace) -> tuple[str, str]:
+async def import_csv_to_s3(page, args: argparse.Namespace) -> tuple[str, str, str]:
     unique_id = uuid4().hex[:10]
     file_name = f"playwright-s3-handoff-{unique_id}.csv"
     object_base_name = f"playwright-renamed-{unique_id}"
     prefix = f"playwright/csv-imports/{unique_id}"
+    expected_alias = ".".join(
+        [
+            "s3",
+            normalize_alias_segment(args.bucket, "bucket"),
+            "playwright",
+            "csv_imports",
+            normalize_alias_segment(unique_id, "folder"),
+            normalize_alias_segment(object_base_name, "s3_object"),
+            "jsonl",
+        ]
+    )
 
     await page.locator('[data-csv-target-option][value="workspace.s3"]').check()
     await page.locator('[data-csv-config-panel="workspace.s3"] [data-csv-s3-bucket]').fill(args.bucket)
@@ -125,9 +147,23 @@ async def import_csv_to_s3(page, args: argparse.Namespace) -> tuple[str, str]:
 
     query_button = page.locator("[data-csv-import-open-query]").first
     await query_button.wait_for(state="visible", timeout=args.timeout_ms)
+    unavailable_note = page.locator("[data-csv-result-query-note]").first
+    if await unavailable_note.count() and await unavailable_note.is_visible():
+        note_copy = (await unavailable_note.text_content() or "").strip()
+        raise RuntimeError(
+            "S3 import reported success before the uploaded object was queryable: "
+            f"{note_copy!r}"
+        )
     relation = (await query_button.get_attribute("data-csv-query-source-relation") or "").strip()
     if not relation:
         raise RuntimeError("S3 import result did not expose a query relation.")
+    if re.fullmatch(r"[a-z][a-z0-9]*", args.bucket) and not relation.startswith(
+        f"{args.bucket}."
+    ):
+        raise RuntimeError(
+            "Simple S3 bucket names should remain readable in generated SQL. "
+            f"Expected relation to start with {args.bucket!r}, got {relation!r}."
+        )
 
     result_copy = (
         await page.locator(".ingestion-csv-result-card-imported").first.text_content() or ""
@@ -142,10 +178,15 @@ async def import_csv_to_s3(page, args: argparse.Namespace) -> tuple[str, str]:
         raise RuntimeError(f"Expected explicit object name in result copy, got: {result_copy!r}")
 
     await query_button.click()
-    return relation, f"{prefix}/{object_base_name}.jsonl"
+    return relation, f"{prefix}/{object_base_name}.jsonl", expected_alias
 
 
-async def assert_query_handoff(page, expected_relation: str, timeout_ms: int) -> None:
+async def assert_query_handoff(
+    page,
+    expected_relation: str,
+    expected_alias: str,
+    timeout_ms: int,
+) -> None:
     await page.locator("[data-workspace-notebook]").wait_for(
         state="visible",
         timeout=timeout_ms,
@@ -157,9 +198,16 @@ async def assert_query_handoff(page, expected_relation: str, timeout_ms: int) ->
         f'[data-source-object].is-selected[data-source-option-id="workspace.s3"][data-source-object-relation="{expected_relation}"]'
     )
     await selected_source.wait_for(state="visible", timeout=timeout_ms)
+    actual_alias = (await selected_source.get_attribute("data-source-object-query-alias") or "").strip()
+    if actual_alias != expected_alias:
+        raise RuntimeError(f"Expected S3 query alias {expected_alias!r}, got {actual_alias!r}.")
 
     editor = page.locator("[data-query-cell] [data-editor-source]").first
     sql_text = (await editor.input_value()).strip()
+    if expected_alias not in sql_text:
+        raise RuntimeError(f"The new notebook SQL does not use the readable S3 alias: {sql_text!r}.")
+    if expected_relation in sql_text:
+        raise RuntimeError(f"The new notebook SQL still exposes the physical S3 relation: {sql_text!r}.")
     if "record_id" not in sql_text or "canton_code" not in sql_text:
         raise RuntimeError(
             "The new notebook SQL does not reference the real CSV header names."
@@ -168,6 +216,14 @@ async def assert_query_handoff(page, expected_relation: str, timeout_ms: int) ->
         raise RuntimeError(
             "The new notebook SQL still references synthetic CSV column names."
         )
+
+    await page.locator("[data-query-cell]:visible [data-run-cell]").first.click()
+    result_root = page.locator("[data-query-cell]:visible [data-cell-result]").first
+    await result_root.wait_for(state="visible", timeout=timeout_ms)
+    await result_root.get_by_text("Zurich Central Tax Office").first.wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
 
 
 async def run_smoke(args: argparse.Namespace) -> int:
@@ -186,8 +242,8 @@ async def run_smoke(args: argparse.Namespace) -> int:
 
         try:
             await open_csv_ingestion(page, args.base_url, args.timeout_ms)
-            relation, uploaded_key = await import_csv_to_s3(page, args)
-            await assert_query_handoff(page, relation, args.timeout_ms)
+            relation, uploaded_key, expected_alias = await import_csv_to_s3(page, args)
+            await assert_query_handoff(page, relation, expected_alias, args.timeout_ms)
         except (PlaywrightTimeoutError, RuntimeError) as exc:
             print(str(exc), file=sys.stderr)
             for message in console_messages:

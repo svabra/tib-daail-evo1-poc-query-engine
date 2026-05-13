@@ -1,3 +1,9 @@
+import {
+  findQueryAliasReferences,
+  localWorkspaceQueryAliases,
+  replaceQueryAliases,
+} from "./query-alias-utils.js";
+
 function escapeRegex(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -6,6 +12,7 @@ export function createLocalWorkspaceQueryBridge(helpers) {
   const {
     getLocalWorkspaceExport,
     isLocalWorkspaceRelation,
+    listLocalWorkspaceExports,
     localWorkspaceEntryIdFromRelation,
     localWorkspaceRelation,
     normalizeSourceObjectFields,
@@ -121,9 +128,78 @@ export function createLocalWorkspaceQueryBridge(helpers) {
     return Array.from(matches);
   }
 
+  async function localWorkspaceAliasIndex() {
+    const entries = await listLocalWorkspaceExports();
+    const aliases = localWorkspaceQueryAliases(entries);
+    const byAlias = new Map();
+    entries.forEach((entry) => {
+      const alias = aliases.get(entry.id);
+      if (alias) {
+        byAlias.set(String(alias).toLowerCase(), entry);
+      }
+    });
+    return byAlias;
+  }
+
+  function localWorkspaceAliasesInText(sqlText = "") {
+    return findQueryAliasReferences(sqlText, new Set(["local"]))
+      .map((reference) => String(reference.alias || "").trim())
+      .filter(Boolean);
+  }
+
+  async function validateLocalWorkspaceAliases(sqlText = "") {
+    const aliases = localWorkspaceAliasesInText(sqlText);
+    if (!aliases.length) {
+      return {
+        aliases: [],
+        localRelations: {},
+        missingAliases: [],
+        validationSql: String(sqlText || ""),
+      };
+    }
+
+    const aliasIndex = await localWorkspaceAliasIndex();
+    const localRelations = {};
+    const missingAliases = [];
+    aliases.forEach((alias) => {
+      const entry = aliasIndex.get(alias.toLowerCase());
+      if (!entry) {
+        missingAliases.push(alias);
+        return;
+      }
+      localRelations[alias] = localWorkspaceRelation(entry.id);
+    });
+
+    return {
+      aliases,
+      localRelations,
+      missingAliases,
+      validationSql: replaceQueryAliases(
+        sqlText,
+        new Map(Object.entries(localRelations))
+      ),
+    };
+  }
+
   async function prepareQuerySql(sqlText = "") {
     let rewrittenSql = String(sqlText || "");
     const synchronizedSources = [];
+    const aliasIndex = await localWorkspaceAliasIndex();
+    const localAliasMap = new Map();
+
+    for (const logicalAlias of localWorkspaceAliasesInText(rewrittenSql)) {
+      const entry = aliasIndex.get(logicalAlias.toLowerCase());
+      if (!entry) {
+        throw new Error(`The Local Workspace source was not found: ${logicalAlias}.`);
+      }
+      const result = await syncLocalWorkspaceEntry(entry.id);
+      synchronizedSources.push({
+        ...result,
+        logicalRelation: logicalAlias,
+      });
+      localAliasMap.set(logicalAlias, result.relation);
+    }
+    rewrittenSql = replaceQueryAliases(rewrittenSql, localAliasMap);
 
     for (const logicalRelation of localWorkspaceRelationsInText(rewrittenSql)) {
       const entryId = localWorkspaceEntryIdFromRelation(logicalRelation);
@@ -318,6 +394,7 @@ export function createLocalWorkspaceQueryBridge(helpers) {
     loadLocalWorkspaceSourceFields,
     localWorkspaceEntryIdFromSourceObject,
     localWorkspaceRelationsInText,
+    validateLocalWorkspaceAliases,
     moveLocalWorkspaceEntryToS3,
     preparePythonExecution,
     prepareQuerySql,

@@ -642,6 +642,7 @@ class QueryJobRecord:
     snapshot: QueryJobDefinition
     sort_index: int
     execution_mode: str
+    execution_sql: str
     cancel_requested: bool = False
     cancellation_started_monotonic: float | None = None
     terminate_sent: bool = False
@@ -685,6 +686,7 @@ class QueryJobManager:
         self,
         *,
         sql: str,
+        execution_sql: str = "",
         notebook_id: str,
         notebook_title: str,
         cell_id: str,
@@ -698,7 +700,8 @@ class QueryJobManager:
 
         source_ids = [source_id.strip() for source_id in (data_sources or []) if source_id.strip()]
         source_types = infer_source_types(source_ids)
-        execution_mode = classify_query_execution(sql, source_ids)
+        normalized_execution_sql = str(execution_sql or sql or "").strip()
+        execution_mode = classify_query_execution(normalized_execution_sql, source_ids)
         now = utc_now_iso()
         resolved_title = notebook_title.strip() or self._notebook_title_resolver(notebook_id) or "Notebook"
         backend_name = "PostgreSQL Native" if execution_mode == QUERY_EXECUTION_POSTGRES_NATIVE else "VMTP DUCKDB"
@@ -729,6 +732,7 @@ class QueryJobManager:
                 snapshot=snapshot,
                 sort_index=self._sort_counter,
                 execution_mode=execution_mode,
+                execution_sql=normalized_execution_sql,
             )
             self._jobs[snapshot.job_id] = record
             self._touch_locked()
@@ -865,7 +869,7 @@ class QueryJobManager:
                     "event_queue": event_queue,
                     "cancel_event": cancel_event,
                     "settings": self._settings,
-                    "sql": record.snapshot.sql,
+                    "sql": record.execution_sql,
                     "execution_mode": record.execution_mode,
                     "max_result_rows": self._max_result_rows,
                 },

@@ -100,6 +100,9 @@ export function sourceObjectElement(descriptor = {}) {
   if (descriptor.relation) {
     element.dataset.sourceObjectRelation = String(descriptor.relation);
   }
+  if (descriptor.queryAlias) {
+    element.dataset.sourceObjectQueryAlias = String(descriptor.queryAlias);
+  }
   if (descriptor.name) {
     element.dataset.sourceObjectName = String(descriptor.name);
   }

@@ -107,6 +107,7 @@ import {
 import { createSourceInspectorController } from "./source-inspector-controller.js";
 import { createSourceInspectorUi } from "./source-inspector-ui.js";
 import { createQueryInsights } from "./query-insights.js";
+import { createQuerySourceValidationController } from "./query-source-validation-controller.js";
 import { createQueryUi } from "./query-ui.js";
 import {
   applyOptimisticQueryJobSnapshot,
@@ -341,9 +342,11 @@ const {
   preparePythonExecution: prepareLocalWorkspacePythonExecution,
   prepareQuerySql: prepareLocalWorkspaceQuerySql,
   syncLocalWorkspaceEntry,
+  validateLocalWorkspaceAliases,
 } = createLocalWorkspaceQueryBridge({
   getLocalWorkspaceExport,
   isLocalWorkspaceRelation,
+  listLocalWorkspaceExports,
   localWorkspaceEntryIdFromRelation,
   localWorkspaceRelation,
   normalizeSourceObjectFields,
@@ -566,6 +569,12 @@ const { pythonResultPanelMarkup } = createPythonUi({
   pythonJobStatusCopy,
 });
 
+const querySourceValidationController = createQuerySourceValidationController({
+  cellLanguageForCellRoot,
+  selectedDataSourcesForCell,
+  validateLocalWorkspaceAliases,
+});
+
 const { renderHomePage } = createHomeUi({
   dataGenerationJobElapsedMs,
   escapeHtml,
@@ -693,6 +702,7 @@ const { querySourceInCurrentNotebook, querySourceInNewNotebook, viewSourceData }
     getCurrentSidebarMode: currentSidebarMode,
     getNotebookMetadata: notebookMetadata,
     getNotebookTreeRoot: notebookTreeRoot,
+    isLocalWorkspaceSourceObject,
     refreshSidebar,
     requestCellRun,
     selectSourceObject,
@@ -700,6 +710,7 @@ const { querySourceInCurrentNotebook, querySourceInNewNotebook, viewSourceData }
       activeCellId = cellId;
     },
     setNotebookCells,
+    setSelectedSourceObjectState,
   });
 
 const dataProductsController = createDataProductsController({
@@ -1353,6 +1364,7 @@ const {
   queryPerformanceStatsMarkup,
   queryResultPanelMarkup,
   queryRowsShownLabel,
+  querySourceValidationController,
   renderDataGenerationMonitor,
   renderHomePage,
   renderIngestionWorkbench,
@@ -3106,6 +3118,10 @@ function setCellDataSources(notebookId, cellId, dataSources) {
   applySidebarSearchFilter();
   recordNotebookActivity(notebookId, "edited");
   scheduleSharedNotebookSync(notebookId);
+  const cellRoot = document.querySelector(
+    `[data-workspace-notebook][data-notebook-id="${CSS.escape(notebookId)}"] [data-query-cell][data-cell-id="${CSS.escape(cellId)}"]`
+  );
+  querySourceValidationController.refreshCell(cellRoot);
 }
 
 function setCellSql(notebookId, cellId, sqlText) {
@@ -3356,6 +3372,7 @@ function createEditor(root) {
             if (!applyingNotebookState && notebookId && cellId) {
               setCellSql(notebookId, cellId, textarea.value);
             }
+            querySourceValidationController.handleEditorChanged(root);
           }
         }),
       ],
@@ -3387,6 +3404,7 @@ function createEditor(root) {
 function initializeEditors(root = document) {
   root.querySelectorAll("[data-editor-root]").forEach((editorRoot) => {
     createEditor(editorRoot);
+    querySourceValidationController.refreshCell(editorRoot.closest("[data-query-cell]"));
   });
 }
 
@@ -3577,6 +3595,7 @@ function renderLocalNotebookWorkspace(notebookId, options = {}) {
   writeLastNotebookId(notebookId);
   syncVisibleQueryCells();
   syncVisiblePythonCells();
+  querySourceValidationController.refreshAll(panel);
   renderQueryNotificationMenu();
   if (scrollToTop) {
     scrollWorkspaceNotebookIntoView();
@@ -4355,6 +4374,10 @@ function setCellLanguage(notebookId, cellId, language) {
   applySidebarSearchFilter();
   recordNotebookActivity(notebookId, "edited");
   scheduleSharedNotebookSync(notebookId);
+  const cellRoot = document.querySelector(
+    `[data-workspace-notebook][data-notebook-id="${CSS.escape(notebookId)}"] [data-query-cell][data-cell-id="${CSS.escape(cellId)}"]`
+  );
+  querySourceValidationController.refreshCell(cellRoot);
 }
 
 function refreshLivePythonClock() {
@@ -4665,6 +4688,7 @@ async function loadWorkspacePanelPartial(path) {
   initializeEditors(panel);
   applyNotebookMetadata();
   syncVisiblePythonCells();
+  querySourceValidationController.refreshAll(panel);
   renderQueryNotificationMenu();
   return panel;
 }
@@ -5245,6 +5269,30 @@ async function openNotebookForQueryJob(notebookId, cellId = "") {
   }
 }
 
+function renderLocalQueryFailure(cellRoot, { cellId, notebookId, workspaceRoot, sql, error }) {
+  const resultRoot = cellRoot?.querySelector?.("[data-cell-result]");
+  if (!resultRoot) {
+    return;
+  }
+
+  resultRoot.outerHTML = queryResultPanelMarkup(cellId, {
+    jobId: `local-error-${cellId}`,
+    notebookId,
+    notebookTitle: currentWorkspaceNotebookTitle(workspaceRoot),
+    cellId,
+    sql,
+    status: "failed",
+    durationMs: 0,
+    updatedAt: new Date().toISOString(),
+    rowsShown: 0,
+    truncated: false,
+    message: "Query failed.",
+    error,
+    columns: [],
+    rows: [],
+  });
+}
+
 async function startQueryJobForForm(form) {
   if (formCellLanguage(form) === "python") {
     await startPythonJobForForm(form);
@@ -5268,40 +5316,50 @@ async function startQueryJobForForm(form) {
   const formData = new FormData(form);
   const editorSource = cellRoot.querySelector("[data-editor-source]");
   const originalSql = editorSource?.value ?? "";
+  const sourceValidation = await querySourceValidationController.validateBeforeRun(cellRoot, originalSql);
+  if (sourceValidation?.status === "invalid") {
+    renderLocalQueryFailure(cellRoot, {
+      cellId,
+      notebookId,
+      workspaceRoot,
+      sql: originalSql,
+      error: sourceValidation.message || "Referenced source(s) were not found.",
+    });
+    return;
+  }
+
   let executionSql = originalSql;
+  const localRelationMap = {};
   try {
     const preparedQuery = await prepareLocalWorkspaceQuerySql(originalSql);
     executionSql = preparedQuery.sql;
+    (preparedQuery.synchronizedSources || []).forEach((source) => {
+      const logicalRelation = String(source?.logicalRelation || "").trim();
+      const physicalRelation = String(source?.relation || "").trim();
+      if (logicalRelation && physicalRelation) {
+        localRelationMap[logicalRelation] = physicalRelation;
+      }
+    });
   } catch (error) {
-    const resultRoot = cellRoot.querySelector("[data-cell-result]");
-    if (resultRoot) {
-      resultRoot.outerHTML = queryResultPanelMarkup(cellId, {
-        jobId: `local-error-${cellId}`,
-        notebookId,
-        notebookTitle: currentWorkspaceNotebookTitle(workspaceRoot),
-        cellId,
-        sql: originalSql,
-        status: "failed",
-        durationMs: 0,
-        updatedAt: new Date().toISOString(),
-        rowsShown: 0,
-        truncated: false,
-        message: "Query failed.",
-        error:
-          error instanceof Error
-            ? error.message
-            : "The Local Workspace sources could not be prepared for querying.",
-        columns: [],
-        rows: [],
-      });
-    }
+    renderLocalQueryFailure(cellRoot, {
+      cellId,
+      notebookId,
+      workspaceRoot,
+      sql: originalSql,
+      error:
+        error instanceof Error
+          ? error.message
+          : "The Local Workspace sources could not be prepared for querying.",
+    });
     return;
   }
   formData.set("sql", executionSql);
+  formData.set("displaySql", originalSql);
   formData.set("notebook_id", notebookId);
   formData.set("cell_id", cellId);
   formData.set("notebook_title", currentWorkspaceNotebookTitle(workspaceRoot));
   formData.set("data_sources", selectedDataSourcesForCell(cellRoot).join("||"));
+  formData.set("localRelations", JSON.stringify(localRelationMap));
 
   const response = await window.fetch("/api/query-jobs", {
     method: "POST",
@@ -5320,25 +5378,13 @@ async function startQueryJobForForm(form) {
       // Ignore invalid JSON bodies.
     }
 
-    const resultRoot = cellRoot.querySelector("[data-cell-result]");
-    if (resultRoot) {
-      resultRoot.outerHTML = queryResultPanelMarkup(cellId, {
-        jobId: `local-error-${cellId}`,
-        notebookId,
-        notebookTitle: currentWorkspaceNotebookTitle(workspaceRoot),
-        cellId,
-        sql: originalSql,
-        status: "failed",
-        durationMs: 0,
-        updatedAt: new Date().toISOString(),
-        rowsShown: 0,
-        truncated: false,
-        message: "Query failed.",
-        error: message,
-        columns: [],
-        rows: [],
-      });
-    }
+    renderLocalQueryFailure(cellRoot, {
+      cellId,
+      notebookId,
+      workspaceRoot,
+      sql: originalSql,
+      error: message,
+    });
     return;
   }
 
@@ -7178,6 +7224,7 @@ async function loadNotebookWorkspace(notebookId, options = {}) {
   writeLastNotebookId(notebookId);
   syncVisibleQueryCells();
   syncVisiblePythonCells();
+  querySourceValidationController.refreshAll(panel);
   renderQueryNotificationMenu();
   if (scrollToTop) {
     scrollWorkspaceNotebookIntoView();
@@ -7620,6 +7667,11 @@ document.body.addEventListener("input", (event) => {
     return;
   }
 
+  const queryEditorSource = event.target.closest("[data-editor-source]");
+  if (queryEditorSource) {
+    querySourceValidationController.handleTextareaInput(queryEditorSource);
+  }
+
   if (handleNotebookWorkspaceInput(event)) {
     return;
   }
@@ -7745,7 +7797,13 @@ document.body.addEventListener("change", async (event) => {
     return;
   }
 
+  const changedCellSourceOption = event.target.closest("[data-cell-source-option]");
   if (handleNotebookWorkspaceChange(event)) {
+    if (changedCellSourceOption) {
+      querySourceValidationController.scheduleValidationForCell(
+        changedCellSourceOption.closest("[data-query-cell]")
+      );
+    }
     return;
   }
 
@@ -7878,6 +7936,7 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
   renderQueryMonitor();
   syncVisibleQueryCells();
   syncVisiblePythonCells();
+  querySourceValidationController.refreshAll(event.target);
   renderQueryNotificationMenu();
   dataProductsController.initializeCurrentPage();
   dataExchangeController.initializeCurrentPage();
@@ -8086,7 +8145,7 @@ Promise.allSettled(initialLoadTasks)
     }
 
     if (initialWorkspaceMode === "ingestion") {
-      showIngestionLanding();
+      renderCsvIngestionWorkbench();
       renderFileIngestionWorkbench();
       renderQueryNotificationMenu();
       return;

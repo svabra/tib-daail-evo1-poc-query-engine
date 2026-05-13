@@ -252,6 +252,15 @@ export function createSourceInspectorController(helpers) {
         return;
       }
 
+      if (
+        isLocalWorkspaceSourceObject(sourceObjectRoot) &&
+        !sourceObjectFieldCache.has(sourceObjectFieldCacheKey(sourceObjectRoot))
+      ) {
+        setSelectedSourceObjectState(sourceObjectRoot);
+        renderSourceInspectorMarkup("", true, scopeRoot);
+        return;
+      }
+
       selectSourceObject(sourceObjectRoot, {
         renderLoading: !sourceObjectFieldCache.has(sourceObjectFieldCacheKey(sourceObjectRoot)),
       }).catch(() => {

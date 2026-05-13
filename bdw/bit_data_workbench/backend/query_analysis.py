@@ -89,6 +89,9 @@ def build_relation_index(catalogs: Iterable[SourceCatalog]) -> dict[str, KnownRe
                     normalize_relation_key(canonical_relation),
                     normalize_relation_key(source_object.name),
                 }
+                query_alias = normalize_relation_key(getattr(source_object, "query_alias", ""))
+                if query_alias:
+                    aliases.add(query_alias)
                 if schema.name:
                     aliases.add(normalize_relation_key(f"{schema.name}.{source_object.name}"))
                 for prefix in catalog_prefixes:

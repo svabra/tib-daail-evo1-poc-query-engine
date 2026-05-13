@@ -450,6 +450,15 @@
               spellcheck="false"
             >{{ cell.sql }}</textarea>
           </div>
+          <div
+            class="query-source-validation"
+            data-query-source-validation
+            data-query-source-validation-status="unchecked"
+            aria-live="polite"
+            {% if cell_language == 'python' %}hidden{% endif %}
+          >
+            <span data-query-source-validation-message>No source references found. Sources will be checked before execution.</span>
+          </div>
         </form>
 
         {% if cell_language == 'python' %}

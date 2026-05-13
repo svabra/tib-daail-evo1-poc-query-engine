@@ -32,6 +32,7 @@ export function createRealtimeController(helpers) {
     queryPerformanceStatsMarkup,
     queryResultPanelMarkup,
     queryRowsShownLabel,
+    querySourceValidationController = null,
     renderDataGenerationMonitor,
     renderHomePage,
     renderIngestionWorkbench,
@@ -336,6 +337,8 @@ export function createRealtimeController(helpers) {
         .querySelector("[data-query-form]")
         ?.insertAdjacentHTML("afterend", queryResultPanelMarkup(cellId, job));
     }
+
+    querySourceValidationController?.syncQueryJobState?.(cellRoot, job);
   }
 
   function syncVisibleQueryCells() {

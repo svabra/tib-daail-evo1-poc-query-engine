@@ -844,7 +844,7 @@ export function createCsvIngestionController(helpers) {
 
   async function openImportedSourceInNewNotebook(querySource) {
     await refreshSidebar("notebook");
-    const sourceObjectRoot = sourceObjectRootForQuerySource(querySource);
+    const sourceObjectRoot = await waitForQuerySourceObject(querySource);
     if (!(sourceObjectRoot instanceof Element)) {
       throw new Error(
         `The imported source ${querySource?.name || querySource?.relation || ""} is not visible in Data Sources yet.`
@@ -857,7 +857,20 @@ export function createCsvIngestionController(helpers) {
       throw new Error("The Query Workbench could not open a notebook for the imported source.");
     }
     await openQueryWorkbench(notebookId);
+    revealQuerySourceInSidebar((await waitForQuerySourceObject(querySource)) || sourceObjectRoot);
     return notebookId;
+  }
+
+  async function waitForQuerySourceObject(querySource) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const sourceObjectRoot = sourceObjectRootForQuerySource(querySource);
+      if (sourceObjectRoot instanceof Element) {
+        return sourceObjectRoot;
+      }
+      await renderLocalWorkspaceSidebarEntries();
+      await sleep(100);
+    }
+    return null;
   }
 
   function syncConfigPanels() {
