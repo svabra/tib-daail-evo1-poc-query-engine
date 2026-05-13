@@ -1,36 +1,36 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.8.10. Keep entries concise and
+# Derived from git history through version 0.8.11. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
     {
-        "version": "0.8.10",
-        "releasedAt": "2026-05-12T16:49:10+02:00",
+        "version": "0.8.11",
+        "releasedAt": "2026-05-13T11:12:06+02:00",
         "features": [
             (
-                "Shared Workspace S3 deletes now preserve the real object key, including spaces and "
-                "nested prefixes, and regression coverage verifies special-key, generated-part, and "
-                "large-object delete paths."
+                "Restores the stable 0.8.9 query execution path so Query in new notebook "
+                "and regular source queries can run against the shared DuckDB workspace again."
             ),
             (
-                "Generated CSV exports can now be downloaded directly, while generated ZIP exports "
-                "run as visible same-bucket ZIP64 jobs that stream source parts instead of buffering "
-                "large files in memory."
+                "Rolls back the 0.8.10 query isolation, Explain / Analyze, and S3 download-job "
+                "changes that caused DuckDB connection configuration failures."
+            ),
+        ],
+    },
+    {
+        "version": "0.8.9",
+        "releasedAt": "2026-05-12T14:33:30+02:00",
+        "features": [
+            (
+                "Shared notebook folders now store their Public or Private visibility in the hidden "
+                "S3 shared-notebooks bucket, keeping folder visibility synchronized across users "
+                "without exposing the storage bucket in Shared Workspace explorers."
             ),
             (
-                "SQL Run and Analyze jobs now execute in isolated child processes with cancellable "
-                "DuckDB/PostgreSQL execution, CPU and RAM metrics, DuckDB progress when available, "
-                "and clearer Query or Analyze labels in the monitor and message center."
-            ),
-            (
-                "Query cells now include Explain and Analyze controls: Explain shows a non-executing "
-                "plan and estimates, while Analyze runs read-only statements with profiling output "
-                "directly in the notebook."
-            ),
-            (
-                "Notebook tree cleanup now migrates orphan notebooks into Unassigned Notebooks so "
-                "root-level notebooks are consistently grouped."
+                "New notebooks inherit the visibility of their parent folder, default root creates "
+                "land in Shared Notebooks, and notebook/folder badges now clearly show Public / "
+                "Shared or Private / Local with tooltip context."
             ),
         ],
     },

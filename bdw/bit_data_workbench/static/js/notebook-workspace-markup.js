@@ -127,8 +127,6 @@ export function createNotebookWorkspaceMarkup(helpers) {
             <div class="cell-actions">
               <div class="cell-run-actions">
                 <button class="run-button" type="submit" title="Run with Ctrl/Cmd + Enter" data-run-cell>Run Cell</button>
-                <button class="run-button run-button-secondary" type="button" title="Explain this SQL without executing it" data-explain-query>Explain</button>
-                <button class="run-button run-button-secondary" type="button" title="Analyze this SQL by executing it with profiling" data-analyze-query>Analyze</button>
                 <button class="query-cancel-button" type="button" data-cancel-query hidden>Cancel</button>
               </div>
               <details class="workspace-action-menu cell-action-menu" data-cell-action-menu>

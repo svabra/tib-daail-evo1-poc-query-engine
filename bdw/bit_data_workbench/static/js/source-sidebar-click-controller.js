@@ -666,7 +666,7 @@ export function createSourceSidebarClickController(helpers) {
       event.preventDefault();
       closeSourceActionMenus();
 
-      const downloaded = await downloadSourceS3GeneratedParts(
+      const downloaded = downloadSourceS3GeneratedParts(
         downloadSourceS3GeneratedMergedButton.closest("[data-source-object]"),
         "merged"
       );
@@ -686,7 +686,7 @@ export function createSourceSidebarClickController(helpers) {
       event.preventDefault();
       closeSourceActionMenus();
 
-      const downloaded = await downloadSourceS3GeneratedParts(
+      const downloaded = downloadSourceS3GeneratedParts(
         downloadSourceS3GeneratedZipButton.closest("[data-source-object]"),
         "zip"
       );

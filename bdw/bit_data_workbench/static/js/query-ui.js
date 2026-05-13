@@ -52,13 +52,6 @@ export function createQueryUi(helpers) {
       return "Run this cell to inspect the selected data sources.";
     }
 
-    if (job.workloadType === "analyze") {
-      if (queryJobIsRunning(job)) {
-        return "Analyze is running.";
-      }
-      return job.status === "completed" ? "Analyze profile is ready." : (job.message || "Analyze query.");
-    }
-
     if (job.rowsShown > 0) {
       if (job.truncated) {
         return `${job.rowsShown} row(s) shown. The result was truncated for the UI.`;
@@ -71,21 +64,6 @@ export function createQueryUi(helpers) {
     }
 
     return job.message || "Statement executed successfully.";
-  }
-
-  function formatBytes(value) {
-    const bytes = Number(value || 0);
-    if (!Number.isFinite(bytes) || bytes <= 0) {
-      return "";
-    }
-    const units = ["B", "KB", "MB", "GB", "TB"];
-    let size = bytes;
-    let index = 0;
-    while (size >= 1024 && index < units.length - 1) {
-      size /= 1024;
-      index += 1;
-    }
-    return `${size.toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
   }
 
   function queryProgressActivityCopy(job) {
@@ -256,20 +234,6 @@ export function createQueryUi(helpers) {
     if (job.footprintInsights) {
       metricPills.push(queryInsightPillMarkup(job.footprintInsights));
     }
-    if (job.bytesTouchedEstimate) {
-      metricPills.push(queryInsightPillMarkup({
-        label: "Touched",
-        value: formatBytes(job.bytesTouchedEstimate),
-        title: "Estimated source data touched by this query.",
-      }));
-    }
-    if (job.peakMemoryRssBytes) {
-      metricPills.push(queryInsightPillMarkup({
-        label: "Peak RAM",
-        value: formatBytes(job.peakMemoryRssBytes),
-        title: "Peak resident memory sampled for the query process.",
-      }));
-    }
 
     if (!metricPills.length) {
       return "";
@@ -304,17 +268,9 @@ export function createQueryUi(helpers) {
       return emptyQueryResultsMarkup(cellId);
     }
 
-    const showExportActions = job.workloadType !== "analyze" && job.status === "completed" && job.columns.length > 0;
+    const showExportActions = job.status === "completed" && job.columns.length > 0;
     const rowsBadge = queryRowsShownLabel(job);
     const showRowsBadge = queryJobIsRunning(job) || Number(job.rowsShown || 0) > 0 || Boolean(job.truncated);
-    const analyzeBody = job.workloadType === "analyze" && job.planText
-      ? `
-          ${queryProgressMarkup(job)}
-          <div class="result-empty">
-            <pre class="query-plan-output">${escapeHtml(job.planText)}</pre>
-          </div>
-        `
-      : "";
     const resultBody = job.error
       ? `
           <div class="result-error">
@@ -322,8 +278,6 @@ export function createQueryUi(helpers) {
             <pre>${escapeHtml(job.error)}</pre>
           </div>
         `
-      : analyzeBody
-        ? analyzeBody
       : job.columns.length
         ? `
             ${queryProgressMarkup(job)}
@@ -559,7 +513,6 @@ export function createQueryUi(helpers) {
   function queryMonitorItemMarkup(job) {
     const running = queryJobIsRunning(job);
     const rowsCopy = job.rowsShown > 0 ? `${job.rowsShown} row(s)` : "No rows yet";
-    const typeCopy = job.workloadType === "analyze" ? "Analyze" : "Query";
     const timestamp = job.startedAt || job.updatedAt;
     return `
       <article class="query-monitor-item query-monitor-item-${escapeHtml(job.status)}" data-query-job-id="${escapeHtml(job.jobId)}">
@@ -574,7 +527,7 @@ export function createQueryUi(helpers) {
             ${escapeHtml(job.notebookTitle)}
           </button>
           <div class="query-monitor-item-meta">
-            <span class="query-monitor-status-badge${running ? " is-live" : ""}">${escapeHtml(`${typeCopy}: ${queryJobStatusCopy(job)}`)}</span>
+            <span class="query-monitor-status-badge${running ? " is-live" : ""}">${escapeHtml(queryJobStatusCopy(job))}</span>
             <span data-query-monitor-duration data-job-id="${escapeHtml(job.jobId)}">${escapeHtml(formatQueryDuration(queryJobElapsedMs(job)))}</span>
             <span>${escapeHtml(rowsCopy)}</span>
           </div>
@@ -591,7 +544,6 @@ export function createQueryUi(helpers) {
 
   function queryNotificationItemMarkup(job) {
     const rowsLabel = queryRowsShownLabel(job);
-    const typeCopy = job.workloadType === "analyze" ? "Analyze" : "Query";
     return `
       <button
         type="button"
@@ -600,7 +552,7 @@ export function createQueryUi(helpers) {
         data-open-query-cell="${escapeHtml(job.cellId)}"
         title="Open ${escapeHtml(job.notebookTitle)}"
       >
-        <span class="topbar-notification-item-status${queryJobIsRunning(job) ? " is-live" : ""}">${escapeHtml(`${typeCopy}: ${queryJobStatusCopy(job)}`)}</span>
+        <span class="topbar-notification-item-status${queryJobIsRunning(job) ? " is-live" : ""}">${escapeHtml(queryJobStatusCopy(job))}</span>
         <span class="topbar-notification-item-title">${escapeHtml(job.notebookTitle)}</span>
         <span class="topbar-notification-item-copy" data-query-notification-copy data-job-id="${escapeHtml(job.jobId)}" data-query-copy-suffix="${escapeHtml(rowsLabel)}">${escapeHtml(formatQueryDuration(queryJobElapsedMs(job)))} | ${escapeHtml(rowsLabel)}</span>
         <span class="topbar-notification-item-copy topbar-notification-item-copy-secondary">${escapeHtml(queryJobEventDateTimeCopy(job))}</span>

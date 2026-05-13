@@ -107,18 +107,6 @@ class QueryResultDownloadExportPayload(BaseModel):
     settings: dict[str, object] = Field(default_factory=dict)
 
 
-class QueryExplainPayload(BaseModel):
-    sql: str = ""
-    data_sources: list[str] = Field(default_factory=list, alias="dataSources")
-
-
-class S3GeneratedZipDownloadPayload(BaseModel):
-    bucket: str = ""
-    prefix: str = ""
-    file_format: str = Field(default="", alias="format")
-    file_name: str = Field(default="", alias="filename")
-
-
 class LocalWorkspaceQuerySourceDeletePayload(BaseModel):
     entry_id: str = Field(validation_alias="entryId", serialization_alias="entryId")
 
@@ -365,53 +353,6 @@ def download_s3_generated_parts(
         media_type=artifact.content_type,
         headers=headers,
     )
-
-
-@router.get("/api/s3/download-jobs")
-def s3_download_jobs_state(service: WorkbenchService = Depends(get_workbench_service)) -> JSONResponse:
-    return JSONResponse(jsonable_encoder(service.s3_download_jobs_state()))
-
-
-@router.post("/api/s3/generated/zip-jobs")
-def start_s3_generated_zip_download_job(
-    payload: S3GeneratedZipDownloadPayload,
-    service: WorkbenchService = Depends(get_workbench_service),
-) -> JSONResponse:
-    try:
-        snapshot = service.start_s3_generated_zip_download_job(
-            bucket=payload.bucket,
-            prefix=payload.prefix,
-            file_format=payload.file_format,
-            file_name=payload.file_name,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    return JSONResponse(jsonable_encoder(snapshot))
-
-
-@router.get("/api/s3/download-jobs/{job_id}")
-def s3_download_job_state(
-    job_id: str,
-    service: WorkbenchService = Depends(get_workbench_service),
-) -> JSONResponse:
-    try:
-        snapshot = service.s3_download_job_snapshot(job_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return JSONResponse(jsonable_encoder(snapshot))
-
-
-@router.post("/api/s3/download-jobs/{job_id}/cancel")
-def cancel_s3_download_job(
-    job_id: str,
-    service: WorkbenchService = Depends(get_workbench_service),
-) -> JSONResponse:
-    try:
-        snapshot = service.cancel_s3_download_job(job_id)
-    except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return JSONResponse(jsonable_encoder(snapshot))
 
 
 @router.get("/api/source-object-ddl/download")
@@ -1175,45 +1116,6 @@ def start_query_job(
     return JSONResponse(jsonable_encoder(snapshot))
 
 
-@router.post("/api/query-jobs/explain")
-def explain_query_job(
-    payload: QueryExplainPayload,
-    service: WorkbenchService = Depends(get_workbench_service),
-) -> JSONResponse:
-    try:
-        result = service.explain_query(
-            sql=payload.sql,
-            data_sources=list(payload.data_sources),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    return JSONResponse(jsonable_encoder(result))
-
-
-@router.post("/api/query-jobs/analyze")
-def start_query_analyze_job(
-    sql: str = Form(""),
-    notebook_id: str = Form(""),
-    notebook_title: str = Form(""),
-    cell_id: str = Form(""),
-    data_sources: str = Form(""),
-    service: WorkbenchService = Depends(get_workbench_service),
-) -> JSONResponse:
-    try:
-        snapshot = service.start_query_analyze_job(
-            sql=sql,
-            notebook_id=notebook_id,
-            notebook_title=notebook_title,
-            cell_id=cell_id,
-            data_sources=[source for source in data_sources.split("||") if source.strip()],
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    return JSONResponse(jsonable_encoder(snapshot))
-
-
 @router.post("/api/python-jobs")
 def start_python_job(
     code: str = Form(""),
@@ -1467,10 +1369,6 @@ async def stream_realtime_events(
         default=None,
         alias="dataGenerationJobsVersion",
     ),
-    download_jobs_version: int | None = Query(
-        default=None,
-        alias="downloadJobsVersion",
-    ),
     data_source_events_version: int | None = Query(
         default=None,
         alias="dataSourceEventsVersion",
@@ -1494,7 +1392,6 @@ async def stream_realtime_events(
             "query-jobs": query_jobs_version,
             "python-jobs": python_jobs_version,
             "data-generation-jobs": data_generation_jobs_version,
-            "download-jobs": download_jobs_version,
             "data-source-events": data_source_events_version,
             "service-consumption": service_consumption_version,
             "notebook-events": notebook_events_version,

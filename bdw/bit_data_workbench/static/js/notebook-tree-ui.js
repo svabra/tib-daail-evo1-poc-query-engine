@@ -204,11 +204,9 @@ export function createNotebookTreeUi(helpers) {
       return false;
     }
 
-    const label = folderLabel(folder)?.textContent?.trim();
     return (
       folder.dataset.systemFolder === "unassigned" ||
-      label === unassignedFolderName ||
-      label === "Unassigned"
+      folderLabel(folder)?.textContent?.trim() === unassignedFolderName
     );
   }
 
@@ -217,11 +215,6 @@ export function createNotebookTreeUi(helpers) {
       return;
     }
 
-    const label = folderLabel(folder);
-    if (label && label.textContent?.trim() === "Unassigned") {
-      label.textContent = unassignedFolderName;
-      folder.querySelector(":scope > summary")?.setAttribute("data-searchable-item", unassignedFolderName);
-    }
     const deleteButton = folder.querySelector(":scope > summary [data-delete-tree-folder]");
     if (deleteButton) {
       deleteButton.title = "Delete folder. Notebooks will be moved to the notebook tree root.";
@@ -674,12 +667,7 @@ export function createNotebookTreeUi(helpers) {
       return false;
     }
 
-    const normalizedPath = Array.isArray(folderPath)
-      ? folderPath.map((segment) => String(segment ?? "").trim()).filter(Boolean)
-      : [];
-    const targetContainer = normalizedPath.length
-      ? ensureTreeFolderPath(root, normalizedPath)
-      : directChildrenContainer(ensureRootUnassignedFolder());
+    const targetContainer = ensureTreeFolderPath(root, folderPath);
     if (!(targetContainer instanceof Element)) {
       return false;
     }

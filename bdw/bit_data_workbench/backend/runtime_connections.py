@@ -26,7 +26,6 @@ def create_duckdb_worker_connection(
     settings: Settings,
     *,
     database_path: Path | str | None = None,
-    read_only: bool = False,
 ) -> duckdb.DuckDBPyConnection:
     target_database = database_path or settings.duckdb_database
     if isinstance(target_database, Path):
@@ -45,7 +44,7 @@ def create_duckdb_worker_connection(
             connection_target = normalized_target
     settings.duckdb_extension_directory.mkdir(parents=True, exist_ok=True)
 
-    connection = duckdb.connect(connection_target, read_only=read_only)
+    connection = duckdb.connect(connection_target)
     connection.execute(
         f"SET extension_directory = {sql_literal(settings.duckdb_extension_directory.as_posix())}"
     )
