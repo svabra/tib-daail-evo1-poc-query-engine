@@ -116,6 +116,23 @@ async def wait_for_loader_terminal_state(page, job_id: str, timeout_ms: int) -> 
     return status
 
 
+async def assert_loader_job_uses_write_targets(page, job_id: str, timeout_ms: int) -> None:
+    job_card = page.locator(
+        f'[data-data-generation-job-card][data-job-id="{job_id}"]'
+    )
+    await job_card.wait_for(state="visible", timeout=timeout_ms)
+
+    if await job_card.locator(".ingestion-job-targets").count():
+        raise RuntimeError("Loader job still renders the legacy target summary block.")
+
+    card_text = await job_card.inner_text()
+    legacy_labels = ("Relation:", "Path:")
+    if any(label in card_text for label in legacy_labels):
+        raise RuntimeError(
+            "Loader job still renders legacy Relation/Path labels outside Write targets."
+        )
+
+
 async def run_smoke(args: argparse.Namespace) -> int:
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=args.headless)
@@ -141,6 +158,11 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 args.timeout_ms,
             )
             terminal_status = await wait_for_loader_terminal_state(
+                page,
+                job_id,
+                args.timeout_ms,
+            )
+            await assert_loader_job_uses_write_targets(
                 page,
                 job_id,
                 args.timeout_ms,

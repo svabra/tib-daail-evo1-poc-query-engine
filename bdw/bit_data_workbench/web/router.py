@@ -31,10 +31,10 @@ def is_partial_request(request: Request) -> bool:
 
 def brand_title_for_mode(workspace_mode: str) -> str:
     if workspace_mode == "loader":
-        return "DAAIFL Loader Workbench"
+        return "DAAIF Fabric - Loader Workbench"
     if workspace_mode == "ingestion":
-        return "DAAIFL Ingestion Workbench"
-    return "DAAIFL Query Workbench"
+        return "DAAIF Fabric - Ingestion Workbench"
+    return "DAAIF Fabric - Query Workbench"
 
 
 def _display_value(value: object, fallback: str = "Not configured") -> str:
@@ -517,7 +517,7 @@ def index(
                 workspace_partial_template="partials/home.html",
                 shell_sidebar_hidden=True,
             ),
-            "title": "DAAIFL Workbench",
+            "title": "DAAIF Fabric",
             **build_home_data_source_context(service),
         },
     )
@@ -559,6 +559,32 @@ def query_workbench_entry(
     )
 
 
+@router.get("/query-workbench/query-runs", response_class=HTMLResponse)
+def query_runs_page(
+    request: Request,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> HTMLResponse:
+    if is_partial_request(request):
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/query_runs.html",
+            context={},
+        )
+
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context=shell_context(
+            request,
+            service,
+            active_notebook=None,
+            workspace_mode="notebook",
+            workspace_partial_template="partials/query_runs.html",
+            shell_sidebar_hidden=True,
+        ),
+    )
+
+
 @router.get("/data-sources", response_class=HTMLResponse)
 @router.get("/query-workbench/data-sources", response_class=HTMLResponse)
 def query_workbench_data_sources(
@@ -594,7 +620,7 @@ def query_workbench_data_sources(
                 ),
                 shell_sidebar_hidden=True,
             ),
-            "title": "DAAIFL Data Source Workbench",
+            "title": "DAAIF Fabric - Data Source Workbench",
             **context,
         },
     )
@@ -631,7 +657,7 @@ def query_workbench_data_source_explorer(
                 ),
                 shell_sidebar_hidden=True,
             ),
-            "title": "DAAIFL Data Source Workbench",
+            "title": "DAAIF Fabric - Data Source Workbench",
             **context,
         },
     )
@@ -663,7 +689,7 @@ def service_consumption_page(
                 workspace_partial_template="partials/service_consumption.html",
                 shell_sidebar_hidden=True,
             ),
-            "title": "DAAIFL Service Consumption",
+            "title": "DAAIF Fabric - Service Consumption",
             **context,
         },
     )

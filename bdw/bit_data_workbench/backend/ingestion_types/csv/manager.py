@@ -17,7 +17,7 @@ from .archives import CsvArchivePolicy, extract_csv_archive
 from .dialect import normalize_csv_delimiter
 from .s3_formats import build_csv_s3_upload_artifact, normalize_csv_s3_storage_format
 from .validation import validate_csv_file
-from ...s3_hidden import reject_hidden_s3_bucket
+from ...s3_hidden import reject_hidden_s3_location
 
 
 class CsvUpload(Protocol):
@@ -382,7 +382,6 @@ class CsvIngestionManager:
         normalized_bucket = str(bucket or "").strip() or str(self._settings.s3_bucket or "").strip()
         if not normalized_bucket:
             raise ValueError("Provide a bucket or configure S3_BUCKET before importing CSV files.")
-        reject_hidden_s3_bucket(normalized_bucket, self._settings)
 
         upload_artifact = build_csv_s3_upload_artifact(
             local_path=local_path,
@@ -398,6 +397,12 @@ class CsvIngestionManager:
             f"{normalized_prefix}/{upload_artifact.file_name}"
             if normalized_prefix
             else upload_artifact.file_name
+        )
+        reject_hidden_s3_location(
+            normalized_bucket,
+            key,
+            self._settings,
+            data_exchange_prefix=self._settings.data_exchange_prefix,
         )
         ensure_s3_bucket(self._settings, normalized_bucket)
         client = self._s3_client_factory(self._settings)

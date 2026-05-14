@@ -18,7 +18,7 @@ from .data_exporters import (
     normalize_export_settings,
     write_export,
 )
-from .s3_hidden import reject_hidden_s3_bucket
+from .s3_hidden import reject_hidden_s3_location
 from .s3_explorer import normalize_s3_bucket_name, normalize_s3_prefix, s3_path
 from .s3_storage import ensure_s3_bucket, s3_client, upload_s3_file
 
@@ -135,11 +135,16 @@ class QueryResultExportManager:
         normalized_format = normalize_export_format(export_format)
         export_options = normalize_export_settings(normalized_format, export_settings)
         normalized_bucket = normalize_s3_bucket_name(bucket)
-        reject_hidden_s3_bucket(normalized_bucket, self._settings)
         normalized_prefix = normalize_s3_prefix(prefix)
         default_filename = build_default_filename(job, normalized_format)
         filename = normalize_export_filename(file_name, normalized_format, fallback=default_filename)
         key = f"{normalized_prefix}{filename}"
+        reject_hidden_s3_location(
+            normalized_bucket,
+            key,
+            self._settings,
+            data_exchange_prefix=self._settings.data_exchange_prefix,
+        )
         artifact = self.download(
             job_id=job.job_id,
             export_format=normalized_format,

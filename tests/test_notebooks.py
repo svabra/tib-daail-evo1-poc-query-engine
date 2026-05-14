@@ -14,6 +14,7 @@ if str(BDW_ROOT) not in sys.path:
 def import_notebook_helpers():
     from bit_data_workbench.backend.notebooks import (
         build_generator_notebook_links,
+        build_notebook_tree,
         build_notebooks,
     )
     from bit_data_workbench.models import (
@@ -26,6 +27,7 @@ def import_notebook_helpers():
 
     return (
         build_generator_notebook_links,
+        build_notebook_tree,
         build_notebooks,
         NotebookCellDefinition,
         NotebookDefinition,
@@ -41,6 +43,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
     ) -> None:
         (
             build_generator_notebook_links,
+            _,
             _,
             notebook_cell_type,
             notebook_type,
@@ -120,6 +123,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
         (
             build_generator_notebook_links,
             _,
+            _,
             notebook_cell_type,
             notebook_type,
             _,
@@ -163,6 +167,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
     ) -> None:
         (
             _,
+            _,
             build_notebooks,
             _,
             _,
@@ -189,10 +194,30 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             notebooks["mwa-abrechnung-s3-parquet"].cells[0].sql,
         )
 
+    def test_immutable_preset_folders_are_public(self) -> None:
+        (
+            _,
+            build_notebook_tree,
+            build_notebooks,
+            _,
+            _,
+            _,
+            _,
+            _,
+        ) = import_notebook_helpers()
+
+        tree = build_notebook_tree(build_notebooks([]))
+        poc_folder = next(folder for folder in tree if folder.name == "PoC Tests")
+        self.assertFalse(poc_folder.can_edit)
+        self.assertFalse(poc_folder.can_delete)
+        self.assertTrue(poc_folder.is_shared)
+        self.assertTrue(all(child.is_shared for child in poc_folder.folders))
+
     def test_build_notebooks_uses_discovered_relations_for_smoke_presets(
         self,
     ) -> None:
         (
+            _,
             _,
             build_notebooks,
             _,
@@ -257,6 +282,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
         self,
     ) -> None:
         (
+            _,
             _,
             build_notebooks,
             _,
@@ -389,6 +415,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
     ) -> None:
         (
             _,
+            _,
             build_notebooks,
             _,
             _,
@@ -428,6 +455,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
         )
         self.assertFalse(pandas_demo.can_edit)
         self.assertFalse(pandas_demo.can_delete)
+        self.assertTrue(pandas_demo.shared)
         self.assertEqual(
             [cell.language for cell in pandas_demo.cells],
             ["sql", "python", "python"],
@@ -451,6 +479,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
         )
         self.assertFalse(chart_demo.can_edit)
         self.assertFalse(chart_demo.can_delete)
+        self.assertTrue(chart_demo.shared)
         self.assertEqual(
             [cell.language for cell in chart_demo.cells],
             ["python", "python"],

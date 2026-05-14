@@ -12,8 +12,17 @@ export function createHomeUi(helpers) {
     readNotebookActivity,
   } = helpers;
 
+  function notebookActivityReason(entry, { compact = false } = {}) {
+    if (entry.reason === "run") {
+      return compact ? "Run" : "Last action: Run";
+    }
+    if (entry.reason === "open") {
+      return compact ? "Open" : "Last action: Open";
+    }
+    return compact ? "Edit" : "Last action: Edit";
+  }
+
   function notebookActivityMarkup(entry) {
-    const reasonCopy = entry.reason === "run" ? "Last action: Run" : "Last action: Edit";
     return `
       <button
         type="button"
@@ -25,9 +34,38 @@ export function createHomeUi(helpers) {
           <span class="home-activity-meta">${escapeHtml(formatRelativeTimestamp(entry.touchedAt))}</span>
         </span>
         <span class="home-activity-copy">${escapeHtml(entry.summary || "No description saved.")}</span>
-        <span class="home-activity-meta">${escapeHtml(reasonCopy)}</span>
+        <span class="home-activity-meta">${escapeHtml(notebookActivityReason(entry))}</span>
       </button>
     `;
+  }
+
+  function recentNotebookActivityEntries(limit) {
+    return Object.values(readNotebookActivity())
+      .filter((entry) => entry && typeof entry === "object")
+      .map((entry) => ({
+        notebookId: String(entry.notebookId || "").trim(),
+        title: String(entry.title || "").trim(),
+        summary: String(entry.summary || "").trim(),
+        touchedAt: String(entry.touchedAt || "").trim(),
+        reason: ["open", "run"].includes(entry.reason) ? entry.reason : "edited",
+      }))
+      .filter((entry) => entry.notebookId && notebookLinks(entry.notebookId).length)
+      .sort((left, right) => Date.parse(right.touchedAt || "") - Date.parse(left.touchedAt || ""))
+      .slice(0, limit);
+  }
+
+  function renderRecentNotebooks(root, { limit } = {}) {
+    if (!root) {
+      return;
+    }
+
+    const entries = recentNotebookActivityEntries(limit);
+    if (!entries.length) {
+      root.innerHTML = '<p class="home-empty">No recent notebook activity yet.</p>';
+      return;
+    }
+
+    root.innerHTML = entries.map((entry) => notebookActivityMarkup(entry)).join("");
   }
 
   function ingestionActivityMarkup(job) {
@@ -49,30 +87,10 @@ export function createHomeUi(helpers) {
   }
 
   function renderHomePage() {
+    renderRecentNotebooks(homeRecentNotebooksRoot(), { limit: 3 });
+
     if (!homePageRoot()) {
       return;
-    }
-
-    const recentNotebooksRoot = homeRecentNotebooksRoot();
-    if (recentNotebooksRoot) {
-      const activityEntries = Object.values(readNotebookActivity())
-        .filter((entry) => entry && typeof entry === "object")
-        .map((entry) => ({
-          notebookId: String(entry.notebookId || "").trim(),
-          title: String(entry.title || "").trim(),
-          summary: String(entry.summary || "").trim(),
-          touchedAt: String(entry.touchedAt || "").trim(),
-          reason: entry.reason === "run" ? "run" : "edited",
-        }))
-        .filter((entry) => entry.notebookId && notebookLinks(entry.notebookId).length)
-        .sort((left, right) => Date.parse(right.touchedAt || "") - Date.parse(left.touchedAt || ""))
-        .slice(0, 3);
-
-      if (!activityEntries.length) {
-        recentNotebooksRoot.innerHTML = '<p class="home-empty">No recent notebook activity yet.</p>';
-      } else {
-        recentNotebooksRoot.innerHTML = activityEntries.map((entry) => notebookActivityMarkup(entry)).join("");
-      }
     }
 
     const recentIngestionsRoot = homeRecentIngestionsRoot();

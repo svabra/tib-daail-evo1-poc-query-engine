@@ -504,7 +504,7 @@ export function createQuerySourceValidationController(helpers) {
         return;
       }
       state.terminalTimer = null;
-      renderCellState(cellRoot, state.result || baseResult);
+      scheduleValidationForCell(cellRoot, currentSqlForCell(cellRoot));
     }, terminalQueryStatusDisplayMs);
   }
 

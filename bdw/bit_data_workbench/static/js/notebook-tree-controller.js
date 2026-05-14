@@ -181,7 +181,7 @@ export function createNotebookTreeController(helpers) {
     event.stopPropagation();
 
     const folder = toggleButton.closest("[data-tree-folder]");
-    if (!folder) {
+    if (!folder || toggleButton.disabled || !folderCanEdit(folder)) {
       return true;
     }
 

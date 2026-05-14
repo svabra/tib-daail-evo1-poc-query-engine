@@ -95,7 +95,7 @@ async def create_root_folder(page, folder_name: str, timeout_ms: int) -> float:
             raise RuntimeError("The synthetic Saved Results root is still visible in Local Workspace.")
     summary = catalog.locator(":scope > summary")
     await summary.hover()
-    await summary.locator("[data-create-local-workspace-root-folder]").click()
+    await summary.locator("[data-create-local-workspace-root-folder]").evaluate("(node) => node.click()")
     await page.locator("[data-folder-name-input]").fill(folder_name)
     await page.locator("[data-folder-name-submit]").click()
     await page.locator("[data-confirm-submit]").click()

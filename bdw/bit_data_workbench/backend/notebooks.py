@@ -250,7 +250,7 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         for object_name, relation in mwa_postgres_relations.items()
     }
 
-    return build_static_notebooks(
+    notebooks = build_static_notebooks(
         preferred_s3_relation=preferred_s3_relation,
         preferred_postgres_relation=preferred_postgres_relation,
         contest_postgres_relation=contest_postgres_relation,
@@ -271,6 +271,10 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         union_oltp_s3_relation=union_oltp_s3_relation,
         union_s3_relation=union_s3_relation,
     )
+    for notebook in notebooks:
+        if not notebook.can_edit:
+            notebook.shared = True
+    return notebooks
 
 
 def _source_option(
@@ -410,7 +414,11 @@ def build_notebook_tree(
                         if is_protected_path
                         else bool(getattr(folder_metadata_entry, "can_delete", True))
                     ),
-                    is_shared=bool(getattr(folder_metadata_entry, "is_public", False)),
+                    is_shared=(
+                        True
+                        if is_protected_path
+                        else bool(getattr(folder_metadata_entry, "is_public", False))
+                    ),
                 )
                 folder_index[path_key] = folder
                 if parent_folder is None:
@@ -430,7 +438,11 @@ def build_notebook_tree(
                     if is_protected_path
                     else bool(getattr(folder_metadata_entry, "can_delete", folder.can_delete))
                 )
-                folder.is_shared = bool(getattr(folder_metadata_entry, "is_public", folder.is_shared))
+                folder.is_shared = (
+                    True
+                    if is_protected_path
+                    else bool(getattr(folder_metadata_entry, "is_public", folder.is_shared))
+                )
             parent_folder = folder
 
         return parent_folder

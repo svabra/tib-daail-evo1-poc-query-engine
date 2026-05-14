@@ -18,11 +18,11 @@ import duckdb
 from ..config import Settings
 from ..models import DataSourceDiscoveryEventDefinition, SourceConnectionStatus
 from .ingestion_types.csv.dialect import csv_read_settings_from_s3_metadata
-from .data_exchange import (
-    is_data_exchange_key,
+from .s3_hidden import (
+    is_hidden_s3_bucket_name,
+    is_hidden_s3_key,
     normalize_data_exchange_prefix,
 )
-from .s3_hidden import is_hidden_s3_bucket_name
 from .queryable_files import (
     materialize_queryable_file,
 )
@@ -821,7 +821,7 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
             keys = sorted(
                 key
                 for key in set(iter_s3_keys(client, bucket))
-                if not is_data_exchange_key(key, exchange_prefix)
+                if not is_hidden_s3_key(key, exchange_prefix)
             )
             key_set = set(keys)
 

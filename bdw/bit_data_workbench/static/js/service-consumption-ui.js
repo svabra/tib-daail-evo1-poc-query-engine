@@ -135,7 +135,7 @@ function serviceMixSectorLabelConfig(service) {
     default: {
       const label = String(service?.label || "Service")
         .trim()
-        .replace(/^DAAIFL\s+/i, "")
+        .replace(/^DAAIF(?:L)?(?:\s+Fabric)?(?:\s*-\s*)?\s*/i, "")
         .replace(/\s+Service$/i, "")
         .replace(/\s+/g, " ");
       return {
@@ -925,7 +925,7 @@ function renderServiceList(financial, formatByteCount) {
       appendServiceDetail(grid, {
         label: "Annual service fee",
         value: formatChfValue(detail?.annualFeeChf, { whenNull: "CHF 500.00" }),
-        note: "Fixed PoC-wide DAAIFL application fee per year.",
+        note: "Fixed PoC-wide DAAIF application fee per year.",
       });
       appendServiceDetail(grid, {
         label: "Monthly service fee",
@@ -938,7 +938,7 @@ function renderServiceList(financial, formatByteCount) {
       appendServiceDetail(grid, {
         label: "Application cost YTD",
         value: formatChfValue(detail?.costYtdChf, { whenNull: "CHF 0.00" }),
-        note: "Estimated DAAIFL application fee accumulated year-to-date.",
+        note: "Estimated DAAIF application fee accumulated year-to-date.",
       });
     } else if (serviceKey === "filesystem") {
       appendServiceDetail(grid, {

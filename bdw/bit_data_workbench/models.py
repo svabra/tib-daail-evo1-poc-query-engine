@@ -552,6 +552,25 @@ class QueryJobMetricPoint:
 
 
 @dataclass(slots=True)
+class QueryResourceSample:
+    elapsed_ms: float
+    cpu_percent: float | None = None
+    average_cpu_percent: float | None = None
+    memory_rss_bytes: int | None = None
+    average_memory_rss_bytes: int | None = None
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {
+            "elapsedMs": self.elapsed_ms,
+            "cpuPercent": self.cpu_percent,
+            "averageCpuPercent": self.average_cpu_percent,
+            "memoryRssBytes": self.memory_rss_bytes,
+            "averageMemoryRssBytes": self.average_memory_rss_bytes,
+        }
+
+
+@dataclass(slots=True)
 class QueryJobDefinition:
     job_id: str
     notebook_id: str
@@ -582,8 +601,12 @@ class QueryJobDefinition:
     execution_mode: str = ""
     process_id: int | None = None
     cpu_percent: float | None = None
+    average_cpu_percent: float | None = None
+    peak_cpu_percent: float | None = None
     memory_rss_bytes: int | None = None
+    average_memory_rss_bytes: int | None = None
     peak_memory_rss_bytes: int | None = None
+    resource_samples: list[QueryResourceSample] = field(default_factory=list)
     cancellation_phase: str | None = None
     cancellation_requested_at: str | None = None
     worker_exit_code: int | None = None
@@ -621,8 +644,12 @@ class QueryJobDefinition:
             "executionMode": self.execution_mode,
             "processId": self.process_id,
             "cpuPercent": self.cpu_percent,
+            "averageCpuPercent": self.average_cpu_percent,
+            "peakCpuPercent": self.peak_cpu_percent,
             "memoryRssBytes": self.memory_rss_bytes,
+            "averageMemoryRssBytes": self.average_memory_rss_bytes,
             "peakMemoryRssBytes": self.peak_memory_rss_bytes,
+            "resourceSamples": [sample.payload for sample in self.resource_samples],
             "cancellationPhase": self.cancellation_phase,
             "cancellationRequestedAt": self.cancellation_requested_at,
             "workerExitCode": self.worker_exit_code,

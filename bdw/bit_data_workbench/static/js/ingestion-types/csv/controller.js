@@ -1491,6 +1491,19 @@ export function createCsvIngestionController(helpers) {
   }
 
   function handleCsvIngestionInput(event) {
+    const importBaseNameInput = event.target.closest("[data-csv-import-base-name]");
+    if (importBaseNameInput instanceof HTMLInputElement) {
+      if (
+        updateSelectedFileImportBaseName(
+          importBaseNameInput.dataset.csvFileId,
+          importBaseNameInput.value
+        )
+      ) {
+        renderCsvIngestionWorkbench();
+      }
+      return true;
+    }
+
     const relevantInput = event.target.closest(
       "[data-csv-folder-path], [data-csv-s3-bucket], [data-csv-s3-prefix], [data-csv-schema-name], [data-csv-table-prefix]"
     );

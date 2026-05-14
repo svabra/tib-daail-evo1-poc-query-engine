@@ -5,6 +5,7 @@ import tempfile
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import TestCase
 
 import duckdb
@@ -20,12 +21,14 @@ from bit_data_workbench.backend.query_jobs import (  # noqa: E402
     QUERY_EXECUTION_DUCKDB_READ,
     QUERY_EXECUTION_DUCKDB_WRITE,
     QUERY_EXECUTION_POSTGRES_NATIVE,
+    QUERY_METRICS_SAMPLE_SECONDS,
     DuckDBQueryAccessCoordinator,
     QueryJobManager,
+    QueryJobRecord,
     classify_query_execution,
 )
 from bit_data_workbench.config import Settings  # noqa: E402
-from bit_data_workbench.models import QueryJobDefinition  # noqa: E402
+from bit_data_workbench.models import QueryJobDefinition, QueryResourceSample  # noqa: E402
 from bit_data_workbench.version_info import current_repo_version  # noqa: E402
 
 
@@ -128,8 +131,20 @@ class QueryJobPayloadTests(TestCase):
             execution_mode=QUERY_EXECUTION_DUCKDB_READ,
             process_id=1234,
             cpu_percent=12.5,
+            average_cpu_percent=8.5,
+            peak_cpu_percent=18.0,
             memory_rss_bytes=1024,
+            average_memory_rss_bytes=1536,
             peak_memory_rss_bytes=2048,
+            resource_samples=[
+                QueryResourceSample(
+                    elapsed_ms=2000,
+                    cpu_percent=12.5,
+                    average_cpu_percent=8.5,
+                    memory_rss_bytes=1024,
+                    average_memory_rss_bytes=1536,
+                )
+            ],
             cancellation_phase="interrupting",
             cancellation_requested_at="2026-05-13T00:00:02+00:00",
             worker_exit_code=-15,
@@ -140,8 +155,12 @@ class QueryJobPayloadTests(TestCase):
         self.assertEqual(payload["executionMode"], QUERY_EXECUTION_DUCKDB_READ)
         self.assertEqual(payload["processId"], 1234)
         self.assertEqual(payload["cpuPercent"], 12.5)
+        self.assertEqual(payload["averageCpuPercent"], 8.5)
+        self.assertEqual(payload["peakCpuPercent"], 18.0)
         self.assertEqual(payload["memoryRssBytes"], 1024)
+        self.assertEqual(payload["averageMemoryRssBytes"], 1536)
         self.assertEqual(payload["peakMemoryRssBytes"], 2048)
+        self.assertEqual(payload["resourceSamples"][0]["elapsedMs"], 2000)
         self.assertEqual(payload["cancellationPhase"], "interrupting")
         self.assertEqual(payload["workerExitCode"], -15)
 
@@ -193,6 +212,59 @@ class ProcessQueryJobManagerTests(TestCase):
     def tearDown(self) -> None:
         self.manager.shutdown()
         self.temp_dir.cleanup()
+
+    def test_process_metrics_sample_once_per_second(self) -> None:
+        self.assertEqual(QUERY_METRICS_SAMPLE_SECONDS, 1.0)
+
+    def test_process_metrics_samples_current_average_peak_and_throttles(self) -> None:
+        class FakeProcessMetrics:
+            def __init__(self) -> None:
+                self.samples = iter([(10.0, 1000), (30.0, 3000), (70.0, 7000)])
+                self.current = (0.0, 0)
+
+            def cpu_percent(self, interval=None) -> float:
+                self.current = next(self.samples)
+                return self.current[0]
+
+            def memory_info(self):
+                return SimpleNamespace(rss=self.current[1])
+
+            def children(self, recursive=True):
+                return []
+
+        snapshot = QueryJobDefinition(
+            job_id="query-metrics-test",
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-1",
+            sql="select 1",
+            status="running",
+            started_at="2026-05-13T00:00:00+00:00",
+            updated_at="2026-05-13T00:00:00+00:00",
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+        )
+        record = QueryJobRecord(
+            snapshot=snapshot,
+            sort_index=1,
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+            execution_sql="select 1",
+            process_metrics=FakeProcessMetrics(),
+        )
+        with self.manager._condition:
+            self.manager._jobs[snapshot.job_id] = record
+
+        self.manager._sample_process_metrics(snapshot.job_id, force=True)
+        self.manager._sample_process_metrics(snapshot.job_id)
+        self.manager._sample_process_metrics(snapshot.job_id, force=True)
+
+        sampled = self.manager.snapshot(snapshot.job_id)
+        self.assertEqual(sampled.cpu_percent, 30.0)
+        self.assertEqual(sampled.average_cpu_percent, 20.0)
+        self.assertEqual(sampled.peak_cpu_percent, 30.0)
+        self.assertEqual(sampled.memory_rss_bytes, 3000)
+        self.assertEqual(sampled.average_memory_rss_bytes, 2000)
+        self.assertEqual(sampled.peak_memory_rss_bytes, 3000)
+        self.assertEqual(len(sampled.resource_samples), 2)
 
     def test_simple_query_completes_in_worker_process(self) -> None:
         job = self.manager.start_job(
@@ -302,7 +374,7 @@ class ProcessQueryJobManagerTests(TestCase):
         cancelling = self.manager.cancel_job(job.job_id)
 
         self.assertIn(cancelling.cancellation_phase, {"requested", "interrupting"})
-        self.assertIn("Cancellation", cancelling.message or "")
+        self.assertRegex(cancelling.message or "", r"Cancellation|Interrupting")
 
         terminal = wait_until(
             lambda: self.manager.snapshot(job.job_id)

@@ -54,6 +54,33 @@ export function createNotebookWorkspaceMarkup(helpers) {
     `;
   }
 
+  function queryRunsPanelMarkup(notebookId, cellId) {
+    return `
+      <details
+        class="workspace-query-runs workspace-query-runs-cell"
+        data-notebook-query-runs
+        data-query-runs-notebook-id="${escapeHtml(notebookId)}"
+        data-query-runs-cell-id="${escapeHtml(cellId)}"
+        data-query-runs-limit="10"
+      >
+        <summary class="workspace-query-runs-summary">
+          <span class="workspace-query-runs-title">
+            <span class="workspace-query-runs-chevron" aria-hidden="true"></span>
+            <span class="workspace-tags-label">Query Runs</span>
+          </span>
+          <span class="query-runs-status" data-query-runs-status>No recorded query runs yet.</span>
+        </summary>
+        <div class="workspace-query-runs-header workspace-query-runs-header-cell">
+          <p>Recorded runs for this cell.</p>
+          <button type="button" class="workspace-version-save" data-query-runs-refresh>Refresh</button>
+        </div>
+        <div class="query-run-history-list query-run-history-list-compact" data-query-runs-list>
+          <p class="home-empty">No recorded query runs yet.</p>
+        </div>
+      </details>
+    `;
+  }
+
   function buildCellMarkup(notebookId, cell, index, canEdit, totalCells, activeCellId) {
     const selectedSources = normalizeDataSources(cell.dataSources);
     const cellLanguage = normalizeCellLanguage(cell.language);
@@ -168,7 +195,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
             <span data-query-source-validation-message>No source references found. Sources will be checked before execution.</span>
           </div>
         </form>
-        ${cellLanguage === "python" ? pythonResultPanelMarkup(cell.cellId, null) : queryResultPanelMarkup(cell.cellId, null)}
+        ${cellLanguage === "python" ? pythonResultPanelMarkup(cell.cellId, null) : `${queryRunsPanelMarkup(notebookId, cell.cellId)}${queryResultPanelMarkup(cell.cellId, null)}`}
       </article>
     `;
   }
@@ -251,7 +278,8 @@ export function createNotebookWorkspaceMarkup(helpers) {
                 class="workspace-sharing-toggle${metadata.shared ? " is-on" : ""}"
                 data-notebook-shared-toggle
                 aria-pressed="${metadata.shared ? "true" : "false"}"
-                title="${metadata.shared ? "Shared with connected users and stored on the server." : "Private to this browser workspace."}"
+                title="${metadata.canEdit ? (metadata.shared ? "Shared with connected users and stored on the server." : "Private to this browser workspace.") : "Immutable preset notebooks are public."}"
+                ${metadata.canEdit ? "" : "disabled"}
               >
                 <span class="workspace-sharing-toggle-switch" aria-hidden="true">
                   <span class="workspace-sharing-toggle-thumb"></span>

@@ -46,7 +46,7 @@ export function createNotebookTreeState(helpers) {
       open: true,
       canEdit: permissions.canEdit,
       canDelete: permissions.canDelete,
-      isShared: false,
+      isShared: permissions.isShared === true,
       children: [],
     };
   }
@@ -180,7 +180,7 @@ export function createNotebookTreeState(helpers) {
             ...createStoredFolderState(folderName, parentFolderId),
             canEdit: fallbackPolicy.canEdit,
             canDelete: fallbackPolicy.canDelete,
-            isShared: false,
+            isShared: fallbackPolicy.isShared === true,
           };
 
     if (!folderState.open) {
@@ -261,7 +261,7 @@ export function createNotebookTreeState(helpers) {
     } else {
       nextNodes.push({
         ...createStoredFolderState(folderName),
-        isShared: false,
+        isShared: defaultFolderPermissions(folderId).isShared === true,
         children: [notebookNode],
       });
     }
@@ -423,6 +423,37 @@ export function createNotebookTreeState(helpers) {
       changed = changed || result.changed;
     }
 
+    function forceProtectedFoldersPublic(nodes) {
+      let folderChanged = false;
+      const normalizedNodes = (Array.isArray(nodes) ? nodes : []).map((node) => {
+        if (!node || typeof node !== "object" || node.type !== "folder") {
+          return node;
+        }
+        const permissions = defaultFolderPermissions(node.folderId || deriveFolderId(node.name || ""));
+        const childResult = forceProtectedFoldersPublic(node.children);
+        const shouldBePublic = permissions.isShared === true;
+        if (!shouldBePublic && !childResult.changed) {
+          return node;
+        }
+        folderChanged = true;
+        return {
+          ...node,
+          canEdit: shouldBePublic ? false : node.canEdit,
+          canDelete: shouldBePublic ? false : node.canDelete,
+          isShared: shouldBePublic ? true : node.isShared,
+          children: childResult.nodes,
+        };
+      });
+      return {
+        nodes: normalizedNodes,
+        changed: folderChanged,
+      };
+    }
+
+    const publicFolderMigration = forceProtectedFoldersPublic(nextState);
+    nextState = publicFolderMigration.nodes;
+    changed = changed || publicFolderMigration.changed;
+
     const obsoleteRootFolders = new Set(["Smoke Tests"]);
     const obsoleteRootNodes = nextState.filter(
       (node) =>
@@ -488,12 +519,14 @@ export function createNotebookTreeState(helpers) {
       return {
         canEdit: false,
         canDelete: false,
+        isShared: true,
       };
     }
 
     return {
       canEdit: true,
       canDelete: true,
+      isShared: false,
     };
   }
 

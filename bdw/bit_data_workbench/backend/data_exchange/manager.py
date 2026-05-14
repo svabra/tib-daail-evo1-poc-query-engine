@@ -12,7 +12,12 @@ from boto3.s3.transfer import TransferConfig
 
 from ...config import Settings
 from ..ingestion_types.common.uploads import IngestionLocalSource
-from ..s3_hidden import is_data_exchange_bucket_name, reject_hidden_s3_bucket
+from ..s3_hidden import (
+    is_data_exchange_bucket_name,
+    is_data_exchange_key,
+    normalize_data_exchange_prefix,
+    reject_hidden_s3_location,
+)
 from ..s3_storage import ensure_s3_bucket, s3_client, upload_s3_file
 from .registry import DataExchangeFileRecord, DataExchangeFolderRecord, DataExchangeStore
 from .security import hash_password, verify_password
@@ -31,21 +36,6 @@ DATA_EXCHANGE_QUERYABLE_EXTENSIONS = {
 
 def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def normalize_data_exchange_prefix(prefix: str | None) -> str:
-    raw_value = str(prefix or "").strip().replace("\\", "/")
-    parts = [segment.strip() for segment in raw_value.split("/") if segment.strip()]
-    return "/".join(parts) + "/" if parts else "--data-exchange--/"
-
-
-def is_data_exchange_key(key: str, prefix: str | None = None) -> bool:
-    normalized_prefix = normalize_data_exchange_prefix(prefix)
-    normalized_key = str(key or "").strip().replace("\\", "/")
-    return bool(normalized_key) and (
-        normalized_key == normalized_prefix.rstrip("/")
-        or normalized_key.startswith(normalized_prefix)
-    )
 
 
 def normalize_tags(tags: list[str] | str | None) -> list[str]:
@@ -393,7 +383,6 @@ class DataExchangeManager:
         target_bucket = str(bucket or "").strip() or str(self._settings.s3_bucket or "").strip()
         if not target_bucket:
             raise ValueError("Choose a Shared Workspace S3 bucket.")
-        reject_hidden_s3_bucket(target_bucket, self._settings)
         target_name = safe_storage_file_name(file_name or record.file_name)
         normalized_prefix = "/".join(
             segment.strip()
@@ -401,6 +390,12 @@ class DataExchangeManager:
             if segment.strip()
         )
         target_key = f"{normalized_prefix}/{target_name}" if normalized_prefix else target_name
+        reject_hidden_s3_location(
+            target_bucket,
+            target_key,
+            self._settings,
+            data_exchange_prefix=self.exchange_prefix,
+        )
         if target_bucket == record.bucket and is_data_exchange_key(target_key, self.exchange_prefix):
             raise ValueError("DataExchange files cannot be copied back into the hidden exchange prefix.")
 

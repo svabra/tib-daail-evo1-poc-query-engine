@@ -9,6 +9,8 @@ export function createQueryUi(helpers) {
     queryJobStatusCopy,
   } = helpers;
 
+  const bytesPerMegabyte = 1024 * 1024;
+
   function emptyQueryResultsMarkup(cellId) {
     return `
       <section id="query-results-${escapeHtml(cellId)}" class="result-panel" data-cell-result data-query-job-id="" hidden>
@@ -108,23 +110,64 @@ export function createQueryUi(helpers) {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(bytes >= 10 * 1024 * 1024 * 1024 ? 0 : 1)} GB`;
   }
 
-  function queryProcessMetricStripMarkup(job, { compact = false } = {}) {
+  function bytesToMegabytes(value) {
+    const bytes = Number(value);
+    if (!Number.isFinite(bytes) || bytes <= 0) {
+      return 0;
+    }
+    return Math.round((bytes / bytesPerMegabyte) * 10) / 10;
+  }
+
+  function formatQueryMegabytes(value) {
+    const megabytes = Number(value);
+    if (!Number.isFinite(megabytes) || megabytes <= 0) {
+      return "0 MB";
+    }
+    const decimals = megabytes >= 100 ? 0 : 1;
+    return `${megabytes.toFixed(decimals).replace(/\.0$/, "")} MB`;
+  }
+
+  function formatResourceElapsedLabel(value) {
+    const elapsedMs = Number(value);
+    if (!Number.isFinite(elapsedMs) || elapsedMs <= 0) {
+      return "0s";
+    }
+    const elapsedSeconds = elapsedMs / 1000;
+    if (elapsedSeconds < 60) {
+      return `${elapsedSeconds.toFixed(elapsedSeconds >= 10 ? 0 : 1).replace(/\.0$/, "")}s`;
+    }
+    const minutes = Math.floor(elapsedSeconds / 60);
+    const seconds = Math.round(elapsedSeconds % 60);
+    return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+  }
+
+  function queryProcessMetricStripMarkup(job, { compact = false, includeCurrent = null } = {}) {
     if (!job) {
       return "";
     }
 
+    const showCurrent = includeCurrent === null ? queryJobIsRunning(job) : Boolean(includeCurrent);
     const metrics = [];
     if (job.processId) {
       metrics.push(["PID", String(job.processId)]);
     }
-    if (typeof job.cpuPercent === "number") {
-      metrics.push(["CPU", `${job.cpuPercent.toFixed(job.cpuPercent >= 10 ? 0 : 1)}%`]);
+    if (showCurrent && typeof job.cpuPercent === "number") {
+      metrics.push(["CPU", formatQueryCpuPercent(job.cpuPercent)]);
     }
-    if (typeof job.memoryRssBytes === "number") {
+    if (typeof job.averageCpuPercent === "number") {
+      metrics.push(["CPU avg", formatQueryCpuPercent(job.averageCpuPercent)]);
+    }
+    if (typeof job.peakCpuPercent === "number") {
+      metrics.push(["CPU peak", formatQueryCpuPercent(job.peakCpuPercent)]);
+    }
+    if (showCurrent && typeof job.memoryRssBytes === "number") {
       metrics.push(["RAM", formatQueryByteCount(job.memoryRssBytes)]);
     }
+    if (typeof job.averageMemoryRssBytes === "number") {
+      metrics.push(["RAM avg", formatQueryByteCount(job.averageMemoryRssBytes)]);
+    }
     if (typeof job.peakMemoryRssBytes === "number") {
-      metrics.push(["Peak", formatQueryByteCount(job.peakMemoryRssBytes)]);
+      metrics.push(["RAM peak", formatQueryByteCount(job.peakMemoryRssBytes)]);
     }
     if (!metrics.length) {
       return "";
@@ -143,6 +186,151 @@ export function createQueryUi(helpers) {
             `
           )
           .join("")}
+      </div>
+    `;
+  }
+
+  function formatQueryCpuPercent(value) {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return "";
+    }
+    return `${value.toFixed(value >= 10 ? 0 : 1)}%`;
+  }
+
+  function queryResourceSeries(samples, valueKey, valueMapper = (value) => value) {
+    return samples.map((sample) => {
+      const value = Number(sample?.[valueKey]);
+      if (!Number.isFinite(value)) {
+        return null;
+      }
+      const mappedValue = Number(valueMapper(value));
+      return Number.isFinite(mappedValue) ? Math.max(0, mappedValue) : null;
+    });
+  }
+
+  function lastFiniteSeriesValue(values) {
+    for (let index = values.length - 1; index >= 0; index -= 1) {
+      const value = Number(values[index]);
+      if (Number.isFinite(value)) {
+        return value;
+      }
+    }
+    return null;
+  }
+
+  function maxFiniteSeriesValue(values) {
+    const finiteValues = values.filter((value) => Number.isFinite(Number(value)));
+    return finiteValues.length ? Math.max(...finiteValues.map((value) => Number(value))) : null;
+  }
+
+  function queryResourceSparklineChartMarkup({
+    label,
+    unitLabel,
+    axisLabel,
+    samples,
+    valueKey,
+    averageKey,
+    maxValue,
+    formatter,
+    running,
+    valueMapper,
+  }) {
+    const currentValues = queryResourceSeries(samples, valueKey, valueMapper);
+    const averageValues = queryResourceSeries(samples, averageKey, valueMapper);
+    const hasCurrent = currentValues.some((value) => value !== null);
+    const hasAverage = averageValues.some((value) => value !== null);
+    if (!hasCurrent && !hasAverage) {
+      return "";
+    }
+    const currentLegendLabel = running ? "Now" : "Peak";
+    const currentCopy = formatter(running ? lastFiniteSeriesValue(currentValues) : maxFiniteSeriesValue(currentValues));
+    const averageCopy = formatter(lastFiniteSeriesValue(averageValues));
+    const chartKind = label.toLowerCase();
+    const currentAttribute = escapeHtml(JSON.stringify(currentValues));
+    const averageAttribute = escapeHtml(JSON.stringify(averageValues));
+    const labelAttribute = escapeHtml(JSON.stringify(
+      samples.map((sample, index) => {
+        const elapsedMs = Number(sample?.elapsedMs);
+        return Number.isFinite(elapsedMs) ? formatResourceElapsedLabel(elapsedMs) : String(index + 1);
+      })
+    ));
+    const chartMax = Math.max(
+      1,
+      Number(maxValue || 0),
+      maxFiniteSeriesValue(currentValues) || 0,
+      maxFiniteSeriesValue(averageValues) || 0
+    );
+    const currentDatasetLabel = running ? "Current" : "Peak sample";
+    return `
+      <article class="query-resource-sparkline-card">
+        <div class="query-resource-sparkline-header">
+          <strong>${escapeHtml(label)}</strong>
+        </div>
+        <div class="query-resource-sparkline-plot">
+          <span class="query-resource-sparkline-axis" aria-hidden="true">${escapeHtml(axisLabel || unitLabel)}</span>
+          <div class="query-resource-sparkline-canvas">
+            <canvas
+              data-query-resource-chart
+              data-query-resource-kind="${escapeHtml(chartKind)}"
+            data-query-resource-current="${currentAttribute}"
+            data-query-resource-average="${averageAttribute}"
+            data-query-resource-labels="${labelAttribute}"
+            data-query-resource-max="${escapeHtml(String(chartMax))}"
+              data-query-resource-axis-label="${escapeHtml(axisLabel)}"
+              data-query-resource-current-label="${escapeHtml(currentDatasetLabel)}"
+              data-query-resource-average-label="Average"
+              aria-label="${escapeHtml(label)} query resource chart"
+            ></canvas>
+          </div>
+        </div>
+        <div class="query-resource-sparkline-legend">
+          <span><i class="is-current"></i>${escapeHtml(currentLegendLabel)} ${escapeHtml(currentCopy)}</span>
+          <span><i class="is-average"></i>AVG ${escapeHtml(averageCopy)}</span>
+        </div>
+      </article>
+    `;
+  }
+
+  function queryResourceSparklineMarkup(job, { compact = false } = {}) {
+    const samples = Array.isArray(job?.resourceSamples)
+      ? job.resourceSamples.filter((sample) => sample && typeof sample === "object")
+      : [];
+    if (!samples.length) {
+      return "";
+    }
+    const cpuMax = Math.max(
+      1,
+      100,
+      ...samples.map((sample) => Number(sample.cpuPercent || 0)),
+      ...samples.map((sample) => Number(sample.averageCpuPercent || 0))
+    );
+    const compactClass = compact ? " query-resource-sparklines-compact" : "";
+    const running = queryJobIsRunning(job);
+    return `
+      <div class="query-resource-sparklines${compactClass}" data-query-resource-sparklines>
+        ${queryResourceSparklineChartMarkup({
+          label: "CPU",
+          unitLabel: "%",
+          axisLabel: "CPU %",
+          samples,
+          valueKey: "cpuPercent",
+          averageKey: "averageCpuPercent",
+          maxValue: cpuMax,
+          formatter: formatQueryCpuPercent,
+          running,
+        })}
+        ${queryResourceSparklineChartMarkup({
+          label: "RAM",
+          unitLabel: "MB",
+          axisLabel: "RAM (MB)",
+          samples,
+          valueKey: "memoryRssBytes",
+          averageKey: "averageMemoryRssBytes",
+          maxValue: 1,
+          formatter: formatQueryMegabytes,
+          running,
+          valueMapper: bytesToMegabytes,
+        })}
       </div>
     `;
   }
@@ -191,6 +379,7 @@ export function createQueryUi(helpers) {
     const backendCopy = escapeHtml(job.backendName || "VMTP DUCKDB");
     const progressLabel = escapeHtml(job.cancellationPhase ? queryCancellationCopy(job) : job.progressLabel || "Running...");
     const metricsMarkup = queryProcessMetricStripMarkup(job);
+    const sparklineMarkup = queryResourceSparklineMarkup(job);
 
     if (progressValue === null) {
       return `
@@ -204,6 +393,7 @@ export function createQueryUi(helpers) {
             <span>${escapeHtml(queryProgressActivityCopy(job))}</span>
           </div>
           ${metricsMarkup}
+          ${sparklineMarkup}
         </div>
       `;
     }
@@ -218,6 +408,7 @@ export function createQueryUi(helpers) {
           <span style="width:${progressValue}%;"></span>
         </div>
         ${metricsMarkup}
+        ${sparklineMarkup}
       </div>
     `;
   }
@@ -359,11 +550,14 @@ export function createQueryUi(helpers) {
     const showExportActions = job.status === "completed" && job.columns.length > 0;
     const rowsBadge = queryRowsShownLabel(job);
     const showRowsBadge = queryJobIsRunning(job) || Number(job.rowsShown || 0) > 0 || Boolean(job.truncated);
+    const terminalMetricsMarkup = queryJobIsRunning(job) ? "" : queryProcessMetricStripMarkup(job);
+    const terminalSparklineMarkup = queryJobIsRunning(job) ? "" : queryResourceSparklineMarkup(job);
     const resultBody = job.status === "cancelled"
       ? `
           <div class="result-empty result-empty-cancelled">
             <p>${escapeHtml(queryCancellationCopy({ ...job, cancellationPhase: "cancelled" }))}</p>
-            ${queryProcessMetricStripMarkup(job)}
+            ${terminalMetricsMarkup}
+            ${terminalSparklineMarkup}
           </div>
         `
       : job.error
@@ -371,11 +565,15 @@ export function createQueryUi(helpers) {
           <div class="result-error">
             <strong>${escapeHtml(job.status === "cancelled" ? "Query cancelled." : "Query failed.")}</strong>
             <pre>${escapeHtml(job.error)}</pre>
+            ${terminalMetricsMarkup}
+            ${terminalSparklineMarkup}
           </div>
         `
       : job.columns.length
         ? `
             ${queryProgressMarkup(job)}
+            ${terminalMetricsMarkup}
+            ${terminalSparklineMarkup}
             ${queryResultTableMarkup(job)}
           `
         : queryJobIsRunning(job)
@@ -388,6 +586,8 @@ export function createQueryUi(helpers) {
           : `
               <div class="result-empty">
                 <p>${escapeHtml(job.message || "Statement executed successfully.")}</p>
+                ${terminalMetricsMarkup}
+                ${terminalSparklineMarkup}
               </div>
             `;
 
@@ -645,6 +845,7 @@ export function createQueryUi(helpers) {
             <span>${escapeHtml(rowsCopy)}</span>
           </div>
           ${queryProcessMetricStripMarkup(job, { compact: true })}
+          ${queryResourceSparklineMarkup(job, { compact: true })}
           ${progressMarkup}
           ${queryMonitorInsightStripMarkup(job)}
           <p class="query-monitor-sql">${escapeHtml(job.sql)}</p>
@@ -688,5 +889,6 @@ export function createQueryUi(helpers) {
     queryPerformanceStatsMarkup,
     queryMonitorItemMarkup,
     queryNotificationItemMarkup,
+    queryResourceSparklineMarkup,
   };
 }

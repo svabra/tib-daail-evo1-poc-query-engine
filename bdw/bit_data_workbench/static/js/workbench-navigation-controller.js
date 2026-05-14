@@ -16,6 +16,7 @@ export function createWorkbenchNavigationController(helpers) {
     openQueryWorkbench,
     openQueryWorkbenchDataSources,
     openQueryWorkbenchNavigation,
+    openQueryRunsPage,
     promptClearLocalWorkspace,
     selectIngestionRunbook,
     showAboutDialog,
@@ -76,6 +77,15 @@ export function createWorkbenchNavigationController(helpers) {
       event.stopPropagation();
       closeNotificationMenu();
       await openQueryWorkbenchDataSources();
+      return true;
+    }
+
+    const openQueryRunsButton = event.target.closest("[data-open-query-runs]");
+    if (openQueryRunsButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeNotificationMenu();
+      await openQueryRunsPage();
       return true;
     }
 

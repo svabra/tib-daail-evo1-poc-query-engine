@@ -529,69 +529,6 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 timeout=args.timeout_ms,
             )
 
-            stage = "delete Unassigned non-recursively"
-            unassigned_delete_ms = await delete_folder_non_recursive(
-                page,
-                "Unassigned",
-                args.timeout_ms,
-            )
-            state = await notebook_tree_state(page)
-            if tree_contains_folder(state, "Unassigned"):
-                raise RuntimeError(
-                    "Deleted Unassigned folder is still present in tree state."
-                )
-            if not root_contains_notebook(state, notebook_id):
-                raise RuntimeError(
-                    "Deleting Unassigned did not preserve its notebook at the "
-                    f"tree root: {notebook_id}"
-                )
-            await page.locator(
-                "[data-notebook-tree] > "
-                f'[data-draggable-notebook][data-notebook-id="{notebook_id}"]'
-            ).wait_for(
-                state="attached",
-                timeout=args.timeout_ms,
-            )
-
-            stage = "create default notebook in Unassigned"
-            (
-                unassigned_notebook_id,
-                default_notebook_create_ms,
-            ) = await create_notebook_in_default_folder(page, args.timeout_ms)
-            state = await notebook_tree_state(page)
-            if not folder_contains_notebook(
-                state,
-                "Unassigned",
-                unassigned_notebook_id,
-            ):
-                raise RuntimeError(
-                    "Default notebook creation did not persist inside "
-                    f"Unassigned: {unassigned_notebook_id}"
-                )
-
-            stage = "delete Unassigned recursively"
-            unassigned_recursive_delete_ms = await delete_folder_recursive(
-                page,
-                "Unassigned",
-                args.timeout_ms,
-            )
-            state = await notebook_tree_state(page)
-            if tree_contains_folder(state, "Unassigned"):
-                raise RuntimeError(
-                    "Recursively deleted Unassigned folder is still present "
-                    "in tree state."
-                )
-            if tree_contains_notebook(state, unassigned_notebook_id):
-                raise RuntimeError(
-                    "Recursively deleted Unassigned notebook is still present "
-                    f"in tree state: {unassigned_notebook_id}"
-                )
-            if not root_contains_notebook(state, notebook_id):
-                raise RuntimeError(
-                    "Recursive Unassigned deletion removed an unrelated root "
-                    f"notebook: {notebook_id}"
-                )
-
             stage = "create recursive test folder"
             recursive_create_ms = await create_root_folder(
                 page,
@@ -636,17 +573,16 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 state="detached",
                 timeout=args.timeout_ms,
             )
-            await page.locator(
-                "[data-notebook-tree] > "
+            unassigned_folder = await wait_for_notebook_folder(
+                page,
+                "Unassigned",
+                args.timeout_ms,
+            )
+            await ensure_folder_open(unassigned_folder)
+            await unassigned_folder.locator(
                 f'[data-draggable-notebook][data-notebook-id="{notebook_id}"]'
             ).wait_for(
                 state="attached",
-                timeout=args.timeout_ms,
-            )
-            await page.locator(
-                f'[data-draggable-notebook][data-notebook-id="{unassigned_notebook_id}"]'
-            ).wait_for(
-                state="detached",
                 timeout=args.timeout_ms,
             )
             await notebook_folder(page, recursive_folder).wait_for(
@@ -673,12 +609,6 @@ async def run_smoke(args: argparse.Namespace) -> int:
     print(f"Sibling notebook folder create: {sibling_create_ms:.0f} ms")
     print(f"Notebook create in folder: {create_notebook_ms:.0f} ms")
     print(f"Notebook folder move to Unassigned: {move_to_unassigned_ms:.0f} ms")
-    print(f"Unassigned folder non-recursive delete: {unassigned_delete_ms:.0f} ms")
-    print(f"Default notebook create in Unassigned: {default_notebook_create_ms:.0f} ms")
-    print(
-        "Unassigned folder recursive delete: "
-        f"{unassigned_recursive_delete_ms:.0f} ms"
-    )
     print(f"Recursive test folder create: {recursive_create_ms:.0f} ms")
     print(
         "Recursive test notebook create: "

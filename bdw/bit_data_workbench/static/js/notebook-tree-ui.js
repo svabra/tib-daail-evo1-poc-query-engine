@@ -65,6 +65,12 @@ export function createNotebookTreeUi(helpers) {
       : "Private folder. New notebooks created here stay local.";
   }
 
+  function folderVisibilityDisabledTitle(isShared) {
+    return isShared
+      ? "Immutable preset folders are public."
+      : "This folder visibility cannot be changed.";
+  }
+
   function folderIsShared(folder) {
     if (!(folder instanceof Element)) {
       return false;
@@ -80,10 +86,13 @@ export function createNotebookTreeUi(helpers) {
     }
 
     const isShared = folderIsShared(folder);
+    const canEdit = folderCanEdit(folder);
     button.textContent = folderVisibilityLabel(isShared);
-    button.title = folderVisibilityTitle(isShared);
+    button.title = canEdit ? folderVisibilityTitle(isShared) : folderVisibilityDisabledTitle(isShared);
     button.setAttribute("aria-label", isShared ? "Mark folder private" : "Mark folder public");
     button.setAttribute("aria-pressed", isShared ? "true" : "false");
+    button.disabled = !canEdit;
+    button.classList.toggle("is-action-disabled", !canEdit);
   }
 
   function setFolderShared(folder, isShared) {
@@ -99,6 +108,7 @@ export function createNotebookTreeUi(helpers) {
     name,
     { open = false, folderId = "", canEdit = true, canDelete = true, isShared = false } = {}
   ) {
+    const resolvedIsShared = isShared || !canEdit;
     const folder = document.createElement("details");
     folder.className = "tree-folder";
     folder.dataset.treeFolder = "";
@@ -106,7 +116,7 @@ export function createNotebookTreeUi(helpers) {
     folder.dataset.folderId = folderId || "";
     folder.dataset.canEdit = String(canEdit);
     folder.dataset.canDelete = String(canDelete);
-    folder.dataset.folderShared = isShared ? "true" : "false";
+    folder.dataset.folderShared = resolvedIsShared ? "true" : "false";
 
     const summary = document.createElement("summary");
     summary.className = "tree-folder-summary";
@@ -121,12 +131,15 @@ export function createNotebookTreeUi(helpers) {
 
     const visibilityButton = document.createElement("button");
     visibilityButton.type = "button";
-    visibilityButton.className = "tree-add-button tree-add-button-inline";
+    visibilityButton.className = `tree-add-button tree-add-button-inline${canEdit ? "" : " is-action-disabled"}`;
     visibilityButton.dataset.toggleFolderShared = "";
-    visibilityButton.textContent = folderVisibilityLabel(isShared);
-    visibilityButton.title = folderVisibilityTitle(isShared);
-    visibilityButton.setAttribute("aria-label", isShared ? "Mark folder private" : "Mark folder public");
-    visibilityButton.setAttribute("aria-pressed", isShared ? "true" : "false");
+    visibilityButton.textContent = folderVisibilityLabel(resolvedIsShared);
+    visibilityButton.title = canEdit
+      ? folderVisibilityTitle(resolvedIsShared)
+      : folderVisibilityDisabledTitle(resolvedIsShared);
+    visibilityButton.setAttribute("aria-label", resolvedIsShared ? "Mark folder private" : "Mark folder public");
+    visibilityButton.setAttribute("aria-pressed", resolvedIsShared ? "true" : "false");
+    visibilityButton.disabled = !canEdit;
 
     const createNotebookButton = document.createElement("button");
     createNotebookButton.type = "button";
@@ -507,8 +520,9 @@ export function createNotebookTreeUi(helpers) {
               ? nodeState.canDelete
               : true
           : false,
-        isShared:
-          typeof serverPolicy.isShared === "boolean"
+        isShared: fallbackPolicy.isShared === true
+          ? true
+          : typeof serverPolicy.isShared === "boolean"
             ? serverPolicy.isShared
             : nodeState.isShared === true,
       });
@@ -648,7 +662,7 @@ export function createNotebookTreeUi(helpers) {
           folderId,
           canEdit: permissions.canEdit,
           canDelete: permissions.canDelete,
-          isShared: false,
+          isShared: permissions.isShared === true,
         });
         container.appendChild(folder);
       } else {

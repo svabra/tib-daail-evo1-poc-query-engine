@@ -70,10 +70,12 @@ class _FakeListingClient:
             return {
                 "CommonPrefixes": [
                     {"Prefix": "--data-exchange--/"},
+                    {"Prefix": "--bdw-internal--/"},
                     {"Prefix": "published/"},
                 ],
                 "Contents": [
                     {"Key": "--data-exchange--/files/secret/alpha.csv", "Size": 10},
+                    {"Key": "--bdw-internal--/query-runs/2026/05/13/query-1.json", "Size": 30},
                     {"Key": "visible.csv", "Size": 20},
                 ],
                 "IsTruncated": False,
@@ -196,6 +198,17 @@ def test_stream_object_rejects_data_exchange_prefix() -> None:
         manager.stream_object(
             bucket="client-bucket",
             key="--data-exchange--/files/secret/alpha.csv",
+        )
+
+
+def test_stream_object_rejects_internal_prefix() -> None:
+    explorer = import_s3_explorer()
+    manager = explorer.S3ExplorerManager(_ConfiguredSettings())
+
+    with pytest.raises(ValueError, match="Internal Workbench"):
+        manager.stream_object(
+            bucket="client-bucket",
+            key="--bdw-internal--/query-runs/2026/05/13/query-1.json",
         )
 
 

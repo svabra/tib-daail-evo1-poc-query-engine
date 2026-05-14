@@ -1,1 +1,1 @@
-"""DAAIFL Workbench application package."""
+"""DAAIF Fabric application package."""

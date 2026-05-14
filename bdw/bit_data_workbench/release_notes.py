@@ -1,9 +1,42 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.8.13. Keep entries concise and
+# Derived from git history through version 0.8.14. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.8.14",
+        "releasedAt": "2026-05-14T13:57:07+02:00",
+        "features": [
+            (
+                "Immutable PoC notebooks and notebook folders now stay Public / Shared, matching "
+                "their shared catalogue behavior instead of exposing Private / Local controls."
+            ),
+            (
+                "Recorded Query Runs now live inside each notebook cell between the SQL editor and "
+                "results, start collapsed with a stateful chevron, refresh from the shared SSE event "
+                "stream, and show a quiet empty state instead of an endless loading message."
+            ),
+            (
+                "The workbench shell now uses DAAIF Fabric branding, shows realtime SSE connection "
+                "status in the top bar, and exposes Query Runs from navigation."
+            ),
+            (
+                "Query run history, notebook results, and the Query Monitor now share one resource "
+                "chart renderer with larger readable line charts, CPU percent and RAM MB axes, peak "
+                "and AVG legends, and light horizontal guide lines."
+            ),
+            (
+                "Loader job details now rely on the Write targets panel for materialized outputs "
+                "and no longer repeat the legacy Relation and Path summary above it."
+            ),
+            (
+                "Regression coverage now verifies SSE-driven query run history, per-cell collapsed "
+                "spacing, chart layout and labels across all query surfaces, immutable public "
+                "notebook visibility, and loader write-target cleanup."
+            ),
+        ],
+    },
     {
         "version": "0.8.13",
         "releasedAt": "2026-05-13T22:19:03+02:00",
@@ -357,7 +390,7 @@ RELEASE_NOTES: list[dict[str, object]] = [
                 "with service mix, expandable cost drivers, and current-vs-forecast burn tracking."
             ),
             (
-                "The monitoring page now blends fixed DAAIFL and PostgreSQL fees with "
+                "The monitoring page now blends fixed DAAIF and PostgreSQL fees with "
                 "usage-based container, S3, and filesystem costs in one client-facing view."
             ),
             (

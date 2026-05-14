@@ -62,6 +62,10 @@ export function queryNotificationMenu() {
   return document.querySelector("[data-query-notifications]");
 }
 
+export function sseConnectionStatusIndicator() {
+  return document.querySelector("[data-sse-connection-status]");
+}
+
 export function settingsMenu() {
   return document.querySelector("[data-settings-menu]");
 }
@@ -80,6 +84,14 @@ export function homePageRoot() {
 
 export function queryWorkbenchEntryPageRoot() {
   return document.querySelector("[data-query-workbench-entry-page]");
+}
+
+export function queryEntryRecentNotebooksRoot() {
+  return document.querySelector("[data-query-entry-recent-notebooks]");
+}
+
+export function queryRunsPageRoot() {
+  return document.querySelector("[data-query-runs-page]");
 }
 
 export function queryWorkbenchDataSourcesPageRoot() {

@@ -92,6 +92,7 @@ import {
   queryPerformanceDistribution,
   queryPerformanceSection,
   queryPerformanceStats,
+  queryRunsPageRoot,
   queryWorkbenchDataSourcesPageRoot,
   queryWorkbenchEntryPageRoot,
   runbookFolders,
@@ -100,6 +101,7 @@ import {
   shellRoot,
   sidebarQueryCounts,
   sidebarToggles,
+  sseConnectionStatusIndicator,
   sourceInspector,
   sourceInspectorPanel,
   sourceObjectNodes,
@@ -107,8 +109,11 @@ import {
 import { createSourceInspectorController } from "./source-inspector-controller.js";
 import { createSourceInspectorUi } from "./source-inspector-ui.js";
 import { createQueryInsights } from "./query-insights.js";
+import { createQueryResourceChartsController } from "./query-resource-charts.js";
+import { createQueryRunsController } from "./query-runs-controller.js";
 import { createQuerySourceValidationController } from "./query-source-validation-controller.js";
 import { createQueryUi } from "./query-ui.js";
+import { createQueryWorkbenchEntryController } from "./query-workbench-entry-controller.js";
 import {
   applyOptimisticQueryJobSnapshot,
   compareQueryJobsByCompletedAt,
@@ -122,6 +127,7 @@ import {
 } from "./query-job-state.js";
 import { createS3ExplorerLoader, s3ExplorerPath } from "./s3-explorer-loader.js";
 import { createRealtimeController } from "./realtime-controller.js";
+import { createRealtimeConnectionStatusController } from "./realtime-connection-status-controller.js";
 import { createServiceConsumptionUi } from "./service-consumption-ui.js?v=2026-04-19-service-mix-refresh-2";
 import { createSidebarLayoutManager } from "./sidebar-layout-manager.js";
 import { createSidebarRefreshController } from "./sidebar-refresh-controller.js";
@@ -192,6 +198,7 @@ let sidebarSourceOperationStatus = null;
 let sidebarSourceOperationStatusClearHandle = null;
 const sharedNotebookDrafts = new Map();
 const sharedNotebookSyncHandles = new Map();
+const sharedNotebookActivityTouchHandles = new Map();
 const s3ExplorerNodeRequests = new Map();
 const resultExportDialogState = {
   jobId: "",
@@ -359,6 +366,7 @@ const {
   pushDataProductsHistory,
   pushHomeHistory,
   pushNotebookHistory,
+  pushQueryRunsHistory,
   pushQueryWorkbenchDataSourceExplorerHistory,
   pushQueryWorkbenchDataSourcesHistory,
   pushQueryWorkbenchHistory,
@@ -551,6 +559,7 @@ const {
   queryPerformanceStatsMarkup,
   queryMonitorItemMarkup,
   queryNotificationItemMarkup,
+  queryResourceSparklineMarkup,
 } = createQueryUi({
   escapeHtml,
   formatQueryDuration,
@@ -573,6 +582,31 @@ const querySourceValidationController = createQuerySourceValidationController({
   cellLanguageForCellRoot,
   selectedDataSourcesForCell,
   validateLocalWorkspaceAliases,
+});
+
+const queryResourceChartsController = createQueryResourceChartsController();
+queryResourceChartsController.start();
+
+const realtimeConnectionStatusController = createRealtimeConnectionStatusController({
+  getIndicator: sseConnectionStatusIndicator,
+});
+
+const queryRunsController = createQueryRunsController({
+  escapeHtml,
+  fetchJsonOrThrow,
+  formatByteCount,
+  formatQueryDuration,
+  formatQueryTimestamp,
+  queryResourceSparklineMarkup,
+});
+
+const queryWorkbenchEntryController = createQueryWorkbenchEntryController({
+  escapeHtml,
+  fetchJsonOrThrow,
+  formatRelativeTimestamp,
+  notebookLinks,
+  readNotebookActivity,
+  workbenchClientId,
 });
 
 const { renderHomePage } = createHomeUi({
@@ -768,6 +802,7 @@ const {
   openQueryWorkbench,
   openQueryWorkbenchDataSources,
   openQueryWorkbenchNavigation,
+  openQueryRunsPage,
   promptClearLocalWorkspace,
   selectIngestionRunbook,
   showAboutDialog,
@@ -1163,6 +1198,10 @@ function currentWorkbenchSection() {
     return "service-consumption";
   }
 
+  if (queryRunsPageRoot()) {
+    return "query-runs";
+  }
+
   if (queryWorkbenchDataSourcesPageRoot()) {
     return "data-sources";
   }
@@ -1191,7 +1230,7 @@ function applicationVersion() {
   }
 
   const overlayVersion = Array.from(document.querySelectorAll(".app-version-overlay-row"))
-    .find((row) => row.querySelector(".app-version-overlay-label")?.textContent?.trim() === "DAAIFL Workbench")
+    .find((row) => row.querySelector(".app-version-overlay-label")?.textContent?.trim() === "DAAIF Fabric")
     ?.querySelector(".app-version-overlay-value")
     ?.textContent?.trim() || "";
   if (overlayVersion) {
@@ -1204,34 +1243,38 @@ function applicationVersion() {
 
 function workbenchTitle(section = currentWorkbenchSection()) {
   if (section === "home") {
-    return "DAAIFL Workbench";
+    return "DAAIF Fabric";
   }
 
   if (section === "data-sources") {
-    return "DAAIFL Data Source Workbench";
+    return "DAAIF Fabric - Data Source Workbench";
   }
 
   if (section === "data-products") {
-    return "DAAIFL Data Products Workbench";
+    return "DAAIF Fabric - Data Products Workbench";
   }
 
   if (section === "data-exchange") {
-    return "DAAIFL DataExchange Workbench";
+    return "DAAIF Fabric - DataExchange Workbench";
   }
 
   if (section === "service-consumption") {
-    return "DAAIFL Service Consumption";
+    return "DAAIF Fabric - Service Consumption";
+  }
+
+  if (section === "query-runs") {
+    return "DAAIF Fabric - Query Runs";
   }
 
   if (section === "loader") {
-    return "DAAIFL Loader Workbench";
+    return "DAAIF Fabric - Loader Workbench";
   }
 
   if (section === "ingestion") {
-    return "DAAIFL Ingestion Workbench";
+    return "DAAIF Fabric - Ingestion Workbench";
   }
 
-  return "DAAIFL Query Workbench";
+  return "DAAIF Fabric - Query Workbench";
 }
 
 function applyWorkbenchTitle(section = currentWorkbenchSection()) {
@@ -1543,6 +1586,7 @@ function syncShellVisibility() {
     dataProductsPageRoot() ||
     dataExchangePageRoot() ||
     serviceConsumptionPageRoot() ||
+    queryRunsPageRoot() ||
     queryWorkbenchEntryPageRoot() ||
     queryWorkbenchDataSourcesPageRoot() ||
     dataSourceExplorerPageRoot() ||
@@ -2173,6 +2217,52 @@ function notificationItemKey(type, job) {
   return `${type}:${job?.jobId || ""}:${lifecycleKey}`;
 }
 
+function normalizeNotebookActivityAction(reason = "edited") {
+  const normalized = String(reason || "").trim().toLowerCase();
+  if (normalized === "run") {
+    return "run";
+  }
+  if (normalized === "open") {
+    return "open";
+  }
+  return "edit";
+}
+
+function scheduleSharedNotebookActivityTouch(notebookId, reason = "edited") {
+  const normalizedNotebookId = String(notebookId || "").trim();
+  if (!normalizedNotebookId || !notebookMetadata(normalizedNotebookId).shared) {
+    return;
+  }
+
+  const existingHandle = sharedNotebookActivityTouchHandles.get(normalizedNotebookId);
+  if (existingHandle) {
+    window.clearTimeout(existingHandle);
+  }
+
+  const action = normalizeNotebookActivityAction(reason);
+  const delayMs = action === "edit" ? 1200 : 0;
+  const handle = window.setTimeout(() => {
+    sharedNotebookActivityTouchHandles.delete(normalizedNotebookId);
+    window
+      .fetch("/api/notebook-activity/touch", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+          "X-Workbench-Client-Id": workbenchClientId(),
+        },
+        body: JSON.stringify({
+          notebookId: normalizedNotebookId,
+          action,
+        }),
+      })
+      .catch((error) => {
+        console.error("Failed to record shared notebook activity.", error);
+      });
+  }, delayMs);
+  sharedNotebookActivityTouchHandles.set(normalizedNotebookId, handle);
+}
+
 function recordNotebookActivity(notebookId, reason = "edited") {
   const normalizedNotebookId = String(notebookId ?? "").trim();
   if (!normalizedNotebookId) {
@@ -2190,6 +2280,8 @@ function recordNotebookActivity(notebookId, reason = "edited") {
   };
   writeNotebookActivity(activity);
   renderHomePage();
+  queryWorkbenchEntryController.renderMyLatest();
+  scheduleSharedNotebookActivityTouch(normalizedNotebookId, reason);
 }
 
 function currentWorkspaceCanEdit() {
@@ -3593,6 +3685,7 @@ function renderLocalNotebookWorkspace(notebookId, options = {}) {
   activateNotebookLink(notebookId);
   revealNotebookLink(notebookId);
   writeLastNotebookId(notebookId);
+  recordNotebookActivity(notebookId, "open");
   syncVisibleQueryCells();
   syncVisiblePythonCells();
   querySourceValidationController.refreshAll(panel);
@@ -3616,10 +3709,65 @@ function resolveNotebookCreateTarget(button) {
   return directChildrenContainer(ensureRootUnassignedFolder());
 }
 
+function initialMetadataIsEmpty(initialMetadata = {}) {
+  return (
+    initialMetadata &&
+    typeof initialMetadata === "object" &&
+    !Array.isArray(initialMetadata) &&
+    Object.keys(initialMetadata).length === 0
+  );
+}
+
+function isReusableBlankLocalNotebook(notebookId) {
+  if (!isLocalNotebookId(notebookId)) {
+    return false;
+  }
+
+  const metadata = notebookMetadata(notebookId);
+  const cells = Array.isArray(metadata.cells) ? metadata.cells : [];
+  const firstCell = cells[0] || {};
+  return (
+    metadata.canEdit &&
+    !metadata.shared &&
+    !metadata.deleted &&
+    /^Untitled Notebook \d+$/.test(String(metadata.title || "").trim()) &&
+    String(metadata.summary || "").trim() === "Describe this notebook." &&
+    !String(metadata.linkedGeneratorId || "").trim() &&
+    !normalizeTags(metadata.tags || []).length &&
+    cells.length === 1 &&
+    normalizeCellLanguage(firstCell.language, "sql") === "sql" &&
+    !String(firstCell.sql || "").trim() &&
+    !normalizeDataSources(firstCell.dataSources || []).length &&
+    (!Array.isArray(metadata.versions) || metadata.versions.length <= 1)
+  );
+}
+
+function reusableBlankNotebookId(targetContainer) {
+  if (!targetContainer) {
+    return "";
+  }
+
+  return Array.from(targetContainer.querySelectorAll(":scope > .notebook-tree-leaf"))
+    .map((link) => ({
+      notebookId: String(link.dataset.notebookId || "").trim(),
+      createdAt: Date.parse(link.dataset.createdAt || "") || 0,
+    }))
+    .filter((entry) => entry.notebookId && isReusableBlankLocalNotebook(entry.notebookId))
+    .sort((left, right) => right.createdAt - left.createdAt)[0]?.notebookId || "";
+}
+
 async function createNotebook(targetContainer, initialMetadata = {}) {
   const notebookId = `${localNotebookPrefix}${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
   const targetFolder = targetContainer?.closest("[data-tree-folder]") ?? null;
   const inheritedShared = Boolean(initialMetadata.shared ?? folderIsShared(targetFolder));
+  if (initialMetadataIsEmpty(initialMetadata) && !inheritedShared) {
+    const existingBlankNotebookId = reusableBlankNotebookId(targetContainer);
+    if (existingBlankNotebookId) {
+      renderLocalNotebookWorkspace(existingBlankNotebookId, { scrollToTop: true });
+      return existingBlankNotebookId;
+    }
+  }
+
   const metadata = {
     title: initialMetadata.title ?? defaultLocalNotebookTitle(),
     summary: initialMetadata.summary ?? "Describe this notebook.",
@@ -3880,6 +4028,33 @@ function setActiveCell(cellRoot = null) {
   cellRoot?.classList.add("is-active");
 }
 
+function cellQueryRunsPanelMarkup(notebookId, cellId) {
+  return `
+    <details
+      class="workspace-query-runs workspace-query-runs-cell"
+      data-notebook-query-runs
+      data-query-runs-notebook-id="${escapeHtml(notebookId)}"
+      data-query-runs-cell-id="${escapeHtml(cellId)}"
+      data-query-runs-limit="10"
+    >
+      <summary class="workspace-query-runs-summary">
+        <span class="workspace-query-runs-title">
+          <span class="workspace-query-runs-chevron" aria-hidden="true"></span>
+          <span class="workspace-tags-label">Query Runs</span>
+        </span>
+        <span class="query-runs-status" data-query-runs-status>No recorded query runs yet.</span>
+      </summary>
+      <div class="workspace-query-runs-header workspace-query-runs-header-cell">
+        <p>Recorded runs for this cell.</p>
+        <button type="button" class="workspace-version-save" data-query-runs-refresh>Refresh</button>
+      </div>
+      <div class="query-run-history-list query-run-history-list-compact" data-query-runs-list>
+        <p class="home-empty">No recorded query runs yet.</p>
+      </div>
+    </details>
+  `;
+}
+
 function applyWorkspaceCellState(workspaceRoot, cell, index, editable, totalCells) {
   const cellRoot = workspaceRoot?.querySelector(`[data-query-cell][data-cell-id="${cell.cellId}"]`);
   if (!cellRoot) {
@@ -3934,6 +4109,21 @@ function applyWorkspaceCellState(workspaceRoot, cell, index, editable, totalCell
 
   syncCellActionButtons(cellRoot, editable, index, totalCells);
   updateWorkspaceCellEditor(cellRoot, cell.sql);
+
+  const queryRunsRoot = cellRoot.querySelector(":scope > [data-notebook-query-runs]");
+  if (cellLanguage === "python") {
+    queryRunsRoot?.remove();
+  } else if (!queryRunsRoot) {
+    const resultRoot = cellRoot.querySelector("[data-cell-result]");
+    if (resultRoot) {
+      resultRoot.insertAdjacentHTML("beforebegin", cellQueryRunsPanelMarkup(notebookId, cell.cellId));
+    } else {
+      cellRoot.querySelector("[data-query-form]")?.insertAdjacentHTML(
+        "afterend",
+        cellQueryRunsPanelMarkup(notebookId, cell.cellId)
+      );
+    }
+  }
 
   const resultRoot = cellRoot.querySelector("[data-cell-result]");
   const job = cellLanguage === "python" ? pythonJobForCell(notebookId, cell.cellId) : queryJobForCell(notebookId, cell.cellId);
@@ -4020,8 +4210,10 @@ function applyWorkspaceMetadata(metaRoot, metadata) {
   if (sharedToggle) {
     sharedToggle.classList.toggle("is-on", metadata.shared === true);
     sharedToggle.setAttribute("aria-pressed", metadata.shared === true ? "true" : "false");
-    sharedToggle.title = notebookVisibilityTitle(metadata.shared === true);
-    sharedToggle.disabled = !metadata.canEdit && metadata.shared !== true;
+    sharedToggle.title = metadata.canEdit
+      ? notebookVisibilityTitle(metadata.shared === true)
+      : "Immutable preset notebooks are public.";
+    sharedToggle.disabled = !metadata.canEdit;
   }
 
   syncWorkspaceActionButton(workspaceRoot?.querySelector("[data-rename-notebook]"), {
@@ -4508,6 +4700,7 @@ function applyRealtimeTopicSnapshot(topic, snapshot) {
   switch (topic) {
     case "query-jobs":
       applyQueryJobsState(snapshot);
+      queryRunsController.refreshForQueryJobsSnapshot(snapshot);
       break;
     case "python-jobs":
       applyPythonJobsState(snapshot);
@@ -4689,6 +4882,9 @@ async function loadWorkspacePanelPartial(path) {
   applyNotebookMetadata();
   syncVisiblePythonCells();
   querySourceValidationController.refreshAll(panel);
+  queryRunsController.initializeCurrentPage(panel).catch((error) => {
+    console.error("Failed to load query-run history.", error);
+  });
   renderQueryNotificationMenu();
   return panel;
 }
@@ -4702,8 +4898,26 @@ async function loadQueryWorkbenchEntry({ pushHistory = true } = {}) {
   syncShellVisibility();
   activateNotebookLink("");
   applyWorkbenchTitle("query");
+  renderHomePage();
+  queryWorkbenchEntryController.initializeCurrentPage(panel).catch((error) => {
+    console.error("Failed to initialize the Query Workbench entry page.", error);
+  });
   if (pushHistory) {
     pushQueryWorkbenchHistory();
+  }
+}
+
+async function loadQueryRunsPage({ pushHistory = true } = {}) {
+  const panel = await loadWorkspacePanelPartial("/query-workbench/query-runs");
+  if (!panel) {
+    return;
+  }
+
+  syncShellVisibility();
+  activateNotebookLink("");
+  applyWorkbenchTitle("query-runs");
+  if (pushHistory) {
+    pushQueryRunsHistory();
   }
 }
 
@@ -4904,6 +5118,14 @@ async function openQueryWorkbenchDataSources() {
   await loadQueryWorkbenchDataSources();
 }
 
+async function openQueryRunsPage() {
+  if (currentSidebarMode() !== "notebook") {
+    await refreshSidebar("notebook");
+  }
+
+  await loadQueryRunsPage();
+}
+
 async function openDataProductsWorkbench() {
   if (currentSidebarMode() !== "notebook") {
     await refreshSidebar("notebook");
@@ -4948,9 +5170,15 @@ async function openDataProductPublishDialog({
 }
 
 function ensureRealtimeEventsEventSource() {
-  if (realtimeEventsEventSource || typeof window.EventSource !== "function") {
+  if (realtimeEventsEventSource) {
     return;
   }
+  if (typeof window.EventSource !== "function") {
+    realtimeConnectionStatusController.setDisconnected();
+    return;
+  }
+
+  realtimeConnectionStatusController.setConnecting();
 
   const params = new URLSearchParams();
   const dataSourceEventsStateVersion = getDataSourceEventsStateVersion();
@@ -4980,6 +5208,9 @@ function ensureRealtimeEventsEventSource() {
     ? `/api/events/stream?${params.toString()}`
     : "/api/events/stream";
   const eventSource = new window.EventSource(streamUrl);
+  eventSource.onopen = () => {
+    realtimeConnectionStatusController.setConnected();
+  };
   [
     "query-jobs",
     "python-jobs",
@@ -4998,6 +5229,7 @@ function ensureRealtimeEventsEventSource() {
     });
   });
   eventSource.onerror = () => {
+    realtimeConnectionStatusController.setDisconnected();
     const refreshTasks = [];
     const dataSourceEventsStateVersion = getDataSourceEventsStateVersion();
     if (queryJobsStateVersion !== null) {
@@ -7222,6 +7454,7 @@ async function loadNotebookWorkspace(notebookId, options = {}) {
   activateNotebookLink(notebookId);
   revealNotebookLink(notebookId);
   writeLastNotebookId(notebookId);
+  recordNotebookActivity(notebookId, "open");
   syncVisibleQueryCells();
   syncVisiblePythonCells();
   querySourceValidationController.refreshAll(panel);
@@ -7555,6 +7788,10 @@ document.body.addEventListener("click", async (event) => {
   }
 
   if (await serviceConsumptionUi.handleClick(event)) {
+    return;
+  }
+
+  if (await queryRunsController.handleClick(event)) {
     return;
   }
 
@@ -7937,6 +8174,12 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
   syncVisibleQueryCells();
   syncVisiblePythonCells();
   querySourceValidationController.refreshAll(event.target);
+  queryRunsController.initializeCurrentPage(event.target).catch((error) => {
+    console.error("Failed to initialize query-run history after a partial swap.", error);
+  });
+  queryWorkbenchEntryController.initializeCurrentPage(event.target).catch((error) => {
+    console.error("Failed to initialize Query Workbench entry after a partial swap.", error);
+  });
   renderQueryNotificationMenu();
   dataProductsController.initializeCurrentPage();
   dataExchangeController.initializeCurrentPage();
@@ -8020,6 +8263,17 @@ window.addEventListener("popstate", async () => {
     } catch (error) {
       if (error?.name !== "AbortError") {
         console.error("Failed to restore query workbench from browser history.", error);
+      }
+    }
+    return;
+  }
+
+  if (window.location.pathname === "/query-workbench/query-runs") {
+    try {
+      await loadQueryRunsPage({ pushHistory: false });
+    } catch (error) {
+      if (error?.name !== "AbortError") {
+        console.error("Failed to restore query runs from browser history.", error);
       }
     }
     return;
@@ -8171,6 +8425,14 @@ Promise.allSettled(initialLoadTasks)
       return;
     }
 
+    if (queryRunsPageRoot()) {
+      queryRunsController.initializeCurrentPage().catch((error) => {
+        console.error("Failed to initialize query-run history.", error);
+      });
+      renderQueryNotificationMenu();
+      return;
+    }
+
     if (queryWorkbenchDataSourcesPageRoot()) {
       sidebarRefreshTask.finally(() => {
         initializeDataSourceManagementPage().catch((error) => {
@@ -8210,6 +8472,10 @@ Promise.allSettled(initialLoadTasks)
         });
         return;
       }
+      renderHomePage();
+      queryWorkbenchEntryController.initializeCurrentPage().catch((error) => {
+        console.error("Failed to initialize the Query Workbench entry page.", error);
+      });
       renderQueryNotificationMenu();
       return;
     }

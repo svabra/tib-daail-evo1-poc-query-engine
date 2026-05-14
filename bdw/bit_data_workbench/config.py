@@ -573,7 +573,7 @@ class Settings:
         # Secret-backed credentials, TLS settings, and cluster endpoints.
         return cls(
             service_name="bit-data-workbench",
-            ui_title="DAAIFL Workbench",
+            ui_title="DAAIF Fabric",
             image_version=default_image_version(),
             port=int(env("PORT", "8000")),
             duckdb_database=Path(env("DUCKDB_DATABASE", "/tmp/workspace/workspace.duckdb")),

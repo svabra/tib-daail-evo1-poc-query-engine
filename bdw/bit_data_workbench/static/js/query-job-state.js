@@ -10,7 +10,10 @@ export function normalizeQueryJob(job) {
   const progress = Number(job.progress);
   const processId = Number(job.processId);
   const cpuPercent = Number(job.cpuPercent);
+  const averageCpuPercent = Number(job.averageCpuPercent);
+  const peakCpuPercent = Number(job.peakCpuPercent);
   const memoryRssBytes = Number(job.memoryRssBytes);
+  const averageMemoryRssBytes = Number(job.averageMemoryRssBytes);
   const peakMemoryRssBytes = Number(job.peakMemoryRssBytes);
   const workerExitCode = Number(job.workerExitCode);
 
@@ -32,10 +35,35 @@ export function normalizeQueryJob(job) {
     executionMode: String(job.executionMode ?? "").trim(),
     processId: Number.isFinite(processId) && processId > 0 ? Math.round(processId) : null,
     cpuPercent: Number.isFinite(cpuPercent) ? Math.max(0, cpuPercent) : null,
+    averageCpuPercent: Number.isFinite(averageCpuPercent) ? Math.max(0, averageCpuPercent) : null,
+    peakCpuPercent: Number.isFinite(peakCpuPercent) ? Math.max(0, peakCpuPercent) : null,
     memoryRssBytes: Number.isFinite(memoryRssBytes) ? Math.max(0, Math.round(memoryRssBytes)) : null,
+    averageMemoryRssBytes: Number.isFinite(averageMemoryRssBytes)
+      ? Math.max(0, Math.round(averageMemoryRssBytes))
+      : null,
     peakMemoryRssBytes: Number.isFinite(peakMemoryRssBytes)
       ? Math.max(0, Math.round(peakMemoryRssBytes))
       : null,
+    resourceSamples: Array.isArray(job.resourceSamples)
+      ? job.resourceSamples
+          .map((sample) => {
+            const elapsedMs = Number(sample?.elapsedMs);
+            const sampleCpu = Number(sample?.cpuPercent);
+            const sampleAverageCpu = Number(sample?.averageCpuPercent);
+            const sampleMemory = Number(sample?.memoryRssBytes);
+            const sampleAverageMemory = Number(sample?.averageMemoryRssBytes);
+            return {
+              elapsedMs: Number.isFinite(elapsedMs) ? Math.max(0, elapsedMs) : 0,
+              cpuPercent: Number.isFinite(sampleCpu) ? Math.max(0, sampleCpu) : null,
+              averageCpuPercent: Number.isFinite(sampleAverageCpu) ? Math.max(0, sampleAverageCpu) : null,
+              memoryRssBytes: Number.isFinite(sampleMemory) ? Math.max(0, Math.round(sampleMemory)) : null,
+              averageMemoryRssBytes: Number.isFinite(sampleAverageMemory)
+                ? Math.max(0, Math.round(sampleAverageMemory))
+                : null,
+            };
+          })
+          .filter((sample) => sample.cpuPercent !== null || sample.memoryRssBytes !== null)
+      : [],
     cancellationPhase: String(job.cancellationPhase ?? "").trim(),
     cancellationRequestedAt: String(job.cancellationRequestedAt ?? "").trim(),
     workerExitCode: Number.isFinite(workerExitCode) ? Math.round(workerExitCode) : null,

@@ -19,11 +19,12 @@
       {% if notebook_browser_manage %}
         <button
           type="button"
-          class="tree-add-button tree-add-button-inline"
+          class="tree-add-button tree-add-button-inline{% if not node.can_edit %} is-action-disabled{% endif %}"
           data-toggle-folder-shared
-          title="{{ 'Public folder. New notebooks created here start shared.' if node.is_shared else 'Private folder. New notebooks created here stay local.' }}"
+          title="{% if not node.can_edit %}Immutable preset folders are public.{% else %}{{ 'Public folder. New notebooks created here start shared.' if node.is_shared else 'Private folder. New notebooks created here stay local.' }}{% endif %}"
           aria-label="{{ 'Mark folder private' if node.is_shared else 'Mark folder public' }}"
           aria-pressed="{{ 'true' if node.is_shared else 'false' }}"
+          {% if not node.can_edit %}disabled{% endif %}
         >
           {{ "Public" if node.is_shared else "Private" }}
         </button>

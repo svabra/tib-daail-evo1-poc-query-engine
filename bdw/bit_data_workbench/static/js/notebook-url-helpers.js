@@ -24,6 +24,18 @@ export function createNotebookUrlHelpers({ isLocalNotebookId }) {
     window.history.pushState({ mode: "query-workbench" }, "", "/query-workbench");
   }
 
+  function pushQueryRunsHistory() {
+    if (window.location.pathname === "/query-workbench/query-runs") {
+      return;
+    }
+
+    window.history.pushState(
+      { mode: "query-runs" },
+      "",
+      "/query-workbench/query-runs"
+    );
+  }
+
   function queryWorkbenchDataSourcesUrl(sourceId = "", { browse = false } = {}) {
     const normalizedSourceId = String(sourceId || "").trim();
     const params = new URLSearchParams();
@@ -114,6 +126,7 @@ export function createNotebookUrlHelpers({ isLocalNotebookId }) {
     notebookUrl,
     pushHomeHistory,
     pushNotebookHistory,
+    pushQueryRunsHistory,
     pushQueryWorkbenchDataSourceExplorerHistory,
     pushQueryWorkbenchDataSourcesHistory,
     pushQueryWorkbenchHistory,

@@ -32,11 +32,22 @@
           </a>
           <div class="brand-copy">
             <h1>{{ title }}</h1>
-            <p class="brand-tagline">Data Analytics and AI Feed Landscape</p>
+            <p class="brand-tagline">Data Analytics and AI Fabric</p>
           </div>
         </div>
         <div class="topbar-actions">
           <div class="topbar-actions-primary">
+            <div
+              class="topbar-connection-status"
+              data-sse-connection-status
+              data-connection-status="connected"
+              role="status"
+              aria-live="polite"
+              hidden
+            >
+              <span class="topbar-connection-status-dot" aria-hidden="true"></span>
+              <span data-sse-connection-status-label>Offline</span>
+            </div>
             <a
               href="/query-workbench"
               class="topbar-action-button topbar-action-button-icon-only topbar-workbench-button"
@@ -248,7 +259,7 @@
   </div>
   <aside class="app-version-overlay" aria-label="Runtime status">
     <div class="app-version-overlay-row">
-      <span class="app-version-overlay-label">DAAIFL Workbench</span>
+      <span class="app-version-overlay-label">DAAIF Fabric</span>
       <span class="app-version-overlay-value">V{{ runtime.image_version }}</span>
     </div>
     <div class="app-version-overlay-row app-version-overlay-row-poc">

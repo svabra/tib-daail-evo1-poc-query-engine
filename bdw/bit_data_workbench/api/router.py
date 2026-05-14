@@ -78,6 +78,11 @@ class SharedNotebookFolderVisibilityPayload(BaseModel):
     is_public: bool = Field(alias="isPublic")
 
 
+class NotebookActivityTouchPayload(BaseModel):
+    notebook_id: str = Field(validation_alias="notebookId", serialization_alias="notebookId")
+    action: str = "open"
+
+
 class S3BucketCreatePayload(BaseModel):
     bucket_name: str = Field(validation_alias="bucketName", serialization_alias="bucketName")
 
@@ -1102,6 +1107,38 @@ def query_jobs_state(service: WorkbenchService = Depends(get_workbench_service))
     return JSONResponse(jsonable_encoder(service.query_jobs_state()))
 
 
+@router.get("/api/query-runs")
+def query_runs_history(
+    notebook_id: str = Query("", alias="notebookId"),
+    cell_id: str = Query("", alias="cellId"),
+    status: str = Query(""),
+    limit: int = Query(100, ge=1, le=500),
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return JSONResponse(
+        jsonable_encoder(
+            service.query_runs_history(
+                notebook_id=notebook_id,
+                cell_id=cell_id,
+                status=status,
+                limit=limit,
+            )
+        )
+    )
+
+
+@router.get("/api/query-runs/{job_id}")
+def query_run_detail(
+    job_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        payload = service.query_run_detail(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder(payload))
+
+
 @router.get("/api/python-jobs")
 def python_jobs_state(service: WorkbenchService = Depends(get_workbench_service)) -> JSONResponse:
     return JSONResponse(jsonable_encoder(service.python_jobs_state()))
@@ -1406,6 +1443,42 @@ def notebook_events_state(
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> JSONResponse:
     return JSONResponse(jsonable_encoder(service.notebook_events_state()))
+
+
+@router.post("/api/notebook-activity/touch")
+def touch_notebook_activity(
+    payload: NotebookActivityTouchPayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+    workbench_client_id: str | None = Header(default=None, alias="X-Workbench-Client-Id"),
+) -> JSONResponse:
+    try:
+        result = service.record_notebook_activity(
+            notebook_id=payload.notebook_id,
+            action=payload.action,
+            client_id=str(workbench_client_id or "").strip(),
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(result))
+
+
+@router.get("/api/notebook-activity/recent")
+def recent_notebook_activity(
+    service: WorkbenchService = Depends(get_workbench_service),
+    limit: int = Query(default=5, ge=1, le=25),
+    workbench_client_id: str | None = Header(default=None, alias="X-Workbench-Client-Id"),
+) -> JSONResponse:
+    return JSONResponse(
+        jsonable_encoder(
+            service.recent_notebook_activity(
+                client_id=str(workbench_client_id or "").strip(),
+                limit=limit,
+            )
+        )
+    )
 
 
 @router.get("/api/events/stream")

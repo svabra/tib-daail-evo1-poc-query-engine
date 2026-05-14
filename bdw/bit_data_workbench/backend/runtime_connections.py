@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 from pathlib import Path
 
 import duckdb
@@ -7,6 +9,11 @@ import duckdb
 from ..config import Settings
 from .s3_storage import effective_s3_url_style, normalize_s3_endpoint
 from .sql_utils import sql_identifier, sql_literal
+
+
+logger = logging.getLogger(__name__)
+DUCKDB_LOCK_RETRY_ATTEMPTS = 20
+DUCKDB_LOCK_RETRY_DELAY_SECONDS = 0.5
 
 
 def normalize_port(value: str, variable_name: str) -> str:
@@ -20,6 +27,34 @@ def normalize_postgres_host(value: str | None) -> str | None:
     if normalized in {"localhost", "::1"}:
         return "127.0.0.1"
     return value
+
+
+def _is_duckdb_lock_conflict(exc: duckdb.IOException) -> bool:
+    message = str(exc).lower()
+    return "being used by another process" in message or "file is already open" in message
+
+
+def _connect_duckdb_with_lock_retry(
+    connection_target: str,
+    *,
+    read_only: bool,
+) -> duckdb.DuckDBPyConnection:
+    for attempt in range(1, DUCKDB_LOCK_RETRY_ATTEMPTS + 1):
+        try:
+            return duckdb.connect(connection_target, read_only=read_only)
+        except duckdb.IOException as exc:
+            if not _is_duckdb_lock_conflict(exc) or attempt >= DUCKDB_LOCK_RETRY_ATTEMPTS:
+                raise
+            logger.warning(
+                "DuckDB worker connection is waiting for the database file lock to clear "
+                "(attempt %d/%d, path=%s).",
+                attempt,
+                DUCKDB_LOCK_RETRY_ATTEMPTS,
+                connection_target,
+            )
+            time.sleep(DUCKDB_LOCK_RETRY_DELAY_SECONDS)
+
+    raise RuntimeError("DuckDB worker connection retry loop exited unexpectedly.")
 
 
 def create_duckdb_worker_connection(
@@ -45,7 +80,7 @@ def create_duckdb_worker_connection(
             connection_target = normalized_target
     settings.duckdb_extension_directory.mkdir(parents=True, exist_ok=True)
 
-    connection = duckdb.connect(connection_target, read_only=read_only)
+    connection = _connect_duckdb_with_lock_retry(connection_target, read_only=read_only)
     connection.execute(
         f"SET extension_directory = {sql_literal(settings.duckdb_extension_directory.as_posix())}"
     )

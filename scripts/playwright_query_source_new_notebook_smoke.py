@@ -62,7 +62,11 @@ async def expand_source_tree(page) -> None:
 
 
 async def query_source_in_new_notebook(page, timeout_ms: int) -> tuple[str, str, str]:
-    first_visible_source = await page.evaluate(
+    previous_notebook_id = (
+        await page.locator("[data-notebook-meta]").first.get_attribute("data-notebook-id")
+    ) or ""
+
+    clicked_source = await page.evaluate(
         """
         () => {
             const sourceObjects = Array.from(document.querySelectorAll('[data-source-object]'));
@@ -80,7 +84,12 @@ async def query_source_in_new_notebook(page, timeout_ms: int) -> tuple[str, str,
                 menu.open = true;
                 menu.setAttribute('open', '');
             }
+            const action = firstVisible.querySelector('[data-query-source-new]');
+            if (!(action instanceof HTMLButtonElement)) {
+                return null;
+            }
 
+            action.click();
             return {
                 relation: String(firstVisible.dataset.sourceObjectRelation || '').trim(),
                 queryAlias: String(firstVisible.dataset.sourceObjectQueryAlias || '').trim(),
@@ -89,21 +98,13 @@ async def query_source_in_new_notebook(page, timeout_ms: int) -> tuple[str, str,
         }
         """
     )
-    if not first_visible_source:
+    if not clicked_source:
         raise RuntimeError("No visible source object was available for the smoke test.")
 
-    relation = str(first_visible_source.get("relation") or "").strip()
+    relation = str(clicked_source.get("relation") or "").strip()
     if not relation:
         raise RuntimeError("The first source object did not expose a queryable relation.")
-    expected_sql_relation = str(first_visible_source.get("queryAlias") or relation).strip()
-
-    previous_notebook_id = (
-        await page.locator("[data-notebook-meta]").first.get_attribute("data-notebook-id")
-    ) or ""
-
-    action = page.locator("[data-query-source-new]:visible").first
-    await action.wait_for(state="visible", timeout=timeout_ms)
-    await action.click()
+    expected_sql_relation = str(clicked_source.get("queryAlias") or relation).strip()
 
     await page.wait_for_function(
         """

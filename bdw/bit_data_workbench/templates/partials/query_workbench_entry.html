@@ -7,7 +7,55 @@
         Start a fresh notebook, share a notebook with colleages to collaborate, or browse the current notebook structure before entering the SQL workspace.
       </p>
     </div>
-    <div class="query-entry-action-grid">
+    <div class="query-entry-focus-grid">
+      <section class="query-entry-activity-card" aria-labelledby="query-entry-my-latest-title">
+        <div class="query-entry-activity-header">
+          <span class="home-workbench-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path d="M5.2 5.1h13.6v13.8H5.2z"></path>
+              <path d="M8.2 9.1h7.6"></path>
+              <path d="M8.2 12.4h5.6"></path>
+              <path d="M8.2 15.7h4.1"></path>
+              <path d="M16 14.2l1.8 1.8 3-3"></path>
+            </svg>
+          </span>
+          <span>
+            <span class="home-workbench-title" id="query-entry-my-latest-title">My Latest Notebooks</span>
+            <span class="home-workbench-copy">Five most recently opened, edited, or run notebooks in this browser.</span>
+          </span>
+        </div>
+        <div
+          class="query-entry-activity-list"
+          data-query-entry-my-notebooks
+          data-query-entry-recent-notebooks
+        >
+          <p class="home-empty">No recent notebook activity yet.</p>
+        </div>
+      </section>
+
+      <section class="query-entry-activity-card" aria-labelledby="query-entry-shared-activity-title">
+        <div class="query-entry-activity-header">
+          <span class="home-workbench-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path d="M4.4 5.2h15.2v11.6H4.4z"></path>
+              <path d="M7.5 9.1h6.4"></path>
+              <path d="M7.5 12.2h4.4"></path>
+              <path d="M15.8 10.2l1.5 1.5 2.4-2.6"></path>
+              <path d="M8 18.8h8"></path>
+            </svg>
+          </span>
+          <span>
+            <span class="home-workbench-title" id="query-entry-shared-activity-title">Shared Activity</span>
+            <span class="home-workbench-copy">Public notebooks recently touched by other connected browsers.</span>
+          </span>
+        </div>
+        <div class="query-entry-activity-list" data-query-entry-shared-activity>
+          <p class="home-empty">Loading shared activity...</p>
+        </div>
+      </section>
+    </div>
+
+    <div class="query-entry-action-grid query-entry-action-grid-secondary">
       <button type="button" class="home-workbench-card query-entry-action-card" data-create-notebook>
         <span class="home-workbench-icon" aria-hidden="true">
           <svg viewBox="0 0 24 24">
@@ -41,6 +89,26 @@
         <span class="home-workbench-title">Manage Data Sources</span>
         <span class="home-workbench-copy">
           Open the catalog navigator so you can inspect sources, buckets, and available relations before you query.
+        </span>
+      </a>
+      <a
+        href="/query-workbench/query-runs"
+        class="home-workbench-card query-entry-action-card query-entry-action-card-secondary"
+        data-open-query-runs
+      >
+        <span class="home-workbench-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24">
+            <path d="M4 5.2h16"></path>
+            <path d="M4 11.2h16"></path>
+            <path d="M4 17.2h16"></path>
+            <path d="M7.2 3.7v3"></path>
+            <path d="M11.8 9.7v3"></path>
+            <path d="M16.5 15.7v3"></path>
+          </svg>
+        </span>
+        <span class="home-workbench-title">Recorded Query Runs</span>
+        <span class="home-workbench-copy">
+          Review completed, failed, and cancelled query executions with CPU and RAM telemetry.
         </span>
       </a>
     </div>

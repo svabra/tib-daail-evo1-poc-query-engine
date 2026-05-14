@@ -24,6 +24,7 @@ from bit_data_workbench.models import (  # noqa: E402
 )
 from bit_data_workbench.web.router import (  # noqa: E402
     index,
+    query_runs_page,
     query_workbench_data_source_explorer,
     query_workbench_data_sources,
     sidebar_partial,
@@ -361,6 +362,17 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
             body,
         )
         self.assertNotIn('data-data-source-explorer-page', body)
+
+    def test_query_runs_page_renders_history_shell(self) -> None:
+        response = query_runs_page(
+            request=build_request("/query-workbench/query-runs", partial=True),
+            service=FakeWorkbenchService(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.body.decode("utf-8")
+        self.assertIn('data-query-runs-page', body)
+        self.assertIn('data-query-runs-list', body)
 
     def test_explorer_api_returns_postgres_catalog_payload(self) -> None:
         response = data_source_explorer_payload(

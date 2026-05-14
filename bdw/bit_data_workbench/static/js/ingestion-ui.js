@@ -249,18 +249,6 @@ export function createIngestionUi(helpers) {
         </div>
         ${dataGenerationJobProgressMarkup(job)}
         ${dataGenerationJobFactsMarkup(job)}
-        <div class="ingestion-job-targets">
-          ${
-            job.targetRelation
-              ? `<span class="ingestion-job-target"><strong>Relation:</strong> ${escapeHtml(job.targetRelation)}</span>`
-              : ""
-          }
-          ${
-            job.targetPath
-              ? `<span class="ingestion-job-target"><strong>Path:</strong> ${escapeHtml(job.targetPath)}</span>`
-              : ""
-          }
-        </div>
         ${dataGenerationJobTargetDetailsMarkup(job)}
         <p class="ingestion-job-message">${escapeHtml(job.message || "")}</p>
         ${job.error ? `<pre class="ingestion-job-error">${escapeHtml(job.error)}</pre>` : ""}

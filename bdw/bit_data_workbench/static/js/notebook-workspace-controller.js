@@ -354,7 +354,7 @@ export function createNotebookWorkspaceController(helpers) {
     }
 
     const { notebookId } = notebookContext(sharedToggle);
-    if (!notebookId) {
+    if (!notebookId || sharedToggle.disabled) {
       return true;
     }
 

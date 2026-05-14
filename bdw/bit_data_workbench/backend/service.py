@@ -92,6 +92,7 @@ from .query_jobs import (
     QUERY_EXECUTION_DUCKDB_WRITE,
     QueryJobManager,
 )
+from .query_run_history import QueryRunHistoryStore
 from .query_result_exports import QueryResultExportManager
 from .realtime_facade import WorkbenchRealtimeFacade
 from .runtime_connections import normalize_postgres_host, open_postgres_native_connection
@@ -102,6 +103,7 @@ from .notebooks import (
     build_notebooks,
     build_source_options,
 )
+from .notebook_activity import NotebookActivityStore
 from .runbooks import build_runbook_tree
 from .service_consumption import (
     SERVICE_CONSUMPTION_DEFAULT_WINDOW,
@@ -204,6 +206,8 @@ class WorkbenchService:
         self._data_exchange_store = DataExchangeStore(
             self._data_exchange_store_path()
         )
+        self._query_run_history = QueryRunHistoryStore(settings)
+        self._notebook_activity = NotebookActivityStore(settings)
         self._notebook_events: list[NotebookEventDefinition] = []
         self._notebook_events_version = 0
         self._realtime_facade().initialize_state()
@@ -221,6 +225,7 @@ class WorkbenchService:
                 "query-jobs",
                 snapshot,
             ),
+            terminal_job_callback=self._record_query_run_history,
             access_coordinator=self._duckdb_query_access,
         )
         self._kernel_sessions = KernelSessionManager()
@@ -520,6 +525,83 @@ class WorkbenchService:
     def notebook_events_state(self) -> dict[str, object]:
         with self._condition:
             return self._notebook_events_state_locked()
+
+    def record_notebook_activity(
+        self,
+        *,
+        notebook_id: str,
+        action: str,
+        client_id: str = "",
+    ) -> dict[str, object]:
+        normalized_notebook_id = str(notebook_id or "").strip()
+        with self._lock:
+            notebook = next(
+                (
+                    item
+                    for item in self._notebooks
+                    if item.notebook_id == normalized_notebook_id and item.shared
+                ),
+                None,
+            )
+        if notebook is None:
+            raise KeyError(f"Unknown shared notebook: {normalized_notebook_id}")
+        return self._notebook_activity.record(
+            notebook_id=notebook.notebook_id,
+            action=action,
+            client_id=client_id,
+        )
+
+    def recent_notebook_activity(
+        self,
+        *,
+        client_id: str = "",
+        limit: int = 5,
+    ) -> dict[str, object]:
+        normalized_limit = max(1, min(25, int(limit or 5)))
+        with self._lock:
+            shared_notebooks = {
+                notebook.notebook_id: notebook
+                for notebook in self._notebooks
+                if notebook.shared
+            }
+
+        payload = self._notebook_activity.list_recent(
+            exclude_client_id=client_id,
+            limit=max(50, normalized_limit * 10),
+        )
+        if not payload.get("available"):
+            return {
+                "available": False,
+                "activities": [],
+                "message": payload.get("message") or "Notebook activity is unavailable.",
+            }
+
+        activities: list[dict[str, object]] = []
+        seen_notebooks: set[str] = set()
+        for activity in payload.get("activities", []) or []:
+            if not isinstance(activity, dict):
+                continue
+            notebook_id = str(activity.get("notebookId") or "").strip()
+            if not notebook_id or notebook_id in seen_notebooks:
+                continue
+            notebook = shared_notebooks.get(notebook_id)
+            if notebook is None:
+                continue
+            seen_notebooks.add(notebook_id)
+            activities.append(
+                {
+                    "notebookId": notebook.notebook_id,
+                    "title": notebook.title,
+                    "summary": notebook.summary,
+                    "action": str(activity.get("action") or "").strip().lower(),
+                    "touchedAt": str(activity.get("touchedAt") or "").strip(),
+                    "actorLabel": "another browser",
+                }
+            )
+            if len(activities) >= normalized_limit:
+                break
+
+        return {"available": True, "activities": activities}
 
     def data_product_source_options(self) -> list[dict[str, object]]:
         return self._data_products.source_options()
@@ -1106,6 +1188,24 @@ class WorkbenchService:
     def query_jobs_state(self) -> dict[str, object]:
         return self._query_jobs.state_payload()
 
+    def query_runs_history(
+        self,
+        *,
+        notebook_id: str = "",
+        cell_id: str = "",
+        status: str = "",
+        limit: int = 100,
+    ) -> dict[str, object]:
+        return self._query_run_history.list_runs(
+            notebook_id=notebook_id,
+            cell_id=cell_id,
+            status=status,
+            limit=limit,
+        )
+
+    def query_run_detail(self, job_id: str) -> dict[str, object]:
+        return self._query_run_history.get_run(job_id)
+
     def python_jobs_state(self) -> dict[str, object]:
         return self._python_jobs.state_payload()
 
@@ -1295,6 +1395,9 @@ class WorkbenchService:
     def cancel_query_job(self, job_id: str) -> dict[str, object]:
         snapshot = self._query_jobs.cancel_job(job_id)
         return snapshot.payload
+
+    def _record_query_run_history(self, job_payload: dict[str, object]) -> None:
+        self._query_run_history.record_async(dict(job_payload or {}))
 
     def s3_explorer_snapshot(self, *, bucket: str = "", prefix: str = "") -> dict[str, object]:
         return self._s3_plugin.snapshot(bucket=bucket, prefix=prefix).payload

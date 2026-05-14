@@ -1,1 +1,1 @@
-"""Backend services for the DAAIFL Workbench."""
+"""Backend services for DAAIF Fabric."""

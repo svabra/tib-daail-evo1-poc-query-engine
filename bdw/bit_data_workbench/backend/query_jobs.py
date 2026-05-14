@@ -19,7 +19,7 @@ except Exception:  # pragma: no cover
     psutil = None  # type: ignore[assignment]
 
 from ..config import Settings
-from ..models import QueryJobDefinition, QueryJobMetricPoint, QueryResult
+from ..models import QueryJobDefinition, QueryJobMetricPoint, QueryResourceSample, QueryResult
 from .runtime_connections import create_duckdb_worker_connection, open_postgres_native_connection
 
 
@@ -28,6 +28,8 @@ TERMINAL_QUERY_STATUSES = {"completed", "failed", "cancelled"}
 MAX_QUERY_HISTORY = 80
 QUERY_PROGRESS_POLL_SECONDS = 0.35
 QUERY_PARENT_POLL_SECONDS = 0.1
+QUERY_METRICS_SAMPLE_SECONDS = 1.0
+MAX_QUERY_RESOURCE_SAMPLES = 180
 QUERY_INTERRUPT_GRACE_SECONDS = 1.5
 QUERY_TERMINATE_GRACE_SECONDS = 1.5
 
@@ -397,6 +399,7 @@ def _query_worker_entry(
     sql: str,
     execution_mode: str,
     max_result_rows: int,
+    database_path: str | None = None,
 ) -> None:
     started = time.perf_counter()
     connection: Any = None
@@ -422,9 +425,11 @@ def _query_worker_entry(
         if execution_mode == QUERY_EXECUTION_POSTGRES_NATIVE:
             connection = open_postgres_native_connection(settings, "oltp")
         else:
+            worker_database_path = str(database_path or "").strip() or None
             connection = create_duckdb_worker_connection(
                 settings,
-                read_only=execution_mode == QUERY_EXECUTION_DUCKDB_READ,
+                database_path=worker_database_path,
+                read_only=execution_mode == QUERY_EXECUTION_DUCKDB_READ and worker_database_path != ":memory:",
             )
             _enable_duckdb_progress(connection)
 
@@ -643,6 +648,7 @@ class QueryJobRecord:
     sort_index: int
     execution_mode: str
     execution_sql: str
+    worker_database_path: str | None = None
     cancel_requested: bool = False
     cancellation_started_monotonic: float | None = None
     terminate_sent: bool = False
@@ -653,6 +659,11 @@ class QueryJobRecord:
     thread: threading.Thread | None = None
     process_metrics: Any | None = None
     cpu_percent_initialized: bool = False
+    last_metric_sample_monotonic: float = 0.0
+    cpu_sample_total: float = 0.0
+    cpu_sample_count: int = 0
+    memory_sample_total: int = 0
+    memory_sample_count: int = 0
     final_received: bool = False
     access_acquired: bool = False
 
@@ -666,6 +677,7 @@ class QueryJobManager:
         notebook_title_resolver: Any,
         metadata_refresher: Any,
         state_change_callback: Any | None = None,
+        terminal_job_callback: Any | None = None,
         access_coordinator: DuckDBQueryAccessCoordinator | None = None,
         multiprocessing_context: Any | None = None,
     ) -> None:
@@ -674,6 +686,7 @@ class QueryJobManager:
         self._notebook_title_resolver = notebook_title_resolver
         self._metadata_refresher = metadata_refresher
         self._state_change_callback = state_change_callback
+        self._terminal_job_callback = terminal_job_callback
         self._access_coordinator = access_coordinator or DuckDBQueryAccessCoordinator()
         self._mp_context = multiprocessing_context or mp.get_context("spawn")
         self._lock = threading.RLock()
@@ -733,6 +746,12 @@ class QueryJobManager:
                 sort_index=self._sort_counter,
                 execution_mode=execution_mode,
                 execution_sql=normalized_execution_sql,
+                worker_database_path=self._worker_database_path(
+                    execution_mode=execution_mode,
+                    source_ids=source_ids,
+                    touched_relations=touched_relations,
+                    touched_buckets=touched_buckets,
+                ),
             )
             self._jobs[snapshot.job_id] = record
             self._touch_locked()
@@ -750,6 +769,8 @@ class QueryJobManager:
 
     def cancel_job(self, job_id: str) -> QueryJobDefinition:
         cancel_event = None
+        terminal_payload: dict[str, Any] | None = None
+        queued_cancel_snapshot: QueryJobDefinition | None = None
         with self._condition:
             record = self._jobs.get(job_id)
             if record is None:
@@ -773,15 +794,22 @@ class QueryJobManager:
                 record.snapshot.cancellation_requested_at = completed_at
                 record.snapshot.can_cancel = False
                 self._touch_locked()
-                return record.snapshot
+                terminal_payload = record.snapshot.payload
+                queued_cancel_snapshot = record.snapshot
+            else:
+                record.snapshot.updated_at = utc_now_iso()
+                record.snapshot.progress_label = "Cancelling..."
+                record.snapshot.message = "Cancellation requested."
+                record.snapshot.cancellation_phase = "requested"
+                record.snapshot.cancellation_requested_at = record.snapshot.cancellation_requested_at or record.snapshot.updated_at
+                record.snapshot.can_cancel = False
+                self._touch_locked()
 
-            record.snapshot.updated_at = utc_now_iso()
-            record.snapshot.progress_label = "Cancelling..."
-            record.snapshot.message = "Cancellation requested."
-            record.snapshot.cancellation_phase = "requested"
-            record.snapshot.cancellation_requested_at = record.snapshot.cancellation_requested_at or record.snapshot.updated_at
-            record.snapshot.can_cancel = False
-            self._touch_locked()
+        if terminal_payload is not None and self._terminal_job_callback is not None:
+            with suppress(Exception):
+                self._terminal_job_callback(terminal_payload)
+        if queued_cancel_snapshot is not None:
+            return queued_cancel_snapshot
 
         if cancel_event is not None:
             with suppress(Exception):
@@ -830,17 +858,22 @@ class QueryJobManager:
                 record.snapshot.message = "Waiting for an available query worker."
                 self._touch_locked()
 
-            access_acquired = self._access_coordinator.acquire(
-                record.execution_mode,
-                lambda: self._is_cancelled_or_terminal(job_id),
+            requires_duckdb_file_access = not (
+                record.execution_mode == QUERY_EXECUTION_POSTGRES_NATIVE
+                or record.worker_database_path == ":memory:"
             )
-            if not access_acquired:
-                return
+            if requires_duckdb_file_access:
+                access_acquired = self._access_coordinator.acquire(
+                    record.execution_mode,
+                    lambda: self._is_cancelled_or_terminal(job_id),
+                )
+                if not access_acquired:
+                    return
             with self._condition:
                 record = self._jobs.get(job_id)
                 if record is None or record.snapshot.status in TERMINAL_QUERY_STATUSES:
                     return
-                record.access_acquired = True
+                record.access_acquired = access_acquired
 
             self._start_and_monitor_process(job_id)
         finally:
@@ -872,6 +905,7 @@ class QueryJobManager:
                     "sql": record.execution_sql,
                     "execution_mode": record.execution_mode,
                     "max_result_rows": self._max_result_rows,
+                    "database_path": record.worker_database_path,
                 },
                 daemon=True,
                 name=f"bdw-query-worker-{job_id[:8]}",
@@ -909,7 +943,7 @@ class QueryJobManager:
 
         process.join(timeout=0.2)
         self._drain_worker_events(job_id)
-        self._sample_process_metrics(job_id)
+        self._sample_process_metrics(job_id, force=True)
         self._finalize_after_process_exit(job_id, process.exitcode)
 
         with self._condition:
@@ -918,7 +952,21 @@ class QueryJobManager:
                 record.process = None
                 record.cancel_event = None
                 record.event_queue = None
-                record.process_metrics = None
+            record.process_metrics = None
+
+    @staticmethod
+    def _worker_database_path(
+        *,
+        execution_mode: str,
+        source_ids: list[str],
+        touched_relations: list[str] | None,
+        touched_buckets: list[str] | None,
+    ) -> str | None:
+        if execution_mode != QUERY_EXECUTION_DUCKDB_READ:
+            return None
+        if source_ids or touched_relations or touched_buckets:
+            return None
+        return ":memory:"
 
     def _drain_worker_events(self, job_id: str) -> None:
         with self._condition:
@@ -982,10 +1030,18 @@ class QueryJobManager:
                 changes[target_key] = payload[source_key]
         return changes
 
-    def _sample_process_metrics(self, job_id: str) -> None:
+    def _sample_process_metrics(self, job_id: str, *, force: bool = False) -> None:
+        now_monotonic = time.monotonic()
         with self._condition:
             record = self._jobs.get(job_id)
             process_metrics = record.process_metrics if record is not None else None
+            last_sample = record.last_metric_sample_monotonic if record is not None else 0.0
+            if (
+                record is None
+                or record.snapshot.status in TERMINAL_QUERY_STATUSES
+                or (not force and last_sample and now_monotonic - last_sample < QUERY_METRICS_SAMPLE_SECONDS)
+            ):
+                return
         if process_metrics is None or psutil is None:
             return
 
@@ -1003,12 +1059,42 @@ class QueryJobManager:
             record = self._jobs.get(job_id)
             if record is None or record.snapshot.status in TERMINAL_QUERY_STATUSES:
                 return
-            record.snapshot.cpu_percent = max(0.0, cpu_percent)
-            record.snapshot.memory_rss_bytes = max(0, memory_rss)
+            if not force and record.last_metric_sample_monotonic and now_monotonic - record.last_metric_sample_monotonic < QUERY_METRICS_SAMPLE_SECONDS:
+                return
+
+            normalized_cpu_percent = max(0.0, cpu_percent)
+            normalized_memory_rss = max(0, memory_rss)
+            record.last_metric_sample_monotonic = now_monotonic
+            record.cpu_sample_total += normalized_cpu_percent
+            record.cpu_sample_count += 1
+            record.memory_sample_total += normalized_memory_rss
+            record.memory_sample_count += 1
+            average_cpu = record.cpu_sample_total / max(1, record.cpu_sample_count)
+            average_memory = int(record.memory_sample_total / max(1, record.memory_sample_count))
+
+            record.snapshot.cpu_percent = normalized_cpu_percent
+            record.snapshot.average_cpu_percent = average_cpu
+            record.snapshot.peak_cpu_percent = max(
+                float(record.snapshot.peak_cpu_percent or 0.0),
+                normalized_cpu_percent,
+            )
+            record.snapshot.memory_rss_bytes = normalized_memory_rss
+            record.snapshot.average_memory_rss_bytes = average_memory
             record.snapshot.peak_memory_rss_bytes = max(
                 int(record.snapshot.peak_memory_rss_bytes or 0),
-                max(0, memory_rss),
+                normalized_memory_rss,
             )
+            record.snapshot.resource_samples.append(
+                QueryResourceSample(
+                    elapsed_ms=self._elapsed_duration_ms_locked(record),
+                    cpu_percent=normalized_cpu_percent,
+                    average_cpu_percent=average_cpu,
+                    memory_rss_bytes=normalized_memory_rss,
+                    average_memory_rss_bytes=average_memory,
+                )
+            )
+            if len(record.snapshot.resource_samples) > MAX_QUERY_RESOURCE_SAMPLES:
+                record.snapshot.resource_samples = record.snapshot.resource_samples[-MAX_QUERY_RESOURCE_SAMPLES:]
             record.snapshot.updated_at = utc_now_iso()
             self._touch_locked()
 
@@ -1098,7 +1184,12 @@ class QueryJobManager:
     def _elapsed_duration_ms(self, job_id: str) -> float:
         with self._condition:
             record = self._jobs.get(job_id)
-            started_at = record.snapshot.started_at if record is not None else ""
+            if record is None:
+                return 0.0
+            return self._elapsed_duration_ms_locked(record)
+
+    def _elapsed_duration_ms_locked(self, record: QueryJobRecord) -> float:
+        started_at = record.snapshot.started_at if record is not None else ""
         try:
             started = datetime.fromisoformat(started_at)
             return max(0.0, (datetime.now(UTC) - started).total_seconds() * 1000)
@@ -1128,6 +1219,7 @@ class QueryJobManager:
             self._touch_locked()
 
     def _finalize_job(self, job_id: str, *, status: str, duration_ms: float, **changes: Any) -> None:
+        terminal_payload: dict[str, Any] | None = None
         with self._condition:
             record = self._jobs.get(job_id)
             if record is None or record.snapshot.status in TERMINAL_QUERY_STATUSES:
@@ -1148,8 +1240,12 @@ class QueryJobManager:
                 if key in {"columns", "rows"} and value is None:
                     continue
                 setattr(record.snapshot, key, value)
+            terminal_payload = record.snapshot.payload
             self._prune_history_locked()
             self._touch_locked()
+        if terminal_payload is not None and self._terminal_job_callback is not None:
+            with suppress(Exception):
+                self._terminal_job_callback(terminal_payload)
 
     def _state_payload_locked(self) -> dict[str, Any]:
         jobs = sorted(

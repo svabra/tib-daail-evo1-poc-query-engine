@@ -49,7 +49,7 @@ TOPOLOGY_COPY = (
     "The current PoC runs API, backend, frontend, and query execution on a single node."
 )
 SCALE_OUT_COPY = (
-    "Query nodes will scale out automatically under higher query pressure once DAAIFL goes live."
+    "Query nodes will scale out automatically under higher query pressure once DAAIF goes live."
 )
 SERVICE_ACCOUNT_TOKEN_PATH = Path(
     "/var/run/secrets/kubernetes.io/serviceaccount/token"
@@ -1307,7 +1307,7 @@ class ServiceConsumptionMonitor:
     ) -> dict[str, object]:
         component_labels = {
             "container": "container service",
-            "application": "DAAIFL application service",
+            "application": "DAAIF Fabric application service",
             "s3": "S3",
             "filesystem": "file system service",
             "pg": "PG service",
@@ -1469,7 +1469,7 @@ class ServiceConsumptionMonitor:
             },
             {
                 "key": "application",
-                "label": "DAAIFL Application Service",
+                "label": "DAAIF Fabric Application Service",
                 "subtitle": "Shared application fee prorated across the year",
                 "costYtdChf": application_total,
                 "shareOfTotalPercent": self._service_share_percent(

@@ -26,6 +26,16 @@
       "enabledByDefault": true
     },
     {
+      "id": "sse-connection-status",
+      "script": "playwright_sse_connection_status_smoke.py",
+      "enabledByDefault": true
+    },
+    {
+      "id": "query-workbench-recent-activity",
+      "script": "playwright_query_workbench_recent_activity_smoke.py",
+      "enabledByDefault": true
+    },
+    {
       "id": "query-source-new-notebook",
       "script": "playwright_query_source_new_notebook_smoke.py",
       "enabledByDefault": true
