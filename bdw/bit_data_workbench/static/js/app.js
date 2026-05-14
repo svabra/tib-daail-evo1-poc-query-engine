@@ -4046,7 +4046,12 @@ function cellQueryRunsPanelMarkup(notebookId, cellId) {
       </summary>
       <div class="workspace-query-runs-header workspace-query-runs-header-cell">
         <p>Recorded runs for this cell.</p>
-        <button type="button" class="workspace-version-save" data-query-runs-refresh>Refresh</button>
+        <button type="button" class="query-runs-chart-toggle" data-query-runs-toggle-charts aria-pressed="false" title="Show resource charts">
+          <span class="query-runs-chart-toggle-switch" aria-hidden="true">
+            <span class="query-runs-chart-toggle-thumb"></span>
+          </span>
+          <span class="query-runs-chart-toggle-copy" data-query-runs-toggle-label>Show resource charts</span>
+        </button>
       </div>
       <div class="query-run-history-list query-run-history-list-compact" data-query-runs-list>
         <p class="home-empty">No recorded query runs yet.</p>
@@ -8485,6 +8490,9 @@ Promise.allSettled(initialLoadTasks)
       activateNotebookLink(currentNotebookId);
       revealNotebookLink(currentNotebookId);
       writeLastNotebookId(currentNotebookId);
+      queryRunsController.initializeCurrentPage().catch((error) => {
+        console.error("Failed to initialize query-run history.", error);
+      });
       renderQueryNotificationMenu();
       return;
     }

@@ -1,9 +1,39 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.8.14. Keep entries concise and
+# Derived from git history through version 0.8.15. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.8.15",
+        "releasedAt": "2026-05-14T15:19:57+02:00",
+        "features": [
+            (
+                "Per-cell Query Runs now load their existing history on initial notebook page load "
+                "and recover when the panel is opened before startup initialization has completed."
+            ),
+            (
+                "Query Runs now default to an analyst-friendly table with start date, end date, "
+                "duration, CPU average, CPU peak, RAM average, RAM peak, rows, status, and SQL access."
+            ),
+            (
+                "The manual Refresh action was removed from Query Runs because the list refreshes "
+                "through the shared SSE event-driven channel."
+            ),
+            (
+                "Resource charts are hidden by default and can be shown with a compact switch-style "
+                "toggle that matches the notebook visibility control and sits clear of the table border."
+            ),
+            (
+                "SQL details now expand from a chevron in each run row into a dedicated sub-row, "
+                "making longer SQL easier to read without adding a separate global SQL toggle."
+            ),
+            (
+                "Regression coverage now checks first-load query-run history, absence of the Refresh "
+                "button, the chart switch state, SQL sub-row expansion, and table-first rendering."
+            ),
+        ],
+    },
     {
         "version": "0.8.14",
         "releasedAt": "2026-05-14T13:57:07+02:00",

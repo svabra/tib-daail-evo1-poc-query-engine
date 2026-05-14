@@ -662,17 +662,81 @@ async def assert_query_run_history(page, timeout_ms: int, cell_ids: list[str]) -
           }
           const text = root.textContent || "";
           return !/Loading query runs/i.test(text)
-            && root.querySelector(".query-run-history-item")
-            && root.querySelector("[data-query-resource-chart]");
+            && root.querySelector(".query-run-history-table")
+            && root.querySelector(".query-run-history-row")
+            && root.querySelector("[data-query-runs-toggle-charts]")
+            && root.querySelector("[data-query-run-sql-toggle]")
+            && /Start date/.test(text)
+            && /End date/.test(text)
+            && /CPU avg/.test(text)
+            && /RAM peak/.test(text)
+            && !root.querySelector("[data-query-runs-refresh]")
+            && !root.querySelector("[data-query-resource-chart]");
         })
         """,
         arg=cell_ids,
         timeout=timeout_ms,
     )
+    sql_state = await page.evaluate(
+        """
+        async (cellIds) => {
+          const root = cellIds
+            .map((cellId) => document.querySelector(`[data-notebook-query-runs][data-query-runs-cell-id="${CSS.escape(cellId)}"]`))
+            .find((node) => node instanceof HTMLDetailsElement && node.open && node.querySelector("[data-query-run-sql-toggle]"));
+          const button = root?.querySelector("[data-query-run-sql-toggle]");
+          if (!(root instanceof HTMLElement) || !(button instanceof HTMLButtonElement)) {
+            throw new Error("Query Runs SQL chevron is missing.");
+          }
+          const beforeExpanded = button.getAttribute("aria-expanded");
+          button.click();
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          return {
+            beforeExpanded,
+            afterExpanded: root.querySelector("[data-query-run-sql-toggle]")?.getAttribute("aria-expanded"),
+            hasSqlRow: Boolean(root.querySelector(".query-run-history-sql-row pre")),
+          };
+        }
+        """,
+        cell_ids,
+    )
+    if sql_state.get("beforeExpanded") != "false" or sql_state.get("afterExpanded") != "true":
+        raise RuntimeError(f"Query Runs SQL chevron did not expand: {sql_state!r}.")
+    if not sql_state.get("hasSqlRow"):
+        raise RuntimeError(f"Query Runs SQL sub-row did not render: {sql_state!r}.")
+    toggle_state = await page.evaluate(
+        """
+        async (cellIds) => {
+          const root = cellIds
+            .map((cellId) => document.querySelector(`[data-notebook-query-runs][data-query-runs-cell-id="${CSS.escape(cellId)}"]`))
+            .find((node) => node instanceof HTMLDetailsElement && node.open && node.querySelector(".query-run-history-row"));
+          const button = root?.querySelector("[data-query-runs-toggle-charts]");
+          if (!(root instanceof HTMLElement) || !(button instanceof HTMLButtonElement)) {
+            throw new Error("Query Runs chart toggle is missing.");
+          }
+          const beforePressed = button.getAttribute("aria-pressed");
+          button.click();
+          await new Promise((resolve) => setTimeout(resolve, 350));
+          return {
+            beforePressed,
+            afterPressed: button.getAttribute("aria-pressed"),
+            label: button.textContent || "",
+            hasChartRow: Boolean(root.querySelector(".query-run-history-chart-row")),
+            hasChartCanvas: Boolean(root.querySelector(".query-run-history-chart-row [data-query-resource-chart]")),
+          };
+        }
+        """,
+        cell_ids,
+    )
+    if toggle_state.get("beforePressed") != "false" or toggle_state.get("afterPressed") != "true":
+        raise RuntimeError(f"Query Runs chart toggle did not switch on: {toggle_state!r}.")
+    if "Hide resource charts" not in str(toggle_state.get("label", "")):
+        raise RuntimeError(f"Query Runs chart toggle label did not update: {toggle_state!r}.")
+    if not toggle_state.get("hasChartRow") or not toggle_state.get("hasChartCanvas"):
+        raise RuntimeError(f"Query Runs chart rows did not render after toggle: {toggle_state!r}.")
     await assert_query_resource_chart_layout(
         page,
         timeout_ms,
-        "[data-notebook-query-runs][open] .query-run-history-item .query-resource-sparkline-card",
+        "[data-notebook-query-runs][open] .query-run-history-chart-row .query-resource-sparkline-card",
         min_count=2,
     )
 

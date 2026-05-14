@@ -373,6 +373,9 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
         body = response.body.decode("utf-8")
         self.assertIn('data-query-runs-page', body)
         self.assertIn('data-query-runs-list', body)
+        self.assertIn('data-query-runs-toggle-charts', body)
+        self.assertIn('Show resource charts', body)
+        self.assertNotIn('data-query-runs-refresh', body)
 
     def test_explorer_api_returns_postgres_catalog_payload(self) -> None:
         response = data_source_explorer_payload(
