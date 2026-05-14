@@ -59,6 +59,7 @@ from .data_exchange import (
     DataExchangeUploadSessionManager,
 )
 from .data_generation_jobs import DataGenerationJobManager
+from .download_jobs import DownloadArtifactStream, DownloadJobManager
 from .ingestion_types.csv import (
     CsvIngestionManager,
     CsvUploadFileRequest,
@@ -136,6 +137,7 @@ REALTIME_TOPIC_ORDER = (
     "query-jobs",
     "python-jobs",
     "data-generation-jobs",
+    "download-jobs",
     "data-source-events",
     "service-consumption",
     "notebook-events",
@@ -299,6 +301,13 @@ class WorkbenchService:
             settings=settings,
             store=self._data_exchange_store,
         )
+        self._download_jobs = DownloadJobManager(
+            settings=settings,
+            state_change_callback=lambda snapshot: self._publish_realtime_snapshot(
+                "download-jobs",
+                snapshot,
+            ),
+        )
         self._data_exchange_upload_completion_threads: list[Thread] = []
         self._local_workspace_query_sources = LocalWorkspaceQuerySourceManager(
             settings=settings,
@@ -367,6 +376,11 @@ class WorkbenchService:
         self._set_realtime_snapshot(
             "data-generation-jobs",
             self._data_generation_jobs.state_payload(),
+            notify=False,
+        )
+        self._set_realtime_snapshot(
+            "download-jobs",
+            self._download_jobs.state_payload(),
             notify=False,
         )
         self._set_realtime_snapshot(
@@ -954,6 +968,55 @@ class WorkbenchService:
 
     def stream_data_exchange_file(self, *, file_id: str, token: str):
         return self._data_exchange.stream_download(file_id=file_id, token=token)
+
+    def download_jobs_state(self) -> dict[str, object]:
+        return self._download_jobs.state_payload()
+
+    def download_job_state(self, *, job_id: str) -> dict[str, object]:
+        return self._download_jobs.job_payload(job_id)
+
+    def start_s3_download_job(
+        self,
+        *,
+        bucket: str,
+        key: str,
+        filename: str = "",
+        file_format: str = "",
+    ) -> dict[str, object]:
+        return self._download_jobs.start_s3_job(
+            bucket=bucket,
+            key=key,
+            filename=filename,
+            file_format=file_format,
+        )
+
+    def start_data_exchange_download_job(
+        self,
+        *,
+        file_id: str,
+        file_password: str,
+    ) -> dict[str, object]:
+        source = self._data_exchange.prepared_download_source(
+            file_id=file_id,
+            file_password=file_password,
+        )
+        return self._download_jobs.start_prepared_source(source)
+
+    def cancel_download_job(self, *, job_id: str) -> dict[str, object]:
+        return self._download_jobs.cancel_job(job_id)
+
+    def stream_download_job_artifact(
+        self,
+        *,
+        job_id: str,
+        token: str,
+        range_header: str = "",
+    ) -> DownloadArtifactStream:
+        return self._download_jobs.artifact_stream(
+            job_id=job_id,
+            token=token,
+            range_header=range_header,
+        )
 
     def copy_data_exchange_file_to_shared_s3(
         self,

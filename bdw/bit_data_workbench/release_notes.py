@@ -1,9 +1,39 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.8.15. Keep entries concise and
+# Derived from git history through version 0.8.16. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.8.16",
+        "releasedAt": "2026-05-14T17:11:07+02:00",
+        "features": [
+            (
+                "Shared S3 and DataExchange CSV files now support prepared ZIP downloads for large "
+                "files, using background jobs, high-compression ZIP64 artifacts, hidden S3 storage, "
+                "and resumable Range-capable download links."
+            ),
+            (
+                "Prepared download jobs hydrate on page load and update through the shared SSE "
+                "channel, so ready, failed, cancelled, and expired states appear in the Message "
+                "Centre even after navigation or refresh."
+            ),
+            (
+                "The prepared download modal now shows live progress, cancellation, ready download "
+                "actions, and clear guidance that users may navigate away while the ZIP is prepared."
+            ),
+            (
+                "DataExchange now shows a virtual Zip downloads folder that points to existing "
+                "prepared artifacts, while S3 and DataExchange objects expose clickable ready badges "
+                "and Download prepared ZIP file actions once the artifact is available."
+            ),
+            (
+                "Regression coverage now verifies prepared S3 and DataExchange jobs, password "
+                "enforcement, hidden-prefix rejection, ZIP contents, startup recovery, Range "
+                "responses, modal behavior, ready badge downloads, and virtual ZIP downloads."
+            ),
+        ],
+    },
     {
         "version": "0.8.15",
         "releasedAt": "2026-05-14T15:19:57+02:00",

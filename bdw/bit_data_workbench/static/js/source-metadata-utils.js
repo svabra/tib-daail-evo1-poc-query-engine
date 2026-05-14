@@ -180,6 +180,8 @@ export function sourceObjectS3DownloadDescriptor(sourceObjectRoot) {
     bucket,
     key,
     path,
+    fileFormat: String(sourceObjectRoot.dataset.s3FileFormat || "").trim().toLowerCase(),
+    sizeBytes: Number(sourceObjectRoot.dataset.s3SizeBytes || 0) || 0,
     fileName: displayName.includes(".") ? displayName : keyFileName || displayName || "s3-object",
   };
 }

@@ -245,6 +245,22 @@ def create_data_exchange_download_token(
     return JSONResponse(jsonable_encoder(token))
 
 
+@router.post("/api/data-exchange/files/{file_id}/download-jobs")
+def create_data_exchange_download_job(
+    file_id: str,
+    payload: DataExchangeFilePasswordPayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        job = service.start_data_exchange_download_job(
+            file_id=file_id,
+            file_password=payload.file_password,
+        )
+    except (PermissionError, KeyError, ValueError, ClientError, BotoCoreError) as exc:
+        raise _api_error(exc) from exc
+    return JSONResponse(jsonable_encoder(job))
+
+
 @router.get("/api/data-exchange/files/{file_id}/download")
 def download_data_exchange_file(
     file_id: str,

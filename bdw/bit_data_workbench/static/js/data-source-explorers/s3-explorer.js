@@ -17,6 +17,8 @@ export function createS3DataSourceExplorer(helpers) {
     showMessageDialog,
     downloadSourceObjectDdl,
     downloadSourceS3Object,
+    downloadJobsController,
+    prepareSourceS3Download,
   } = helpers;
 
   const stateByRoot = new WeakMap();
@@ -128,6 +130,7 @@ export function createS3DataSourceExplorer(helpers) {
                             <span class="data-source-explorer-object-title-row">
                               <strong>${escapeHtml(entry.name || "")}</strong>
                               ${publicationBadgeMarkup(entry.publishedDataProducts, escapeHtml)}
+                              ${downloadJobsController?.s3IndicatorMarkup?.(entry.bucket, entry.prefix) || ""}
                             </span>
                             <span>${
                               isFile
@@ -173,6 +176,13 @@ export function createS3DataSourceExplorer(helpers) {
     }
 
     if (state.selectedEntry?.entryKind === "file") {
+      const canPrepareZip = String(state.selectedEntry.fileFormat || "").trim().toLowerCase() === "csv";
+      const preparedZipJob = downloadJobsController?.jobForS3Object?.(
+        state.selectedEntry.bucket,
+        state.selectedEntry.prefix
+      );
+      const canDownloadPreparedZip =
+        preparedZipJob?.status === "ready" && Boolean(preparedZipJob.downloadUrl);
       detail.innerHTML = detailCardMarkup(
         {
           eyebrow: `${snapshot.bucket} • ${String(state.selectedEntry.fileFormat || "file").toUpperCase()}`,
@@ -180,11 +190,22 @@ export function createS3DataSourceExplorer(helpers) {
           copy: `Download the selected object or publish it as a managed data product.`,
           actions: [
             actionButtonMarkup("Download", "download", escapeHtml),
+            canPrepareZip ? actionButtonMarkup("Prepare ZIP download", "prepare-zip", escapeHtml) : "",
+            canDownloadPreparedZip
+              ? `<button
+                  type="button"
+                  class="data-source-explorer-action"
+                  data-download-job-download="${escapeHtml(preparedZipJob.jobId)}"
+                >
+                  Download prepared ZIP file
+                </button>`
+              : "",
             actionButtonMarkup("Download DDL", "download-ddl", escapeHtml),
             actionButtonMarkup("Create Data Product ...", "create-data-product", escapeHtml),
           ].join(""),
           body: `
             ${publicationLinksMarkup(state.selectedEntry.publishedDataProducts, escapeHtml)}
+            ${downloadJobsController?.s3IndicatorMarkup?.(state.selectedEntry.bucket, state.selectedEntry.prefix) || ""}
             <ul class="sidebar-source-field-list">
               <li class="sidebar-source-field">
                 <span class="sidebar-source-field-name"><span class="sidebar-source-field-name-text">Path</span></span>
@@ -297,6 +318,11 @@ export function createS3DataSourceExplorer(helpers) {
   }
 
   async function handleClick(event, root) {
+    if (downloadJobsController?.handleClick && (await downloadJobsController.handleClick(event))) {
+      event.stopPropagation();
+      return true;
+    }
+
     const locationButton = event.target.closest(
       "[data-data-source-explorer-s3-location]"
     );
@@ -362,6 +388,17 @@ export function createS3DataSourceExplorer(helpers) {
         await showMessageDialog({
           title: "DDL download unavailable",
           copy: "Choose a concrete Shared Workspace object before downloading DDL.",
+        });
+      }
+      return true;
+    }
+
+    if (action === "prepare-zip") {
+      const descriptor = selectedFileDescriptor(state);
+      if (!(descriptor instanceof Element) || (await prepareSourceS3Download?.(descriptor)) === false) {
+        await showMessageDialog({
+          title: "Prepared ZIP unavailable",
+          copy: "Choose a concrete CSV object before preparing a ZIP download.",
         });
       }
       return true;

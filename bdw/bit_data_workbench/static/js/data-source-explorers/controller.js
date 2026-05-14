@@ -5,6 +5,7 @@ import { createS3DataSourceExplorer } from "./s3-explorer.js";
 export function createDataSourceExplorerController(helpers) {
   const {
     allLocalWorkspaceFolderPaths,
+    downloadJobsController,
     downloadLocalWorkspaceExportFromSource,
     downloadSourceObjectDdl,
     downloadSourceS3Object,
@@ -18,6 +19,7 @@ export function createDataSourceExplorerController(helpers) {
     localWorkspaceRelation,
     normalizeLocalWorkspaceFolderPath,
     openDataProductPublishDialog,
+    prepareSourceS3Download,
     querySourceInCurrentNotebook,
     querySourceInNewNotebook,
     showMessageDialog,
@@ -38,10 +40,12 @@ export function createDataSourceExplorerController(helpers) {
     s3: createS3DataSourceExplorer({
       downloadSourceObjectDdl,
       downloadSourceS3Object,
+      downloadJobsController,
       escapeHtml,
       fetchJsonOrThrow,
       formatByteCount,
       openDataProductPublishDialog,
+      prepareSourceS3Download,
       showMessageDialog,
     }),
     "local-workspace": createLocalWorkspaceDataSourceExplorer({

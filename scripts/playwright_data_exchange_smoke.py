@@ -215,6 +215,64 @@ async def main() -> None:
             if download.suggested_filename != csv_name:
                 raise RuntimeError(f"Unexpected downloaded file name: {download.suggested_filename!r}")
 
+            await detail.locator("[data-data-exchange-prepare-download]").wait_for(
+                state="visible",
+                timeout=args.timeout_ms,
+            )
+            await detail.locator("[data-data-exchange-prepare-download]").click()
+            prepared_dialog = page.locator("[data-download-job-dialog]")
+            await prepared_dialog.wait_for(state="visible", timeout=args.timeout_ms)
+            await prepared_dialog.locator("text=You may continue to navigate away").wait_for(
+                state="visible",
+                timeout=args.timeout_ms,
+            )
+            await prepared_dialog.locator("[data-download-job-download]").wait_for(
+                state="visible",
+                timeout=args.timeout_ms,
+            )
+            async with page.expect_download(timeout=args.timeout_ms) as zip_download_info:
+                await prepared_dialog.locator("[data-download-job-download]").click()
+            zip_download = await zip_download_info.value
+            if not zip_download.suggested_filename.endswith(".zip"):
+                raise RuntimeError(
+                    f"Unexpected prepared ZIP filename: {zip_download.suggested_filename!r}"
+                )
+            await prepared_dialog.locator("[data-download-job-close]").click()
+            await prepared_dialog.wait_for(state="hidden", timeout=args.timeout_ms)
+
+            ready_badge = page.locator(
+                f'[data-data-exchange-file-row]:has-text("{csv_name}") '
+                '[data-prepared-download-indicator][data-download-job-download]'
+            ).first
+            await ready_badge.wait_for(state="visible", timeout=args.timeout_ms)
+            badge_title = await ready_badge.get_attribute("title")
+            if "Click to download" not in (badge_title or ""):
+                raise RuntimeError(f"Prepared ZIP badge title did not explain click behavior: {badge_title!r}")
+            async with page.expect_download(timeout=args.timeout_ms) as badge_download_info:
+                await ready_badge.click()
+            badge_download = await badge_download_info.value
+            if not badge_download.suggested_filename.endswith(".zip"):
+                raise RuntimeError(
+                    f"Unexpected prepared ZIP badge filename: {badge_download.suggested_filename!r}"
+                )
+
+            zip_folder = page.locator("[data-data-exchange-zip-downloads-folder]").first
+            await zip_folder.wait_for(state="visible", timeout=args.timeout_ms)
+            zip_row = zip_folder.locator(f'[data-data-exchange-zip-job-row]:has-text("{csv_name}")').first
+            await zip_row.wait_for(state="visible", timeout=args.timeout_ms)
+            async with page.expect_download(timeout=args.timeout_ms) as virtual_zip_download_info:
+                await zip_row.click()
+            virtual_zip_download = await virtual_zip_download_info.value
+            if not virtual_zip_download.suggested_filename.endswith(".zip"):
+                raise RuntimeError(
+                    f"Unexpected virtual ZIP filename: {virtual_zip_download.suggested_filename!r}"
+                )
+
+            await detail.locator('[data-download-job-download]:has-text("Download prepared ZIP file")').wait_for(
+                state="visible",
+                timeout=args.timeout_ms,
+            )
+
             await detail.locator("[data-data-exchange-edit]").click()
             await page.locator("[data-data-exchange-edit-password]").fill(args.file_password)
             await page.locator("[data-data-exchange-edit-display-name]").fill(f"Edited exchange {unique_id}")

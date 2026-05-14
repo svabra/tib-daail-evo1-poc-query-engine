@@ -9,6 +9,8 @@ SHARED_NOTEBOOKS_BUCKET_SUFFIX = "shared-notebooks"
 INTERNAL_S3_PREFIX = "--bdw-internal--/"
 QUERY_RUN_HISTORY_S3_PREFIX = f"{INTERNAL_S3_PREFIX}query-runs/"
 NOTEBOOK_ACTIVITY_S3_PREFIX = f"{INTERNAL_S3_PREFIX}notebook-activity/"
+DOWNLOAD_JOB_S3_PREFIX = f"{INTERNAL_S3_PREFIX}download-jobs/"
+DOWNLOAD_ARTIFACT_S3_PREFIX = f"{INTERNAL_S3_PREFIX}download-artifacts/"
 
 
 def normalize_data_exchange_prefix(prefix: str | None) -> str:

@@ -33,6 +33,7 @@ export function createSourceSidebarClickController(helpers) {
     openNotebookForQueryJob,
     openResultDownloadDialog,
     openResultExportDialog,
+    prepareSourceS3Download,
     queryJobForResultActionTarget,
     queryNotificationMenu,
     querySourceInCurrentNotebook,
@@ -654,6 +655,31 @@ export function createSourceSidebarClickController(helpers) {
         await showMessageDialog({
           title: "S3 download unavailable",
           copy: "This source object does not point to a single downloadable S3 object.",
+        });
+      }
+      return true;
+    }
+
+    const prepareSourceS3DownloadButton = event.target.closest("[data-prepare-source-s3-download]");
+    if (prepareSourceS3DownloadButton) {
+      event.preventDefault();
+      closeSourceActionMenus();
+
+      try {
+        const prepared = await prepareSourceS3Download?.(
+          prepareSourceS3DownloadButton.closest("[data-source-object]")
+        );
+        if (prepared === false) {
+          await showMessageDialog({
+            title: "Prepared ZIP unavailable",
+            copy: "This source object does not point to a CSV S3 object.",
+          });
+        }
+      } catch (error) {
+        console.error("Failed to start the prepared S3 download.", error);
+        await showMessageDialog({
+          title: "Prepared ZIP failed",
+          copy: error instanceof Error ? error.message : "The prepared ZIP download could not be started.",
         });
       }
       return true;

@@ -26,6 +26,7 @@ import { createDataProductsSampleContracts } from "./data-products-sample-contra
 import { createDataProductsUi } from "./data-products-ui.js";
 import { createDataExchangeController } from "./data-exchange-controller.js";
 import { createDataSourceExplorerController } from "./data-source-explorers/controller.js";
+import { createDownloadJobsController } from "./download-jobs-controller.js";
 import { createEditorAutosizeManager } from "./editor-autosize-manager.js";
 import { createLocalWorkspaceDialogController } from "./local-workspace-dialog-controller.js";
 import { createLocalWorkspaceExportManager } from "./local-workspace-export-manager.js";
@@ -188,6 +189,9 @@ let dataGeneratorsCatalog = [];
 let dataGenerationJobsStateVersion = null;
 let dataGenerationJobsSnapshot = [];
 let dataGenerationJobsSummary = { runningCount: 0, totalCount: 0 };
+let downloadJobsStateVersion = null;
+let downloadJobsSnapshot = [];
+let downloadJobsSummary = { runningCount: 0, readyCount: 0, totalCount: 0 };
 let selectedIngestionRunbookId = "";
 let spotlightIngestionRunbookId = "";
 let ingestionRunbookSpotlightHandle = null;
@@ -762,11 +766,21 @@ const dataProductsController = createDataProductsController({
   showMessageDialog,
 });
 
+const downloadJobsController = createDownloadJobsController({
+  escapeHtml,
+  fetchJsonOrThrow,
+  formatByteCount,
+  formatRelativeTimestamp,
+  showMessageDialog,
+  onStateChanged: syncDownloadJobsUi,
+});
+
 const dataSourceExplorerController = createDataSourceExplorerController({
   allLocalWorkspaceFolderPaths,
   downloadLocalWorkspaceExportFromSource,
   downloadSourceObjectDdl,
   downloadSourceS3Object,
+  downloadJobsController,
   escapeHtml,
   fetchJsonOrThrow,
   formatByteCount,
@@ -777,6 +791,7 @@ const dataSourceExplorerController = createDataSourceExplorerController({
   localWorkspaceRelation,
   normalizeLocalWorkspaceFolderPath,
   openDataProductPublishDialog,
+  prepareSourceS3Download,
   querySourceInCurrentNotebook,
   querySourceInNewNotebook,
   showMessageDialog,
@@ -851,6 +866,7 @@ const {
 
 const dataExchangeController = createDataExchangeController({
   createLocalWorkspaceEntryId,
+  downloadJobsController,
   escapeHtml,
   fetchJsonOrThrow,
   formatByteCount,
@@ -861,6 +877,7 @@ const dataExchangeController = createDataExchangeController({
   saveLocalWorkspaceExport,
   showConfirmDialog,
   showMessageDialog,
+  startDataExchangePreparedDownload,
   syncLocalWorkspaceEntry,
 });
 
@@ -945,6 +962,7 @@ const {
   openNotebookForQueryJob,
   openResultDownloadDialog,
   openResultExportDialog,
+  prepareSourceS3Download,
   queryJobForResultActionTarget,
   queryNotificationMenu,
   querySourceInCurrentNotebook,
@@ -1133,6 +1151,11 @@ const {
   escapeHtml,
   getDataGenerationJobsSnapshot: () => dataGenerationJobsSnapshot,
   getDataGenerationTerminalStatuses: () => dataGenerationTerminalStatuses,
+  getDownloadNotificationItems: () =>
+    downloadJobsController.notificationItems({
+      dismissedKeys: dismissedNotificationKeys,
+      notificationItemKey,
+    }),
   getDismissedNotificationKeys: () => dismissedNotificationKeys,
   getQueryJobsSnapshot: () => queryJobsSnapshot,
   getQueryJobTerminalStatuses: () => queryJobTerminalStatuses,
@@ -1384,6 +1407,11 @@ const {
     version: dataGenerationJobsStateVersion,
     snapshot: dataGenerationJobsSnapshot,
     summary: dataGenerationJobsSummary,
+  }),
+  getDownloadState: () => ({
+    version: downloadJobsStateVersion,
+    snapshot: downloadJobsSnapshot,
+    summary: downloadJobsSummary,
   }),
   getDismissedNotificationKeys: () => dismissedNotificationKeys,
   getQueryState: currentQueryState,
@@ -2213,7 +2241,13 @@ function comparePythonJobsByStartedAt(left, right) {
 function notificationItemKey(type, job) {
   const status = String(job?.status || "").trim().toLowerCase();
   const lifecycleKey =
-    status === "completed" || status === "failed" || status === "cancelled" ? status : "active";
+    status === "completed" ||
+    status === "ready" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "expired"
+      ? status
+      : "active";
   return `${type}:${job?.jobId || ""}:${lifecycleKey}`;
 }
 
@@ -2326,6 +2360,36 @@ function downloadSourceS3Object(sourceObjectRoot) {
   anchor.click();
   anchor.remove();
   return true;
+}
+
+function syncDownloadJobsUi() {
+  const state = downloadJobsController.currentState();
+  downloadJobsStateVersion = state.version;
+  downloadJobsSnapshot = state.snapshot;
+  downloadJobsSummary = state.summary;
+  downloadJobsController.syncPreparedDownloadIndicators();
+  dataExchangeController.refreshPreparedDownloadState?.();
+  renderQueryNotificationMenu();
+}
+
+function applyDownloadJobsState(snapshot) {
+  downloadJobsController.applyState(snapshot);
+}
+
+async function loadDownloadJobsState() {
+  return downloadJobsController.loadState();
+}
+
+async function prepareSourceS3Download(sourceObjectRoot) {
+  const descriptor = sourceObjectS3DownloadDescriptor(sourceObjectRoot);
+  if (!descriptor) {
+    return false;
+  }
+  return downloadJobsController.startS3PreparedDownload(descriptor);
+}
+
+async function startDataExchangePreparedDownload(fileId, filePassword = "") {
+  return downloadJobsController.startDataExchangePreparedDownload(fileId, filePassword);
 }
 
 function downloadSourceS3GeneratedParts(sourceObjectRoot, mode = "merged") {
@@ -4713,6 +4777,9 @@ function applyRealtimeTopicSnapshot(topic, snapshot) {
     case "data-generation-jobs":
       applyDataGenerationJobsState(snapshot);
       break;
+    case "download-jobs":
+      applyDownloadJobsState(snapshot);
+      break;
     case "data-source-events":
       applyDataSourceEventsState(snapshot);
       break;
@@ -5196,6 +5263,9 @@ function ensureRealtimeEventsEventSource() {
   if (dataGenerationJobsStateVersion !== null) {
     params.set("dataGenerationJobsVersion", String(dataGenerationJobsStateVersion));
   }
+  if (downloadJobsStateVersion !== null) {
+    params.set("downloadJobsVersion", String(downloadJobsStateVersion));
+  }
   if (dataSourceEventsStateVersion !== null) {
     params.set("dataSourceEventsVersion", String(dataSourceEventsStateVersion));
   }
@@ -5220,6 +5290,7 @@ function ensureRealtimeEventsEventSource() {
     "query-jobs",
     "python-jobs",
     "data-generation-jobs",
+    "download-jobs",
     "data-source-events",
     "service-consumption",
     "notebook-events",
@@ -5254,6 +5325,13 @@ function ensureRealtimeEventsEventSource() {
     if (dataGenerationJobsStateVersion !== null) {
       refreshTasks.push(
         loadDataGenerationJobsState().catch(() => {
+          // Ignore transient reconnect issues.
+        })
+      );
+    }
+    if (downloadJobsStateVersion !== null) {
+      refreshTasks.push(
+        loadDownloadJobsState().catch(() => {
           // Ignore transient reconnect issues.
         })
       );
@@ -7784,6 +7862,10 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  if (await downloadJobsController.handleClick(event)) {
+    return;
+  }
+
   if (await handleWorkbenchNavigationClick(event)) {
     return;
   }
@@ -8366,6 +8448,9 @@ const initialLoadTasks = [
   }),
   loadDataGenerationJobsState().catch((error) => {
     console.error("Failed to load data generation jobs.", error);
+  }),
+  loadDownloadJobsState().catch((error) => {
+    console.error("Failed to load prepared download jobs.", error);
   }),
   loadDataSourceEventsState().catch((error) => {
     console.error("Failed to load data source events.", error);

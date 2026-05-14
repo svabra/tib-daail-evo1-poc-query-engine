@@ -1,6 +1,7 @@
 export function createDataExchangeController(helpers) {
   const {
     createLocalWorkspaceEntryId,
+    downloadJobsController,
     escapeHtml,
     fetchJsonOrThrow,
     formatByteCount,
@@ -11,6 +12,7 @@ export function createDataExchangeController(helpers) {
     saveLocalWorkspaceExport,
     showConfirmDialog,
     showMessageDialog,
+    startDataExchangePreparedDownload,
     syncLocalWorkspaceEntry,
   } = helpers;
 
@@ -306,6 +308,7 @@ export function createDataExchangeController(helpers) {
           <span class="source-node-label">
             ${sourceFileIconMarkup()}
             <span>${escapeHtml(file.fileName)}</span>
+            ${downloadJobsController?.dataExchangeIndicatorMarkup?.(file.fileId) || ""}
           </span>
           <span class="source-object-meta">
             ${lockIconMarkup(file)}
@@ -316,6 +319,116 @@ export function createDataExchangeController(helpers) {
           </span>
         </button>
       </li>
+    `;
+  }
+
+  function preparedZipJobs() {
+    const snapshot = downloadJobsController?.currentState?.()?.snapshot;
+    if (!Array.isArray(snapshot)) {
+      return [];
+    }
+    return snapshot.filter((job) =>
+      job?.sourceKind === "data_exchange_file" &&
+      ["queued", "running", "ready"].includes(String(job.status || "").toLowerCase())
+    );
+  }
+
+  function preparedZipJobStatusLabel(job) {
+    switch (String(job?.status || "").toLowerCase()) {
+      case "queued":
+        return "Queued";
+      case "running":
+        return "Preparing";
+      case "ready":
+        return "Ready";
+      default:
+        return "Preparing";
+    }
+  }
+
+  function preparedZipJobSearchMatches(job, queryText) {
+    const needle = String(queryText || "").trim().toLowerCase();
+    if (!needle) {
+      return true;
+    }
+    return [
+      "zip downloads",
+      "prepared zip",
+      job.sourceName,
+      job.artifactFilename,
+      sourceFileNameFromJob(job),
+      preparedZipJobStatusLabel(job),
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(needle);
+  }
+
+  function sourceFileNameFromJob(job) {
+    const sourceKey = String(job?.sourceKey || "").trim();
+    const sourceSegments = sourceKey.split("/").filter(Boolean);
+    return sourceSegments[sourceSegments.length - 1] || String(job?.sourceName || "");
+  }
+
+  function preparedZipJobButtonMarkup(job) {
+    const ready = String(job?.status || "").toLowerCase() === "ready" && Boolean(job.downloadUrl);
+    const sizeCopy = ready ? formatByteCount(job.artifactSizeBytes || 0) : formatByteCount(job.bytesProcessed || 0);
+    const updatedCopy = ready
+      ? formatRelativeTimestamp(job.completedAt || job.updatedAt)
+      : formatRelativeTimestamp(job.updatedAt || job.startedAt);
+    const sourceFileName = sourceFileNameFromJob(job);
+    const actionAttributes = ready
+      ? `data-download-job-download="${escapeHtml(job.jobId)}"`
+      : `data-download-job-open="${escapeHtml(job.jobId)}"`;
+    const tooltip = ready
+      ? "Prepared ZIP download is ready. Click to download"
+      : "Preparing ZIP download";
+    return `
+      <li>
+        <button
+          type="button"
+          class="source-object source-object-table data-exchange-zip-download-row"
+          data-data-exchange-zip-job-row="${escapeHtml(job.jobId)}"
+          ${actionAttributes}
+          title="${escapeHtml(tooltip)}"
+        >
+          <span class="source-node-label">
+            ${sourceFileIconMarkup()}
+            <span>${escapeHtml(job.artifactFilename || `${job.sourceName || "Prepared download"}.zip`)}</span>
+            ${downloadJobsController?.dataExchangeIndicatorMarkup?.(job.dataExchangeFileId) || ""}
+          </span>
+          <span class="source-object-meta">
+            <small>ZIP</small>
+            ${sourceFileName ? `<small>${escapeHtml(sourceFileName)}</small>` : ""}
+            <small>${escapeHtml(sizeCopy)}</small>
+            <small>${escapeHtml(preparedZipJobStatusLabel(job))}</small>
+            ${updatedCopy ? `<small>${escapeHtml(updatedCopy)}</small>` : ""}
+          </span>
+        </button>
+      </li>
+    `;
+  }
+
+  function preparedZipDownloadsFolderMarkup(queryText = "") {
+    const jobs = preparedZipJobs().filter((job) => preparedZipJobSearchMatches(job, queryText));
+    if (!jobs.length) {
+      return "";
+    }
+    return `
+      <details class="source-schema data-exchange-folder-node data-exchange-zip-downloads-folder" data-data-exchange-zip-downloads-folder open>
+        <summary>
+          <span class="source-node-label">
+            ${sourceSchemaIconMarkup()}
+            <span title="Prepared ZIP downloads">Zip downloads</span>
+          </span>
+          <span class="source-schema-meta">
+            <small>${jobs.length} item(s)</small>
+          </span>
+        </summary>
+        <ul class="source-object-list data-exchange-source-object-list">
+          ${jobs.map((job) => preparedZipJobButtonMarkup(job)).join("")}
+        </ul>
+      </details>
     `;
   }
 
@@ -371,8 +484,9 @@ export function createDataExchangeController(helpers) {
       .map((folder) => folderNodeMarkup(folder, visibleFiles, children, searchText))
       .filter(Boolean)
       .join("");
+    const zipFolderMarkup = preparedZipDownloadsFolderMarkup(searchText);
     const rootFiles = visibleFiles.filter((file) => !String(file.folderId || ""));
-    if (!visibleFiles.length && !rootFolderMarkup && searchText.trim()) {
+    if (!visibleFiles.length && !rootFolderMarkup && !zipFolderMarkup && searchText.trim()) {
       root.innerHTML = `<div class="data-source-explorer-empty"><p>${
         exchangeFiles.length ? "No DataExchange files match this search." : "No files have been uploaded yet."
       }</p></div>`;
@@ -414,8 +528,11 @@ export function createDataExchangeController(helpers) {
                 : ""
             }
             ${rootFolderMarkup}
+            <div data-data-exchange-zip-downloads-slot>
+              ${zipFolderMarkup}
+            </div>
             ${
-              !visibleFiles.length && !rootFolderMarkup
+              !visibleFiles.length && !rootFolderMarkup && !zipFolderMarkup
                 ? `<div class="data-source-explorer-empty data-exchange-tree-empty">
                     <p>No files have been uploaded yet.</p>
                   </div>`
@@ -442,6 +559,10 @@ export function createDataExchangeController(helpers) {
       .map((tag) => `<span class="ingestion-generator-tag">${escapeHtml(tag)}</span>`)
       .join("");
     const extension = fileExtension(file) || "file";
+    const canPrepareZip = extension === "csv";
+    const preparedZipJob = downloadJobsController?.jobForDataExchangeFile?.(file.fileId);
+    const canDownloadPreparedZip =
+      preparedZipJob?.status === "ready" && Boolean(preparedZipJob.downloadUrl);
     const passwordField = file.hasPassword
       ? `
         <label class="result-export-field data-exchange-detail-password">
@@ -484,6 +605,24 @@ export function createDataExchangeController(helpers) {
           <button type="button" class="data-source-explorer-action" data-data-exchange-download>
             Download
           </button>
+          ${
+            canPrepareZip
+              ? `<button type="button" class="data-source-explorer-action" data-data-exchange-prepare-download>
+                  Prepare ZIP download
+                </button>`
+              : ""
+          }
+          ${
+            canDownloadPreparedZip
+              ? `<button
+                  type="button"
+                  class="data-source-explorer-action"
+                  data-download-job-download="${escapeHtml(preparedZipJob.jobId)}"
+                >
+                  Download prepared ZIP file
+                </button>`
+              : ""
+          }
           <button type="button" class="data-source-explorer-action" data-data-exchange-edit>
             Edit metadata
           </button>
@@ -520,6 +659,28 @@ export function createDataExchangeController(helpers) {
       return;
     }
     root.innerHTML = fileDetailMarkup(file);
+  }
+
+  function refreshPreparedDownloadState() {
+    const root = pageRoot();
+    if (!root) {
+      return;
+    }
+    downloadJobsController?.syncPreparedDownloadIndicators?.(root);
+    const slot = query("[data-data-exchange-zip-downloads-slot]", root);
+    if (slot) {
+      const searchText = String(query("[data-data-exchange-search]", root)?.value || "");
+      slot.innerHTML = preparedZipDownloadsFolderMarkup(searchText);
+    }
+    const detail = query("[data-data-exchange-file-detail]", root);
+    if (detail && selectedFile()) {
+      const password = String(query("[data-data-exchange-detail-password]", root)?.value || "");
+      detail.innerHTML = fileDetailMarkup(selectedFile());
+      const passwordInput = query("[data-data-exchange-detail-password]", root);
+      if (passwordInput) {
+        passwordInput.value = password;
+      }
+    }
   }
 
   async function loadFiles() {
@@ -941,6 +1102,11 @@ export function createDataExchangeController(helpers) {
   }
 
   async function handleClick(event) {
+    if (downloadJobsController?.handleClick && (await downloadJobsController.handleClick(event))) {
+      event.stopPropagation();
+      return true;
+    }
+
     const showUpload = event.target.closest("[data-data-exchange-show-upload]");
     if (showUpload) {
       event.preventDefault();
@@ -993,6 +1159,13 @@ export function createDataExchangeController(helpers) {
     if (downloadButton) {
       event.preventDefault();
       await downloadFile(file.fileId || "");
+      return true;
+    }
+
+    const prepareDownloadButton = event.target.closest("[data-data-exchange-prepare-download]");
+    if (prepareDownloadButton) {
+      event.preventDefault();
+      await startDataExchangePreparedDownload?.(file.fileId || "", selectedFilePassword());
       return true;
     }
 
@@ -1078,5 +1251,6 @@ export function createDataExchangeController(helpers) {
 
   return {
     initializeCurrentPage,
+    refreshPreparedDownloadState,
   };
 }

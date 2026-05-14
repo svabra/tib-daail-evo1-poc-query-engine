@@ -2758,6 +2758,21 @@ details:not([open]) > .tree-children {
   font-size: 0.74rem;
 }
 
+.topbar-notification-item-action {
+  align-self: flex-start;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--accent-strong);
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 0.35rem 0.55rem;
+  text-decoration: none;
+}
+
+.topbar-notification-item-action:hover {
+  background: rgba(11, 68, 121, 0.06);
+}
+
 .topbar-notification-badge {
   position: absolute;
   top: -4px;
@@ -5856,6 +5871,140 @@ details:not([open]) > .tree-children {
 .modal-button-danger {
   border-color: var(--accent-deep);
   background: var(--accent-deep);
+}
+
+.download-job-dialog-card {
+  gap: 18px;
+}
+
+.download-job-dialog-body {
+  display: grid;
+  gap: 14px;
+}
+
+.download-job-dialog-status,
+.download-job-progress-copy {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.download-job-dialog-note,
+.download-job-dialog-message {
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.download-job-status-badge {
+  border-radius: 999px;
+  background: rgba(11, 68, 121, 0.08);
+  color: var(--accent-strong);
+  font-size: 0.76rem;
+  font-weight: 700;
+  padding: 0.2rem 0.55rem;
+}
+
+.download-job-status-ready {
+  background: rgba(22, 101, 52, 0.1);
+  color: #166534;
+}
+
+.download-job-status-failed,
+.download-job-status-expired {
+  background: rgba(185, 28, 28, 0.1);
+  color: #991b1b;
+}
+
+.download-job-progress {
+  display: grid;
+  gap: 8px;
+}
+
+.download-job-progress-copy {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.download-job-progress-track {
+  background: rgba(15, 23, 42, 0.08);
+  border-radius: 999px;
+  height: 8px;
+  overflow: hidden;
+}
+
+.download-job-progress-track > span {
+  background: var(--accent);
+  display: block;
+  height: 100%;
+  transition: width 180ms ease;
+}
+
+.download-job-progress-track.is-indeterminate > span {
+  animation: download-progress-indeterminate 1.3s ease-in-out infinite;
+  width: 35%;
+}
+
+.prepared-download-indicator {
+  align-items: center;
+  border: 1px solid rgba(11, 68, 121, 0.2);
+  border-radius: 999px;
+  color: var(--accent-strong);
+  display: inline-flex;
+  font-size: 0.64rem;
+  font-weight: 800;
+  height: 18px;
+  justify-content: center;
+  line-height: 1;
+  min-width: 28px;
+  padding: 0 5px;
+  vertical-align: middle;
+}
+
+.prepared-download-indicator.is-running {
+  animation: prepared-download-blink 1.1s ease-in-out infinite;
+  background: rgba(214, 126, 116, 0.12);
+  border-color: rgba(214, 126, 116, 0.38);
+  color: #9f241c;
+}
+
+.prepared-download-indicator.is-ready {
+  animation: prepared-download-blink 1.4s ease-in-out infinite;
+  background: rgba(22, 101, 52, 0.1);
+  border-color: rgba(22, 101, 52, 0.25);
+  color: #166534;
+}
+
+.prepared-download-indicator[data-download-job-download],
+.prepared-download-indicator[data-download-job-open] {
+  cursor: pointer;
+}
+
+.prepared-download-indicator[data-download-job-download]:hover,
+.prepared-download-indicator[data-download-job-open]:hover {
+  border-color: currentColor;
+}
+
+@keyframes prepared-download-blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@keyframes download-progress-indeterminate {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
 }
 
 .result-export-dialog-card {

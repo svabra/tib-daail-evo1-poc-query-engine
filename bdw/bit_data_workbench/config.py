@@ -14,6 +14,8 @@ DEFAULT_INGESTION_UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024
 DEFAULT_INGESTION_UPLOAD_MAX_BYTES = 30 * 1024 * 1024 * 1024
 DEFAULT_INGESTION_TABULAR_CONVERSION_MAX_BYTES = 512 * 1024 * 1024
 DEFAULT_DATA_EXCHANGE_PREFIX = "--data-exchange--/"
+DEFAULT_DOWNLOAD_MULTIPART_CHUNK_BYTES = 64 * 1024 * 1024
+DEFAULT_DOWNLOAD_PREPARE_THRESHOLD_BYTES = 100 * 1024 * 1024
 
 WORKBENCH_ENVIRONMENT_VARIABLES = (
     "BDW_ENABLE_FILE_LOGGING",
@@ -45,6 +47,11 @@ WORKBENCH_ENVIRONMENT_VARIABLES = (
     "BDW_DATA_EXCHANGE_PREFIX",
     "BDW_DATA_EXCHANGE_UPLOAD_MAX_BYTES",
     "BDW_DATA_EXCHANGE_DOWNLOAD_TOKEN_TTL_SECONDS",
+    "BDW_DOWNLOAD_ARTIFACT_TTL_HOURS",
+    "BDW_DOWNLOAD_MULTIPART_CHUNK_BYTES",
+    "BDW_DOWNLOAD_MAX_CONCURRENT_JOBS",
+    "BDW_DOWNLOAD_COMPRESSION_LEVEL",
+    "BDW_DOWNLOAD_PREPARE_THRESHOLD_BYTES",
     "BDW_SHARED_NOTEBOOKS_BUCKET",
     "MAX_RESULT_ROWS",
     "S3_ENDPOINT",
@@ -562,6 +569,11 @@ class Settings:
     data_exchange_prefix: str = DEFAULT_DATA_EXCHANGE_PREFIX
     data_exchange_upload_max_bytes: int = DEFAULT_INGESTION_UPLOAD_MAX_BYTES
     data_exchange_download_token_ttl_seconds: int = 300
+    download_artifact_ttl_hours: int = 72
+    download_multipart_chunk_bytes: int = DEFAULT_DOWNLOAD_MULTIPART_CHUNK_BYTES
+    download_max_concurrent_jobs: int = 2
+    download_compression_level: int = 9
+    download_prepare_threshold_bytes: int = DEFAULT_DOWNLOAD_PREPARE_THRESHOLD_BYTES
     shared_notebooks_bucket: str | None = None
     _generated_s3_ca_cert_file: Path | None = field(init=False, default=None, repr=False)
 
@@ -693,6 +705,32 @@ class Settings:
             data_exchange_download_token_ttl_seconds=max(
                 30,
                 env_int("BDW_DATA_EXCHANGE_DOWNLOAD_TOKEN_TTL_SECONDS", 300),
+            ),
+            download_artifact_ttl_hours=max(
+                1,
+                env_int("BDW_DOWNLOAD_ARTIFACT_TTL_HOURS", 72),
+            ),
+            download_multipart_chunk_bytes=max(
+                5 * 1024 * 1024,
+                env_int(
+                    "BDW_DOWNLOAD_MULTIPART_CHUNK_BYTES",
+                    DEFAULT_DOWNLOAD_MULTIPART_CHUNK_BYTES,
+                ),
+            ),
+            download_max_concurrent_jobs=max(
+                1,
+                env_int("BDW_DOWNLOAD_MAX_CONCURRENT_JOBS", 2),
+            ),
+            download_compression_level=max(
+                0,
+                min(9, env_int("BDW_DOWNLOAD_COMPRESSION_LEVEL", 9)),
+            ),
+            download_prepare_threshold_bytes=max(
+                1,
+                env_int(
+                    "BDW_DOWNLOAD_PREPARE_THRESHOLD_BYTES",
+                    DEFAULT_DOWNLOAD_PREPARE_THRESHOLD_BYTES,
+                ),
             ),
             shared_notebooks_bucket=env_optional("BDW_SHARED_NOTEBOOKS_BUCKET"),
             max_result_rows=int(env("MAX_RESULT_ROWS", "200")),

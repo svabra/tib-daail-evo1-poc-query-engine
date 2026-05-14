@@ -10,6 +10,7 @@ export function createRealtimeController(helpers) {
     decorateQueryJobsWithInsights,
     formatQueryDuration,
     getDataGenerationState,
+    getDownloadState = () => ({ version: null, snapshot: [], summary: {} }),
     getDismissedNotificationKeys,
     getQueryState,
     normalizeDataGenerationJob,
@@ -60,12 +61,21 @@ export function createRealtimeController(helpers) {
     return getDataGenerationState();
   }
 
+  function downloadState() {
+    return getDownloadState();
+  }
+
   function pruneDismissedNotificationKeys() {
     const queryJobsSnapshot = queryState().snapshot;
     const dataGenerationJobsSnapshot = dataGenerationState().snapshot;
+    const downloadJobsState = downloadState();
+    const downloadJobsSnapshot = Array.isArray(downloadJobsState.snapshot)
+      ? downloadJobsState.snapshot
+      : [];
     const validKeys = new Set([
       ...queryJobsSnapshot.map((job) => notificationItemKey("query", job)),
       ...dataGenerationJobsSnapshot.map((job) => notificationItemKey("ingestion", job)),
+      ...downloadJobsSnapshot.map((job) => notificationItemKey("download", job)),
     ]);
     const dismissedNotificationKeys = getDismissedNotificationKeys();
     let changed = false;
@@ -75,6 +85,9 @@ export function createRealtimeController(helpers) {
         continue;
       }
       if (key.startsWith("ingestion:") && !dataGenerationJobsLoaded) {
+        continue;
+      }
+      if (key.startsWith("download:") && downloadJobsState.version === null) {
         continue;
       }
       if (validKeys.has(key)) {
@@ -259,8 +272,11 @@ export function createRealtimeController(helpers) {
     const visibleNotifications = collectVisibleNotifications();
     const { summary: queryJobsSummary } = queryState();
     const { summary: dataGenerationJobsSummary } = dataGenerationState();
+    const { summary: downloadJobsSummary } = downloadState();
     const hasRunningActivity =
-      Number(queryJobsSummary.runningCount || 0) > 0 || Number(dataGenerationJobsSummary.runningCount || 0) > 0;
+      Number(queryJobsSummary.runningCount || 0) > 0 ||
+      Number(dataGenerationJobsSummary.runningCount || 0) > 0 ||
+      Number(downloadJobsSummary?.runningCount || 0) > 0;
     const badgeCount = visibleNotifications.length;
     countRoot.textContent = String(badgeCount);
     countRoot.hidden = badgeCount === 0;

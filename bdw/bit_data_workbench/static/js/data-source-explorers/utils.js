@@ -151,6 +151,9 @@ export function sourceObjectElement(descriptor = {}) {
   if (descriptor.s3FileFormat) {
     element.dataset.s3FileFormat = String(descriptor.s3FileFormat);
   }
+  if (descriptor.sizeBytes !== undefined) {
+    element.dataset.s3SizeBytes = String(descriptor.sizeBytes);
+  }
   if (descriptor.s3Downloadable !== undefined) {
     element.dataset.s3Downloadable = descriptor.s3Downloadable ? "true" : "false";
   }

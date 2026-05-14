@@ -247,6 +247,37 @@ class DataExchangeManagerTests(TestCase):
             self.assertTrue(deleted["ok"])
             self.assertFalse(manager.list_files()["files"])
 
+    def test_prepared_download_source_requires_password_and_supports_csv(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source = root / "alpha.csv"
+            source.write_bytes(b"id,name\n1,alpha\n")
+            fake_s3 = FakeS3Client()
+            manager = manager_with_store(root, fake_s3)
+
+            with patch("bit_data_workbench.backend.data_exchange.manager.ensure_s3_bucket"):
+                result = manager.store_uploaded_sources(
+                    sources=[IngestionLocalSource(file_name="alpha.csv", local_path=source)],
+                    file_password="file-secret",
+                )
+            file_id = result["files"][0]["fileId"]
+
+            with self.assertRaises(PermissionError):
+                manager.prepared_download_source(
+                    file_id=file_id,
+                    file_password="wrong",
+                )
+
+            prepared_source = manager.prepared_download_source(
+                file_id=file_id,
+                file_password="file-secret",
+            )
+
+            self.assertEqual(prepared_source["sourceKind"], "data_exchange_file")
+            self.assertEqual(prepared_source["dataExchangeFileId"], file_id)
+            self.assertEqual(prepared_source["format"], "csv")
+            self.assertNotIn("filePassword", prepared_source)
+
     def test_copy_to_shared_s3_accepts_queryable_and_rejects_pdf(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

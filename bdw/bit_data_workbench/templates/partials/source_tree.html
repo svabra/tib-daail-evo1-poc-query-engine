@@ -285,6 +285,16 @@
                         >
                           Download S3 object
                         </button>
+                        {% if source_object.s3_file_format | lower == "csv" %}
+                          <button
+                            type="button"
+                            class="workspace-action-menu-item"
+                            data-prepare-source-s3-download
+                            title="Prepare a resumable ZIP download for this CSV object"
+                          >
+                            Prepare ZIP download
+                          </button>
+                        {% endif %}
                       {% endif %}
                       {% if source_object.s3_merge_downloadable %}
                         <button

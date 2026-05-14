@@ -1491,6 +1491,10 @@ async def stream_realtime_events(
         default=None,
         alias="dataGenerationJobsVersion",
     ),
+    download_jobs_version: int | None = Query(
+        default=None,
+        alias="downloadJobsVersion",
+    ),
     data_source_events_version: int | None = Query(
         default=None,
         alias="dataSourceEventsVersion",
@@ -1514,6 +1518,7 @@ async def stream_realtime_events(
             "query-jobs": query_jobs_version,
             "python-jobs": python_jobs_version,
             "data-generation-jobs": data_generation_jobs_version,
+            "download-jobs": download_jobs_version,
             "data-source-events": data_source_events_version,
             "service-consumption": service_consumption_version,
             "notebook-events": notebook_events_version,
@@ -1564,8 +1569,10 @@ async def stream_realtime_events(
 from .data_products import router as data_products_router
 from .data_exchange import router as data_exchange_router
 from .data_source_explorer import router as data_source_explorer_router
+from .download_jobs import router as download_jobs_router
 
 
 router.include_router(data_source_explorer_router)
 router.include_router(data_products_router)
 router.include_router(data_exchange_router)
+router.include_router(download_jobs_router)

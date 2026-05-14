@@ -339,6 +339,28 @@ class DataExchangeManager:
             "downloadUrl": f"/api/data-exchange/files/{record.file_id}/download?token={token}",
         }
 
+    def prepared_download_source(
+        self,
+        *,
+        file_id: str,
+        file_password: str,
+    ) -> dict[str, object]:
+        record = self._require_file_password(file_id, file_password)
+        extension = queryable_extension(record.file_name)
+        if extension != "csv":
+            raise ValueError("Prepared ZIP downloads currently support CSV files.")
+        return {
+            "sourceKind": "data_exchange_file",
+            "dataExchangeFileId": record.file_id,
+            "bucket": record.bucket,
+            "key": record.s3_key,
+            "filename": record.file_name,
+            "sourceName": record.display_name or record.file_name,
+            "sourceSizeBytes": record.size_bytes,
+            "sourceRevision": f"{record.updated_at}:{record.size_bytes}",
+            "format": extension,
+        }
+
     def stream_download(self, *, file_id: str, token: str) -> DataExchangeDownloadStream:
         normalized_token = str(token or "").strip()
         with self._lock:
