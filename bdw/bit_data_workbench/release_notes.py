@@ -1,9 +1,34 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.8.16. Keep entries concise and
+# Derived from git history through version 0.9.0. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.0",
+        "releasedAt": "2026-05-14T21:59:47+02:00",
+        "features": [
+            (
+                "SQL notebook cells now include a DuckDB-only Explain action beside Run Cell, "
+                "enabled through the same source-validation checks and hidden for Python or native "
+                "PostgreSQL cells."
+            ),
+            (
+                "DuckDB EXPLAIN runs without executing the query, rewrites notebook aliases the same "
+                "way as Run Cell, and returns logical, optimized, physical, and raw JSON plans."
+            ),
+            (
+                "The Explain modal now provides an analyst briefing with operator counts, touched "
+                "sources, estimated row signals, warnings, hints, optimizer notes, and tabbed plan "
+                "inspection."
+            ),
+            (
+                "Regression coverage now verifies the query explain API, validation failures, native "
+                "PostgreSQL rejection, local alias rewriting, summary extraction, and the Explain modal "
+                "smoke flow."
+            ),
+        ],
+    },
     {
         "version": "0.8.16",
         "releasedAt": "2026-05-14T17:11:07+02:00",

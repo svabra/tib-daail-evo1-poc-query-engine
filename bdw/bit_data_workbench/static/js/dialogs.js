@@ -36,6 +36,10 @@ export function resultDownloadDialog() {
   return document.querySelector("[data-result-download-dialog]");
 }
 
+export function queryExplainDialog() {
+  return document.querySelector("[data-query-explain-dialog]");
+}
+
 function appendModalDialog(markup) {
   document.body.insertAdjacentHTML("beforeend", markup.trim());
 }
@@ -93,6 +97,45 @@ export function ensureMessageDialog() {
   `);
 
   dialog = messageDialog();
+  return dialog;
+}
+
+export function ensureQueryExplainDialog() {
+  let dialog = queryExplainDialog();
+  if (dialog) {
+    return dialog;
+  }
+
+  appendModalDialog(`
+    <dialog class="modal-dialog modal-dialog-wide" data-query-explain-dialog>
+      <form method="dialog" class="modal-card modal-card-wide query-explain-dialog-card" data-query-explain-form>
+        <div class="query-explain-dialog-header">
+          <div>
+            <h2 class="modal-title" data-query-explain-title>Query Plan</h2>
+            <p class="modal-copy" data-query-explain-copy>
+              Non-executing DuckDB EXPLAIN output with an analyst briefing.
+            </p>
+          </div>
+          <div class="query-explain-meta" data-query-explain-meta></div>
+        </div>
+        <div class="query-explain-tabs" role="tablist" aria-label="Query explain views">
+          <button class="query-explain-tab is-active" type="button" role="tab" data-query-explain-tab="briefing">Briefing</button>
+          <button class="query-explain-tab" type="button" role="tab" data-query-explain-tab="physical_plan">Physical Plan</button>
+          <button class="query-explain-tab" type="button" role="tab" data-query-explain-tab="logical_opt">Optimized Plan</button>
+          <button class="query-explain-tab" type="button" role="tab" data-query-explain-tab="logical_plan">Logical Plan</button>
+          <button class="query-explain-tab" type="button" role="tab" data-query-explain-tab="raw_json">Raw JSON</button>
+        </div>
+        <div class="query-explain-dialog-body" data-query-explain-body></div>
+        <menu class="modal-actions">
+          <button class="modal-button" type="submit" value="confirm" data-query-explain-submit>
+            Close
+          </button>
+        </menu>
+      </form>
+    </dialog>
+  `);
+
+  dialog = queryExplainDialog();
   return dialog;
 }
 

@@ -90,13 +90,21 @@ from .query_aliases import (
 from .query_source_validation import QUERY_SOURCE_INVALID, validate_query_sources
 from .query_jobs import (
     DuckDBQueryAccessCoordinator,
+    QUERY_EXECUTION_DUCKDB_READ,
     QUERY_EXECUTION_DUCKDB_WRITE,
+    QUERY_EXECUTION_POSTGRES_NATIVE,
     QueryJobManager,
+    classify_query_execution,
 )
+from .query_explain import generate_duckdb_explain
 from .query_run_history import QueryRunHistoryStore
 from .query_result_exports import QueryResultExportManager
 from .realtime_facade import WorkbenchRealtimeFacade
-from .runtime_connections import normalize_postgres_host, open_postgres_native_connection
+from .runtime_connections import (
+    create_duckdb_worker_connection,
+    normalize_postgres_host,
+    open_postgres_native_connection,
+)
 from .notebooks import (
     build_completion_schema,
     build_generator_notebook_links,
@@ -1357,6 +1365,65 @@ class WorkbenchService:
             touched_buckets=query_analysis.touched_buckets,
         )
         return snapshot.payload
+
+    def explain_query(
+        self,
+        *,
+        sql: str,
+        display_sql: str = "",
+        notebook_id: str = "",
+        notebook_title: str = "",
+        cell_id: str = "",
+        data_sources: list[str] | None = None,
+        local_relation_map: dict[str, str] | None = None,
+    ) -> dict[str, object]:
+        user_sql = str(display_sql or sql or "")
+        relation_index = self._query_source_relation_index(local_relation_map=local_relation_map)
+        source_validation = self.validate_query_sources(
+            sql=user_sql,
+            data_sources=data_sources,
+            local_relation_map=local_relation_map,
+            relation_index=relation_index,
+        )
+        if source_validation.get("status") == QUERY_SOURCE_INVALID:
+            raise ValueError(
+                str(source_validation.get("message") or "Referenced source(s) were not found.")
+            )
+
+        execution_sql = self._rewrite_query_source_aliases(user_sql, relation_index, local_relation_map)
+        execution_mode = classify_query_execution(execution_sql, data_sources)
+        if execution_mode == QUERY_EXECUTION_POSTGRES_NATIVE:
+            raise ValueError("Explain is available for DuckDB-backed SQL cells only.")
+
+        query_analysis = self._analyze_query(user_sql, relation_index=relation_index)
+        acquired = self._duckdb_query_access.acquire(execution_mode, lambda: False)
+        if not acquired:
+            raise RuntimeError("DuckDB connection acquisition cancelled.")
+
+        connection = None
+        try:
+            connection = create_duckdb_worker_connection(
+                self.settings,
+                read_only=(
+                    execution_mode == QUERY_EXECUTION_DUCKDB_READ
+                    and self.settings.duckdb_database.exists()
+                ),
+            )
+            return generate_duckdb_explain(
+                connection=connection,
+                execution_sql=execution_sql,
+                display_sql=user_sql,
+                notebook_id=notebook_id,
+                notebook_title=notebook_title,
+                cell_id=cell_id,
+                data_sources=data_sources or [],
+                touched_relations=query_analysis.touched_relations,
+                touched_buckets=query_analysis.touched_buckets,
+            )
+        finally:
+            if connection is not None:
+                connection.close()
+            self._duckdb_query_access.release(execution_mode)
 
     def validate_query_sources(
         self,

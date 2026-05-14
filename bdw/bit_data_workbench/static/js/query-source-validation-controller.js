@@ -11,6 +11,18 @@ const runTooltips = {
   valid: "Run this SQL cell. Referenced sources were found.",
 };
 
+const explainTooltips = {
+  unchecked: "Explain this SQL cell without running it. Sources will be checked first.",
+  checking: "Checking whether referenced sources exist before this cell can be explained.",
+  starting: "Sources checked. Preparing explain request...",
+  completed: "Explain this SQL cell again. The last query completed.",
+  failed: "Explain this SQL cell. The last query failed.",
+  cancelled: "Explain this SQL cell. The last query was cancelled.",
+  valid: "Explain this SQL cell without running it.",
+  native: "Explain is available for DuckDB-backed SQL cells only.",
+  python: "Explain is available for SQL cells only.",
+};
+
 function normalizedStatus(status) {
   const value = String(status || "").trim().toLowerCase();
   return [
@@ -94,6 +106,37 @@ function runTooltipFor(result, runtimePhase = "") {
       : "Run Cell is disabled because source existence validation failed.";
   }
   return runTooltips.unchecked;
+}
+
+function explainTooltipFor(result, runtimePhase = "") {
+  const status = normalizedStatus(runtimePhase || result?.status);
+  if (status === "checking" || runtimePhase === "checking") {
+    return explainTooltips.checking;
+  }
+  if (status === "starting") {
+    return explainTooltips.starting;
+  }
+  if (status === "completed") {
+    return explainTooltips.completed;
+  }
+  if (status === "failed") {
+    return explainTooltips.failed;
+  }
+  if (status === "cancelled") {
+    return explainTooltips.cancelled;
+  }
+  if (status === "valid") {
+    return explainTooltips.valid;
+  }
+  if (status === "invalid") {
+    const missing = Array.isArray(result?.missingReferences)
+      ? result.missingReferences.filter(Boolean).join(", ")
+      : "";
+    return missing
+      ? `Explain is disabled because these sources were not found: ${missing}`
+      : "Explain is disabled because source existence validation failed.";
+  }
+  return explainTooltips.unchecked;
 }
 
 function normalizeValidationPayload(payload) {
@@ -201,6 +244,12 @@ export function createQuerySourceValidationController(helpers) {
     return cellRoot?.querySelector?.("[data-editor-source]")?.value ?? "";
   }
 
+  function cellUsesNativePostgres(cellRoot) {
+    return selectedDataSourcesForCell(cellRoot).some((sourceId) =>
+      String(sourceId || "").trim().toLowerCase().endsWith("_native")
+    );
+  }
+
   function validationRootForCell(cellRoot) {
     if (!(cellRoot instanceof Element)) {
       return null;
@@ -226,6 +275,25 @@ export function createQuerySourceValidationController(helpers) {
 
   function setRunButtonState(cellRoot, result, runtimePhase = "") {
     const runButton = cellRoot?.querySelector?.("[data-run-cell]");
+    const explainButton = cellRoot?.querySelector?.("[data-explain-cell]");
+    const isRunning =
+      cellRoot?.classList?.contains?.("is-query-running") ||
+      runButton?.classList?.contains?.("is-running");
+    const status = normalizedStatus(runtimePhase || result?.status);
+    const disabled = status === "invalid" || status === "checking" || status === "starting";
+
+    if (explainButton) {
+      const isSqlCell = cellLanguageForCellRoot(cellRoot) === "sql";
+      const nativePostgres = isSqlCell && cellUsesNativePostgres(cellRoot);
+      explainButton.hidden = !isSqlCell;
+      explainButton.disabled = !isSqlCell || nativePostgres || disabled || Boolean(isRunning);
+      explainButton.title = !isSqlCell
+        ? explainTooltips.python
+        : nativePostgres
+          ? explainTooltips.native
+          : explainTooltipFor(result, runtimePhase);
+    }
+
     if (
       !runButton ||
       cellRoot.classList.contains("is-query-running") ||
@@ -234,8 +302,6 @@ export function createQuerySourceValidationController(helpers) {
       return;
     }
 
-    const status = normalizedStatus(runtimePhase || result?.status);
-    const disabled = status === "invalid" || status === "checking" || status === "starting";
     runButton.disabled = disabled;
     runButton.title = runTooltipFor(result, runtimePhase);
     if (!runButton.classList.contains("is-running")) {
@@ -257,6 +323,12 @@ export function createQuerySourceValidationController(helpers) {
       const runButton = cellRoot.querySelector("[data-run-cell]");
       if (runButton && !runButton.classList.contains("is-running")) {
         runButton.title = "Run this Python cell.";
+      }
+      const explainButton = cellRoot.querySelector("[data-explain-cell]");
+      if (explainButton) {
+        explainButton.hidden = true;
+        explainButton.disabled = true;
+        explainButton.title = explainTooltips.python;
       }
       return;
     }
@@ -440,6 +512,24 @@ export function createQuerySourceValidationController(helpers) {
     return requestValidation(cellRoot, sql, { runtime: true });
   }
 
+  async function validateBeforeExplain(cellRoot, sql = currentSqlForCell(cellRoot)) {
+    if (!(cellRoot instanceof Element) || cellLanguageForCellRoot(cellRoot) !== "sql") {
+      return normalizeValidationPayload({ status: "unchecked" });
+    }
+
+    if (!sourceReferencesNeedValidation(sql)) {
+      const result = normalizeValidationPayload({ status: "unchecked" });
+      const state = stateForCell(cellRoot);
+      clearScheduledValidation(state);
+      abortPendingRequest(state);
+      state.result = result;
+      renderCellState(cellRoot, result);
+      return result;
+    }
+
+    return requestValidation(cellRoot, sql);
+  }
+
   function handleEditorChanged(editorRoot) {
     const cellRoot = editorRoot?.closest?.("[data-query-cell]");
     if (cellRoot) {
@@ -516,5 +606,6 @@ export function createQuerySourceValidationController(helpers) {
     scheduleValidationForCell,
     syncQueryJobState,
     validateBeforeRun,
+    validateBeforeExplain,
   };
 }

@@ -5426,7 +5426,8 @@ details:not([open]) > .tree-children {
   gap: 8px;
 }
 
-.cell-actions .run-button {
+.cell-actions .run-button,
+.cell-actions .explain-button {
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
@@ -5436,8 +5437,11 @@ details:not([open]) > .tree-children {
 }
 
 .workspace-cell:hover .cell-actions .run-button,
+.workspace-cell:hover .cell-actions .explain-button,
 .workspace-cell.is-active .cell-actions .run-button,
+.workspace-cell.is-active .cell-actions .explain-button,
 .workspace-cell:focus-within .cell-actions .run-button,
+.workspace-cell:focus-within .cell-actions .explain-button,
 .workspace-cell.is-query-running .cell-actions .run-button,
 .workspace-cell.is-query-running .cell-actions .query-cancel-button {
   opacity: 1;
@@ -5875,6 +5879,139 @@ details:not([open]) > .tree-children {
 
 .download-job-dialog-card {
   gap: 18px;
+}
+
+.query-explain-dialog-card {
+  min-height: 580px;
+}
+
+.query-explain-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.query-explain-meta {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.query-explain-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 10px;
+}
+
+.query-explain-tab {
+  border: 1px solid rgba(71, 95, 120, 0.24);
+  border-radius: var(--radius-control);
+  padding: 8px 12px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.query-explain-tab.is-active {
+  border-color: rgba(29, 73, 112, 0.42);
+  background: #eaf2f8;
+}
+
+.query-explain-dialog-body {
+  margin-top: 16px;
+  max-height: min(68vh, 720px);
+  overflow: auto;
+}
+
+.query-explain-briefing {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.query-explain-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: #fbfcfe;
+  padding: 14px;
+}
+
+.query-explain-panel h3,
+.query-explain-plan-view h3 {
+  margin: 0 0 10px;
+  font-size: 0.96rem;
+}
+
+.query-explain-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-muted);
+}
+
+.query-explain-list li + li {
+  margin-top: 6px;
+}
+
+.query-explain-empty {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.query-explain-operator-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.query-explain-operator-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 999px;
+  background: rgba(226, 233, 240, 0.86);
+  padding: 5px 9px;
+  font-size: 0.84rem;
+}
+
+.query-explain-mini-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+
+.query-explain-mini-table th,
+.query-explain-mini-table td {
+  border-bottom: 1px solid rgba(205, 216, 226, 0.78);
+  padding: 6px 6px 6px 0;
+  text-align: left;
+  vertical-align: top;
+}
+
+.query-explain-mini-table th {
+  color: var(--text-muted);
+  font-weight: 800;
+}
+
+.query-explain-plan-text {
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: #fbfcfe;
+  color: var(--text);
+  padding: 14px;
+  overflow: auto;
+  white-space: pre;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.82rem;
+  line-height: 1.35;
 }
 
 .download-job-dialog-body {
@@ -7617,6 +7754,30 @@ details:not([open]) > .tree-children {
 .run-button.is-running:hover {
   background: rgba(123, 138, 153, 0.22);
   color: #5f6d7b;
+}
+
+.explain-button {
+  border: 1px solid rgba(71, 95, 120, 0.28);
+  border-radius: var(--radius-control);
+  padding: 9px 13px;
+  font: inherit;
+  font-weight: 700;
+  background: #fff;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.explain-button:hover {
+  border-color: rgba(29, 73, 112, 0.42);
+  background: #f5f8fb;
+}
+
+.explain-button:disabled,
+.explain-button.is-loading {
+  border-color: rgba(123, 138, 153, 0.24);
+  background: rgba(237, 242, 247, 0.86);
+  color: #6b7785;
+  cursor: default;
 }
 
 .query-button-spinner {

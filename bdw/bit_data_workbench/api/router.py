@@ -126,6 +126,24 @@ class QuerySourceValidationPayload(BaseModel):
     )
 
 
+class QueryExplainPayload(BaseModel):
+    sql: str = ""
+    display_sql: str = Field(default="", validation_alias="displaySql", serialization_alias="displaySql")
+    notebook_id: str = Field(default="", validation_alias="notebookId", serialization_alias="notebookId")
+    notebook_title: str = Field(default="", validation_alias="notebookTitle", serialization_alias="notebookTitle")
+    cell_id: str = Field(default="", validation_alias="cellId", serialization_alias="cellId")
+    data_sources: list[str] = Field(
+        default_factory=list,
+        validation_alias="dataSources",
+        serialization_alias="dataSources",
+    )
+    local_relations: dict[str, str] = Field(
+        default_factory=dict,
+        validation_alias="localRelations",
+        serialization_alias="localRelations",
+    )
+
+
 class LocalWorkspaceQuerySourceDeletePayload(BaseModel):
     entry_id: str = Field(validation_alias="entryId", serialization_alias="entryId")
 
@@ -1162,6 +1180,31 @@ def validate_query_sources(
             )
         )
     )
+
+
+@router.post("/api/query-explain")
+def explain_query(
+    payload: QueryExplainPayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        result = service.explain_query(
+            sql=payload.sql,
+            display_sql=payload.display_sql,
+            notebook_id=payload.notebook_id,
+            notebook_title=payload.notebook_title,
+            cell_id=payload.cell_id,
+            data_sources=payload.data_sources,
+            local_relation_map={
+                str(key): str(value)
+                for key, value in payload.local_relations.items()
+                if str(key).strip() and str(value).strip()
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(result))
 
 
 @router.post("/api/query-jobs")

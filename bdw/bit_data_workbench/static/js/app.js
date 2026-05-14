@@ -3,10 +3,12 @@ import { sql, PostgreSQL } from "../vendor/lang-sql.bundle.mjs";
 import {
   ensureAboutDialog,
   ensureFeatureListDialog,
+  ensureQueryExplainDialog,
   ensureResultDownloadDialog,
   ensureResultExportDialog,
   localWorkspaceMoveDialog,
   localWorkspaceSaveDialog,
+  queryExplainDialog,
   resultDownloadDialog,
   resultExportDialog,
 } from "./dialogs.js";
@@ -242,6 +244,10 @@ const localWorkspaceMoveDialogState = {
   s3Loaded: false,
   loadingSharedWorkspace: false,
   sharedWorkspaceLoadError: "",
+};
+const queryExplainDialogState = {
+  payload: null,
+  activeTab: "briefing",
 };
 
 const notebookTreeStorageKey = "bdw.notebookTree.v2";
@@ -1806,6 +1812,233 @@ function escapeHtml(value) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+}
+
+function queryExplainArray(values) {
+  return Array.isArray(values) ? values.filter(Boolean) : [];
+}
+
+function queryExplainSummary(payload) {
+  return payload?.summary && typeof payload.summary === "object" ? payload.summary : {};
+}
+
+function queryExplainPlan(payload, key) {
+  const plans = payload?.plans && typeof payload.plans === "object" ? payload.plans : {};
+  const plan = plans[key] && typeof plans[key] === "object" ? plans[key] : {};
+  return {
+    label: String(plan.label || key || "Plan"),
+    text: String(plan.text || ""),
+    json: Array.isArray(plan.json) ? plan.json : [],
+  };
+}
+
+function queryExplainListMarkup(values, emptyCopy) {
+  const items = queryExplainArray(values);
+  if (!items.length) {
+    return `<p class="query-explain-empty">${escapeHtml(emptyCopy)}</p>`;
+  }
+  return `<ul class="query-explain-list">${items
+    .map((item) => `<li>${escapeHtml(item)}</li>`)
+    .join("")}</ul>`;
+}
+
+function queryExplainOperatorCountsMarkup(summary) {
+  const counts = queryExplainArray(summary.operatorCounts);
+  if (!counts.length) {
+    return '<p class="query-explain-empty">No operator counts were returned.</p>';
+  }
+  return `
+    <div class="query-explain-operator-grid">
+      ${counts
+        .slice(0, 12)
+        .map(
+          (entry) => `
+            <span class="query-explain-operator-pill">
+              <strong>${escapeHtml(entry.name)}</strong>
+              <span>${escapeHtml(entry.count)}</span>
+            </span>
+          `
+        )
+        .join("")}
+    </div>
+  `;
+}
+
+function queryExplainEstimatedRowsMarkup(summary) {
+  const rows = queryExplainArray(summary.estimatedRows);
+  if (!rows.length) {
+    return '<p class="query-explain-empty">DuckDB did not return estimated row counts for this plan.</p>';
+  }
+  return `
+    <table class="query-explain-mini-table">
+      <thead>
+        <tr>
+          <th>Operator</th>
+          <th>Estimated rows</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows
+          .slice(0, 8)
+          .map(
+            (entry) => `
+              <tr>
+                <td>${escapeHtml(entry.operator)}</td>
+                <td>${Number(entry.estimatedRows || 0).toLocaleString()}</td>
+              </tr>
+            `
+          )
+          .join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function queryExplainSourcesMarkup(summary) {
+  const sources = summary.sources && typeof summary.sources === "object" ? summary.sources : {};
+  const relations = queryExplainArray(sources.relations);
+  const buckets = queryExplainArray(sources.buckets);
+  const dataSources = queryExplainArray(sources.dataSources);
+  if (!relations.length && !buckets.length && !dataSources.length) {
+    return '<p class="query-explain-empty">No catalog sources were detected for this statement.</p>';
+  }
+  const rows = [
+    ...dataSources.map((value) => ["Data source", value]),
+    ...relations.map((value) => ["Relation", value]),
+    ...buckets.map((value) => ["S3 bucket", value]),
+  ];
+  return `
+    <table class="query-explain-mini-table">
+      <tbody>
+        ${rows
+          .map(
+            ([label, value]) => `
+              <tr>
+                <th>${escapeHtml(label)}</th>
+                <td>${escapeHtml(value)}</td>
+              </tr>
+            `
+          )
+          .join("")}
+      </tbody>
+    </table>
+  `;
+}
+
+function queryExplainBriefingMarkup(payload) {
+  const summary = queryExplainSummary(payload);
+  return `
+    <div class="query-explain-briefing">
+      <section class="query-explain-panel">
+        <h3>Plan Warnings</h3>
+        ${queryExplainListMarkup(summary.warnings, "No warnings were generated.")}
+      </section>
+      <section class="query-explain-panel">
+        <h3>Hints</h3>
+        ${queryExplainListMarkup(summary.hints, "No hints were generated.")}
+      </section>
+      <section class="query-explain-panel">
+        <h3>Optimization Notes</h3>
+        ${queryExplainListMarkup(summary.optimizationNotes, "No optimizer notes were generated.")}
+      </section>
+      <section class="query-explain-panel">
+        <h3>Operators</h3>
+        ${queryExplainOperatorCountsMarkup(summary)}
+      </section>
+      <section class="query-explain-panel">
+        <h3>Estimated Rows</h3>
+        ${queryExplainEstimatedRowsMarkup(summary)}
+      </section>
+      <section class="query-explain-panel">
+        <h3>Sources</h3>
+        ${queryExplainSourcesMarkup(summary)}
+      </section>
+    </div>
+  `;
+}
+
+function queryExplainPlanMarkup(payload, key) {
+  const plan = queryExplainPlan(payload, key);
+  const planText = plan.text || "DuckDB did not return this plan.";
+  return `
+    <div class="query-explain-plan-view">
+      <h3>${escapeHtml(plan.label)}</h3>
+      <pre class="query-explain-plan-text">${escapeHtml(planText)}</pre>
+    </div>
+  `;
+}
+
+function queryExplainRawJsonMarkup(payload) {
+  const rawPayload = {
+    summary: payload?.summary || {},
+    plans: payload?.plans || {},
+  };
+  return `
+    <div class="query-explain-plan-view">
+      <h3>Raw JSON</h3>
+      <pre class="query-explain-plan-text">${escapeHtml(JSON.stringify(rawPayload, null, 2))}</pre>
+    </div>
+  `;
+}
+
+function renderQueryExplainDialog() {
+  const dialog = queryExplainDialog();
+  const payload = queryExplainDialogState.payload;
+  if (!dialog || !payload) {
+    return;
+  }
+
+  const activeTab = queryExplainDialogState.activeTab || "briefing";
+  const title = dialog.querySelector("[data-query-explain-title]");
+  const copy = dialog.querySelector("[data-query-explain-copy]");
+  const meta = dialog.querySelector("[data-query-explain-meta]");
+  const body = dialog.querySelector("[data-query-explain-body]");
+
+  if (title) {
+    title.textContent = "DuckDB Query Plan";
+  }
+  if (copy) {
+    copy.textContent = "Non-executing EXPLAIN output. Estimates can differ from actual runtime.";
+  }
+  if (meta) {
+    const duration = Number(payload.durationMs || 0);
+    meta.textContent = `DuckDB ${payload.duckdbVersion || "unknown"} | ${formatQueryDuration(duration)}`;
+  }
+
+  dialog.querySelectorAll("[data-query-explain-tab]").forEach((tab) => {
+    const selected = tab.dataset.queryExplainTab === activeTab;
+    tab.classList.toggle("is-active", selected);
+    tab.setAttribute("aria-selected", selected ? "true" : "false");
+  });
+
+  if (body) {
+    if (activeTab === "briefing") {
+      body.innerHTML = queryExplainBriefingMarkup(payload);
+    } else if (activeTab === "raw_json") {
+      body.innerHTML = queryExplainRawJsonMarkup(payload);
+    } else {
+      body.innerHTML = queryExplainPlanMarkup(payload, activeTab);
+    }
+  }
+}
+
+function openQueryExplainDialog(payload) {
+  const dialog = ensureQueryExplainDialog();
+  queryExplainDialogState.payload = payload;
+  queryExplainDialogState.activeTab = "briefing";
+  renderQueryExplainDialog();
+  if (typeof dialog.showModal === "function" && !dialog.open) {
+    dialog.showModal();
+  }
+}
+
+function setQueryExplainButtonBusy(button, busy) {
+  if (!button) {
+    return;
+  }
+  button.disabled = Boolean(busy);
+  button.classList.toggle("is-loading", Boolean(busy));
+  button.textContent = busy ? "Explaining..." : "Explain";
 }
 
 function normalizeDataGenerator(generator) {
@@ -4158,6 +4391,12 @@ function applyWorkspaceCellState(workspaceRoot, cell, index, editable, totalCell
     button.classList.toggle("is-active", buttonLanguage === cellLanguage);
   });
 
+  const explainButton = cellRoot.querySelector("[data-explain-cell]");
+  if (explainButton) {
+    explainButton.hidden = cellLanguage !== "sql";
+    explainButton.disabled = cellLanguage !== "sql";
+  }
+
   const sourceSummary = cellRoot.querySelector("[data-cell-source-summary]");
   if (sourceSummary) {
     sourceSummary.innerHTML = cellSourceSummaryMarkup(cell.dataSources);
@@ -5715,6 +5954,115 @@ async function startQueryJobForForm(form) {
     getQueryState: currentQueryState,
     incrementRunningCount: true,
   });
+}
+
+async function startQueryExplainForForm(form) {
+  if (formCellLanguage(form) !== "sql") {
+    return;
+  }
+
+  const workspaceRoot = form.closest("[data-workspace-notebook]");
+  const cellRoot = form.closest("[data-query-cell]");
+  const notebookId = workspaceNotebookId(workspaceRoot);
+  const cellId = cellRoot?.dataset.cellId;
+  if (!workspaceRoot || !cellRoot || !notebookId || !cellId) {
+    return;
+  }
+
+  const explainButton = cellRoot.querySelector("[data-explain-cell]");
+  if (explainButton?.disabled) {
+    return;
+  }
+
+  const selectedSources = selectedDataSourcesForCell(cellRoot);
+  if (selectedSources.some((sourceId) => String(sourceId || "").trim().toLowerCase().endsWith("_native"))) {
+    await showMessageDialog({
+      title: "Explain unavailable",
+      copy: "Explain is available for DuckDB-backed SQL cells only.",
+    });
+    return;
+  }
+
+  const existingJob = queryJobForCell(notebookId, cellId);
+  const existingPythonJob = pythonJobForCell(notebookId, cellId);
+  if (queryJobIsRunning(existingJob) || pythonJobIsRunning(existingPythonJob)) {
+    return;
+  }
+
+  const editorSource = cellRoot.querySelector("[data-editor-source]");
+  const originalSql = editorSource?.value ?? "";
+  const sourceValidation = await querySourceValidationController.validateBeforeExplain(cellRoot, originalSql);
+  if (sourceValidation?.status === "invalid") {
+    await showMessageDialog({
+      title: "Explain blocked",
+      copy: sourceValidation.message || "Referenced source(s) were not found.",
+    });
+    return;
+  }
+
+  let executionSql = originalSql;
+  const localRelationMap = {};
+  try {
+    const preparedQuery = await prepareLocalWorkspaceQuerySql(originalSql);
+    executionSql = preparedQuery.sql;
+    (preparedQuery.synchronizedSources || []).forEach((source) => {
+      const logicalRelation = String(source?.logicalRelation || "").trim();
+      const physicalRelation = String(source?.relation || "").trim();
+      if (logicalRelation && physicalRelation) {
+        localRelationMap[logicalRelation] = physicalRelation;
+      }
+    });
+  } catch (error) {
+    await showMessageDialog({
+      title: "Explain failed",
+      copy:
+        error instanceof Error
+          ? error.message
+          : "The Local Workspace sources could not be prepared for explaining.",
+    });
+    return;
+  }
+
+  setQueryExplainButtonBusy(explainButton, true);
+  try {
+    const response = await window.fetch("/api/query-explain", {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        sql: executionSql,
+        displaySql: originalSql,
+        notebookId,
+        notebookTitle: currentWorkspaceNotebookTitle(workspaceRoot),
+        cellId,
+        dataSources: selectedSources,
+        localRelations: localRelationMap,
+      }),
+    });
+
+    if (!response.ok) {
+      let message = "The query plan could not be generated.";
+      try {
+        const payload = await response.json();
+        message = payload?.detail || message;
+      } catch (_error) {
+        // Ignore invalid JSON bodies.
+      }
+      throw new Error(message);
+    }
+
+    openQueryExplainDialog(await response.json());
+  } catch (error) {
+    await showMessageDialog({
+      title: "Explain failed",
+      copy: error instanceof Error ? error.message : "The query plan could not be generated.",
+    });
+  } finally {
+    setQueryExplainButtonBusy(explainButton, false);
+    querySourceValidationController.refreshCell(cellRoot);
+  }
 }
 
 async function startPythonJobForForm(form) {
@@ -7833,6 +8181,25 @@ document.body.addEventListener("click", async (event) => {
   if (modalCancelButton) {
     event.preventDefault();
     closeDialog(modalCancelButton.closest("dialog"), "cancel");
+    return;
+  }
+
+  const queryExplainTab = event.target.closest("[data-query-explain-tab]");
+  if (queryExplainTab) {
+    event.preventDefault();
+    queryExplainDialogState.activeTab = queryExplainTab.dataset.queryExplainTab || "briefing";
+    renderQueryExplainDialog();
+    return;
+  }
+
+  const explainCellButton = event.target.closest("[data-explain-cell]");
+  if (explainCellButton) {
+    event.preventDefault();
+    const form = explainCellButton.closest("[data-query-form]");
+    if (!form) {
+      return;
+    }
+    await startQueryExplainForForm(form);
     return;
   }
 

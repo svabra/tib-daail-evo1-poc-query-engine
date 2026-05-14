@@ -319,6 +319,7 @@ export function createRealtimeController(helpers) {
     const job = queryJobForCell(notebookId, cellId);
     const cancelling = queryJobIsRunning(job) && Boolean(job?.cancellationPhase);
     const runButton = cellRoot.querySelector("[data-run-cell]");
+    const explainButton = cellRoot.querySelector("[data-explain-cell]");
     const cancelButton = cellRoot.querySelector("[data-cancel-query]");
     const resultRoot = cellRoot.querySelector("[data-cell-result]");
 
@@ -335,6 +336,13 @@ export function createRealtimeController(helpers) {
         runButton.classList.remove("is-running");
         runButton.textContent = "Run Cell";
       }
+    }
+
+    if (explainButton) {
+      explainButton.disabled = queryJobIsRunning(job);
+      explainButton.title = queryJobIsRunning(job)
+        ? "Explain is unavailable while this cell is running."
+        : "Explain this SQL cell without running it.";
     }
 
     if (cancelButton) {
