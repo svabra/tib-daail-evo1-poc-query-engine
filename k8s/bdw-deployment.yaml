@@ -20,7 +20,7 @@ spec:
       serviceAccountName: evo1-bdw
       containers:
         - name: bdw
-          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.9.3
+          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.9.4
           imagePullPolicy: Always
           ports:
             - name: http
@@ -65,6 +65,14 @@ spec:
               value: "false"
             - name: BDW_SERVICE_CONSUMPTION_PVC_CAPACITY_ENABLED
               value: "false"
+            - name: BDW_QUERY_JOB_LOGGING_ENABLED
+              value: "true"
+            - name: BDW_QUERY_JOB_LOG_HEARTBEAT_SECONDS
+              value: "10"
+            - name: BDW_QUERY_JOB_LOG_TIMEZONE
+              value: Europe/Zurich
+            - name: BDW_QUERY_JOB_DUCKDB_PROFILING_ENABLED
+              value: "true"
             - name: POD_NAME
               valueFrom:
                 fieldRef:

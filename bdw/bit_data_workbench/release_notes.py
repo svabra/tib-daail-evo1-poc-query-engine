@@ -1,9 +1,35 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.3. Keep entries concise and
+# Derived from git history through version 0.9.4. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.4",
+        "releasedAt": "2026-05-15T15:01:16+02:00",
+        "features": [
+            (
+                "SQL query jobs now emit low-noise backend lifecycle logs with "
+                "CET/Zurich timestamps, notebook and cell metadata, start, "
+                "heartbeat, completion, failure, and cancellation events."
+            ),
+            (
+                "Ongoing query logs are throttled to a configurable heartbeat "
+                "interval and include only metadata such as progress label, "
+                "DuckDB progress percentage, PID, CPU, and RAM when available."
+            ),
+            (
+                "DuckDB-backed SQL jobs can attach compact JSON profiling "
+                "summaries to terminal logs without writing verbose operator "
+                "trees, raw SQL, result rows, or secrets into production logs."
+            ),
+            (
+                "S3 source log summaries are capped and include discovered "
+                "bucket, key, format, and query alias metadata for CSV and "
+                "Parquet sources while keeping long source lists bounded."
+            ),
+        ],
+    },
     {
         "version": "0.9.3",
         "releasedAt": "2026-05-15T11:44:33+02:00",

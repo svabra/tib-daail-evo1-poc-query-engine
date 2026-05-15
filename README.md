@@ -214,6 +214,10 @@ BDW_ENABLE_FILE_LOGGING
 DUCKDB_DATABASE
 DUCKDB_EXTENSION_DIRECTORY
 MAX_RESULT_ROWS
+BDW_QUERY_JOB_LOGGING_ENABLED
+BDW_QUERY_JOB_LOG_HEARTBEAT_SECONDS
+BDW_QUERY_JOB_LOG_TIMEZONE
+BDW_QUERY_JOB_DUCKDB_PROFILING_ENABLED
 S3_ENDPOINT
 S3_BUCKET
 S3_ACCESS_KEY_ID
@@ -301,7 +305,7 @@ The practical rule is simple: the app does not detect "where it is" by hostname.
 Build locally:
 
 ```bash
-docker build -f bdw/Dockerfile -t bit-data-workbench:0.9.3 .
+docker build -f bdw/Dockerfile -t bit-data-workbench:0.9.4 .
 ```
 
 Run directly without Compose-managed service wiring:
@@ -312,7 +316,7 @@ docker run --rm -d ^
   -p 8000:8000 ^
   -v "%cd%\\logs:/app/logs" ^
   -v "%cd%\\workspace:/workspace" ^
-  -e IMAGE_VERSION=0.9.3 ^
+  -e IMAGE_VERSION=0.9.4 ^
   -e DUCKDB_DATABASE=/workspace/bit-data-workbench.duckdb ^
   -e DUCKDB_EXTENSION_DIRECTORY=/opt/duckdb/extensions ^
   -e S3_ENDPOINT=minio:9000 ^
@@ -330,7 +334,7 @@ docker run --rm -d ^
   -e PG_PASSWORD=evo1 ^
   -e PG_OLTP_DATABASE=evo1_oltp ^
   -e PG_OLAP_DATABASE=evo1_olap ^
-  bit-data-workbench:0.9.3
+  bit-data-workbench:0.9.4
 ```
 
 ### TODO
@@ -357,7 +361,7 @@ The route is an OpenShift `edge` route and exposes the HTTP service externally t
 Current image:
 
 ```text
-docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.9.3
+docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.9.4
 ```
 
 ### RHOS S3 Authentication

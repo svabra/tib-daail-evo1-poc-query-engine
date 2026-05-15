@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest import TestCase
+from unittest.mock import patch
 
 import duckdb
 
@@ -17,6 +18,7 @@ if str(BDW_ROOT) not in sys.path:
     sys.path.insert(0, str(BDW_ROOT))
 
 
+from bit_data_workbench.backend import query_jobs as query_jobs_module  # noqa: E402
 from bit_data_workbench.backend.query_jobs import (  # noqa: E402
     QUERY_EXECUTION_DUCKDB_READ,
     QUERY_EXECUTION_DUCKDB_WRITE,
@@ -26,6 +28,7 @@ from bit_data_workbench.backend.query_jobs import (  # noqa: E402
     QueryJobManager,
     QueryJobRecord,
     classify_query_execution,
+    utc_now_iso,
 )
 from bit_data_workbench.config import Settings  # noqa: E402
 from bit_data_workbench.models import QueryJobDefinition, QueryResourceSample  # noqa: E402
@@ -265,6 +268,205 @@ class ProcessQueryJobManagerTests(TestCase):
         self.assertEqual(sampled.average_memory_rss_bytes, 2000)
         self.assertEqual(sampled.peak_memory_rss_bytes, 3000)
         self.assertEqual(len(sampled.resource_samples), 2)
+
+    def test_query_job_logs_lifecycle_metadata_and_duckdb_profile_summary(self) -> None:
+        with self.assertLogs("bit_data_workbench.backend.query_jobs", level="INFO") as captured:
+            job = self.manager.start_job(
+                sql="select 8675309 as sensitive_value",
+                notebook_id="notebook-y",
+                notebook_title="Notebook Y",
+                cell_id="cell-x",
+                data_sources=["workspace.s3"],
+                touched_relations=["test.sample_csv"],
+                touched_buckets=["test"],
+                source_summaries=[
+                    {
+                        "relation": "test.sample_csv",
+                        "query_alias": "s3.test.sample.csv",
+                        "bucket": "test",
+                        "key": "sample.csv",
+                        "path": "s3://test/sample.csv",
+                        "format": "csv",
+                    }
+                ],
+            )
+            completed = wait_until(
+                lambda: self.manager.snapshot(job.job_id)
+                if self.manager.snapshot(job.job_id).status == "completed"
+                else None,
+                timeout=20,
+            )
+
+        self.assertIsNotNone(completed)
+        output = "\n".join(captured.output)
+        for event in (
+            "queued",
+            "prepared",
+            "worker_started",
+            "fetching_rows",
+            "completed",
+        ):
+            self.assertIn(f'query_job_event="{event}"', output)
+        self.assertRegex(
+            output,
+            r'query_job_time="\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (?:CET|CEST|UTC)"',
+        )
+        self.assertIn('notebook_id="notebook-y"', output)
+        self.assertIn('notebook_title="Notebook Y"', output)
+        self.assertIn('cell_id="cell-x"', output)
+        self.assertIn('"query_alias":"s3.test.sample.csv"', output)
+        self.assertIn("duckdb_latency_ms=", output)
+        self.assertIn("duckdb_rows_returned=", output)
+        self.assertNotIn("select 8675309", output)
+        self.assertNotIn("sensitive_value", output)
+        self.assertNotIn("children", output)
+        self.assertNotIn("query_name", output)
+
+    def test_query_job_heartbeat_is_throttled_and_stops_after_cancellation(self) -> None:
+        snapshot = QueryJobDefinition(
+            job_id="query-heartbeat",
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-1",
+            sql="select secret_value from private_table",
+            status="running",
+            started_at=utc_now_iso(),
+            updated_at=utc_now_iso(),
+            progress=0.42,
+            progress_label="Running... 42%",
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+            process_id=1234,
+            cpu_percent=12.345,
+            memory_rss_bytes=64 * 1024 * 1024,
+        )
+        record = QueryJobRecord(
+            snapshot=snapshot,
+            sort_index=1,
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+            execution_sql="select 1",
+            last_log_heartbeat_monotonic=time.monotonic(),
+        )
+        with self.manager._condition:
+            self.manager._jobs[snapshot.job_id] = record
+
+        with patch.object(query_jobs_module.logger, "info") as log_info:
+            self.manager._log_query_heartbeat_if_due(snapshot.job_id)
+            log_info.assert_not_called()
+
+            with self.manager._condition:
+                record.last_log_heartbeat_monotonic -= 11
+            self.manager._log_query_heartbeat_if_due(snapshot.job_id)
+            self.assertEqual(log_info.call_count, 1)
+            heartbeat_line = str(log_info.call_args.args[1])
+            self.assertIn('query_job_event="heartbeat"', heartbeat_line)
+            self.assertIn("duckdb_progress_percent=42.0", heartbeat_line)
+            self.assertIn("cpu_percent=12.35", heartbeat_line)
+            self.assertIn("ram_mb=64.0", heartbeat_line)
+            self.assertNotIn("private_table", heartbeat_line)
+
+            with self.manager._condition:
+                record.last_log_heartbeat_monotonic -= 11
+                record.cancel_requested = True
+            self.manager._log_query_heartbeat_if_due(snapshot.job_id)
+            self.assertEqual(log_info.call_count, 1)
+
+    def test_prepared_query_log_caps_s3_source_summaries(self) -> None:
+        snapshot = QueryJobDefinition(
+            job_id="query-source-cap",
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-1",
+            sql="select 1",
+            status="queued",
+            started_at=utc_now_iso(),
+            updated_at=utc_now_iso(),
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+        )
+        record = QueryJobRecord(
+            snapshot=snapshot,
+            sort_index=1,
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+            execution_sql="select 1",
+            source_summaries=[
+                {
+                    "relation": f"test.source_{index}",
+                    "query_alias": f"s3.test.source_{index}.csv",
+                    "bucket": "test",
+                    "key": f"source-{index}.csv",
+                    "format": "csv",
+                }
+                for index in range(7)
+            ],
+        )
+        with self.manager._condition:
+            self.manager._jobs[snapshot.job_id] = record
+
+        with patch.object(query_jobs_module.logger, "log") as log_call:
+            self.manager._log_query_job_event(snapshot.job_id, "prepared")
+
+        prepared_line = str(log_call.call_args.args[2])
+        self.assertIn("source_overflow_count=2", prepared_line)
+        self.assertIn("source_0", prepared_line)
+        self.assertIn("source_4", prepared_line)
+        self.assertNotIn("source_5", prepared_line)
+
+    def test_queued_query_cancellation_logs_request_and_cancelled_state(self) -> None:
+        snapshot = QueryJobDefinition(
+            job_id="query-cancel-log",
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-1",
+            sql="select 1",
+            status="queued",
+            started_at=utc_now_iso(),
+            updated_at=utc_now_iso(),
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+            can_cancel=True,
+        )
+        record = QueryJobRecord(
+            snapshot=snapshot,
+            sort_index=1,
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+            execution_sql="select 1",
+        )
+        with self.manager._condition:
+            self.manager._jobs[snapshot.job_id] = record
+
+        with self.assertLogs("bit_data_workbench.backend.query_jobs", level="INFO") as captured:
+            cancelled = self.manager.cancel_job(snapshot.job_id)
+
+        self.assertEqual(cancelled.status, "cancelled")
+        output = "\n".join(captured.output)
+        self.assertIn('query_job_event="cancel_requested"', output)
+        self.assertIn('query_job_event="cancelled"', output)
+
+    def test_failed_query_logs_warning_without_sql_text(self) -> None:
+        with self.assertLogs("bit_data_workbench.backend.query_jobs", level="WARNING") as captured:
+            job = self.manager.start_job(
+                sql="select * from very_sensitive_missing_relation",
+                notebook_id="nb",
+                notebook_title="Notebook",
+                cell_id="cell-1",
+                data_sources=[],
+            )
+            failed = wait_until(
+                lambda: self.manager.snapshot(job.job_id)
+                if self.manager.snapshot(job.job_id).status == "failed"
+                else None,
+                timeout=20,
+            )
+
+        self.assertIsNotNone(failed)
+        output = "\n".join(captured.output)
+        self.assertIn("WARNING", output)
+        self.assertIn('query_job_event="failed"', output)
+        self.assertIn("error=", output)
+        self.assertNotIn("select * from", output.lower())
+
+    def test_missing_duckdb_profile_summary_is_silent(self) -> None:
+        missing_path = self.root / "missing-profile.json"
+
+        self.assertEqual(query_jobs_module._read_duckdb_profile_summary(missing_path), {})
 
     def test_simple_query_completes_in_worker_process(self) -> None:
         job = self.manager.start_job(

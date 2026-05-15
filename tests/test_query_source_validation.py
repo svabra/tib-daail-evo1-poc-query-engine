@@ -265,6 +265,19 @@ class QuerySourceValidationTests(unittest.TestCase):
         self.assertEqual(snapshot["jobId"], "query-s3-alias")
         self.assertEqual(captured["sql"], "select * from s3.test.federal_tax_data_10gb.csv")
         self.assertEqual(captured["execution_sql"], "select * from test.federal_tax_data_10gb")
+        self.assertEqual(
+            captured["source_summaries"],
+            [
+                {
+                    "relation": "test.federal_tax_data_10gb",
+                    "query_alias": "s3.test.federal_tax_data_10gb.csv",
+                    "bucket": "test",
+                    "key": "",
+                    "path": "",
+                    "format": "",
+                }
+            ],
+        )
 
 
 class QuerySourceValidationApiTests(unittest.TestCase):

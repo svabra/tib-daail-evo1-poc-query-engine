@@ -1354,6 +1354,7 @@ class WorkbenchService:
 
         execution_sql = self._rewrite_query_source_aliases(user_sql, relation_index, local_relation_map)
         query_analysis = self._analyze_query(user_sql, relation_index=relation_index)
+        source_summaries = self._query_source_summaries(query_analysis.touched_relations)
         snapshot = self._query_jobs.start_job(
             sql=user_sql,
             execution_sql=execution_sql,
@@ -1363,6 +1364,7 @@ class WorkbenchService:
             data_sources=data_sources,
             touched_relations=query_analysis.touched_relations,
             touched_buckets=query_analysis.touched_buckets,
+            source_summaries=source_summaries,
         )
         return snapshot.payload
 
@@ -1486,6 +1488,37 @@ class WorkbenchService:
             if normalized_alias and normalized_physical:
                 alias_map[normalized_alias] = normalized_physical
         return rewrite_query_aliases(sql, alias_map)
+
+    def _query_source_summaries(self, touched_relations: list[str] | None) -> list[dict[str, object]]:
+        touched_keys = {
+            normalize_query_alias_key(relation)
+            for relation in (touched_relations or [])
+            if str(relation or "").strip()
+        }
+        if not touched_keys:
+            return []
+        summaries: list[dict[str, object]] = []
+        with self._lock:
+            catalogs = list(self._catalogs)
+        for catalog in catalogs:
+            for source_schema in catalog.schemas:
+                for source_object in source_schema.objects:
+                    relation = str(source_object.relation or "").strip()
+                    if normalize_query_alias_key(relation) not in touched_keys:
+                        continue
+                    if not str(source_object.s3_bucket or "").strip():
+                        continue
+                    summaries.append(
+                        {
+                            "relation": relation,
+                            "query_alias": str(source_object.query_alias or "").strip(),
+                            "bucket": str(source_object.s3_bucket or "").strip(),
+                            "key": str(source_object.s3_key or "").strip(),
+                            "path": str(source_object.s3_path or "").strip(),
+                            "format": str(source_object.s3_file_format or "").strip(),
+                        }
+                    )
+        return summaries
 
     def start_python_job(
         self,

@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import json
+import logging
 import multiprocessing as mp
 import os
 import queue
+import tempfile
 import threading
 import time
 import uuid
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Callable
+from zoneinfo import ZoneInfo
 
 import duckdb
 
@@ -23,6 +28,8 @@ from ..models import QueryJobDefinition, QueryJobMetricPoint, QueryResourceSampl
 from .runtime_connections import create_duckdb_worker_connection, open_postgres_native_connection
 
 
+logger = logging.getLogger(__name__)
+
 RUNNING_QUERY_STATUSES = {"queued", "running"}
 TERMINAL_QUERY_STATUSES = {"completed", "failed", "cancelled"}
 MAX_QUERY_HISTORY = 80
@@ -32,6 +39,9 @@ QUERY_METRICS_SAMPLE_SECONDS = 1.0
 MAX_QUERY_RESOURCE_SAMPLES = 180
 QUERY_INTERRUPT_GRACE_SECONDS = 1.5
 QUERY_TERMINATE_GRACE_SECONDS = 1.5
+QUERY_LOG_MAX_LIST_ITEMS = 5
+QUERY_LOG_MAX_TEXT_CHARS = 320
+QUERY_LOG_MAX_ERROR_CHARS = 500
 
 QUERY_EXECUTION_DUCKDB_READ = "duckdb-read"
 QUERY_EXECUTION_DUCKDB_WRITE = "duckdb-write"
@@ -66,6 +76,72 @@ MUTATING_KEYWORDS = WRITE_START_KEYWORDS | {
 
 def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
+
+
+def _query_log_timestamp(timezone_name: str) -> str:
+    normalized_timezone = str(timezone_name or "").strip() or "Europe/Zurich"
+    try:
+        timezone = ZoneInfo(normalized_timezone)
+    except Exception:
+        with suppress(Exception):
+            timezone = ZoneInfo("CET")
+        if "timezone" not in locals():
+            timezone = UTC
+    return datetime.now(UTC).astimezone(timezone).strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def _truncate_log_text(value: object, max_chars: int = QUERY_LOG_MAX_TEXT_CHARS) -> str:
+    text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
+    if len(text) <= max_chars:
+        return text
+    return f"{text[: max(0, max_chars - 3)]}..."
+
+
+def _safe_error_log_text(value: object) -> str:
+    safe_lines: list[str] = []
+    sql_starters = tuple(f"{keyword} " for keyword in sorted(READ_ONLY_START_KEYWORDS | WRITE_START_KEYWORDS))
+    for raw_line in str(value or "").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        lowered = line.lower()
+        if lowered.startswith("line ") or lowered.startswith(sql_starters):
+            continue
+        if set(line) <= {"^", "~", " "}:
+            continue
+        safe_lines.append(line)
+        if len(safe_lines) >= 3:
+            break
+    return _truncate_log_text(" | ".join(safe_lines) or "Query failed.", QUERY_LOG_MAX_ERROR_CHARS)
+
+
+def _format_query_log_value(value: object) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (list, tuple, dict)):
+        return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+    return json.dumps(_truncate_log_text(value), ensure_ascii=True)
+
+
+def _format_query_log_fields(fields: dict[str, object]) -> str:
+    return " ".join(
+        f"{key}={_format_query_log_value(value)}"
+        for key, value in fields.items()
+        if value not in (None, "", [], {})
+    )
+
+
+def _capped_log_list(values: list[object]) -> tuple[list[object], int]:
+    compact_values = [value for value in values if value not in (None, "", [], {})]
+    return compact_values[:QUERY_LOG_MAX_LIST_ITEMS], max(0, len(compact_values) - QUERY_LOG_MAX_LIST_ITEMS)
+
+
+def _duckdb_sql_string(value: object) -> str:
+    return "'" + str(value or "").replace("'", "''") + "'"
 
 
 def infer_source_types(data_sources: list[str]) -> list[str]:
@@ -245,6 +321,87 @@ def _enable_duckdb_progress(connection: duckdb.DuckDBPyConnection) -> None:
             connection.execute(statement)
 
 
+def _enable_duckdb_profiling(
+    connection: duckdb.DuckDBPyConnection,
+    settings: Settings,
+) -> Path | None:
+    if not bool(getattr(settings, "query_job_duckdb_profiling_enabled", True)):
+        return None
+
+    profile_file = tempfile.NamedTemporaryFile(
+        prefix="bdw-duckdb-query-profile-",
+        suffix=".json",
+        delete=False,
+    )
+    profile_path = Path(profile_file.name)
+    profile_file.close()
+    try:
+        connection.execute("PRAGMA enable_profiling='json'")
+        connection.execute(f"PRAGMA profiling_output={_duckdb_sql_string(profile_path.as_posix())}")
+    except Exception:
+        with suppress(Exception):
+            profile_path.unlink(missing_ok=True)
+        return None
+    return profile_path
+
+
+def _profile_float_ms(payload: dict[str, Any], key: str) -> float | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    try:
+        return round(float(value) * 1000, 3)
+    except (TypeError, ValueError):
+        return None
+
+
+def _profile_int(payload: dict[str, Any], key: str) -> int | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    try:
+        return max(0, int(float(value)))
+    except (TypeError, ValueError):
+        return None
+
+
+def _read_duckdb_profile_summary(profile_path: Path | None) -> dict[str, object]:
+    if profile_path is None:
+        return {}
+    try:
+        if not profile_path.exists():
+            return {}
+        payload = json.loads(profile_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return {}
+        summary = {
+            "duckdb_latency_ms": _profile_float_ms(payload, "latency"),
+            "duckdb_cpu_ms": _profile_float_ms(payload, "cpu_time"),
+            "duckdb_rows_returned": _profile_int(payload, "rows_returned"),
+            "duckdb_rows_scanned": _profile_int(payload, "cumulative_rows_scanned"),
+            "duckdb_bytes_read": _profile_int(payload, "total_bytes_read"),
+            "duckdb_bytes_written": _profile_int(payload, "total_bytes_written"),
+            "duckdb_peak_buffer_memory_bytes": _profile_int(payload, "system_peak_buffer_memory"),
+            "duckdb_peak_temp_dir_bytes": _profile_int(payload, "system_peak_temp_dir_size"),
+        }
+        return {key: value for key, value in summary.items() if value is not None}
+    except Exception:
+        return {}
+    finally:
+        with suppress(Exception):
+            profile_path.unlink(missing_ok=True)
+
+
+def _put_final_worker_event(
+    event_queue: Any,
+    event: dict[str, Any],
+    duckdb_profile_summary: dict[str, object] | None = None,
+) -> None:
+    if duckdb_profile_summary:
+        event["duckdbProfile"] = dict(duckdb_profile_summary)
+    _put_worker_event(event_queue, event)
+
+
 def _put_worker_event(event_queue: Any, event: dict[str, Any]) -> None:
     try:
         event_queue.put(event)
@@ -406,10 +563,11 @@ def _query_worker_entry(
     execution_result: QueryResult | None = None
     first_row_ms: float | None = None
     execution_error: Exception | None = None
+    duckdb_profile_path: Path | None = None
 
     try:
         if cancel_event.is_set():
-            _put_worker_event(
+            _put_final_worker_event(
                 event_queue,
                 {
                     "type": "final",
@@ -432,6 +590,7 @@ def _query_worker_entry(
                 read_only=execution_mode == QUERY_EXECUTION_DUCKDB_READ and worker_database_path != ":memory:",
             )
             _enable_duckdb_progress(connection)
+            duckdb_profile_path = _enable_duckdb_profiling(connection, settings)
 
         _put_worker_event(
             event_queue,
@@ -511,10 +670,11 @@ def _query_worker_entry(
 
         execution_thread.join()
         duration_ms = (time.perf_counter() - started) * 1000
+        duckdb_profile_summary = _read_duckdb_profile_summary(duckdb_profile_path)
 
         if execution_error is not None:
             if cancel_event.is_set():
-                _put_worker_event(
+                _put_final_worker_event(
                     event_queue,
                     {
                         "type": "final",
@@ -524,9 +684,10 @@ def _query_worker_entry(
                         "progressLabel": "Cancelled",
                         "cancellationPhase": "cancelled",
                     },
+                    duckdb_profile_summary,
                 )
             else:
-                _put_worker_event(
+                _put_final_worker_event(
                     event_queue,
                     {
                         "type": "final",
@@ -536,11 +697,12 @@ def _query_worker_entry(
                         "error": str(execution_error),
                         "progressLabel": "Failed",
                     },
+                    duckdb_profile_summary,
                 )
             return
 
         if execution_result is None:
-            _put_worker_event(
+            _put_final_worker_event(
                 event_queue,
                 {
                     "type": "final",
@@ -550,10 +712,11 @@ def _query_worker_entry(
                     "error": "The query finished without returning a result.",
                     "progressLabel": "Failed",
                 },
+                duckdb_profile_summary,
             )
             return
 
-        _put_worker_event(
+        _put_final_worker_event(
             event_queue,
             {
                 "type": "final",
@@ -570,9 +733,10 @@ def _query_worker_entry(
                 "firstRowMs": first_row_ms,
                 "fetchMs": max(0.0, duration_ms - first_row_ms) if first_row_ms is not None else None,
             },
+            duckdb_profile_summary,
         )
     except Exception as exc:
-        _put_worker_event(
+        _put_final_worker_event(
             event_queue,
             {
                 "type": "final",
@@ -583,6 +747,7 @@ def _query_worker_entry(
                 "progressLabel": "Cancelled" if cancel_event.is_set() else "Failed",
                 "cancellationPhase": "cancelled" if cancel_event.is_set() else None,
             },
+            _read_duckdb_profile_summary(duckdb_profile_path),
         )
     finally:
         if connection is not None:
@@ -649,6 +814,7 @@ class QueryJobRecord:
     execution_mode: str
     execution_sql: str
     worker_database_path: str | None = None
+    source_summaries: list[dict[str, object]] = field(default_factory=list)
     cancel_requested: bool = False
     cancellation_started_monotonic: float | None = None
     terminate_sent: bool = False
@@ -666,6 +832,8 @@ class QueryJobRecord:
     memory_sample_count: int = 0
     final_received: bool = False
     access_acquired: bool = False
+    last_log_heartbeat_monotonic: float = 0.0
+    logged_events: set[str] = field(default_factory=set)
 
 
 class QueryJobManager:
@@ -706,6 +874,7 @@ class QueryJobManager:
         data_sources: list[str] | None = None,
         touched_relations: list[str] | None = None,
         touched_buckets: list[str] | None = None,
+        source_summaries: list[dict[str, object]] | None = None,
     ) -> QueryJobDefinition:
         normalized_sql = sql.strip()
         if not normalized_sql:
@@ -752,9 +921,18 @@ class QueryJobManager:
                     touched_relations=touched_relations,
                     touched_buckets=touched_buckets,
                 ),
+                source_summaries=[
+                    dict(item)
+                    for item in (source_summaries or [])
+                    if isinstance(item, dict)
+                ],
+                last_log_heartbeat_monotonic=time.monotonic(),
             )
             self._jobs[snapshot.job_id] = record
             self._touch_locked()
+
+        self._log_query_job_event(snapshot.job_id, "queued")
+        self._log_query_job_event(snapshot.job_id, "prepared")
 
         worker = threading.Thread(
             target=self._run_job,
@@ -805,10 +983,12 @@ class QueryJobManager:
                 record.snapshot.can_cancel = False
                 self._touch_locked()
 
+        self._log_query_job_event(job_id, "cancel_requested")
         if terminal_payload is not None and self._terminal_job_callback is not None:
             with suppress(Exception):
                 self._terminal_job_callback(terminal_payload)
         if queued_cancel_snapshot is not None:
+            self._log_query_job_event(job_id, "cancelled")
             return queued_cancel_snapshot
 
         if cancel_event is not None:
@@ -828,6 +1008,145 @@ class QueryJobManager:
     def state_payload(self) -> dict[str, Any]:
         with self._condition:
             return self._state_payload_locked()
+
+    def _log_query_job_event(
+        self,
+        job_id: str,
+        event: str,
+        *,
+        level: int = logging.INFO,
+        extra: dict[str, object] | None = None,
+        once: bool = True,
+    ) -> None:
+        if not bool(getattr(self._settings, "query_job_logging_enabled", True)):
+            return
+        with self._condition:
+            record = self._jobs.get(job_id)
+            if record is None:
+                return
+            if once and event in record.logged_events:
+                return
+            if once:
+                record.logged_events.add(event)
+            fields = self._query_job_log_fields(record, event=event, extra=extra or {})
+        logger.log(level, "[bdw-query] %s", _format_query_log_fields(fields))
+
+    def _log_query_heartbeat_if_due(self, job_id: str) -> None:
+        if not bool(getattr(self._settings, "query_job_logging_enabled", True)):
+            return
+        now_monotonic = time.monotonic()
+        with self._condition:
+            record = self._jobs.get(job_id)
+            if (
+                record is None
+                or record.cancel_requested
+                or record.snapshot.status not in RUNNING_QUERY_STATUSES
+            ):
+                return
+            interval = max(
+                5,
+                int(getattr(self._settings, "query_job_log_heartbeat_seconds", 10) or 10),
+            )
+            if (
+                record.last_log_heartbeat_monotonic
+                and now_monotonic - record.last_log_heartbeat_monotonic < interval
+            ):
+                return
+            record.last_log_heartbeat_monotonic = now_monotonic
+            fields = self._query_job_log_fields(record, event="heartbeat", extra={})
+        logger.info("[bdw-query] %s", _format_query_log_fields(fields))
+
+    def _query_job_log_fields(
+        self,
+        record: QueryJobRecord,
+        *,
+        event: str,
+        extra: dict[str, object],
+    ) -> dict[str, object]:
+        snapshot = record.snapshot
+        fields: dict[str, object] = {
+            "query_job_time": _query_log_timestamp(
+                str(getattr(self._settings, "query_job_log_timezone", "Europe/Zurich") or "Europe/Zurich")
+            ),
+            "query_job_event": event,
+            "job_id": snapshot.job_id,
+            "notebook_id": snapshot.notebook_id,
+            "notebook_title": snapshot.notebook_title,
+            "cell_id": snapshot.cell_id,
+            "status": snapshot.status,
+            "backend": snapshot.backend_name,
+            "execution_mode": snapshot.execution_mode,
+        }
+        if snapshot.process_id is not None:
+            fields["process_id"] = snapshot.process_id
+        if snapshot.duration_ms:
+            fields["duration_ms"] = round(float(snapshot.duration_ms), 3)
+        if snapshot.progress_label:
+            fields["progress_label"] = snapshot.progress_label
+        if (
+            snapshot.progress is not None
+            and event == "heartbeat"
+            and snapshot.status == "running"
+            and snapshot.execution_mode != QUERY_EXECUTION_POSTGRES_NATIVE
+        ):
+            fields["duckdb_progress_percent"] = round(float(snapshot.progress) * 100, 1)
+        if snapshot.cpu_percent is not None and event == "heartbeat":
+            fields["cpu_percent"] = round(float(snapshot.cpu_percent), 2)
+        if snapshot.memory_rss_bytes is not None and event == "heartbeat":
+            fields["ram_mb"] = round(float(snapshot.memory_rss_bytes) / (1024 * 1024), 1)
+        if event == "heartbeat":
+            fields["elapsed_seconds"] = round(self._elapsed_duration_ms_locked(record) / 1000, 1)
+
+        data_sources, source_overflow = _capped_log_list(list(snapshot.data_sources))
+        if data_sources:
+            fields["data_sources"] = data_sources
+        if source_overflow:
+            fields["data_source_overflow_count"] = source_overflow
+
+        touched_relations, relation_overflow = _capped_log_list(list(snapshot.touched_relations))
+        if touched_relations:
+            fields["touched_relations"] = touched_relations
+        if relation_overflow:
+            fields["touched_relation_overflow_count"] = relation_overflow
+
+        touched_buckets, bucket_overflow = _capped_log_list(list(snapshot.touched_buckets))
+        if touched_buckets:
+            fields["touched_buckets"] = touched_buckets
+        if bucket_overflow:
+            fields["touched_bucket_overflow_count"] = bucket_overflow
+
+        if event == "prepared":
+            source_summaries, source_summary_overflow = _capped_log_list(
+                [self._compact_source_summary(item) for item in record.source_summaries]
+            )
+            if source_summaries:
+                fields["s3_sources"] = source_summaries
+            if source_summary_overflow:
+                fields["source_overflow_count"] = source_summary_overflow
+
+        if event in TERMINAL_QUERY_STATUSES:
+            fields["row_count"] = snapshot.row_count
+            fields["rows_shown"] = snapshot.rows_shown
+            fields["truncated"] = snapshot.truncated
+            if snapshot.worker_exit_code is not None:
+                fields["worker_exit_code"] = snapshot.worker_exit_code
+            if snapshot.error:
+                fields["error"] = _safe_error_log_text(snapshot.error)
+        for key, value in (extra or {}).items():
+            if key == "error" and value:
+                fields[key] = _safe_error_log_text(value)
+                continue
+            fields[key] = value
+        return fields
+
+    @staticmethod
+    def _compact_source_summary(summary: dict[str, object]) -> dict[str, object]:
+        compact: dict[str, object] = {}
+        for key in ("relation", "query_alias", "bucket", "key", "path", "format"):
+            value = summary.get(key)
+            if value not in (None, "", [], {}):
+                compact[key] = _truncate_log_text(value, QUERY_LOG_MAX_TEXT_CHARS)
+        return compact
 
     def shutdown(self) -> None:
         records: list[QueryJobRecord]
@@ -866,6 +1185,7 @@ class QueryJobManager:
                 access_acquired = self._access_coordinator.acquire(
                     record.execution_mode,
                     lambda: self._is_cancelled_or_terminal(job_id),
+                    on_waiting=lambda: self._log_query_heartbeat_if_due(job_id),
                 )
                 if not access_acquired:
                     return
@@ -939,6 +1259,7 @@ class QueryJobManager:
             self._drain_worker_events(job_id)
             self._sample_process_metrics(job_id)
             self._apply_cancellation_pressure(job_id)
+            self._log_query_heartbeat_if_due(job_id)
             time.sleep(QUERY_PARENT_POLL_SECONDS)
 
         process.join(timeout=0.2)
@@ -990,9 +1311,18 @@ class QueryJobManager:
         if event_type == "final":
             status = str(event.get("status") or "failed")
             duration_ms = float(event.get("durationMs") or 0.0)
+            duckdb_profile = event.get("duckdbProfile")
+            if not isinstance(duckdb_profile, dict):
+                duckdb_profile = {}
             changes = self._payload_changes(event)
             changes.pop("duration_ms", None)
-            self._finalize_job(job_id, status=status, duration_ms=duration_ms, **changes)
+            self._finalize_job(
+                job_id,
+                status=status,
+                duration_ms=duration_ms,
+                duckdb_profile=duckdb_profile,
+                **changes,
+            )
             with self._condition:
                 record = self._jobs.get(job_id)
                 if record is not None:
@@ -1005,6 +1335,14 @@ class QueryJobManager:
             changes.setdefault("message", "Running query in an isolated worker process.")
         if changes:
             self._patch_job(job_id, **changes)
+        if event_type == "started":
+            self._log_query_job_event(job_id, "worker_started")
+        elif event_type == "columns":
+            self._log_query_job_event(job_id, "fetching_rows")
+        elif event_type == "cancellation":
+            phase = str(event.get("cancellationPhase") or "").strip()
+            if phase:
+                self._log_query_job_event(job_id, f"cancel_{phase}")
 
     def _payload_changes(self, payload: dict[str, Any]) -> dict[str, Any]:
         mapping = {
@@ -1102,12 +1440,14 @@ class QueryJobManager:
         cancel_event = None
         process = None
         action: str | None = None
+        phase_event: str | None = None
         with self._condition:
             record = self._jobs.get(job_id)
             if record is None or not record.cancel_requested or record.snapshot.status in TERMINAL_QUERY_STATUSES:
                 return
             cancel_event = record.cancel_event
             process = record.process
+            previous_phase = record.snapshot.cancellation_phase
             cancel_started = record.cancellation_started_monotonic or time.monotonic()
             record.cancellation_started_monotonic = cancel_started
             elapsed = time.monotonic() - cancel_started
@@ -1129,9 +1469,13 @@ class QueryJobManager:
                 record.snapshot.cancellation_phase = "interrupting"
                 record.snapshot.message = "Interrupting the query worker."
                 record.snapshot.progress_label = "Cancelling..."
+            if record.snapshot.cancellation_phase and record.snapshot.cancellation_phase != previous_phase:
+                phase_event = f"cancel_{record.snapshot.cancellation_phase}"
             record.snapshot.updated_at = utc_now_iso()
             self._touch_locked()
 
+        if phase_event:
+            self._log_query_job_event(job_id, phase_event)
         if process is not None and action == "terminate":
             with suppress(Exception):
                 if process.is_alive():
@@ -1219,6 +1563,9 @@ class QueryJobManager:
             self._touch_locked()
 
     def _finalize_job(self, job_id: str, *, status: str, duration_ms: float, **changes: Any) -> None:
+        duckdb_profile = changes.pop("duckdb_profile", None)
+        if not isinstance(duckdb_profile, dict):
+            duckdb_profile = {}
         terminal_payload: dict[str, Any] | None = None
         with self._condition:
             record = self._jobs.get(job_id)
@@ -1243,6 +1590,13 @@ class QueryJobManager:
             terminal_payload = record.snapshot.payload
             self._prune_history_locked()
             self._touch_locked()
+        log_level = logging.WARNING if status == "failed" else logging.INFO
+        self._log_query_job_event(
+            job_id,
+            status,
+            level=log_level,
+            extra=duckdb_profile,
+        )
         if terminal_payload is not None and self._terminal_job_callback is not None:
             with suppress(Exception):
                 self._terminal_job_callback(terminal_payload)

@@ -36,6 +36,10 @@ WORKBENCH_ENVIRONMENT_VARIABLES = (
     "BDW_SERVICE_CONSUMPTION_COST_PG_CHF_PER_GB_MONTH",
     "BDW_SERVICE_CONSUMPTION_COST_CPU_WEIGHT",
     "BDW_SERVICE_CONSUMPTION_COST_RAM_WEIGHT",
+    "BDW_QUERY_JOB_LOGGING_ENABLED",
+    "BDW_QUERY_JOB_LOG_HEARTBEAT_SECONDS",
+    "BDW_QUERY_JOB_LOG_TIMEZONE",
+    "BDW_QUERY_JOB_DUCKDB_PROFILING_ENABLED",
     "BDW_INGESTION_UPLOAD_DIR",
     "BDW_INGESTION_UPLOAD_CHUNK_BYTES",
     "BDW_INGESTION_UPLOAD_MAX_ARCHIVE_BYTES",
@@ -556,6 +560,10 @@ class Settings:
     service_consumption_cost_pg_chf_per_gb_month: float | None = None
     service_consumption_cost_cpu_weight: float = 0.5
     service_consumption_cost_ram_weight: float = 0.5
+    query_job_logging_enabled: bool = True
+    query_job_log_heartbeat_seconds: int = 10
+    query_job_log_timezone: str = "Europe/Zurich"
+    query_job_duckdb_profiling_enabled: bool = True
     ingestion_upload_dir: Path = field(
         default_factory=lambda: Path(tempfile.gettempdir()) / "bdw-ingestion-uploads"
     )
@@ -651,6 +659,19 @@ class Settings:
                 0.0,
                 env_float_optional("BDW_SERVICE_CONSUMPTION_COST_RAM_WEIGHT")
                 or 0.5,
+            ),
+            query_job_logging_enabled=env_bool(
+                "BDW_QUERY_JOB_LOGGING_ENABLED",
+                True,
+            ),
+            query_job_log_heartbeat_seconds=max(
+                5,
+                env_int("BDW_QUERY_JOB_LOG_HEARTBEAT_SECONDS", 10),
+            ),
+            query_job_log_timezone=env("BDW_QUERY_JOB_LOG_TIMEZONE", "Europe/Zurich"),
+            query_job_duckdb_profiling_enabled=env_bool(
+                "BDW_QUERY_JOB_DUCKDB_PROFILING_ENABLED",
+                True,
             ),
             ingestion_upload_dir=Path(
                 env(
