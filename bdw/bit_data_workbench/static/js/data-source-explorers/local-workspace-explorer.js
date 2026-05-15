@@ -9,6 +9,7 @@ import { localWorkspaceQueryAliases } from "../query-alias-utils.js";
 export function createLocalWorkspaceDataSourceExplorer(helpers) {
   const {
     allLocalWorkspaceFolderPaths,
+    copySourceQueryPath,
     escapeHtml,
     formatByteCount,
     listLocalWorkspaceExports,
@@ -84,6 +85,10 @@ export function createLocalWorkspaceDataSourceExplorer(helpers) {
     return state.entries.find((entry) => entry.id === entryId) ?? null;
   }
 
+  function entryQueryPath(entry, state) {
+    return localWorkspaceQueryAliases(state.entries).get(entry.id) || localWorkspaceRelation(entry.id);
+  }
+
   function selectedDescriptorElement(state) {
     const entry = entryById(state, state.selectedEntryId);
     if (!entry) {
@@ -109,7 +114,8 @@ export function createLocalWorkspaceDataSourceExplorer(helpers) {
   }
 
   function entryButtonMarkup(entry, state) {
-    const displayPath = localWorkspaceDisplayPath(entry.folderPath, entry.fileName);
+    const queryPath = entryQueryPath(entry, state);
+    const displayPath = queryPath || localWorkspaceDisplayPath(entry.folderPath, entry.fileName);
     return `
       <button
         type="button"
@@ -203,6 +209,7 @@ export function createLocalWorkspaceDataSourceExplorer(helpers) {
       return;
     }
 
+    const queryPath = entryQueryPath(entry, state);
     detail.innerHTML = detailCardMarkup(
       {
         eyebrow: `${String(entry.exportFormat || "file").toUpperCase()} • Local Workspace`,
@@ -212,12 +219,17 @@ export function createLocalWorkspaceDataSourceExplorer(helpers) {
           actionButtonMarkup("View Data", "view", escapeHtml),
           actionButtonMarkup("Query In Current Notebook", "query-current", escapeHtml),
           actionButtonMarkup("Query In New Notebook", "query-new", escapeHtml),
+          actionButtonMarkup("Copy query path", "copy-query-path", escapeHtml),
           actionButtonMarkup("Create Data Product ...", "create-data-product", escapeHtml),
           actionButtonMarkup("Download", "download", escapeHtml),
           actionButtonMarkup("Download DDL", "download-ddl", escapeHtml),
         ].join(""),
         body: `
           <ul class="sidebar-source-field-list">
+            <li class="sidebar-source-field">
+              <span class="sidebar-source-field-name"><span class="sidebar-source-field-name-text">Query path</span></span>
+              <span class="sidebar-source-field-type">${escapeHtml(queryPath)}</span>
+            </li>
             <li class="sidebar-source-field">
               <span class="sidebar-source-field-name"><span class="sidebar-source-field-name-text">Folder</span></span>
               <span class="sidebar-source-field-type">${escapeHtml(entry.folderPath || "Root")}</span>
@@ -312,6 +324,16 @@ export function createLocalWorkspaceDataSourceExplorer(helpers) {
 
     if (action === "query-new") {
       await querySourceInNewNotebook(descriptor);
+      return true;
+    }
+
+    if (action === "copy-query-path") {
+      if ((await copySourceQueryPath?.(descriptor)) === false) {
+        await showMessageDialog({
+          title: "Query path unavailable",
+          copy: "This Local Workspace file does not expose a query path.",
+        });
+      }
       return true;
     }
 

@@ -46,6 +46,11 @@
       "enabledByDefault": true
     },
     {
+      "id": "sql-s3-path-completion",
+      "script": "playwright_sql_s3_path_completion_smoke.py",
+      "enabledByDefault": false
+    },
+    {
       "id": "query-explain",
       "script": "playwright_query_explain_smoke.py",
       "enabledByDefault": true

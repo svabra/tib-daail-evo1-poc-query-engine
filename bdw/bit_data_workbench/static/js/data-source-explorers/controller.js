@@ -5,6 +5,7 @@ import { createS3DataSourceExplorer } from "./s3-explorer.js";
 export function createDataSourceExplorerController(helpers) {
   const {
     allLocalWorkspaceFolderPaths,
+    copySourceQueryPath,
     downloadJobsController,
     downloadLocalWorkspaceExportFromSource,
     downloadSourceObjectDdl,
@@ -30,6 +31,7 @@ export function createDataSourceExplorerController(helpers) {
     postgres: createPostgresDataSourceExplorer({
       escapeHtml,
       fetchJsonOrThrow,
+      copySourceQueryPath,
       openDataProductPublishDialog,
       querySourceInCurrentNotebook,
       querySourceInNewNotebook,
@@ -44,12 +46,14 @@ export function createDataSourceExplorerController(helpers) {
       escapeHtml,
       fetchJsonOrThrow,
       formatByteCount,
+      copySourceQueryPath,
       openDataProductPublishDialog,
       prepareSourceS3Download,
       showMessageDialog,
     }),
     "local-workspace": createLocalWorkspaceDataSourceExplorer({
       allLocalWorkspaceFolderPaths,
+      copySourceQueryPath,
       downloadLocalWorkspaceExportFromSource,
       escapeHtml,
       formatByteCount,

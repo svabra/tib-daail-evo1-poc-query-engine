@@ -107,10 +107,9 @@
           </div>
           <div class="data-source-detail-action-cluster">
             <a
-              href="{{ selected_data_source.browse_path }}"
+              href="{{ selected_data_source.explorer_path }}"
               class="data-source-explorer-launcher"
-              data-browse-data-source="{{ selected_data_source.source_id }}"
-              data-browse-sidebar-source-id="{{ selected_data_source.explorer_source_id }}"
+              data-open-data-source-explorer="{{ selected_data_source.source_id }}"
               aria-label="Browse data for {{ selected_data_source.name }}"
             >
               <span class="data-source-explorer-launcher-icon" aria-hidden="true">

@@ -1,9 +1,38 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.2. Keep entries concise and
+# Derived from git history through version 0.9.3. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.3",
+        "releasedAt": "2026-05-15T11:44:33+02:00",
+        "features": [
+            (
+                "SQL completion now suggests discovered Shared Workspace S3 "
+                "object paths through readable aliases such as "
+                "s3.bucket.folder.file.csv, helping analysts query existing "
+                "CSV and Parquet objects without guessing path segments."
+            ),
+            (
+                "The recommender keeps the existing alias execution path, so "
+                "selected S3 paths continue to validate and rewrite to physical "
+                "DuckDB relations only when a query runs."
+            ),
+            (
+                "The Data Sources sidebar and S3 explorer now show the exact "
+                "query path hierarchy for discovered objects, including prefixes, "
+                "and object menus can copy query paths for S3, PostgreSQL, and "
+                "Local Workspace sources."
+            ),
+            (
+                "Regression coverage now verifies S3 CSV and Parquet alias "
+                "completion paths, source validation, explorer query-path display, "
+                "copy actions, and a browser smoke that executes both file formats "
+                "through the SQL editor."
+            ),
+        ],
+    },
     {
         "version": "0.9.2",
         "releasedAt": "2026-05-15T11:38:49+02:00",

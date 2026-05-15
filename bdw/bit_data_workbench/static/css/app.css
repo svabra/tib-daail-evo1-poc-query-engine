@@ -389,6 +389,8 @@ body.sidebar-collapsed .sidebar-resizer::before {
   font-size: 0.77rem;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .query-monitor-count.is-live,
@@ -2084,6 +2086,15 @@ details:not([open]) > .tree-children {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+.source-object-meta .source-query-path-label {
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  letter-spacing: 0;
+  text-transform: none;
+  white-space: nowrap;
 }
 
 .source-catalog-meta {
@@ -4191,9 +4202,15 @@ details:not([open]) > .tree-children {
   min-width: 0;
 }
 
+.data-source-explorer-browser-panel {
+  overflow: hidden;
+}
+
 .data-source-explorer-panel-header h4,
 .data-source-explorer-detail-copy h4 {
   margin: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .data-source-explorer-panel-header p,
@@ -4201,6 +4218,8 @@ details:not([open]) > .tree-children {
   margin: 0;
   color: var(--text-muted);
   line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .data-source-explorer-browser,
@@ -4261,6 +4280,7 @@ details:not([open]) > .tree-children {
 .data-source-explorer-object,
 .data-source-explorer-breadcrumb {
   width: 100%;
+  min-width: 0;
   padding: 12px 14px;
   text-align: left;
   cursor: pointer;
@@ -4289,6 +4309,7 @@ details:not([open]) > .tree-children {
 .data-source-explorer-object-copy {
   display: grid;
   gap: 3px;
+  min-width: 0;
 }
 
 .data-source-explorer-object-title-row {
@@ -4301,6 +4322,8 @@ details:not([open]) > .tree-children {
 .data-source-explorer-object-copy span {
   color: var(--text-muted);
   font-size: 0.84rem;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .data-source-explorer-breadcrumbs {

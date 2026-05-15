@@ -34,13 +34,20 @@ export function fieldListMarkup(fields, escapeHtml) {
   `;
 }
 
-export function actionButtonMarkup(label, action, escapeHtml, { tone = "default" } = {}) {
+export function actionButtonMarkup(
+  label,
+  action,
+  escapeHtml,
+  { tone = "default", disabled = false, title = "" } = {}
+) {
   return `
     <button
       type="button"
       class="data-source-explorer-action"
       data-data-source-explorer-action="${escapeHtml(action)}"
       data-tone="${escapeHtml(tone)}"
+      ${title ? `title="${escapeHtml(title)}"` : ""}
+      ${disabled ? "disabled" : ""}
     >
       ${escapeHtml(label)}
     </button>

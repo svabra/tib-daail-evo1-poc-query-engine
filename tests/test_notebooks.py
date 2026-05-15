@@ -37,6 +37,156 @@ def import_notebook_helpers():
     )
 
 
+def import_completion_schema_helpers():
+    from bit_data_workbench.backend.notebooks import build_completion_schema
+    from bit_data_workbench.models import SourceCatalog, SourceObject, SourceSchema
+
+    return build_completion_schema, SourceCatalog, SourceObject, SourceSchema
+
+
+class CompletionSchemaTests(unittest.TestCase):
+    def test_completion_schema_includes_s3_query_alias_paths(self) -> None:
+        (
+            build_completion_schema,
+            source_catalog_type,
+            source_object_type,
+            source_schema_type,
+        ) = import_completion_schema_helpers()
+
+        catalogs = [
+            source_catalog_type(
+                name="workspace",
+                schemas=[
+                    source_schema_type(
+                        name="vat_smoke_test",
+                        objects=[
+                            source_object_type(
+                                name="tax_csv",
+                                kind="view",
+                                relation="vat_smoke_test.tax_csv",
+                                query_alias=(
+                                    "s3.vat_smoke_test.incoming.tax_data.csv"
+                                ),
+                            ),
+                            source_object_type(
+                                name="tax_parquet",
+                                kind="view",
+                                relation="vat_smoke_test.tax_parquet",
+                                query_alias=(
+                                    "s3.vat_smoke_test.generated.vat_smoke."
+                                    "part_00001.parquet"
+                                ),
+                            ),
+                            source_object_type(
+                                name="tax_csv_duplicate",
+                                kind="view",
+                                relation="vat_smoke_test.tax_csv_duplicate",
+                                query_alias=(
+                                    "s3.vat_smoke_test.incoming.tax_data.csv"
+                                ),
+                            ),
+                            source_object_type(
+                                name="invalid_alias",
+                                kind="view",
+                                relation="vat_smoke_test.invalid_alias",
+                                query_alias="s3.vat_smoke_test",
+                            ),
+                            source_object_type(
+                                name="local_alias",
+                                kind="view",
+                                relation="vat_smoke_test.local_alias",
+                                query_alias="local.folder.local_alias.csv",
+                            ),
+                        ],
+                    )
+                ],
+            ),
+            source_catalog_type(
+                name="pg_oltp",
+                schemas=[
+                    source_schema_type(
+                        name="public",
+                        objects=[
+                            source_object_type(
+                                name="sales_orders",
+                                kind="table",
+                                relation="pg_oltp.public.sales_orders",
+                            )
+                        ],
+                    )
+                ],
+            ),
+        ]
+
+        schema = build_completion_schema(catalogs)
+
+        self.assertEqual(
+            schema["vat_smoke_test"],
+            [
+                "tax_csv",
+                "tax_parquet",
+                "tax_csv_duplicate",
+                "invalid_alias",
+                "local_alias",
+            ],
+        )
+        self.assertEqual(
+            schema["pg_oltp"],
+            {"public": ["sales_orders"]},
+        )
+        self.assertEqual(
+            schema["s3"]["vat_smoke_test"]["incoming"]["tax_data"]["csv"],
+            [],
+        )
+        self.assertEqual(
+            schema["s3"]["vat_smoke_test"]["generated"]["vat_smoke"][
+                "part_00001"
+            ]["parquet"],
+            [],
+        )
+        self.assertNotIn("local", schema)
+
+    def test_completion_schema_merges_workspace_schema_named_s3(self) -> None:
+        (
+            build_completion_schema,
+            source_catalog_type,
+            source_object_type,
+            source_schema_type,
+        ) = import_completion_schema_helpers()
+
+        schema = build_completion_schema(
+            [
+                source_catalog_type(
+                    name="workspace",
+                    schemas=[
+                        source_schema_type(
+                            name="s3",
+                            objects=[
+                                source_object_type(
+                                    name="legacy_relation",
+                                    kind="view",
+                                    relation="s3.legacy_relation",
+                                ),
+                                source_object_type(
+                                    name="path_relation",
+                                    kind="view",
+                                    relation="s3.path_relation",
+                                    query_alias="s3.bucket.folder.file.csv",
+                                ),
+                            ],
+                        )
+                    ],
+                )
+            ]
+        )
+
+        self.assertEqual(schema["s3"]["legacy_relation"], [])
+        self.assertEqual(
+            schema["s3"]["bucket"]["folder"]["file"]["csv"],
+            [],
+        )
+
+
 class GeneratorNotebookLinkTests(unittest.TestCase):
     def test_build_generator_notebook_links_groups_all_notebooks_for_a_loader(
         self,

@@ -358,7 +358,72 @@ def build_completion_schema(catalogs: list[SourceCatalog]) -> dict[str, object]:
             for source_schema in catalog.schemas
         }
 
+    _add_s3_query_alias_completion_paths(schema, catalogs)
     return schema
+
+
+def _completion_namespace_from_list(items: list[object]) -> dict[str, object]:
+    namespace: dict[str, object] = {}
+    for item in items:
+        label = str(item or "").strip()
+        if label:
+            namespace.setdefault(label, [])
+    return namespace
+
+
+def _ensure_completion_namespace(
+    parent: dict[str, object],
+    label: str,
+) -> dict[str, object]:
+    child = parent.get(label)
+    if isinstance(child, dict):
+        return child
+
+    namespace: dict[str, object]
+    if isinstance(child, list):
+        namespace = _completion_namespace_from_list(child)
+    else:
+        namespace = {}
+
+    parent[label] = namespace
+    return namespace
+
+
+def _add_s3_query_alias_path(
+    schema: dict[str, object],
+    query_alias: str,
+) -> None:
+    parts = [
+        part.strip()
+        for part in str(query_alias or "").split(".")
+        if part.strip()
+    ]
+    if len(parts) < 4 or parts[0] != "s3":
+        return
+
+    node = _ensure_completion_namespace(schema, "s3")
+    for part in parts[1:-1]:
+        node = _ensure_completion_namespace(node, part)
+
+    node.setdefault(parts[-1], [])
+
+
+def _add_s3_query_alias_completion_paths(
+    schema: dict[str, object],
+    catalogs: list[SourceCatalog],
+) -> None:
+    aliases: set[str] = set()
+    for catalog in catalogs:
+        if catalog.name != "workspace":
+            continue
+        for source_schema in catalog.schemas:
+            for source_object in source_schema.objects:
+                query_alias = str(source_object.query_alias or "").strip()
+                if query_alias.startswith("s3."):
+                    aliases.add(query_alias)
+
+    for query_alias in sorted(aliases):
+        _add_s3_query_alias_path(schema, query_alias)
 
 
 def _folder_id_for_path(path_key: tuple[str, ...]) -> str:

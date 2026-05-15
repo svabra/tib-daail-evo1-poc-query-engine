@@ -639,7 +639,7 @@ def query_workbench_data_source_explorer(
     if is_partial_request(request):
         return templates.TemplateResponse(
             request=request,
-            name="partials/data_source_management.html",
+            name="partials/data_source_explorer.html",
             context=context,
         )
 
@@ -653,7 +653,7 @@ def query_workbench_data_source_explorer(
                 active_notebook=None,
                 workspace_mode="notebook",
                 workspace_partial_template=(
-                    "partials/data_source_management.html"
+                    "partials/data_source_explorer.html"
                 ),
                 shell_sidebar_hidden=True,
             ),

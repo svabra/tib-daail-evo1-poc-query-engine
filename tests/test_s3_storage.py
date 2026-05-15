@@ -157,6 +157,7 @@ class _DeleteTrackingClient:
         )
         self._delete_objects_responses = list(delete_objects_responses or [])
         self._delete_object_side_effects = list(delete_object_side_effects or [])
+        self.list_object_versions_calls: list[dict[str, object]] = []
         self.delete_objects_calls: list[list[dict[str, str]]] = []
         self.delete_object_calls: list[dict[str, str]] = []
 
@@ -168,7 +169,8 @@ class _DeleteTrackingClient:
             return self._list_responses.pop(0)
         return {"KeyCount": 0, "Contents": []}
 
-    def list_object_versions(self, **_kwargs):
+    def list_object_versions(self, **kwargs):
+        self.list_object_versions_calls.append(dict(kwargs))
         if self._list_object_versions_side_effects:
             effect = self._list_object_versions_side_effects.pop(0)
             if isinstance(effect, Exception):
@@ -512,6 +514,117 @@ class S3StorageTests(unittest.TestCase):
         self.assertEqual(
             fake_client.delete_objects_calls,
             [[{"Key": "foo.parquet"}]],
+        )
+
+    def test_delete_s3_bucket_deletes_visible_keys_when_versions_are_empty(
+        self,
+    ) -> None:
+        s3_storage = import_s3_storage()
+        settings = build_settings()
+        fake_client = _DeleteTrackingClient(
+            list_responses=[
+                {
+                    "KeyCount": 2,
+                    "Contents": [
+                        {"Key": "exports/alpha.csv"},
+                        {"Key": "exports/beta.csv"},
+                    ],
+                    "IsTruncated": False,
+                }
+            ],
+            list_object_versions_responses=[
+                {"Versions": [], "DeleteMarkers": [], "IsTruncated": False}
+            ],
+        )
+
+        with patch.object(
+            s3_storage,
+            "s3_client",
+            return_value=fake_client,
+        ), patch.object(
+            s3_storage,
+            "_bucket_is_accessible",
+            return_value=True,
+        ):
+            deleted = s3_storage.delete_s3_bucket(settings, "vat-smoke-test")
+
+        self.assertEqual(deleted, 2)
+        self.assertEqual(
+            fake_client.delete_objects_calls,
+            [
+                [
+                    {"Key": "exports/alpha.csv"},
+                    {"Key": "exports/beta.csv"},
+                ]
+            ],
+        )
+
+    def test_delete_s3_bucket_deletes_paginated_versions_and_delete_markers(
+        self,
+    ) -> None:
+        s3_storage = import_s3_storage()
+        settings = build_settings()
+        fake_client = _DeleteTrackingClient(
+            list_object_versions_responses=[
+                {
+                    "Versions": [
+                        {"Key": "exports/alpha.csv", "VersionId": "v1"},
+                    ],
+                    "DeleteMarkers": [
+                        {"Key": "exports/beta.csv", "VersionId": "m1"},
+                    ],
+                    "IsTruncated": True,
+                    "NextKeyMarker": "exports/beta.csv",
+                    "NextVersionIdMarker": "m1",
+                },
+                {
+                    "Versions": [
+                        {"Key": "exports/gamma.csv", "VersionId": "v2"},
+                    ],
+                    "DeleteMarkers": [],
+                    "IsTruncated": False,
+                },
+            ],
+        )
+
+        with patch.object(
+            s3_storage,
+            "s3_client",
+            return_value=fake_client,
+        ), patch.object(
+            s3_storage,
+            "_bucket_is_accessible",
+            return_value=True,
+        ):
+            deleted = s3_storage.delete_s3_bucket(settings, "vat-smoke-test")
+
+        self.assertEqual(deleted, 3)
+        self.assertEqual(
+            fake_client.list_object_versions_calls,
+            [
+                {
+                    "Bucket": "vat-smoke-test",
+                    "Prefix": "",
+                    "MaxKeys": 1000,
+                },
+                {
+                    "Bucket": "vat-smoke-test",
+                    "Prefix": "",
+                    "MaxKeys": 1000,
+                    "KeyMarker": "exports/beta.csv",
+                    "VersionIdMarker": "m1",
+                },
+            ],
+        )
+        self.assertEqual(
+            fake_client.delete_objects_calls,
+            [
+                [
+                    {"Key": "exports/alpha.csv", "VersionId": "v1"},
+                    {"Key": "exports/beta.csv", "VersionId": "m1"},
+                    {"Key": "exports/gamma.csv", "VersionId": "v2"},
+                ]
+            ],
         )
 
     def test_delete_s3_keys_falls_back_to_individual_deletes(

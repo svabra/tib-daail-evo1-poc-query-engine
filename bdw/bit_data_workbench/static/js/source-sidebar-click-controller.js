@@ -3,6 +3,7 @@ export function createSourceSidebarClickController(helpers) {
     closeResultActionMenus,
     closeS3ExplorerActionMenus,
     closeSourceActionMenus,
+    copySourceQueryPath,
     cleanupDataGenerationJob,
     cancelDataGenerationJob,
     cancelQueryJob,
@@ -74,6 +75,32 @@ export function createSourceSidebarClickController(helpers) {
         closeSourceActionMenus(nextOpen ? menu : null);
         menu.open = nextOpen;
         syncSourceActionMenu(menu);
+      }
+      return true;
+    }
+
+    const copyQueryPathButton = event.target.closest("[data-copy-query-path]");
+    if (copyQueryPathButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      const sourceObjectRoot = copyQueryPathButton.closest("[data-source-object]");
+      closeSourceActionMenus();
+      try {
+        if ((await copySourceQueryPath?.(sourceObjectRoot)) === false) {
+          await showMessageDialog({
+            title: "Query path unavailable",
+            copy: "This source does not expose a query path yet.",
+          });
+        }
+      } catch (error) {
+        console.error("Failed to copy the source query path.", error);
+        await showMessageDialog({
+          title: "Copy query path failed",
+          copy:
+            error instanceof Error
+              ? error.message
+              : "The query path could not be copied to the clipboard.",
+        });
       }
       return true;
     }

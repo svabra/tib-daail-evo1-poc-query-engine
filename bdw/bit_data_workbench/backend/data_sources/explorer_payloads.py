@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ...models import SourceObject
+from ..query_aliases import normalize_query_alias_segment
 
 if TYPE_CHECKING:
     from ..service import WorkbenchService
@@ -45,6 +46,7 @@ def _source_object_payload(
         "displayName": source_object.display_name or source_object.name,
         "kind": source_object.kind,
         "relation": source_object.relation,
+        "queryAlias": source_object.query_alias,
         "s3Bucket": source_object.s3_bucket,
         "s3Key": source_object.s3_key,
         "s3Path": source_object.s3_path,
@@ -93,6 +95,59 @@ def _source_object_payload(
     return payload
 
 
+def _s3_query_hierarchy(bucket: str, prefix: str = "") -> str:
+    bucket_alias = normalize_query_alias_segment(bucket)
+    if not bucket_alias:
+        return "s3"
+
+    parts = ["s3", bucket_alias]
+    parts.extend(
+        normalize_query_alias_segment(segment)
+        for segment in str(prefix or "").strip("/").split("/")
+        if segment.strip()
+    )
+    return ".".join(part for part in parts if part)
+
+
+def _workspace_s3_source_objects(
+    service: WorkbenchService,
+) -> dict[tuple[str, str], SourceObject]:
+    objects_by_path: dict[tuple[str, str], SourceObject] = {}
+    for catalog in service.catalogs():
+        if str(catalog.connection_source_id or "").strip() != "workspace.s3":
+            continue
+        for schema in catalog.schemas:
+            for source_object in schema.objects:
+                bucket = str(source_object.s3_bucket or "").strip()
+                key = str(source_object.s3_key or "").strip()
+                if bucket and key and source_object.query_alias:
+                    objects_by_path[(bucket, key)] = source_object
+    return objects_by_path
+
+
+def _annotate_s3_breadcrumbs(
+    breadcrumbs: object,
+) -> list[dict[str, object]]:
+    annotated_breadcrumbs: list[dict[str, object]] = []
+    for raw_breadcrumb in list(breadcrumbs or []):
+        if not isinstance(raw_breadcrumb, dict):
+            continue
+        breadcrumb = dict(raw_breadcrumb)
+        bucket = str(breadcrumb.get("bucket") or "").strip()
+        prefix = str(breadcrumb.get("prefix") or "").strip()
+        breadcrumb["queryPath"] = _s3_query_hierarchy(bucket, prefix)
+        if not bucket:
+            breadcrumb["queryLabel"] = "s3"
+        elif not prefix:
+            breadcrumb["queryLabel"] = normalize_query_alias_segment(bucket)
+        else:
+            breadcrumb["queryLabel"] = normalize_query_alias_segment(
+                str(prefix).strip("/").split("/")[-1]
+            )
+        annotated_breadcrumbs.append(breadcrumb)
+    return annotated_breadcrumbs
+
+
 def _annotate_s3_snapshot(
     service: WorkbenchService,
     snapshot: dict[str, object],
@@ -101,6 +156,12 @@ def _annotate_s3_snapshot(
     bucket = str(annotated_snapshot.get("bucket") or "").strip()
     prefix = str(annotated_snapshot.get("prefix") or "").strip()
     annotated_entries: list[dict[str, object]] = []
+    s3_source_objects = _workspace_s3_source_objects(service)
+
+    annotated_snapshot["queryPath"] = _s3_query_hierarchy(bucket, prefix)
+    annotated_snapshot["breadcrumbs"] = _annotate_s3_breadcrumbs(
+        annotated_snapshot.get("breadcrumbs") or []
+    )
 
     for raw_entry in list(annotated_snapshot.get("entries") or []):
         if not isinstance(raw_entry, dict):
@@ -108,25 +169,36 @@ def _annotate_s3_snapshot(
         entry = dict(raw_entry)
         entry_kind = str(entry.get("entryKind") or "").strip()
         publication_source: dict[str, object] | None = None
+        entry_bucket = str(entry.get("bucket") or "").strip()
+        entry_prefix = str(entry.get("prefix") or "").strip()
 
         if entry_kind == "bucket":
-            entry_bucket = str(entry.get("bucket") or "").strip()
             if entry_bucket:
+                entry["queryPath"] = _s3_query_hierarchy(entry_bucket)
                 publication_source = {
                     "sourceKind": "bucket",
                     "sourceId": "workspace.s3",
                     "bucket": entry_bucket,
                 }
         elif entry_kind == "file":
-            entry_bucket = str(entry.get("bucket") or "").strip()
-            entry_key = str(entry.get("prefix") or "").strip()
+            entry_key = entry_prefix
             if entry_bucket and entry_key:
+                source_object = s3_source_objects.get((entry_bucket, entry_key))
+                if source_object:
+                    entry["name"] = source_object.display_name or source_object.name
+                    entry["displayName"] = source_object.display_name or source_object.name
+                    entry["sourceObjectName"] = source_object.name
+                    entry["relation"] = source_object.relation
+                    entry["queryAlias"] = source_object.query_alias
+                    entry["queryPath"] = source_object.query_alias
                 publication_source = {
                     "sourceKind": "object",
                     "sourceId": "workspace.s3",
                     "bucket": entry_bucket,
                     "key": entry_key,
                 }
+        elif entry_bucket and entry_prefix:
+            entry["queryPath"] = _s3_query_hierarchy(entry_bucket, entry_prefix)
 
         entry["publishedDataProducts"] = (
             service.published_data_products_for_source(source=publication_source)

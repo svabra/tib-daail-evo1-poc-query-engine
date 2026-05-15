@@ -58,6 +58,7 @@ export function createLocalWorkspaceSidebarUi(helpers) {
 
   function localWorkspaceEntryMarkup(entry, queryAlias = "") {
     const relation = localWorkspaceRelation(entry.id);
+    const queryPath = queryAlias || relation;
     const formatLabel = String(entry.exportFormat || "file").toUpperCase();
     const displayPath = localWorkspaceDisplayPath(entry.folderPath, entry.fileName);
     const sizeLabel = formatByteCount(entry.sizeBytes);
@@ -93,9 +94,10 @@ export function createLocalWorkspaceSidebarUi(helpers) {
             <path d="M3.2 10.7c1.5-1.7 3.1-2.6 4.8-2.6s3.3.9 4.8 2.6"></path>
             <circle cx="8" cy="10.2" r="1"></circle>
           </svg>
-          <span title="${escapeHtml(entry.fileName)}">${escapeHtml(truncatedFileName)}</span>
+          <span title="${escapeHtml(`${entry.fileName} | Query path: ${queryPath}`)}">${escapeHtml(truncatedFileName)}</span>
         </span>
         <span class="source-object-meta">
+          <small class="source-query-path-label" title="${escapeHtml(`Query path: ${queryPath}`)}">${escapeHtml(queryPath)}</small>
           <small>${escapeHtml(formatLabel)}</small>
           <small title="${escapeHtml(displayPath)}">${escapeHtml(sizeLabel)}</small>
           <details class="workspace-action-menu source-action-menu" data-source-action-menu>
@@ -131,6 +133,14 @@ export function createLocalWorkspaceSidebarUi(helpers) {
                 title="Create a new notebook with this query"
               >
                 Query in new notebook
+              </button>
+              <button
+                type="button"
+                class="workspace-action-menu-item"
+                data-copy-query-path
+                title="Copy the SQL query path for this Local Workspace file"
+              >
+                Copy query path
               </button>
               <button
                 type="button"

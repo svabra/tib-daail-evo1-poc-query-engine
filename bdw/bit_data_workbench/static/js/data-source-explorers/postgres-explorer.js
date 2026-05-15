@@ -12,6 +12,7 @@ export function createPostgresDataSourceExplorer(helpers) {
   const {
     escapeHtml,
     fetchJsonOrThrow,
+    copySourceQueryPath,
     openDataProductPublishDialog,
     querySourceInCurrentNotebook,
     querySourceInNewNotebook,
@@ -122,7 +123,9 @@ export function createPostgresDataSourceExplorer(helpers) {
                               <strong>${escapeHtml(object.displayName || object.name || "")}</strong>
                               ${publicationBadgeMarkup(object.publishedDataProducts, escapeHtml)}
                             </span>
-                            <span>${escapeHtml(String(object.kind || "table").toUpperCase())}</span>
+                            <span>${escapeHtml(
+                              `${String(object.kind || "table").toUpperCase()} - ${object.relation || ""}`
+                            )}</span>
                           </span>
                         </button>
                       `
@@ -164,11 +167,18 @@ export function createPostgresDataSourceExplorer(helpers) {
           actionButtonMarkup("View Data", "view", escapeHtml),
           actionButtonMarkup("Query In Current Notebook", "query-current", escapeHtml),
           actionButtonMarkup("Query In New Notebook", "query-new", escapeHtml),
+          actionButtonMarkup("Copy query path", "copy-query-path", escapeHtml),
           actionButtonMarkup("Create Data Product ...", "create-data-product", escapeHtml),
           actionButtonMarkup("Download DDL", "download-ddl", escapeHtml),
         ].join(""),
         body: `
           ${publicationLinksMarkup(selectedObject.publishedDataProducts, escapeHtml)}
+          <ul class="sidebar-source-field-list">
+            <li class="sidebar-source-field">
+              <span class="sidebar-source-field-name"><span class="sidebar-source-field-name-text">Query path</span></span>
+              <span class="sidebar-source-field-type">${escapeHtml(selectedObject.relation || "")}</span>
+            </li>
+          </ul>
           ${fieldListMarkup(fields, escapeHtml)}
         `,
       },
@@ -297,6 +307,16 @@ export function createPostgresDataSourceExplorer(helpers) {
 
     if (action === "query-new") {
       await querySourceInNewNotebook(selectedElement);
+      return true;
+    }
+
+    if (action === "copy-query-path") {
+      if ((await copySourceQueryPath?.(selectedElement)) === false) {
+        await showMessageDialog({
+          title: "Query path unavailable",
+          copy: "This PostgreSQL relation does not expose a query path.",
+        });
+      }
       return true;
     }
 

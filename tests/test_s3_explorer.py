@@ -149,6 +149,52 @@ def test_create_bucket_normalizes_valid_bucket_name() -> None:
     assert created.bucket == "client-bucket"
 
 
+def test_delete_bucket_entry_cleans_contents_before_removing_bucket() -> None:
+    explorer = import_s3_explorer()
+    manager = explorer.S3ExplorerManager(_ConfiguredSettings())
+
+    with patch.object(
+        explorer,
+        "delete_s3_bucket",
+        return_value=2,
+    ) as delete_s3_bucket, patch.object(
+        explorer,
+        "remove_s3_bucket",
+        return_value=True,
+    ) as remove_s3_bucket:
+        result = manager.delete_entry(
+            entry_kind="bucket",
+            bucket=" Client-Bucket ",
+        )
+
+    delete_s3_bucket.assert_called_once_with(manager._settings, "client-bucket")
+    remove_s3_bucket.assert_called_once_with(manager._settings, "client-bucket")
+    assert result.bucket == "client-bucket"
+    assert result.deleted_keys == 2
+    assert result.bucket_deleted is True
+    assert result.message == "Deleted bucket client-bucket and 2 contained object(s)."
+
+
+def test_delete_bucket_entry_reports_when_bucket_still_cannot_be_removed() -> None:
+    explorer = import_s3_explorer()
+    manager = explorer.S3ExplorerManager(_ConfiguredSettings())
+
+    with patch.object(
+        explorer,
+        "delete_s3_bucket",
+        return_value=1,
+    ), patch.object(
+        explorer,
+        "remove_s3_bucket",
+        return_value=False,
+    ):
+        with pytest.raises(ValueError, match="object cleanup finished"):
+            manager.delete_entry(
+                entry_kind="bucket",
+                bucket="client-bucket",
+            )
+
+
 def test_stream_object_returns_s3_body_without_temp_file_download() -> None:
     explorer = import_s3_explorer()
     manager = explorer.S3ExplorerManager(_ConfiguredSettings())

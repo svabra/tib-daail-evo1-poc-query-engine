@@ -211,8 +211,10 @@ async def create_bucket_via_sidebar(
         '[data-source-catalog][data-source-catalog-name="workspace"]',
     )
     await click_create_bucket_button(page, timeout_ms)
-    await page.locator("[data-folder-name-input]").fill(bucket_name)
-    await page.locator("[data-folder-name-submit]").click()
+    folder_dialog = page.locator("[data-folder-name-dialog][open]").first
+    await folder_dialog.wait_for(state="visible", timeout=timeout_ms)
+    await folder_dialog.locator("[data-folder-name-input]").fill(bucket_name)
+    await folder_dialog.locator("[data-folder-name-submit]").click()
     await page.wait_for_timeout(250)
     confirm_dialog = page.locator("[data-confirm-dialog]")
     if await confirm_dialog.count() and await confirm_dialog.evaluate(
@@ -247,8 +249,10 @@ async def reject_invalid_bucket_via_sidebar(
 
     request_count_before = len(bucket_create_requests)
     await click_create_bucket_button(page, timeout_ms)
-    await page.locator("[data-folder-name-input]").fill(bucket_name)
-    await page.locator("[data-folder-name-submit]").click()
+    folder_dialog = page.locator("[data-folder-name-dialog][open]").first
+    await folder_dialog.wait_for(state="visible", timeout=timeout_ms)
+    await folder_dialog.locator("[data-folder-name-input]").fill(bucket_name)
+    await folder_dialog.locator("[data-folder-name-submit]").click()
     await page.wait_for_timeout(250)
 
     confirm_dialog = page.locator("[data-confirm-dialog]")
@@ -269,7 +273,16 @@ async def reject_invalid_bucket_via_sidebar(
             f"{message_copy!r}"
         )
 
-    await message_dialog.locator("[data-message-submit]").click(force=True)
+    await message_dialog.locator("[data-message-submit]").evaluate("node => node.click()")
+    await page.wait_for_timeout(100)
+    await page.evaluate(
+        """() => {
+            const dialog = document.querySelector("[data-message-dialog][open]");
+            if (dialog && typeof dialog.close === "function") {
+                dialog.close("confirm");
+            }
+        }"""
+    )
     await page.wait_for_function(
         "() => !document.querySelector('[data-message-dialog][open]')",
         timeout=timeout_ms,
@@ -420,7 +433,7 @@ async def delete_object_via_sidebar_shows_pending_strike(
             await asyncio.sleep(0.75)
         await route.continue_()
 
-        await page.route("**/api/s3/explorer/entries", slow_delete)
+    await page.route("**/api/s3/explorer/entries", slow_delete)
     try:
         await object_root.locator("[data-delete-source-s3-object]").evaluate("node => node.click()")
         await submit_confirm_if_open(page, timeout_ms)
@@ -448,12 +461,14 @@ async def delete_object_via_sidebar_shows_pending_strike(
 
 async def run_smoke(args: argparse.Namespace) -> int:
     created_bucket = unique_bucket_name("pw-sidebar-create")
+    content_bucket = unique_bucket_name("pw-sidebar-content-delete")
     versioned_bucket = unique_bucket_name("pw-sidebar-versioned-delete")
     object_delete_bucket = unique_bucket_name("pw-sidebar-object-delete")
     descriptor_bucket = unique_bucket_name("pw-sidebar-descriptor-delete")
     client = s3_client(args)
 
     purge_bucket(client, created_bucket)
+    seed_csv_bucket(client, content_bucket)
     seed_versioned_bucket(client, versioned_bucket)
     seed_csv_bucket(client, object_delete_bucket)
     seed_csv_bucket(client, descriptor_bucket)
@@ -505,6 +520,11 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 created_bucket,
                 args.timeout_ms,
             )
+            content_delete_ms = await delete_bucket_via_sidebar(
+                page,
+                content_bucket,
+                args.timeout_ms,
+            )
             object_delete_ms = await delete_object_via_sidebar_shows_pending_strike(
                 page,
                 object_delete_bucket,
@@ -527,6 +547,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
             await browser.close()
             for bucket_name in (
                 created_bucket,
+                content_bucket,
                 versioned_bucket,
                 object_delete_bucket,
                 descriptor_bucket,
@@ -540,6 +561,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
             await browser.close()
             for bucket_name in (
                 created_bucket,
+                content_bucket,
                 versioned_bucket,
                 object_delete_bucket,
                 descriptor_bucket,
@@ -554,6 +576,11 @@ async def run_smoke(args: argparse.Namespace) -> int:
         failures.append(
             "Created bucket still exists after sidebar delete: "
             f"{created_bucket}"
+        )
+    if bucket_exists(client, content_bucket):
+        failures.append(
+            "Non-empty bucket still exists after sidebar delete: "
+            f"{content_bucket}"
         )
     if bucket_exists(client, versioned_bucket):
         failures.append(
@@ -577,6 +604,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
 
     print(f"Sidebar create bucket: {create_ms:.0f} ms")
     print(f"Sidebar delete empty bucket: {delete_ms:.0f} ms")
+    print(f"Sidebar delete non-empty bucket: {content_delete_ms:.0f} ms")
     print(f"Sidebar delete object pending strike: {object_delete_ms:.0f} ms")
     print(f"Sidebar delete versioned bucket: {versioned_delete_ms:.0f} ms")
     print(f"Sidebar delete bucket descriptor fallback: {descriptor_delete_ms:.0f} ms")
@@ -586,6 +614,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
             print(failure, file=sys.stderr)
         for bucket_name in (
             created_bucket,
+            content_bucket,
             versioned_bucket,
             object_delete_bucket,
             descriptor_bucket,

@@ -17,6 +17,9 @@ if str(BDW_ROOT) not in sys.path:
 from bit_data_workbench.api.data_source_explorer import (  # noqa: E402
     data_source_explorer_payload,
 )
+from bit_data_workbench.backend.data_sources.explorer_payloads import (  # noqa: E402
+    build_data_source_explorer_payload,
+)
 from bit_data_workbench.models import (  # noqa: E402
     SourceCatalog,
     SourceObject,
@@ -101,6 +104,7 @@ class FakeWorkbenchService:
                                 name="orders.csv",
                                 kind="file",
                                 relation="workspace.shared_finance.orders",
+                                query_alias="s3.shared_finance.exports.orders.csv",
                                 s3_bucket="shared-finance",
                                 s3_key="exports/orders.csv",
                                 s3_path="s3://shared-finance/exports/orders.csv",
@@ -180,6 +184,62 @@ class FakeWorkbenchService:
     def completion_schema(self):
         return {}
 
+    def published_data_products_for_source(self, *, source):
+        return []
+
+    def s3_explorer_snapshot(
+        self,
+        *,
+        bucket: str = "",
+        prefix: str = "",
+    ) -> dict[str, object]:
+        selected_bucket = bucket or "shared-finance"
+        selected_prefix = prefix or "exports/"
+        return {
+            "bucket": selected_bucket,
+            "prefix": selected_prefix,
+            "path": f"s3://{selected_bucket}/{selected_prefix}",
+            "entries": [
+                {
+                    "entryKind": "file",
+                    "name": "orders.csv",
+                    "bucket": selected_bucket,
+                    "prefix": "exports/orders.csv",
+                    "path": f"s3://{selected_bucket}/exports/orders.csv",
+                    "fileFormat": "csv",
+                    "sizeBytes": 1024,
+                },
+                {
+                    "entryKind": "file",
+                    "name": "raw.csv",
+                    "bucket": selected_bucket,
+                    "prefix": "exports/raw.csv",
+                    "path": f"s3://{selected_bucket}/exports/raw.csv",
+                    "fileFormat": "csv",
+                    "sizeBytes": 64,
+                },
+                {
+                    "entryKind": "prefix",
+                    "name": "nested",
+                    "bucket": selected_bucket,
+                    "prefix": "exports/nested/",
+                    "path": f"s3://{selected_bucket}/exports/nested/",
+                },
+            ],
+            "breadcrumbs": [
+                {"label": "Buckets", "bucket": "", "prefix": ""},
+                {"label": selected_bucket, "bucket": selected_bucket, "prefix": ""},
+                {
+                    "label": "exports",
+                    "bucket": selected_bucket,
+                    "prefix": "exports/",
+                },
+            ],
+            "canCreateBucket": True,
+            "canCreateFolder": True,
+            "emptyMessage": "",
+        }
+
     def data_source_explorer_payload(
         self,
         *,
@@ -251,7 +311,7 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
             body,
         )
 
-    def test_management_page_uses_standalone_url_and_sidebar_browse_launcher(self) -> None:
+    def test_management_page_uses_standalone_url_and_explorer_launcher(self) -> None:
         response = query_workbench_data_sources(
             request=build_request("/data-sources", partial=True),
             source_id="pg_olap",
@@ -263,10 +323,9 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
         self.assertIn('data-data-source-management-page', body)
         self.assertIn('data-selected-source-id="pg_olap"', body)
         self.assertIn("Browse Data", body)
-        self.assertIn('data-browse-data-source="pg_olap"', body)
-        self.assertIn('data-browse-sidebar-source-id="pg_olap"', body)
+        self.assertIn('data-open-data-source-explorer="pg_olap"', body)
         self.assertIn(
-            'href="/data-sources?source_id=pg_olap&amp;browse=1"',
+            'href="/data-sources/browser?source_id=pg_olap"',
             body,
         )
         self.assertNotIn('data-data-source-explorer-page', body)
@@ -339,7 +398,7 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
         self.assertIn('data-source-catalog-source-id="pg_oltp"', body)
         self.assertIn('data-source-catalog-source-id="pg_olap"', body)
 
-    def test_browser_route_reuses_management_page_and_sidebar_source_mapping(self) -> None:
+    def test_browser_route_renders_dedicated_explorer_page(self) -> None:
         response = query_workbench_data_source_explorer(
             request=build_request(
                 "/data-sources/browser",
@@ -351,17 +410,16 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.body.decode("utf-8")
-        self.assertIn('data-data-source-management-page', body)
+        self.assertIn('data-data-source-explorer-page', body)
         self.assertIn('data-selected-source-id="pg_oltp_native"', body)
-        self.assertIn('data-browse-source-id="pg_oltp_native"', body)
-        self.assertIn('data-browse-sidebar-source-id="pg_oltp"', body)
-        self.assertIn('data-browse-data-source="pg_oltp_native"', body)
+        self.assertIn('data-explorer-kind="postgres"', body)
+        self.assertIn('data-browse-source-id="pg_oltp"', body)
         self.assertIn('data-open-query-data-source="pg_oltp_native"', body)
         self.assertIn(
             'href="/data-sources?source_id=pg_oltp_native"',
             body,
         )
-        self.assertNotIn('data-data-source-explorer-page', body)
+        self.assertNotIn('data-data-source-management-page', body)
 
     def test_query_runs_page_renders_history_shell(self) -> None:
         response = query_runs_page(
@@ -391,6 +449,38 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
         self.assertEqual(payload["sourceId"], "pg_oltp")
         self.assertEqual(payload["defaultRelation"], "pg_oltp.public.orders")
         self.assertEqual(payload["schemas"][0]["objects"][0]["kind"], "table")
+
+    def test_s3_explorer_payload_uses_discovered_query_alias_for_prefixed_file(self) -> None:
+        payload = build_data_source_explorer_payload(
+            FakeWorkbenchService(),
+            source_id="workspace.s3",
+            bucket="shared-finance",
+            prefix="exports/",
+        )
+
+        snapshot = payload["snapshot"]
+        self.assertEqual(snapshot["queryPath"], "s3.shared_finance.exports")
+        self.assertEqual(
+            [breadcrumb["queryLabel"] for breadcrumb in snapshot["breadcrumbs"]],
+            ["s3", "shared_finance", "exports"],
+        )
+
+        entries = {
+            entry["prefix"]: entry
+            for entry in snapshot["entries"]
+            if isinstance(entry, dict)
+        }
+        orders = entries["exports/orders.csv"]
+        self.assertEqual(orders["queryAlias"], "s3.shared_finance.exports.orders.csv")
+        self.assertEqual(orders["queryPath"], "s3.shared_finance.exports.orders.csv")
+        self.assertEqual(orders["relation"], "workspace.shared_finance.orders")
+
+        self.assertNotIn("queryAlias", entries["exports/raw.csv"])
+        self.assertNotIn("queryPath", entries["exports/raw.csv"])
+        self.assertEqual(
+            entries["exports/nested/"]["queryPath"],
+            "s3.shared_finance.exports.nested",
+        )
 
 
 if __name__ == "__main__":

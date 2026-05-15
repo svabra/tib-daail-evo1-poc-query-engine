@@ -783,6 +783,7 @@ const downloadJobsController = createDownloadJobsController({
 
 const dataSourceExplorerController = createDataSourceExplorerController({
   allLocalWorkspaceFolderPaths,
+  copySourceQueryPath,
   downloadLocalWorkspaceExportFromSource,
   downloadSourceObjectDdl,
   downloadSourceS3Object,
@@ -941,6 +942,7 @@ const {
   closeResultActionMenus,
   closeS3ExplorerActionMenus,
   closeSourceActionMenus,
+  copySourceQueryPath,
   createLocalWorkspaceFolder,
   createLocalWorkspaceFolderFromDialog,
   createLocalWorkspaceFolderFromMoveDialog,
@@ -1803,6 +1805,96 @@ function readSchema() {
   } catch (_error) {
     return {};
   }
+}
+
+function flattenS3AliasSchema(schema) {
+  const aliases = [];
+  const root = schema?.s3;
+  if (!root || typeof root !== "object" || Array.isArray(root)) {
+    return aliases;
+  }
+
+  const visit = (node, parts) => {
+    if (Array.isArray(node)) {
+      if (parts.length >= 4) {
+        aliases.push(parts.join("."));
+      }
+      return;
+    }
+    if (!node || typeof node !== "object") {
+      return;
+    }
+    Object.keys(node)
+      .sort()
+      .forEach((part) => visit(node[part], [...parts, part]));
+  };
+
+  visit(root, ["s3"]);
+  return aliases;
+}
+
+function s3AliasCompletionSource(schema) {
+  const aliases = flattenS3AliasSchema(schema);
+  if (!aliases.length) {
+    return () => null;
+  }
+
+  return (context) => {
+    const match = context.matchBefore(/[A-Za-z0-9_.]*/);
+    const typed = String(match?.text || "").trim();
+    if (!match || !typed || !typed.toLowerCase().startsWith("s3.")) {
+      return null;
+    }
+
+    const typedLower = typed.toLowerCase();
+    const typedParts = typedLower.split(".");
+    const typedBucket = typedParts[1] || "";
+    const typedRemainder = typedParts.slice(2).join(".");
+    if (!typedBucket || !typedRemainder) {
+      return null;
+    }
+
+    const options = [];
+    const seen = new Set();
+
+    aliases.forEach((alias) => {
+      const aliasLower = alias.toLowerCase();
+      const aliasParts = aliasLower.split(".");
+      const aliasBucket = aliasParts[1] || "";
+      const aliasRemainder = aliasParts.slice(2).join(".");
+      const aliasFileName = aliasParts.slice(-2).join(".");
+      const sameBucket = typedBucket && aliasBucket === typedBucket;
+      const matchesPrefix = aliasLower.startsWith(typedLower);
+      const matchesDeepFile =
+        sameBucket &&
+        typedRemainder &&
+        (aliasFileName.startsWith(typedRemainder) ||
+          aliasFileName.replace(/_/g, "").startsWith(typedRemainder.replace(/_/g, "")));
+
+      if ((!matchesPrefix && !matchesDeepFile) || seen.has(alias)) {
+        return;
+      }
+
+      seen.add(alias);
+      options.push({
+        label: alias,
+        type: "table",
+        apply: alias,
+        detail: "S3 object",
+        boost: matchesDeepFile ? 110 : 100,
+      });
+    });
+
+    if (!options.length) {
+      return null;
+    }
+
+    return {
+      from: match.from,
+      options,
+      validFor: /^[A-Za-z0-9_.]*$/,
+    };
+  };
 }
 
 function escapeHtml(value) {
@@ -2690,6 +2782,56 @@ async function downloadSourceObjectDdl(sourceObjectRoot) {
   return true;
 }
 
+async function writeTextToClipboard(text) {
+  const value = String(text || "").trim();
+  if (!value) {
+    throw new Error("There is no query path to copy.");
+  }
+
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(value);
+      return;
+    } catch (_error) {
+      // Fall back to the textarea path below for browsers that expose the
+      // clipboard API but block it for the current context.
+    }
+  }
+
+  const textArea = document.createElement("textarea");
+  textArea.value = value;
+  textArea.setAttribute("readonly", "");
+  textArea.style.position = "fixed";
+  textArea.style.left = "-1000px";
+  textArea.style.top = "-1000px";
+  document.body.appendChild(textArea);
+  textArea.focus();
+  textArea.select();
+  const copied = document.execCommand("copy");
+  textArea.remove();
+  if (!copied) {
+    throw new Error("The browser blocked clipboard access.");
+  }
+}
+
+async function copySourceQueryPath(sourceObjectRoot) {
+  const descriptor = sourceQueryDescriptor(sourceObjectRoot);
+  if (!descriptor?.relation) {
+    return false;
+  }
+
+  await writeTextToClipboard(descriptor.relation);
+  setSidebarSourceOperationStatus(
+    {
+      tone: "success",
+      title: "Query path copied",
+      copy: descriptor.relation,
+    },
+    { autoClearMs: 2500 }
+  );
+  return true;
+}
+
 
 function defaultLocalNotebookTitle() {
   const localNotebookCount = Object.keys(readStoredNotebookMetadata()).filter((key) =>
@@ -2724,6 +2866,7 @@ function createNotebookLinkElement(notebookId, metadata) {
   link.dataset.defaultNotebookCells = JSON.stringify(
     (metadata.cells ?? []).map((cell) => ({
       cellId: cell.cellId,
+      language: normalizeCellLanguage(cell.language),
       dataSources: normalizeDataSources(cell.dataSources),
       sql: cell.sql,
     }))
@@ -2985,6 +3128,74 @@ function sharedNotebookPayload(notebookId) {
   };
 }
 
+function metadataFromSharedNotebookPayload(notebook) {
+  const notebookId = String(notebook?.notebookId || "").trim();
+  const cells = normalizeNotebookCells(notebook?.cells ?? []);
+  const metadata = {
+    notebookId,
+    title: normalizeNotebookTitleValue(notebook?.title),
+    summary: normalizeNotebookSummaryValue(notebook?.summary),
+    createdAt: String(notebook?.createdAt || new Date().toISOString()),
+    linkedGeneratorId: String(notebook?.linkedGeneratorId || ""),
+    cells,
+    dataSources: notebookSourceIds({ cells }),
+    tags: normalizeTags(notebook?.tags ?? []),
+    canEdit: notebook?.canEdit !== false,
+    canDelete: notebook?.canDelete !== false,
+    shared: true,
+    deleted: false,
+    versions: sortVersionsDescending(
+      (notebook?.versions ?? []).map((version) => normalizeVersionEntry(version)).filter(Boolean)
+    ),
+  };
+  if (!metadata.versions.length) {
+    metadata.versions = [createInitialNotebookVersion(notebookId, metadata)];
+  }
+  return metadata;
+}
+
+function writeNotebookDefaultsToMetaRoot(metaRoot, metadata) {
+  if (!metaRoot || !metadata?.notebookId) {
+    return;
+  }
+
+  metaRoot.dataset.defaultTitle = metadata.title;
+  metaRoot.dataset.defaultSummary = metadata.summary;
+  metaRoot.dataset.createdAt = metadata.createdAt;
+  metaRoot.dataset.defaultCreatedAt = metadata.createdAt;
+  metaRoot.dataset.linkedGeneratorId = metadata.linkedGeneratorId || "";
+  metaRoot.dataset.defaultCells = JSON.stringify(
+    (metadata.cells ?? []).map((cell) => ({
+      cellId: cell.cellId,
+      language: normalizeCellLanguage(cell.language),
+      dataSources: normalizeDataSources(cell.dataSources),
+      sql: cell.sql,
+    }))
+  );
+  metaRoot.dataset.defaultVersions = JSON.stringify(metadata.versions ?? []);
+  metaRoot.dataset.defaultTags = normalizeTags(metadata.tags ?? []).join("||");
+  metaRoot.dataset.defaultShared = metadata.shared ? "true" : "false";
+  metaRoot.dataset.shared = metadata.shared ? "true" : "false";
+  metaRoot.dataset.canEdit = metadata.canEdit ? "true" : "false";
+  metaRoot.dataset.canDelete = metadata.canDelete ? "true" : "false";
+}
+
+function promoteSyncedSharedNotebook(sharedNotebook) {
+  if (!sharedNotebook?.notebookId) {
+    return null;
+  }
+
+  const metadata = metadataFromSharedNotebookPayload(sharedNotebook);
+  notebookLinks(metadata.notebookId).forEach((link) => updateSidebarNotebookLink(link, metadata));
+  const metaRoot = activeWorkspaceMetaRoot(metadata.notebookId);
+  if (metaRoot) {
+    writeNotebookDefaultsToMetaRoot(metaRoot, metadata);
+    applyWorkspaceMetadata(metaRoot, metadata);
+  }
+  applySidebarSearchFilter();
+  return metadata;
+}
+
 function removeNotebookFromStoredTreeState(notebookId) {
   const currentTree = readStoredNotebookTree();
   if (!currentTree) {
@@ -3086,6 +3297,9 @@ async function syncSharedNotebookNow(notebookId) {
     return null;
   }
 
+  const requestPayload = sharedNotebookPayload(notebookId);
+  const draftAtRequest = sharedNotebookDrafts.get(notebookId);
+
   const response = await window.fetch("/api/notebooks/shared", {
     method: "POST",
     headers: {
@@ -3093,7 +3307,7 @@ async function syncSharedNotebookNow(notebookId) {
       "Content-Type": "application/json",
       "X-Workbench-Client-Id": workbenchClientId(),
     },
-    body: JSON.stringify(sharedNotebookPayload(notebookId)),
+    body: JSON.stringify(requestPayload),
   });
   if (!response.ok) {
     throw new Error(`Failed to sync shared notebook ${notebookId}: ${response.status}`);
@@ -3105,7 +3319,10 @@ async function syncSharedNotebookNow(notebookId) {
     return payload;
   }
 
-  sharedNotebookDrafts.delete(sharedNotebook.notebookId);
+  if (sharedNotebookDrafts.get(sharedNotebook.notebookId) === draftAtRequest) {
+    promoteSyncedSharedNotebook(sharedNotebook);
+    sharedNotebookDrafts.delete(sharedNotebook.notebookId);
+  }
   return payload;
 }
 
@@ -3351,9 +3568,17 @@ function renderWorkspaceVersions(metaRoot, versions) {
 function updateSidebarNotebookLink(link, metadata) {
   link.dataset.notebookTitle = metadata.title;
   link.dataset.notebookSummary = metadata.summary;
+  link.dataset.createdAt = metadata.createdAt || link.dataset.createdAt || new Date().toISOString();
   link.dataset.notebookDataSources = normalizeDataSources(metadata.dataSources).join("||");
+  link.dataset.defaultNotebookTitle = metadata.title;
+  link.dataset.defaultNotebookSummary = metadata.summary;
+  link.dataset.defaultNotebookVersions = JSON.stringify(metadata.versions ?? []);
+  link.dataset.defaultNotebookDataSources = normalizeDataSources(metadata.dataSources).join("||");
+  link.dataset.defaultNotebookTags = normalizeTags(metadata.tags ?? []).join("||");
   link.dataset.shared = metadata.shared ? "true" : "false";
   link.dataset.defaultNotebookShared = metadata.shared ? "true" : "false";
+  link.dataset.canEdit = metadata.canEdit ? "true" : "false";
+  link.dataset.canDelete = metadata.canDelete ? "true" : "false";
   link.dataset.defaultNotebookCells = JSON.stringify(
     (metadata.cells ?? []).map((cell) => ({
       cellId: cell.cellId,
@@ -3466,7 +3691,7 @@ function setNotebookCells(notebookId, cells, options = {}) {
   notebookLinks(notebookId).forEach((link) => updateSidebarNotebookLink(link, metadata));
   recordNotebookActivity(notebookId, "edited");
 
-  if (options.rerender && isLocalNotebookId(notebookId)) {
+  if (options.rerender) {
     renderLocalNotebookWorkspace(notebookId);
     scheduleSharedNotebookSync(notebookId);
     return metadata;
@@ -3476,6 +3701,39 @@ function setNotebookCells(notebookId, cells, options = {}) {
   applySidebarSearchFilter();
   scheduleSharedNotebookSync(notebookId);
   return metadata;
+}
+
+function flushNotebookEditorValues(notebookId) {
+  if (!notebookId) {
+    return;
+  }
+
+  const workspaceRoot = document.querySelector(
+    `[data-workspace-notebook][data-notebook-id="${CSS.escape(notebookId)}"]`
+  );
+  if (!workspaceRoot) {
+    return;
+  }
+
+  const metadataCells = new Map(
+    (notebookMetadata(notebookId).cells ?? []).map((cell) => [cell.cellId, cell])
+  );
+  workspaceRoot.querySelectorAll("[data-query-cell]").forEach((cellRoot) => {
+    const cellId = cellRoot.dataset.cellId;
+    const editorRoot = cellRoot.querySelector("[data-editor-root]");
+    if (!cellId || !editorRoot) {
+      return;
+    }
+
+    const sqlText = currentEditorSql(editorRoot);
+    const textarea = editorRoot.querySelector("[data-editor-source]");
+    if (textarea && textarea.value !== sqlText) {
+      textarea.value = sqlText;
+    }
+    if (metadataCells.get(cellId)?.sql !== sqlText) {
+      setCellSql(notebookId, cellId, sqlText);
+    }
+  });
 }
 
 function setNotebookTags(notebookId, tags) {
@@ -3580,6 +3838,7 @@ async function loadNotebookVersion(notebookId, versionId) {
 }
 
 function addCell(notebookId, afterCellId = null) {
+  flushNotebookEditorValues(notebookId);
   const metadata = notebookMetadata(notebookId);
   if (!metadata.canEdit) {
     return;
@@ -3603,6 +3862,7 @@ function addCell(notebookId, afterCellId = null) {
 }
 
 function duplicateCell(notebookId, cellId) {
+  flushNotebookEditorValues(notebookId);
   const metadata = notebookMetadata(notebookId);
   if (!metadata.canEdit) {
     return;
@@ -3624,6 +3884,7 @@ function duplicateCell(notebookId, cellId) {
 }
 
 function moveCell(notebookId, cellId, direction) {
+  flushNotebookEditorValues(notebookId);
   const metadata = notebookMetadata(notebookId);
   if (!metadata.canEdit) {
     return;
@@ -3651,6 +3912,7 @@ function moveCell(notebookId, cellId, direction) {
 }
 
 function deleteCell(notebookId, cellId) {
+  flushNotebookEditorValues(notebookId);
   const metadata = notebookMetadata(notebookId);
   if (!metadata.canEdit) {
     return;
@@ -3706,6 +3968,9 @@ function editorExtensionsForLanguage(language, schema) {
       dialect: PostgreSQL,
       schema,
       upperCaseKeywords: true,
+    }),
+    PostgreSQL.language.data.of({
+      autocomplete: s3AliasCompletionSource(schema),
     }),
   ];
 }
@@ -4559,7 +4824,7 @@ function applyWorkspaceMetadata(metaRoot, metadata) {
     renderedCellIds.length !== expectedCellIds.length ||
     renderedCellIds.some((cellId, index) => cellId !== expectedCellIds[index]);
 
-  if (cellsMismatch && isLocalNotebookId(metadata.notebookId ?? metaRoot.dataset.notebookId)) {
+  if (cellsMismatch) {
     renderLocalNotebookWorkspace(metaRoot.dataset.notebookId);
     return;
   }
@@ -5355,7 +5620,7 @@ async function loadQueryWorkbenchDataSourceExplorer(sourceId = "", { pushHistory
   syncShellVisibility();
   activateNotebookLink("");
   applyWorkbenchTitle("data-sources");
-  await initializeDataSourceManagementPage();
+  await dataSourceExplorerController.initializeCurrentPage();
   if (pushHistory) {
     pushQueryWorkbenchDataSourceExplorerHistory(sourceId);
   }
@@ -8894,6 +9159,16 @@ Promise.allSettled(initialLoadTasks)
       sidebarRefreshTask.finally(() => {
         initializeDataSourceManagementPage().catch((error) => {
           console.error("Failed to initialize the Data Source Workbench page.", error);
+        });
+      });
+      renderQueryNotificationMenu();
+      return;
+    }
+
+    if (dataSourceExplorerPageRoot()) {
+      sidebarRefreshTask.finally(() => {
+        dataSourceExplorerController.initializeCurrentPage().catch((error) => {
+          console.error("Failed to initialize the Data Source Explorer page.", error);
         });
       });
       renderQueryNotificationMenu();

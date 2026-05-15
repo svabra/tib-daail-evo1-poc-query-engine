@@ -364,6 +364,186 @@ async def create_notebook_in_folder(page, folder_name: str, expect_shared: bool,
     return notebook_id
 
 
+async def replace_first_cell_sql(page, sql_text: str, timeout_ms: int) -> None:
+    editor = page.locator("[data-query-cell]").first.locator(".cm-content")
+    await editor.wait_for(state="visible", timeout=timeout_ms)
+    await editor.click()
+    select_shortcut = "Meta+A" if sys.platform == "darwin" else "Control+A"
+    await page.keyboard.press(select_shortcut)
+    await page.keyboard.press("Backspace")
+    await page.keyboard.type(sql_text)
+
+
+async def read_workspace_cell_sqls(page) -> list[str]:
+    return await page.evaluate(
+        """
+        () => Array.from(document.querySelectorAll("[data-query-cell]"))
+          .map((cell) => cell.querySelector("[data-editor-source]")?.value ?? "")
+        """
+    )
+
+
+async def wait_for_workspace_cell_count(page, expected_count: int, timeout_ms: int) -> None:
+    await page.wait_for_function(
+        """
+        (expectedCount) => document.querySelectorAll("[data-query-cell]").length === expectedCount
+        """,
+        arg=expected_count,
+        timeout=timeout_ms,
+    )
+
+
+def shared_notebook_sync_response(sql_marker: str | None = None):
+    def _matches(response) -> bool:
+        if response.request.method != "POST" or not response.url.endswith("/api/notebooks/shared"):
+            return False
+        if response.status != 200:
+            return False
+        if sql_marker is None:
+            return True
+        return sql_marker in (response.request.post_data or "")
+
+    return _matches
+
+
+def shared_notebook_sync_request(sql_marker: str):
+    def _matches(request) -> bool:
+        return (
+            request.method == "POST"
+            and request.url.endswith("/api/notebooks/shared")
+            and sql_marker in (request.post_data or "")
+        )
+
+    return _matches
+
+
+async def read_shared_notebook_cells_in_new_context(
+    browser,
+    base_url: str,
+    shared_notebook_id: str,
+    expected_count: int,
+    timeout_ms: int,
+) -> list[str]:
+    second_context = await browser.new_context()
+    await second_context.add_init_script(clear_bdw_keys_script())
+    try:
+        viewer_page = await second_context.new_page()
+        await viewer_page.goto(
+            f"{base_url.rstrip('/')}/notebooks/{shared_notebook_id}",
+            wait_until="domcontentloaded",
+            timeout=timeout_ms,
+        )
+        await viewer_page.wait_for_selector("[data-workspace-notebook]", timeout=timeout_ms)
+        await wait_for_workspace_cell_count(viewer_page, expected_count, timeout_ms)
+        return await read_workspace_cell_sqls(viewer_page)
+    finally:
+        await second_context.close()
+
+
+async def assert_shared_add_cell_preserves_sql(
+    page,
+    browser,
+    base_url: str,
+    shared_notebook_id: str,
+    timeout_ms: int,
+) -> None:
+    initial_sql = f"select 42 as preserved_{uuid.uuid4().hex[:6]}"
+
+    async with page.expect_response(
+        shared_notebook_sync_response(initial_sql),
+        timeout=timeout_ms,
+    ):
+        await replace_first_cell_sql(page, initial_sql, timeout_ms)
+
+    async with page.expect_response(
+        shared_notebook_sync_response(initial_sql),
+        timeout=timeout_ms,
+    ):
+        await page.locator("[data-add-cell]").click()
+
+    await wait_for_workspace_cell_count(page, 2, timeout_ms)
+    cell_sqls = await read_workspace_cell_sqls(page)
+    if cell_sqls != [initial_sql, ""]:
+        raise RuntimeError(
+            "Adding a shared-notebook cell did not preserve the existing cell SQL. "
+            f"Observed cells: {cell_sqls!r}"
+        )
+
+    persisted_cell_sqls = await read_shared_notebook_cells_in_new_context(
+        browser,
+        base_url,
+        shared_notebook_id,
+        2,
+        timeout_ms,
+    )
+    if persisted_cell_sqls != [initial_sql, ""]:
+        raise RuntimeError(
+            "The shared notebook did not persist the add-cell state after reload. "
+            f"Observed cells: {persisted_cell_sqls!r}"
+        )
+
+
+async def assert_newer_shared_edit_survives_inflight_sync(
+    page,
+    browser,
+    base_url: str,
+    shared_notebook_id: str,
+    timeout_ms: int,
+) -> None:
+    stale_sql = f"select 1 as stale_{uuid.uuid4().hex[:6]}"
+    latest_sql = f"select 2 as latest_{uuid.uuid4().hex[:6]}"
+    delayed_posts = 0
+
+    async def delay_first_shared_sync(route):
+        nonlocal delayed_posts
+        request = route.request
+        if request.method == "POST" and request.url.endswith("/api/notebooks/shared"):
+            delayed_posts += 1
+            if delayed_posts == 1:
+                await asyncio.sleep(0.35)
+        await route.continue_()
+
+    await page.route("**/api/notebooks/shared", delay_first_shared_sync)
+    try:
+        first_request = asyncio.create_task(
+            page.wait_for_request(
+                shared_notebook_sync_request(stale_sql),
+                timeout=timeout_ms,
+            )
+        )
+        await replace_first_cell_sql(page, stale_sql, timeout_ms)
+        await first_request
+
+        async with page.expect_response(
+            shared_notebook_sync_response(latest_sql),
+            timeout=timeout_ms,
+        ):
+            await replace_first_cell_sql(page, latest_sql, timeout_ms)
+    finally:
+        await page.unroute("**/api/notebooks/shared", delay_first_shared_sync)
+
+    await page.wait_for_timeout(250)
+    cell_sqls = await read_workspace_cell_sqls(page)
+    if not cell_sqls or cell_sqls[0] != latest_sql:
+        raise RuntimeError(
+            "A stale shared-notebook sync response discarded a newer local edit. "
+            f"Observed cells: {cell_sqls!r}"
+        )
+
+    persisted_cell_sqls = await read_shared_notebook_cells_in_new_context(
+        browser,
+        base_url,
+        shared_notebook_id,
+        2,
+        timeout_ms,
+    )
+    if not persisted_cell_sqls or persisted_cell_sqls[0] != latest_sql:
+        raise RuntimeError(
+            "The newer shared-notebook edit was not persisted after an inflight sync. "
+            f"Observed cells: {persisted_cell_sqls!r}"
+        )
+
+
 async def delete_shared_notebook_by_api(page, notebook_id: str) -> None:
     if not notebook_id:
         return
@@ -610,6 +790,24 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 page,
                 public_folder,
                 True,
+                args.timeout_ms,
+            )
+
+            stage = "preserve shared notebook SQL when adding a cell"
+            await assert_shared_add_cell_preserves_sql(
+                page,
+                browser,
+                args.base_url,
+                public_shared_notebook_id,
+                args.timeout_ms,
+            )
+
+            stage = "preserve newer shared notebook edit during inflight sync"
+            await assert_newer_shared_edit_survives_inflight_sync(
+                page,
+                browser,
+                args.base_url,
+                public_shared_notebook_id,
                 args.timeout_ms,
             )
 

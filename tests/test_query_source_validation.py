@@ -71,6 +71,16 @@ def sample_catalogs() -> list[SourceCatalog]:
                             relation="test.federal_tax_data_10gb",
                             query_alias="s3.test.federal_tax_data_10gb.csv",
                             s3_bucket="test",
+                        ),
+                        SourceObject(
+                            name="vat_smoke_part_00001",
+                            kind="view",
+                            relation="test.vat_smoke_part_00001",
+                            query_alias=(
+                                "s3.test.generated.vat_smoke.part_00001."
+                                "parquet"
+                            ),
+                            s3_bucket="test",
                         )
                     ],
                 )
@@ -133,6 +143,18 @@ class QuerySourceValidationTests(unittest.TestCase):
         self.assertEqual(
             result.matched_references[0].matched_relation,
             "test.federal_tax_data_10gb",
+        )
+
+    def test_s3_parquet_query_alias_validates(self) -> None:
+        result = validate(
+            "select * from s3.test.generated.vat_smoke.part_00001.parquet"
+        )
+
+        self.assertEqual(result.status, QUERY_SOURCE_VALID)
+        self.assertEqual(result.missing_references, [])
+        self.assertEqual(
+            result.matched_references[0].matched_relation,
+            "test.vat_smoke_part_00001",
         )
 
     def test_subqueries_aliases_and_table_functions_do_not_false_positive(self) -> None:
