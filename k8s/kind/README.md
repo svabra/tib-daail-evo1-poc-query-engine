@@ -20,14 +20,13 @@ Use this path to validate the service-consumption deployment outside RHOS.
    - `kubectl apply -f k8s/bdw-configmap.yaml`
    - `kubectl apply -f k8s/bdw-serviceaccount.yaml`
    - `kubectl apply -f k8s/bdw-service.yaml`
-2. Apply the app storage and node-metrics RBAC:
-   - `kubectl apply -f k8s/bdw-storage-pvc.yaml`
+2. Apply node-metrics RBAC if you want to test node-level series:
    - `kubectl apply -f k8s/bdw-node-reader-clusterrole.yaml`
    - `kubectl apply -f k8s/bdw-node-reader-clusterrolebinding.yaml`
 3. Apply the updated deployment:
    - `kubectl apply -f k8s/bdw-deployment.yaml`
 
-Set the CHF rate-card values in the ConfigMap before testing the financial view. The shared annual budget itself is entered through the service-consumption page and persisted on the PVC.
+Set the CHF rate-card values in the ConfigMap before testing the financial view. The shared annual budget itself is entered through the service-consumption page and best-effort snapshotted to hidden S3.
 
 Do not apply the legacy `duckdb-*.yaml` deployment manifests in kind. The current validation path is the `evo1-bdw` deployment only.
 
@@ -40,8 +39,8 @@ Do not apply `k8s/bdw-route.yaml` in kind. Access the app with `kubectl port-for
 
 ## Expected Checks
 
-- The pod starts with `/workspace/service-consumption` mounted from the PVC
-- JSONL samples appear under `/workspace/service-consumption/history/...`
+- The pod starts without any PVC mount
+- Hidden S3 state can appear under `--bdw-internal--/service-consumption/state.json`
 - `/service-consumption` loads with the sidebar hidden
 - CPU and RAM charts render and refresh from the SSE-backed monitor cadence
 - The S3 recent-history chart renders when S3/MinIO is configured

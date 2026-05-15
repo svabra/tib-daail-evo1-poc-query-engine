@@ -4,7 +4,6 @@ from calendar import month_abbr
 import json
 import logging
 import math
-import shutil
 import ssl
 import threading
 from dataclasses import dataclass
@@ -17,34 +16,23 @@ from urllib import request as urllib_request
 from botocore.exceptions import BotoCoreError, ClientError
 
 from ..config import Settings
+from .s3_hidden import SERVICE_CONSUMPTION_S3_PREFIX
 from .s3_storage import list_s3_buckets_from_client, s3_client
 
 
 logger = logging.getLogger(__name__)
 
 SERVICE_CONSUMPTION_WINDOWS: dict[str, dict[str, timedelta | int]] = {
-    "15m": {
-        "duration": timedelta(minutes=15),
-        "bucket_seconds": 3,
-    },
-    "1h": {
-        "duration": timedelta(hours=1),
-        "bucket_seconds": 15,
-    },
-    "6h": {
-        "duration": timedelta(hours=6),
-        "bucket_seconds": 60,
-    },
-    "24h": {
-        "duration": timedelta(hours=24),
-        "bucket_seconds": 300,
-    },
     "48h": {
         "duration": timedelta(hours=48),
         "bucket_seconds": 600,
     },
 }
-SERVICE_CONSUMPTION_DEFAULT_WINDOW = "24h"
+SERVICE_CONSUMPTION_DEFAULT_WINDOW = "48h"
+SERVICE_CONSUMPTION_SNAPSHOT_SCHEMA_VERSION = 1
+SERVICE_CONSUMPTION_S3_STATE_KEY = f"{SERVICE_CONSUMPTION_S3_PREFIX}state.json"
+SERVICE_CONSUMPTION_S3_FLUSH_INTERVAL = timedelta(minutes=5)
+SERVICE_CONSUMPTION_S3_WARNING_INTERVAL = timedelta(minutes=15)
 TOPOLOGY_COPY = (
     "The current PoC runs API, backend, frontend, and query execution on a single node."
 )
@@ -60,7 +48,6 @@ SERVICE_ACCOUNT_CA_CERT_PATH = Path(
 KUBERNETES_API_BASE_URL = "https://kubernetes.default.svc"
 KUBERNETES_REQUEST_TIMEOUT_SECONDS = 3.0
 PRUNE_INTERVAL = timedelta(minutes=15)
-COST_EVENT_RETENTION_MONTHS = 13
 COST_CURRENCY = "CHF"
 HOURS_PER_MONTH_FOR_COSTING = 730.0
 FORECAST_WINDOW_DAYS = 30
@@ -235,8 +222,16 @@ def _read_int_file(path: Path) -> int | None:
         return None
 
 
-def _json_line(sample: dict[str, Any]) -> str:
-    return json.dumps(sample, separators=(",", ":"), sort_keys=True)
+def _json_clone(payload: Any) -> Any:
+    return json.loads(json.dumps(payload))
+
+
+def _s3_missing_object_error(error: Exception) -> bool:
+    response = getattr(error, "response", None)
+    if isinstance(response, dict):
+        code = str((response.get("Error") or {}).get("Code") or "").strip()
+        return code in {"404", "NoSuchKey", "NotFound"}
+    return error.__class__.__name__ in {"NoSuchKey", "NotFound"}
 
 
 @dataclass(slots=True)
@@ -332,13 +327,18 @@ class ServiceConsumptionMonitor:
         settings: Settings,
         *,
         state_change_callback: Callable[[dict[str, Any]], None],
+        s3_client_factory=s3_client,
     ) -> None:
         self._settings = settings
         self._state_change_callback = state_change_callback
+        self._s3_client_factory = s3_client_factory
         self._lock = threading.RLock()
         self._stop_event = threading.Event()
         self._worker: threading.Thread | None = None
         self._version = 0
+        self._samples: list[dict[str, Any]] = []
+        self._cost_events: list[dict[str, Any]] = []
+        self._budget_entries: dict[str, dict[str, Any]] = {}
         self._latest_sample: dict[str, Any] | None = None
         self._latest_sample_timestamp: datetime | None = None
         self._last_app_metrics_reading: AppMetricsReading | None = None
@@ -346,32 +346,22 @@ class ServiceConsumptionMonitor:
         self._last_pruned_at: datetime | None = None
         self._financial_cache: FinancialYearCache | None = None
         self._kubernetes_client = KubernetesApiClient()
-
-    @property
-    def history_root(self) -> Path:
-        return self._settings.service_consumption_data_dir / "history"
-
-    @property
-    def financial_root(self) -> Path:
-        return self._settings.service_consumption_data_dir / "financial"
-
-    @property
-    def financial_cost_events_root(self) -> Path:
-        return self.financial_root / "cost-events"
-
-    @property
-    def financial_budgets_path(self) -> Path:
-        return self.financial_root / "budgets.json"
+        self._s3_snapshot_dirty = False
+        self._s3_snapshot_change_version = 0
+        self._s3_snapshot_flush_in_progress = False
+        self._last_s3_snapshot_flush_at: datetime | None = datetime.now(UTC)
+        self._last_s3_snapshot_warning_at: datetime | None = None
 
     def start(self) -> None:
-        self.history_root.mkdir(parents=True, exist_ok=True)
-        self.financial_root.mkdir(parents=True, exist_ok=True)
+        restored_snapshot = self._load_s3_snapshot_payload()
         snapshot_to_publish: dict[str, Any] | None = None
         now = datetime.now(UTC)
         with self._lock:
             if self._worker is not None and self._worker.is_alive():
                 return
             self._stop_event.clear()
+            if restored_snapshot is not None:
+                self._restore_s3_snapshot_payload_locked(restored_snapshot)
             self._prune_history_locked(reference_time=now, force=True)
             restored_sample = self._load_latest_sample_locked()
             if restored_sample is not None:
@@ -382,6 +372,7 @@ class ServiceConsumptionMonitor:
                 self._restore_s3_cache_locked(restored_sample)
                 self._version += 1
                 snapshot_to_publish = self._build_realtime_payload_locked()
+            self._last_s3_snapshot_flush_at = now
             self._worker = threading.Thread(
                 target=self._run,
                 name="bdw-service-consumption",
@@ -399,6 +390,174 @@ class ServiceConsumptionMonitor:
             self._worker = None
         if worker is not None and worker.is_alive():
             worker.join(timeout=1.0)
+
+    def _service_consumption_s3_bucket(self) -> str:
+        return str(getattr(self._settings, "s3_bucket", "") or "").strip()
+
+    def _service_consumption_s3_available(self) -> bool:
+        return bool(
+            self._service_consumption_s3_bucket()
+            and self._settings.s3_endpoint
+            and self._settings.current_s3_access_key_id()
+            and self._settings.current_s3_secret_access_key()
+        )
+
+    def _load_s3_snapshot_payload(self) -> dict[str, Any] | None:
+        if not self._service_consumption_s3_available():
+            return None
+
+        bucket = self._service_consumption_s3_bucket()
+        try:
+            response = self._s3_client_factory(self._settings).get_object(
+                Bucket=bucket,
+                Key=SERVICE_CONSUMPTION_S3_STATE_KEY,
+            )
+        except Exception as exc:
+            if _s3_missing_object_error(exc):
+                return None
+            logger.warning(
+                "Failed to restore service-consumption S3 snapshot: %s",
+                exc,
+            )
+            return None
+
+        body = response.get("Body") if isinstance(response, dict) else None
+        raw = b"" if body is None else body.read()
+        close = getattr(body, "close", None)
+        if callable(close):
+            close()
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            logger.warning(
+                "Skipping malformed service-consumption S3 snapshot: %s",
+                exc,
+            )
+            return None
+        return payload if isinstance(payload, dict) else None
+
+    def _restore_s3_snapshot_payload_locked(self, payload: dict[str, Any]) -> None:
+        cutoff = datetime.now(UTC) - timedelta(
+            hours=self._settings.service_consumption_retention_hours
+        )
+        samples = [
+            _json_clone(sample)
+            for sample in payload.get("samples", []) or []
+            if isinstance(sample, dict)
+            and (observed_at := _parse_iso_datetime(sample.get("timestampUtc"))) is not None
+            and observed_at >= cutoff
+        ]
+        samples.sort(
+            key=lambda sample: _parse_iso_datetime(sample.get("timestampUtc"))
+            or datetime.min.replace(tzinfo=UTC)
+        )
+        self._samples = samples
+
+        cost_cutoff = self._financial_cost_event_cutoff(datetime.now(UTC))
+        self._cost_events = [
+            _json_clone(cost_event)
+            for cost_event in payload.get("costEvents", []) or []
+            if isinstance(cost_event, dict)
+            and (observed_at := _parse_iso_datetime(cost_event.get("endAtUtc"))) is not None
+            and observed_at >= cost_cutoff
+        ]
+
+        budgets = payload.get("budgets") or {}
+        self._budget_entries = {
+            str(year): _json_clone(entry)
+            for year, entry in budgets.items()
+            if isinstance(entry, dict)
+        } if isinstance(budgets, dict) else {}
+
+        latest_sample = payload.get("latestSample") if isinstance(payload.get("latestSample"), dict) else None
+        if latest_sample is None and self._samples:
+            latest_sample = self._samples[-1]
+        self._latest_sample = _json_clone(latest_sample) if isinstance(latest_sample, dict) else None
+        self._latest_sample_timestamp = (
+            _parse_iso_datetime(self._latest_sample.get("timestampUtc"))
+            if isinstance(self._latest_sample, dict)
+            else None
+        )
+        if self._latest_sample is not None:
+            self._restore_s3_cache_locked(self._latest_sample)
+
+        self._financial_cache = None
+        self._s3_snapshot_dirty = False
+        self._s3_snapshot_change_version = 0
+
+    def _mark_s3_snapshot_dirty_locked(self) -> None:
+        self._s3_snapshot_dirty = True
+        self._s3_snapshot_change_version += 1
+
+    def _s3_snapshot_payload_locked(self) -> dict[str, Any]:
+        return {
+            "schemaVersion": SERVICE_CONSUMPTION_SNAPSHOT_SCHEMA_VERSION,
+            "updatedAtUtc": datetime.now(UTC).replace(microsecond=0).isoformat(),
+            "retentionHours": self._settings.service_consumption_retention_hours,
+            "latestSample": _json_clone(self._latest_sample)
+            if self._latest_sample is not None
+            else None,
+            "samples": _json_clone(self._samples),
+            "costEvents": _json_clone(self._cost_events),
+            "budgets": _json_clone(self._budget_entries),
+            "version": self._version,
+        }
+
+    def _prepare_s3_snapshot_flush_locked(
+        self,
+        observed_at: datetime,
+    ) -> tuple[dict[str, Any], int] | None:
+        if (
+            not self._service_consumption_s3_available()
+            or not self._s3_snapshot_dirty
+            or self._s3_snapshot_flush_in_progress
+        ):
+            return None
+        if (
+            self._last_s3_snapshot_flush_at is not None
+            and observed_at - self._last_s3_snapshot_flush_at < SERVICE_CONSUMPTION_S3_FLUSH_INTERVAL
+        ):
+            return None
+
+        self._s3_snapshot_flush_in_progress = True
+        return self._s3_snapshot_payload_locked(), self._s3_snapshot_change_version
+
+    def _flush_s3_snapshot_payload(
+        self,
+        payload: dict[str, Any],
+        change_version: int,
+        observed_at: datetime,
+    ) -> None:
+        success = False
+        try:
+            self._s3_client_factory(self._settings).put_object(
+                Bucket=self._service_consumption_s3_bucket(),
+                Key=SERVICE_CONSUMPTION_S3_STATE_KEY,
+                Body=json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8"),
+                ContentType="application/json",
+                Metadata={"bdw-internal": "service-consumption"},
+            )
+            success = True
+        except Exception as exc:
+            self._log_s3_snapshot_warning(exc)
+        finally:
+            with self._lock:
+                self._s3_snapshot_flush_in_progress = False
+                self._last_s3_snapshot_flush_at = observed_at
+                if success:
+                    if self._s3_snapshot_change_version == change_version:
+                        self._s3_snapshot_dirty = False
+
+    def _log_s3_snapshot_warning(self, exc: Exception) -> None:
+        now = datetime.now(UTC)
+        with self._lock:
+            if (
+                self._last_s3_snapshot_warning_at is not None
+                and now - self._last_s3_snapshot_warning_at < SERVICE_CONSUMPTION_S3_WARNING_INTERVAL
+            ):
+                return
+            self._last_s3_snapshot_warning_at = now
+        logger.warning("Failed to persist service-consumption S3 snapshot: %s", exc)
 
     def realtime_payload(self) -> dict[str, Any]:
         with self._lock:
@@ -492,13 +651,8 @@ class ServiceConsumptionMonitor:
         }
 
     def _normalize_window(self, value: str) -> str:
-        normalized = str(value or "").strip().lower()
-        if normalized not in SERVICE_CONSUMPTION_WINDOWS:
-            raise ValueError(
-                "Unsupported service-consumption window. "
-                f"Expected one of: {', '.join(SERVICE_CONSUMPTION_WINDOWS)}"
-            )
-        return normalized
+        _ = value
+        return SERVICE_CONSUMPTION_DEFAULT_WINDOW
 
     def _window_duration(self, window: str) -> timedelta:
         return SERVICE_CONSUMPTION_WINDOWS[window]["duration"]  # type: ignore[return-value]
@@ -533,6 +687,7 @@ class ServiceConsumptionMonitor:
         sample_timestamp = _parse_iso_datetime(sample.get("timestampUtc")) or datetime.now(
             UTC
         )
+        flush_request: tuple[dict[str, Any], int] | None = None
         with self._lock:
             previous_sample = self._latest_sample
             self._append_sample_locked(sample)
@@ -545,7 +700,15 @@ class ServiceConsumptionMonitor:
             self._restore_s3_cache_locked(sample)
             self._prune_history_locked(reference_time=sample_timestamp)
             self._version += 1
-            return self._build_realtime_payload_locked()
+            flush_request = self._prepare_s3_snapshot_flush_locked(sample_timestamp)
+            snapshot = self._build_realtime_payload_locked()
+        if flush_request is not None:
+            self._flush_s3_snapshot_payload(
+                flush_request[0],
+                flush_request[1],
+                sample_timestamp,
+            )
+        return snapshot
 
     def _collect_sample(self, *, initial: bool) -> dict[str, Any]:
         app_metrics = self._read_app_metrics(initial=initial)
@@ -914,87 +1077,15 @@ class ServiceConsumptionMonitor:
     def _collect_persistent_volume_metrics(
         self,
     ) -> tuple[dict[str, int | str | None], dict[str, object]]:
-        mount_path = self._settings.service_consumption_data_dir
-        try:
-            mount_path.mkdir(parents=True, exist_ok=True)
-            usage = shutil.disk_usage(mount_path)
-            directory_usage_bytes = self._directory_usage_bytes(mount_path)
-        except OSError as exc:
-            logger.warning("Failed to collect persistent volume usage: %s", exc)
-            return {
-                "bytesUsed": None,
-                "bytesCapacity": None,
-                "bytesProvisioned": None,
-                "mountPath": mount_path.as_posix(),
-            }, {
-                "available": False,
-                "detail": str(exc),
-            }
-
-        provisioned_bytes, pvc_name = self._collect_persistent_volume_capacity_bytes()
-        display_capacity_bytes = provisioned_bytes if provisioned_bytes is not None else int(
-            usage.total
-        )
-        detail = f"Persistent volume usage is available from {mount_path.as_posix()}."
-        if provisioned_bytes is not None and pvc_name:
-            detail = (
-                f"Persistent volume usage is available from {mount_path.as_posix()} "
-                f"with PVC {pvc_name} capacity."
-            )
-
         return {
-            "bytesUsed": int(directory_usage_bytes),
-            "bytesCapacity": display_capacity_bytes,
-            "bytesProvisioned": provisioned_bytes,
-            "mountPath": mount_path.as_posix(),
+            "bytesUsed": None,
+            "bytesCapacity": None,
+            "bytesProvisioned": None,
+            "mountPath": "",
         }, {
-            "available": True,
-            "detail": detail,
+            "available": False,
+            "detail": "Persistent volume metrics are disabled; monitoring state is kept in memory and snapshotted to S3.",
         }
-
-    def _collect_persistent_volume_capacity_bytes(self) -> tuple[int | None, str | None]:
-        pvc_name = str(self._settings.app_storage_pvc_name or "").strip() or None
-        if not self._settings.service_consumption_pvc_capacity_enabled:
-            return None, pvc_name
-        pod_namespace = str(self._settings.pod_namespace or "").strip()
-        if pvc_name is None or not pod_namespace or not self._kubernetes_client.available():
-            return None, pvc_name
-
-        try:
-            pvc_payload = self._kubernetes_client.get_json(
-                f"/api/v1/namespaces/{pod_namespace}/persistentvolumeclaims/{pvc_name}"
-            )
-            status_capacity = (
-                ((pvc_payload.get("status") or {}).get("capacity") or {}).get("storage")
-                if isinstance(pvc_payload, dict)
-                else None
-            )
-            requested_capacity = (
-                (
-                    ((pvc_payload.get("spec") or {}).get("resources") or {}).get("requests")
-                    or {}
-                ).get("storage")
-                if isinstance(pvc_payload, dict)
-                else None
-            )
-            raw_capacity = status_capacity or requested_capacity
-            if raw_capacity is None:
-                return None, pvc_name
-            return parse_kubernetes_memory_quantity(raw_capacity), pvc_name
-        except Exception as exc:
-            logger.warning("Failed to collect PVC capacity for %s: %s", pvc_name, exc)
-            return None, pvc_name
-
-    def _directory_usage_bytes(self, root: Path) -> int:
-        total_bytes = 0
-        for path in root.rglob("*"):
-            try:
-                if not path.is_file():
-                    continue
-                total_bytes += path.stat().st_size
-            except OSError:
-                continue
-        return total_bytes
 
     def _build_realtime_payload_locked(self) -> dict[str, Any]:
         return {
@@ -1438,6 +1529,19 @@ class ServiceConsumptionMonitor:
         filesystem_total = _normalized_currency(dynamic_breakdown.get("filesystem", 0.0))
         s3_total = _normalized_currency(dynamic_breakdown.get("s3", 0.0))
         pg_total = _normalized_currency(self._pg_ytd_chf(cache.year))
+        if self._settings.service_consumption_pvc_capacity_enabled:
+            filesystem_status = self._service_status(
+                configured=self._settings.service_consumption_cost_pv_chf_per_gb_month
+                is not None,
+                available=self._persistent_volume_cost_component_available(
+                    latest_sample
+                ),
+                has_cost=bool(filesystem_total),
+            )
+            filesystem_subtitle = "Provisioned PVC capacity allocated to the app"
+        else:
+            filesystem_status = {"state": "unavailable", "label": "Unavailable"}
+            filesystem_subtitle = "PVC-backed filesystem costing is disabled"
         services = [
             {
                 "key": "container",
@@ -1498,20 +1602,13 @@ class ServiceConsumptionMonitor:
             {
                 "key": "filesystem",
                 "label": "FileSystem Service",
-                "subtitle": "Provisioned PVC capacity allocated to the app",
+                "subtitle": filesystem_subtitle,
                 "costYtdChf": filesystem_total,
                 "shareOfTotalPercent": self._service_share_percent(
                     filesystem_total,
                     total_spend,
                 ),
-                "status": self._service_status(
-                    configured=self._settings.service_consumption_cost_pv_chf_per_gb_month
-                    is not None,
-                    available=self._persistent_volume_cost_component_available(
-                        latest_sample
-                    ),
-                    has_cost=bool(filesystem_total),
-                ),
+                "status": filesystem_status,
                 "details": {
                     "provisionedBytes": (
                         (latest_sample.get("persistentVolume") or {}).get(
@@ -2030,56 +2127,20 @@ class ServiceConsumptionMonitor:
         observed_at = _parse_iso_datetime(cost_event.get("endAtUtc"))
         if observed_at is None:
             raise ValueError("Cost event endAtUtc is required.")
-        path = self._cost_event_path_for(observed_at)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(_json_line(cost_event))
-            handle.write("\n")
-
-    def _cost_event_path_for(self, observed_at: datetime) -> Path:
-        return (
-            self.financial_cost_events_root
-            / f"{observed_at.year:04d}"
-            / f"{observed_at.month:02d}"
-            / f"{observed_at.day:02d}.jsonl"
-        )
+        self._cost_events.append(_json_clone(cost_event))
+        self._mark_s3_snapshot_dirty_locked()
 
     def _load_cost_events_for_year_locked(self, year: int) -> list[dict[str, Any]]:
-        events: list[dict[str, Any]] = []
-        root = self.financial_cost_events_root / f"{year:04d}"
-        if not root.exists():
-            return events
-        for path in sorted(root.rglob("*.jsonl")):
-            try:
-                raw_lines = path.read_text(encoding="utf-8").splitlines()
-            except OSError:
-                continue
-            for raw_line in raw_lines:
-                raw_line = raw_line.strip()
-                if not raw_line:
-                    continue
-                try:
-                    cost_event = json.loads(raw_line)
-                except json.JSONDecodeError:
-                    continue
-                observed_at = _parse_iso_datetime(cost_event.get("endAtUtc"))
-                if observed_at is None or observed_at.year != year:
-                    continue
-                events.append(cost_event)
-        return events
+        return [
+            _json_clone(cost_event)
+            for cost_event in self._cost_events
+            if (observed_at := _parse_iso_datetime(cost_event.get("endAtUtc"))) is not None
+            and observed_at.year == year
+        ]
 
     def _read_budget_locked(self, year: int) -> dict[str, Any]:
-        path = self.financial_budgets_path
-        if not path.is_file():
-            return {}
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return {}
-        if not isinstance(payload, dict):
-            return {}
-        entry = payload.get(str(year))
-        return entry if isinstance(entry, dict) else {}
+        entry = self._budget_entries.get(str(year))
+        return _json_clone(entry) if isinstance(entry, dict) else {}
 
     def _write_budget_locked(
         self,
@@ -2088,24 +2149,11 @@ class ServiceConsumptionMonitor:
         annual_budget_chf: float,
         updated_at: datetime,
     ) -> None:
-        path = self.financial_budgets_path
-        budgets: dict[str, object] = {}
-        if path.is_file():
-            try:
-                existing = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError):
-                existing = {}
-            if isinstance(existing, dict):
-                budgets = existing
-        path.parent.mkdir(parents=True, exist_ok=True)
-        budgets[str(year)] = {
+        self._budget_entries[str(year)] = {
             "annualBudgetChf": _normalized_currency(annual_budget_chf),
             "updatedAtUtc": updated_at.isoformat(),
         }
-        path.write_text(
-            json.dumps(budgets, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        self._mark_s3_snapshot_dirty_locked()
 
     def _month_end_date(self, year: int, month: int) -> date:
         if month >= 12:
@@ -2242,50 +2290,17 @@ class ServiceConsumptionMonitor:
         observed_at = _parse_iso_datetime(sample.get("timestampUtc"))
         if observed_at is None:
             raise ValueError("Sample timestampUtc is required.")
-        path = self._history_path_for(observed_at)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(_json_line(sample))
-            handle.write("\n")
-
-    def _history_path_for(self, observed_at: datetime) -> Path:
-        return (
-            self.history_root
-            / f"{observed_at.year:04d}"
-            / f"{observed_at.month:02d}"
-            / f"{observed_at.day:02d}.jsonl"
+        self._samples.append(_json_clone(sample))
+        self._samples.sort(
+            key=lambda item: _parse_iso_datetime(item.get("timestampUtc"))
+            or datetime.min.replace(tzinfo=UTC)
         )
+        self._mark_s3_snapshot_dirty_locked()
 
     def _load_latest_sample_locked(self) -> dict[str, Any] | None:
-        history_root = self.history_root
-        if not history_root.exists():
+        if not self._samples:
             return None
-
-        latest_path = next(
-            iter(
-                sorted(
-                    history_root.rglob("*.jsonl"),
-                    key=lambda item: item.as_posix(),
-                    reverse=True,
-                )
-            ),
-            None,
-        )
-        if latest_path is None:
-            return None
-        try:
-            lines = latest_path.read_text(encoding="utf-8").splitlines()
-        except OSError:
-            return None
-        for raw_line in reversed(lines):
-            raw_line = raw_line.strip()
-            if not raw_line:
-                continue
-            try:
-                return json.loads(raw_line)
-            except json.JSONDecodeError:
-                continue
-        return None
+        return _json_clone(self._samples[-1])
 
     def _load_samples_since_locked(self, cutoff: datetime) -> list[dict[str, Any]]:
         return self._load_samples_between_locked(cutoff, datetime.now(UTC))
@@ -2296,36 +2311,12 @@ class ServiceConsumptionMonitor:
         end_at: datetime,
     ) -> list[dict[str, Any]]:
         samples: list[dict[str, Any]] = []
-        current_date = start_at.date()
-        end_date = end_at.date()
-        while current_date <= end_date:
-            path = self._history_path_for(
-                datetime(
-                    current_date.year,
-                    current_date.month,
-                    current_date.day,
-                    tzinfo=UTC,
-                )
-            )
-            if path.is_file():
-                try:
-                    raw_lines = path.read_text(encoding="utf-8").splitlines()
-                except OSError:
-                    raw_lines = []
-                for raw_line in raw_lines:
-                    raw_line = raw_line.strip()
-                    if not raw_line:
-                        continue
-                    try:
-                        sample = json.loads(raw_line)
-                    except json.JSONDecodeError:
-                        continue
-                    observed_at = _parse_iso_datetime(sample.get("timestampUtc"))
-                    if observed_at is None:
-                        continue
-                    if start_at <= observed_at <= end_at:
-                        samples.append(sample)
-            current_date += timedelta(days=1)
+        for sample in self._samples:
+            observed_at = _parse_iso_datetime(sample.get("timestampUtc"))
+            if observed_at is None:
+                continue
+            if start_at <= observed_at <= end_at:
+                samples.append(_json_clone(sample))
         return samples
 
     def _prune_history_locked(
@@ -2344,128 +2335,34 @@ class ServiceConsumptionMonitor:
         cutoff = reference_time - timedelta(
             hours=self._settings.service_consumption_retention_hours
         )
-        history_root = self.history_root
-        if not history_root.exists():
-            self._prune_financial_cost_events_locked(reference_time)
-            self._last_pruned_at = reference_time
-            return
-
-        for path in sorted(history_root.rglob("*.jsonl")):
-            try:
-                raw_lines = path.read_text(encoding="utf-8").splitlines()
-            except OSError:
-                continue
-
-            kept_lines: list[str] = []
-            for raw_line in raw_lines:
-                raw_line = raw_line.strip()
-                if not raw_line:
-                    continue
-                try:
-                    sample = json.loads(raw_line)
-                except json.JSONDecodeError:
-                    continue
-                observed_at = _parse_iso_datetime(sample.get("timestampUtc"))
-                if observed_at is None or observed_at < cutoff:
-                    continue
-                kept_lines.append(_json_line(sample))
-
-            if not kept_lines:
-                try:
-                    path.unlink()
-                except OSError:
-                    continue
-                continue
-
-            rewritten = "\n".join(kept_lines) + "\n"
-            original = "\n".join(line.strip() for line in raw_lines if line.strip())
-            if rewritten.rstrip("\n") == original:
-                continue
-            try:
-                path.write_text(rewritten, encoding="utf-8")
-            except OSError:
-                continue
-
-        for directory in sorted(history_root.rglob("*"), reverse=True):
-            if not directory.is_dir():
-                continue
-            try:
-                next(directory.iterdir())
-            except StopIteration:
-                try:
-                    directory.rmdir()
-                except OSError:
-                    pass
-            except OSError:
-                continue
-
+        before_count = len(self._samples)
+        self._samples = [
+            sample
+            for sample in self._samples
+            if (observed_at := _parse_iso_datetime(sample.get("timestampUtc"))) is not None
+            and observed_at >= cutoff
+        ]
+        if len(self._samples) != before_count:
+            self._mark_s3_snapshot_dirty_locked()
         self._prune_financial_cost_events_locked(reference_time)
         self._last_pruned_at = reference_time
 
     def _prune_financial_cost_events_locked(self, reference_time: datetime) -> None:
-        cost_events_root = self.financial_cost_events_root
-        if not cost_events_root.exists():
-            return
-
         cutoff = self._financial_cost_event_cutoff(reference_time)
-        for path in sorted(cost_events_root.rglob("*.jsonl")):
-            try:
-                raw_lines = path.read_text(encoding="utf-8").splitlines()
-            except OSError:
-                continue
-
-            kept_lines: list[str] = []
-            for raw_line in raw_lines:
-                raw_line = raw_line.strip()
-                if not raw_line:
-                    continue
-                try:
-                    cost_event = json.loads(raw_line)
-                except json.JSONDecodeError:
-                    continue
-                observed_at = _parse_iso_datetime(cost_event.get("endAtUtc"))
-                if observed_at is None or observed_at < cutoff:
-                    continue
-                kept_lines.append(_json_line(cost_event))
-
-            if not kept_lines:
-                try:
-                    path.unlink()
-                except OSError:
-                    continue
-                continue
-
-            rewritten = "\n".join(kept_lines) + "\n"
-            original = "\n".join(line.strip() for line in raw_lines if line.strip())
-            if rewritten.rstrip("\n") == original:
-                continue
-            try:
-                path.write_text(rewritten, encoding="utf-8")
-            except OSError:
-                continue
-
-        for directory in sorted(cost_events_root.rglob("*"), reverse=True):
-            if not directory.is_dir():
-                continue
-            try:
-                next(directory.iterdir())
-            except StopIteration:
-                try:
-                    directory.rmdir()
-                except OSError:
-                    pass
-            except OSError:
-                continue
+        before_count = len(self._cost_events)
+        self._cost_events = [
+            cost_event
+            for cost_event in self._cost_events
+            if (observed_at := _parse_iso_datetime(cost_event.get("endAtUtc"))) is not None
+            and observed_at >= cutoff
+        ]
+        if len(self._cost_events) != before_count:
+            self._mark_s3_snapshot_dirty_locked()
 
     def _financial_cost_event_cutoff(self, reference_time: datetime) -> datetime:
-        year = reference_time.year
-        month = reference_time.month
-        for _index in range(max(COST_EVENT_RETENTION_MONTHS - 1, 0)):
-            month -= 1
-            if month <= 0:
-                month = 12
-                year -= 1
-        return datetime(year, month, 1, tzinfo=UTC)
+        return reference_time - timedelta(
+            hours=self._settings.service_consumption_retention_hours
+        )
 
     def _restore_s3_cache_locked(self, sample: dict[str, Any]) -> None:
         s3_payload = sample.get("s3") or {}

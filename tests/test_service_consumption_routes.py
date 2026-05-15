@@ -63,11 +63,11 @@ class FakeWorkbenchService:
     def service_consumption_state(
         self,
         *,
-        window: str = "24h",
+        window: str = "48h",
     ) -> dict[str, object]:
         return {
             "version": 3,
-            "window": window,
+            "window": "48h",
             "latest": {
                 "timestampUtc": "2026-04-16T08:00:00+00:00",
                 "cpu": {
@@ -177,7 +177,7 @@ class FakeWorkbenchService:
                     {
                         "key": "filesystem",
                         "label": "FileSystem Service",
-                        "subtitle": "Provisioned PVC capacity allocated to the app",
+                        "subtitle": "Provisioned capacity unavailable without PVC metrics",
                         "costYtdChf": 5.2,
                         "shareOfTotalPercent": 4.2,
                         "status": {"state": "available", "label": "Available"},
@@ -304,7 +304,8 @@ class ServiceConsumptionRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.body.decode("utf-8")
         self.assertIn('data-service-consumption-page', body)
-        self.assertIn('data-service-consumption-window="24h"', body)
+        self.assertIn('data-default-window="48h"', body)
+        self.assertNotIn('data-service-consumption-window=', body)
         self.assertIn('data-service-consumption-cpu-legend', body)
         self.assertIn('data-service-consumption-memory-legend', body)
         self.assertIn('data-service-consumption-s3-legend', body)
@@ -330,7 +331,7 @@ class ServiceConsumptionRouteTests(unittest.TestCase):
         self.assertIn('service-consumption-panel-diagnostic', body)
         self.assertNotIn('data-service-consumption-year-select', body)
         self.assertIn(
-            "Query nodes will scale out automatically under higher query pressure once DAAIFL goes live.",
+            "Query nodes will scale out automatically under higher query pressure once DAAIF goes live.",
             body,
         )
 
@@ -342,7 +343,7 @@ class ServiceConsumptionRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.body.decode("utf-8")
-        self.assertIn("DAAIFL Service Consumption", body)
+        self.assertIn("DAAIF Fabric - Service Consumption", body)
         self.assertIn("shell-sidebar-hidden", body)
         self.assertIn('data-open-service-consumption', body)
         self.assertNotIn('data-service-consumption-card="cpu"', body)
@@ -351,7 +352,7 @@ class ServiceConsumptionRouteTests(unittest.TestCase):
 
     def test_service_consumption_api_route_returns_payload(self) -> None:
         response = api_service_consumption_state(
-            window="48h",
+            window="24h",
             service=FakeWorkbenchService(),
         )
 
@@ -365,6 +366,21 @@ class ServiceConsumptionRouteTests(unittest.TestCase):
         self.assertEqual(payload["financial"]["currency"], "CHF")
         self.assertEqual(payload["financial"]["annualBudgetChf"], 120_000.0)
         self.assertEqual(payload["financial"]["services"][4]["details"]["instances"][0]["label"], "OLTP")
+
+    def test_kubernetes_manifests_drop_pvc_dependency(self) -> None:
+        deployment = (REPO_ROOT / "k8s" / "bdw-deployment.yaml").read_text(encoding="utf-8")
+        node_reader = (REPO_ROOT / "k8s" / "bdw-node-reader-clusterrole.yaml").read_text(encoding="utf-8")
+
+        self.assertNotIn("persistentVolumeClaim", deployment)
+        self.assertNotIn("BDW_APP_STORAGE_PVC_NAME", deployment)
+        self.assertNotIn("BDW_SERVICE_CONSUMPTION_DATA_DIR", deployment)
+        self.assertNotIn("name: app-storage", deployment)
+        self.assertNotIn("persistentvolumeclaims", node_reader)
+        self.assertIn("BDW_SERVICE_CONSUMPTION_PVC_CAPACITY_ENABLED", deployment)
+        self.assertIn('value: "false"', deployment)
+        self.assertIn("BDW_SERVICE_CONSUMPTION_CPU_MEMORY_INTERVAL_SECONDS", deployment)
+        self.assertIn('value: "60"', deployment)
+        self.assertFalse((REPO_ROOT / "k8s" / "bdw-storage-pvc.yaml").exists())
 
     def test_service_consumption_budget_api_route_returns_payload(self) -> None:
         response = api_update_service_consumption_budget(

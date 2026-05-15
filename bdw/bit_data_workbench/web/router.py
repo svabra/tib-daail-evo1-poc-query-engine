@@ -488,7 +488,7 @@ def shell_context(
 
 def service_consumption_page_context() -> dict[str, object]:
     return {
-        "service_consumption_default_window": "24h",
+        "service_consumption_default_window": "48h",
         "service_consumption_budget_year": datetime.now(UTC).year,
     }
 

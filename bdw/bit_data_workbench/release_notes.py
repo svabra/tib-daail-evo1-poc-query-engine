@@ -1,9 +1,30 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.1. Keep entries concise and
+# Derived from git history through version 0.9.2. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.2",
+        "releasedAt": "2026-05-15T11:38:49+02:00",
+        "features": [
+            (
+                "The Kubernetes deployment no longer depends on an application PVC, "
+                "stopping PVC creation failures and related service-consumption warnings "
+                "in production where S3 is the durable storage backend."
+            ),
+            (
+                "Service Consumption now keeps a fixed 48-hour in-memory history, "
+                "removes retention/window controls, and snapshots monitoring and budget "
+                "state to hidden S3 at most once every five minutes."
+            ),
+            (
+                "Production defaults reduce monitoring overhead by sampling app CPU/RAM "
+                "once per minute, keeping S3 metrics hourly, and leaving Kubernetes node "
+                "and PVC capacity collectors disabled."
+            ),
+        ],
+    },
     {
         "version": "0.9.1",
         "releasedAt": "2026-05-15T10:29:41+02:00",

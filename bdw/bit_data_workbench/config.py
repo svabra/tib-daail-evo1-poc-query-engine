@@ -36,7 +36,6 @@ WORKBENCH_ENVIRONMENT_VARIABLES = (
     "BDW_SERVICE_CONSUMPTION_COST_PG_CHF_PER_GB_MONTH",
     "BDW_SERVICE_CONSUMPTION_COST_CPU_WEIGHT",
     "BDW_SERVICE_CONSUMPTION_COST_RAM_WEIGHT",
-    "BDW_APP_STORAGE_PVC_NAME",
     "BDW_INGESTION_UPLOAD_DIR",
     "BDW_INGESTION_UPLOAD_CHUNK_BYTES",
     "BDW_INGESTION_UPLOAD_MAX_ARCHIVE_BYTES",
@@ -548,8 +547,8 @@ class Settings:
     pod_namespace: str | None
     pod_ip: str | None
     node_name: str | None
-    service_consumption_node_metrics_enabled: bool = True
-    service_consumption_pvc_capacity_enabled: bool = True
+    service_consumption_node_metrics_enabled: bool = False
+    service_consumption_pvc_capacity_enabled: bool = False
     service_consumption_cost_node_chf_per_hour: float | None = None
     service_consumption_cost_app_chf_per_month: float | None = None
     service_consumption_cost_s3_chf_per_gb_month: float | None = None
@@ -557,7 +556,6 @@ class Settings:
     service_consumption_cost_pg_chf_per_gb_month: float | None = None
     service_consumption_cost_cpu_weight: float = 0.5
     service_consumption_cost_ram_weight: float = 0.5
-    app_storage_pvc_name: str | None = None
     ingestion_upload_dir: Path = field(
         default_factory=lambda: Path(tempfile.gettempdir()) / "bdw-ingestion-uploads"
     )
@@ -604,7 +602,7 @@ class Settings:
                 int(
                     env(
                         "BDW_SERVICE_CONSUMPTION_CPU_MEMORY_INTERVAL_SECONDS",
-                        "3",
+                        "60",
                     )
                 ),
             ),
@@ -623,11 +621,11 @@ class Settings:
             ),
             service_consumption_node_metrics_enabled=env_bool(
                 "BDW_SERVICE_CONSUMPTION_NODE_METRICS_ENABLED",
-                True,
+                False,
             ),
             service_consumption_pvc_capacity_enabled=env_bool(
                 "BDW_SERVICE_CONSUMPTION_PVC_CAPACITY_ENABLED",
-                True,
+                False,
             ),
             service_consumption_cost_node_chf_per_hour=env_float_optional(
                 "BDW_SERVICE_CONSUMPTION_COST_NODE_CHF_PER_HOUR"
@@ -654,7 +652,6 @@ class Settings:
                 env_float_optional("BDW_SERVICE_CONSUMPTION_COST_RAM_WEIGHT")
                 or 0.5,
             ),
-            app_storage_pvc_name=env_optional("BDW_APP_STORAGE_PVC_NAME"),
             ingestion_upload_dir=Path(
                 env(
                     "BDW_INGESTION_UPLOAD_DIR",

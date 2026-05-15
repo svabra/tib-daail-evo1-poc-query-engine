@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
+import json
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 import unittest
+
+from botocore.exceptions import ClientError
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +18,7 @@ if str(BDW_ROOT) not in sys.path:
 
 
 from bit_data_workbench.backend.service_consumption import (  # noqa: E402
+    SERVICE_CONSUMPTION_S3_STATE_KEY,
     ServiceConsumptionMonitor,
     parse_cgroup_cpu_limit_cores,
     parse_cgroup_cpu_usage_micros,
@@ -42,7 +47,6 @@ def build_settings(data_dir: Path, *, retention_hours: int = 48) -> Settings:
         service_consumption_cost_pg_chf_per_gb_month=None,
         service_consumption_cost_cpu_weight=0.5,
         service_consumption_cost_ram_weight=0.5,
-        app_storage_pvc_name="evo1-bdw-storage",
         max_result_rows=200,
         s3_endpoint=None,
         s3_bucket=None,
@@ -81,7 +85,7 @@ def build_sample(
     s3_bytes: int = 0,
     s3_sampled_at: datetime | None = None,
     persistent_volume_bytes: int = 0,
-    persistent_volume_capacity_bytes: int = 10_737_418_240,
+    persistent_volume_capacity_bytes: int | None = None,
 ) -> dict[str, object]:
     s3_observed_at = (s3_sampled_at or timestamp).astimezone(UTC).replace(microsecond=0)
     return {
@@ -119,8 +123,8 @@ def build_sample(
             "bytesUsed": persistent_volume_bytes,
             "bytesCapacity": persistent_volume_capacity_bytes,
             "bytesProvisioned": persistent_volume_capacity_bytes,
-            "percentOfCapacity": 25.0,
-            "mountPath": "/workspace/service-consumption",
+            "percentOfCapacity": 25.0 if persistent_volume_capacity_bytes else None,
+            "mountPath": "",
         },
         "status": {
             "nodeMetrics": {"available": True, "detail": "ok"},
@@ -146,6 +150,39 @@ class RecordingKubernetesClient:
     def get_json(self, path: str) -> dict[str, object]:
         self.paths.append(path)
         raise AssertionError(f"Kubernetes API should not be called: {path}")
+
+
+class FakeS3Client:
+    def __init__(self, *, fail_put: bool = False) -> None:
+        self.fail_put = fail_put
+        self.objects: dict[tuple[str, str], bytes] = {}
+        self.put_calls: list[dict[str, object]] = []
+
+    def get_object(self, *, Bucket: str, Key: str) -> dict[str, object]:
+        identifier = (Bucket, Key)
+        if identifier not in self.objects:
+            raise ClientError(
+                {"Error": {"Code": "NoSuchKey", "Message": "missing"}},
+                "GetObject",
+            )
+        return {"Body": BytesIO(self.objects[identifier])}
+
+    def put_object(self, **kwargs) -> dict[str, object]:
+        self.put_calls.append(kwargs)
+        if self.fail_put:
+            raise RuntimeError("s3 write failed")
+        body = kwargs.get("Body") or b""
+        self.objects[(str(kwargs["Bucket"]), str(kwargs["Key"]))] = bytes(body)
+        return {}
+
+
+def enable_s3_snapshot_settings(settings: Settings) -> None:
+    settings.s3_endpoint = "http://127.0.0.1:9000"
+    settings.s3_bucket = "bdw-tests"
+    settings.s3_access_key_id = "access"
+    settings.s3_secret_access_key = "secret"
+    settings.s3_use_ssl = False
+    settings.s3_verify_ssl = False
 
 
 class ServiceConsumptionMonitorTests(unittest.TestCase):
@@ -185,7 +222,7 @@ class ServiceConsumptionMonitorTests(unittest.TestCase):
             self.assertEqual(kubernetes_client.available_calls, 0)
             self.assertEqual(kubernetes_client.paths, [])
 
-    def test_disabled_pvc_capacity_keeps_local_volume_usage_without_kubernetes_api(
+    def test_persistent_volume_metrics_disabled_without_kubernetes_or_filesystem_scan(
         self,
     ) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -202,10 +239,11 @@ class ServiceConsumptionMonitorTests(unittest.TestCase):
 
             metrics, status = monitor._collect_persistent_volume_metrics()
 
-            self.assertTrue(status["available"])
-            self.assertGreaterEqual(metrics["bytesUsed"], 5)
-            self.assertIsNotNone(metrics["bytesCapacity"])
+            self.assertFalse(status["available"])
+            self.assertIsNone(metrics["bytesUsed"])
+            self.assertIsNone(metrics["bytesCapacity"])
             self.assertIsNone(metrics["bytesProvisioned"])
+            self.assertEqual(metrics["mountPath"], "")
             self.assertEqual(kubernetes_client.available_calls, 0)
             self.assertEqual(kubernetes_client.paths, [])
 
@@ -250,7 +288,7 @@ class ServiceConsumptionMonitorTests(unittest.TestCase):
 
             payload = monitor.state_payload(window="24h")
 
-            self.assertEqual(payload["window"], "24h")
+            self.assertEqual(payload["window"], "48h")
             self.assertEqual(payload["latest"]["s3"]["sampledAtUtc"], s3_hour_two.isoformat())
             self.assertTrue(payload["cpuHistory"]["timestamps"])
             self.assertTrue(payload["memoryHistory"]["timestamps"])
@@ -288,7 +326,6 @@ class ServiceConsumptionMonitorTests(unittest.TestCase):
                     s3_bytes=1_000_000_000,
                     s3_sampled_at=now - timedelta(hours=2),
                     persistent_volume_bytes=512_000_000,
-                    persistent_volume_capacity_bytes=10_000_000_000,
                 )
             )
             monitor._store_sample(
@@ -301,7 +338,6 @@ class ServiceConsumptionMonitorTests(unittest.TestCase):
                     s3_bytes=1_000_000_000,
                     s3_sampled_at=now - timedelta(hours=1),
                     persistent_volume_bytes=768_000_000,
-                    persistent_volume_capacity_bytes=10_000_000_000,
                 )
             )
 
@@ -325,7 +361,7 @@ class ServiceConsumptionMonitorTests(unittest.TestCase):
             ).days
             expected_compute_ytd = round((36.0 * assumed_dynamic_days) + 1.5, 2)
             expected_s3_ytd = round((2.4 * assumed_dynamic_days) + 0.1, 2)
-            expected_pv_ytd = round((2.4 * assumed_dynamic_days) + 0.1, 2)
+            expected_pv_ytd = 0.0
             expected_container_cpu_ytd = round((12.0 * assumed_dynamic_days) + 0.5, 2)
             expected_container_ram_ytd = round((24.0 * assumed_dynamic_days) + 1.0, 2)
             expected_application_ytd = round(500.0 * (elapsed_days / days_in_year), 2)
@@ -387,6 +423,8 @@ class ServiceConsumptionMonitorTests(unittest.TestCase):
             )
             self.assertAlmostEqual(services[1]["costYtdChf"], expected_application_ytd, places=2)
             self.assertEqual(services[1]["details"]["annualFeeChf"], 500.0)
+            self.assertEqual(services[2]["status"]["state"], "unavailable")
+            self.assertEqual(services[2]["costYtdChf"], 0.0)
             self.assertAlmostEqual(services[4]["costYtdChf"], expected_pg_ytd, places=2)
             self.assertEqual(services[4]["details"]["instances"][0]["label"], "OLTP")
             self.assertEqual(services[4]["details"]["instances"][1]["label"], "OLAP")
@@ -408,25 +446,37 @@ class ServiceConsumptionMonitorTests(unittest.TestCase):
             fresh_timestamp = datetime.now(UTC) - timedelta(hours=2)
             stale_sample = build_sample(stale_timestamp, s3_bytes=32)
             fresh_sample = build_sample(fresh_timestamp, s3_bytes=64)
-            stale_path = monitor._history_path_for(stale_timestamp)
-            fresh_path = monitor._history_path_for(fresh_timestamp)
 
             with monitor._lock:
                 monitor._append_sample_locked(stale_sample)
                 monitor._append_sample_locked(fresh_sample)
+                monitor._cost_events = [
+                    {
+                        "startAtUtc": (stale_timestamp - timedelta(minutes=1)).isoformat(),
+                        "endAtUtc": stale_timestamp.isoformat(),
+                    },
+                    {
+                        "startAtUtc": (fresh_timestamp - timedelta(minutes=1)).isoformat(),
+                        "endAtUtc": fresh_timestamp.isoformat(),
+                    },
+                ]
                 monitor._prune_history_locked(
                     reference_time=datetime.now(UTC),
                     force=True,
                 )
 
-            if stale_path == fresh_path:
-                remaining_lines = fresh_path.read_text(encoding="utf-8").splitlines()
-                self.assertEqual(len([line for line in remaining_lines if line.strip()]), 1)
-            else:
-                self.assertFalse(stale_path.exists())
-            self.assertTrue(fresh_path.exists())
+            self.assertEqual(len(monitor._samples), 1)
+            self.assertEqual(
+                monitor._samples[0]["timestampUtc"],
+                fresh_timestamp.replace(microsecond=0).isoformat(),
+            )
+            self.assertEqual(len(monitor._cost_events), 1)
+            self.assertEqual(
+                monitor._cost_events[0]["endAtUtc"],
+                fresh_timestamp.isoformat(),
+            )
 
-    def test_budget_persists_to_shared_financial_store(self) -> None:
+    def test_budget_persists_to_in_memory_financial_store(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             settings = build_settings(Path(tmp_dir))
             monitor = ServiceConsumptionMonitor(
@@ -438,11 +488,141 @@ class ServiceConsumptionMonitorTests(unittest.TestCase):
             payload = monitor.update_budget(year=current_year, annual_budget_chf=42_500.0)
 
             self.assertEqual(payload["year"], current_year)
-            self.assertTrue((settings.service_consumption_data_dir / "financial" / "budgets.json").is_file())
             self.assertEqual(
                 monitor.state_payload(window="24h")["financial"]["annualBudgetChf"],
                 42_500.0,
             )
+
+    def test_s3_snapshot_does_not_flush_before_five_minutes(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            settings = build_settings(Path(tmp_dir))
+            enable_s3_snapshot_settings(settings)
+            fake_s3 = FakeS3Client()
+            monitor = ServiceConsumptionMonitor(
+                settings,
+                state_change_callback=lambda snapshot: None,
+                s3_client_factory=lambda _settings: fake_s3,
+            )
+            now = datetime.now(UTC).replace(microsecond=0)
+            monitor._last_s3_snapshot_flush_at = now
+
+            monitor._store_sample(build_sample(now + timedelta(minutes=1), s3_bytes=64))
+
+            self.assertEqual(fake_s3.put_calls, [])
+
+    def test_s3_snapshot_flushes_one_compact_object_after_five_minutes(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            settings = build_settings(Path(tmp_dir))
+            enable_s3_snapshot_settings(settings)
+            fake_s3 = FakeS3Client()
+            monitor = ServiceConsumptionMonitor(
+                settings,
+                state_change_callback=lambda snapshot: None,
+                s3_client_factory=lambda _settings: fake_s3,
+            )
+            now = datetime.now(UTC).replace(microsecond=0)
+            monitor._last_s3_snapshot_flush_at = now - timedelta(minutes=5)
+            current_year = now.year
+            monitor.update_budget(year=current_year, annual_budget_chf=42_500.0)
+
+            monitor._store_sample(build_sample(now, s3_bytes=64))
+
+            self.assertEqual(len(fake_s3.put_calls), 1)
+            put_call = fake_s3.put_calls[0]
+            self.assertEqual(put_call["Bucket"], "bdw-tests")
+            self.assertEqual(put_call["Key"], SERVICE_CONSUMPTION_S3_STATE_KEY)
+            snapshot = json.loads(bytes(put_call["Body"]).decode("utf-8"))
+            self.assertEqual(len(snapshot["samples"]), 1)
+            self.assertEqual(snapshot["budgets"][str(current_year)]["annualBudgetChf"], 42_500.0)
+
+    def test_s3_snapshot_skips_overlapping_flush(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            settings = build_settings(Path(tmp_dir))
+            enable_s3_snapshot_settings(settings)
+            fake_s3 = FakeS3Client()
+            monitor = ServiceConsumptionMonitor(
+                settings,
+                state_change_callback=lambda snapshot: None,
+                s3_client_factory=lambda _settings: fake_s3,
+            )
+            now = datetime.now(UTC).replace(microsecond=0)
+            monitor._last_s3_snapshot_flush_at = now - timedelta(minutes=5)
+            monitor._s3_snapshot_flush_in_progress = True
+
+            monitor._store_sample(build_sample(now, s3_bytes=64))
+
+            self.assertEqual(fake_s3.put_calls, [])
+            monitor._s3_snapshot_flush_in_progress = False
+
+    def test_s3_snapshot_failure_is_throttled_and_keeps_monitoring_alive(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            settings = build_settings(Path(tmp_dir))
+            enable_s3_snapshot_settings(settings)
+            fake_s3 = FakeS3Client(fail_put=True)
+            monitor = ServiceConsumptionMonitor(
+                settings,
+                state_change_callback=lambda snapshot: None,
+                s3_client_factory=lambda _settings: fake_s3,
+            )
+            now = datetime.now(UTC).replace(microsecond=0)
+            monitor._last_s3_snapshot_flush_at = now - timedelta(minutes=5)
+
+            with self.assertLogs(
+                "bit_data_workbench.backend.service_consumption",
+                level="WARNING",
+            ) as logs:
+                first_payload = monitor._store_sample(build_sample(now, s3_bytes=64))
+                monitor._store_sample(build_sample(now + timedelta(minutes=1), s3_bytes=96))
+                monitor._store_sample(build_sample(now + timedelta(minutes=5), s3_bytes=128))
+
+            self.assertEqual(len(fake_s3.put_calls), 2)
+            self.assertEqual(
+                sum(
+                    "Failed to persist service-consumption S3 snapshot" in message
+                    for message in logs.output
+                ),
+                1,
+            )
+            self.assertEqual(first_payload["latest"]["s3"]["totalBytes"], 64)
+            self.assertEqual(
+                monitor.state_payload(window="48h")["latest"]["s3"]["totalBytes"],
+                128,
+            )
+
+    def test_s3_snapshot_restore_loads_budget_and_recent_samples(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            settings = build_settings(Path(tmp_dir))
+            enable_s3_snapshot_settings(settings)
+            fake_s3 = FakeS3Client()
+            now = datetime.now(UTC).replace(microsecond=0)
+            current_year = now.year
+            fake_s3.objects[("bdw-tests", SERVICE_CONSUMPTION_S3_STATE_KEY)] = json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "latestSample": build_sample(now, s3_bytes=123),
+                    "samples": [build_sample(now - timedelta(minutes=5), s3_bytes=100), build_sample(now, s3_bytes=123)],
+                    "costEvents": [],
+                    "budgets": {
+                        str(current_year): {
+                            "annualBudgetChf": 12_345.0,
+                            "updatedAtUtc": now.isoformat(),
+                        },
+                    },
+                }
+            ).encode("utf-8")
+            monitor = ServiceConsumptionMonitor(
+                settings,
+                state_change_callback=lambda snapshot: None,
+                s3_client_factory=lambda _settings: fake_s3,
+            )
+
+            with monitor._lock:
+                monitor._restore_s3_snapshot_payload_locked(monitor._load_s3_snapshot_payload())
+
+            payload = monitor.state_payload(window="24h")
+            self.assertEqual(payload["window"], "48h")
+            self.assertEqual(payload["latest"]["s3"]["totalBytes"], 123)
+            self.assertEqual(payload["financial"]["annualBudgetChf"], 12_345.0)
 
 
 if __name__ == "__main__":

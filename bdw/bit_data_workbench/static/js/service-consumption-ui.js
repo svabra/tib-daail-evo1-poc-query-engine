@@ -1,5 +1,5 @@
 const CHART_JS_ASSET_PATH = "/static/chartjs/chart.umd.min.js";
-const DEFAULT_WINDOW = "24h";
+const DEFAULT_WINDOW = "48h";
 const openServiceKeys = new Set();
 const WINDOW_REFRESH_INTERVAL_MS = {
   "15m": 3000,
@@ -49,8 +49,8 @@ const LEGEND_TOOLTIPS = {
       "Total object bytes across all S3 buckets that the current workbench credentials can enumerate. This value refreshes hourly and is reused between hourly samples.",
   },
   persistentVolume: {
-    "Mounted volume":
-      "Occupied bytes under the mounted service-consumption storage path inside the running workbench pod. This tracks persisted monitor history stored on the PVC.",
+    "Monitoring state":
+      "Best-effort monitoring state kept in memory and snapshotted to hidden S3. PVC storage is not measured.",
   },
 };
 
@@ -489,10 +489,6 @@ function s3LegendContainer() {
 
 function persistentVolumeLegendContainer() {
   return document.querySelector("[data-service-consumption-pv-legend]");
-}
-
-function windowButtons() {
-  return Array.from(document.querySelectorAll("[data-service-consumption-window]"));
 }
 
 function formatTimestampLabel(value, { short = false } = {}) {
@@ -944,17 +940,17 @@ function renderServiceList(financial, formatByteCount) {
       appendServiceDetail(grid, {
         label: "Provisioned capacity",
         value: formatBytesOrUnavailable(detail?.provisionedBytes, formatByteCount),
-        note: "PVC capacity provisioned for the app storage volume.",
+        note: "PVC capacity collection is disabled.",
       });
       appendServiceDetail(grid, {
         label: "Rate",
         value: formatRatePerGbMonth(detail?.rateChfPerGbMonth),
-        note: "Applied to the provisioned PVC capacity over time.",
+        note: "No filesystem CHF is calculated while PVC metrics are disabled.",
       });
       appendServiceDetail(grid, {
         label: "FileSystem cost YTD",
         value: formatChfValue(detail?.costYtdChf, { whenNull: "CHF 0.00" }),
-        note: "Persistent storage estimate accumulated this year.",
+        note: "Persistent storage estimate is unavailable without PVC metrics.",
       });
     } else if (serviceKey === "s3") {
       appendServiceDetail(grid, {
@@ -1101,13 +1097,6 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
     if (!pageRoot()) {
       return;
     }
-
-    windowButtons().forEach((button) => {
-      button.classList.toggle(
-        "is-active",
-        String(button.dataset.serviceConsumptionWindow || "") === currentWindow
-      );
-    });
 
     const saveButton = budgetSaveButton();
     if (saveButton instanceof HTMLButtonElement) {
@@ -1359,7 +1348,7 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
         const mountPath = metricPath(latest, ["persistentVolume", "mountPath"]);
         return mountPath
           ? `Occupied bytes in mount ${mountPath}`
-          : "Occupied bytes in mounted service-consumption storage";
+          : "Monitoring state is kept in memory and snapshotted to S3";
       })()
     );
 
@@ -1379,12 +1368,12 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
       pageStatusPersistentVolume(),
       status?.persistentVolumeMetricsAvailable
         ? compactParts([
-            "Persistent volume usage available.",
+            "Monitoring storage usage available.",
             status?.persistentVolumeMountPath
               ? `Mount ${status.persistentVolumeMountPath}`
               : status?.persistentVolumeMetrics?.detail || "",
           ])
-        : `Persistent volume usage unavailable. ${
+        : `Monitoring storage usage unavailable. ${
             status?.persistentVolumeMetrics?.detail || ""
           }`.trim()
     );
@@ -1877,7 +1866,7 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
             labels,
             datasets: [
               {
-                label: "Mounted volume",
+                label: "Monitoring state",
                 data: values,
                 borderColor: METRIC_COLORS.pv,
                 backgroundColor: "transparent",
@@ -1912,7 +1901,7 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
     if (chart) {
       syncLineChartData(chart, {
         labels,
-        datasets: [{ label: "Mounted volume", data: values, borderColor: METRIC_COLORS.pv }],
+        datasets: [{ label: "Monitoring state", data: values, borderColor: METRIC_COLORS.pv }],
       });
       renderLegend(
         persistentVolumeLegendContainer(),
@@ -2141,17 +2130,7 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
       await saveBudget();
       return true;
     }
-
-    const button = event.target.closest("[data-service-consumption-window]");
-    if (!button) {
-      return false;
-    }
-    event.preventDefault();
-    currentWindow =
-      String(button.dataset.serviceConsumptionWindow || currentWindow).trim() || DEFAULT_WINDOW;
-    syncControls();
-    await loadState({ windowRange: currentWindow });
-    return true;
+    return false;
   }
 
   async function handleChange(event) {

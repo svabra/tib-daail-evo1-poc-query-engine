@@ -20,7 +20,7 @@ spec:
       serviceAccountName: evo1-bdw
       containers:
         - name: bdw
-          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.9.1
+          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.9.2
           imagePullPolicy: Always
           ports:
             - name: http
@@ -55,10 +55,8 @@ spec:
               value: "100"
             - name: BDW_INGESTION_COPY_CHUNK_BYTES
               value: "8388608"
-            - name: BDW_SERVICE_CONSUMPTION_DATA_DIR
-              value: /workspace/service-consumption
             - name: BDW_SERVICE_CONSUMPTION_CPU_MEMORY_INTERVAL_SECONDS
-              value: "3"
+              value: "60"
             - name: BDW_SERVICE_CONSUMPTION_S3_INTERVAL_SECONDS
               value: "3600"
             - name: BDW_SERVICE_CONSUMPTION_RETENTION_HOURS
@@ -67,8 +65,6 @@ spec:
               value: "false"
             - name: BDW_SERVICE_CONSUMPTION_PVC_CAPACITY_ENABLED
               value: "false"
-            - name: BDW_APP_STORAGE_PVC_NAME
-              value: evo1-bdw-storage
             - name: POD_NAME
               valueFrom:
                 fieldRef:
@@ -88,8 +84,6 @@ spec:
           volumeMounts:
             - name: workspace
               mountPath: /workspace
-            - name: app-storage
-              mountPath: /workspace/service-consumption
             - name: bit-ros-trusted-certs
               mountPath: /myconfigmap/daai-brs-d/bit-ros-trusted-certs
               readOnly: true
@@ -124,9 +118,6 @@ spec:
       volumes:
         - name: workspace
           emptyDir: {}
-        - name: app-storage
-          persistentVolumeClaim:
-            claimName: evo1-bdw-storage
         - name: bit-ros-trusted-certs
           configMap:
             name: bit-ros-trusted-certs
