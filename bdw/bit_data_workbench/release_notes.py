@@ -1,9 +1,25 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.0. Keep entries concise and
+# Derived from git history through version 0.9.1. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.1",
+        "releasedAt": "2026-05-15T10:29:41+02:00",
+        "features": [
+            (
+                "Service Consumption can now disable Kubernetes node and PVC capacity "
+                "collectors with environment flags, stopping repeated 403 log warnings "
+                "while keeping local app CPU/RAM and mounted-volume usage readings."
+            ),
+            (
+                "The production deployment disables those Kubernetes collectors by default "
+                "until RBAC is repaired, with regression coverage proving disabled collectors "
+                "do not contact the Kubernetes API."
+            ),
+        ],
+    },
     {
         "version": "0.9.0",
         "releasedAt": "2026-05-14T21:59:47+02:00",

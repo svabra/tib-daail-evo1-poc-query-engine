@@ -27,6 +27,8 @@ WORKBENCH_ENVIRONMENT_VARIABLES = (
     "BDW_SERVICE_CONSUMPTION_CPU_MEMORY_INTERVAL_SECONDS",
     "BDW_SERVICE_CONSUMPTION_S3_INTERVAL_SECONDS",
     "BDW_SERVICE_CONSUMPTION_RETENTION_HOURS",
+    "BDW_SERVICE_CONSUMPTION_NODE_METRICS_ENABLED",
+    "BDW_SERVICE_CONSUMPTION_PVC_CAPACITY_ENABLED",
     "BDW_SERVICE_CONSUMPTION_COST_NODE_CHF_PER_HOUR",
     "BDW_SERVICE_CONSUMPTION_COST_APP_CHF_PER_MONTH",
     "BDW_SERVICE_CONSUMPTION_COST_S3_CHF_PER_GB_MONTH",
@@ -546,6 +548,8 @@ class Settings:
     pod_namespace: str | None
     pod_ip: str | None
     node_name: str | None
+    service_consumption_node_metrics_enabled: bool = True
+    service_consumption_pvc_capacity_enabled: bool = True
     service_consumption_cost_node_chf_per_hour: float | None = None
     service_consumption_cost_app_chf_per_month: float | None = None
     service_consumption_cost_s3_chf_per_gb_month: float | None = None
@@ -616,6 +620,14 @@ class Settings:
             service_consumption_retention_hours=max(
                 1,
                 int(env("BDW_SERVICE_CONSUMPTION_RETENTION_HOURS", "48")),
+            ),
+            service_consumption_node_metrics_enabled=env_bool(
+                "BDW_SERVICE_CONSUMPTION_NODE_METRICS_ENABLED",
+                True,
+            ),
+            service_consumption_pvc_capacity_enabled=env_bool(
+                "BDW_SERVICE_CONSUMPTION_PVC_CAPACITY_ENABLED",
+                True,
             ),
             service_consumption_cost_node_chf_per_hour=env_float_optional(
                 "BDW_SERVICE_CONSUMPTION_COST_NODE_CHF_PER_HOUR"

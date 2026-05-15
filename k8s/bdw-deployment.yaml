@@ -20,7 +20,7 @@ spec:
       serviceAccountName: evo1-bdw
       containers:
         - name: bdw
-          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.9.0
+          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.9.1
           imagePullPolicy: Always
           ports:
             - name: http
@@ -63,6 +63,10 @@ spec:
               value: "3600"
             - name: BDW_SERVICE_CONSUMPTION_RETENTION_HOURS
               value: "48"
+            - name: BDW_SERVICE_CONSUMPTION_NODE_METRICS_ENABLED
+              value: "false"
+            - name: BDW_SERVICE_CONSUMPTION_PVC_CAPACITY_ENABLED
+              value: "false"
             - name: BDW_APP_STORAGE_PVC_NAME
               value: evo1-bdw-storage
             - name: POD_NAME

@@ -772,6 +772,11 @@ class ServiceConsumptionMonitor:
             "memoryBytesUsed": None,
             "memoryCapacityBytes": None,
         }
+        if not self._settings.service_consumption_node_metrics_enabled:
+            return empty_metrics, {
+                "available": False,
+                "detail": "Kubernetes node metrics collection is disabled.",
+            }
         node_name = str(self._settings.node_name or "").strip()
         if not node_name:
             return empty_metrics, {
@@ -949,6 +954,8 @@ class ServiceConsumptionMonitor:
 
     def _collect_persistent_volume_capacity_bytes(self) -> tuple[int | None, str | None]:
         pvc_name = str(self._settings.app_storage_pvc_name or "").strip() or None
+        if not self._settings.service_consumption_pvc_capacity_enabled:
+            return None, pvc_name
         pod_namespace = str(self._settings.pod_namespace or "").strip()
         if pvc_name is None or not pod_namespace or not self._kubernetes_client.available():
             return None, pvc_name

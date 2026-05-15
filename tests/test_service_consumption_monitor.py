@@ -134,12 +134,80 @@ def build_sample(
     }
 
 
+class RecordingKubernetesClient:
+    def __init__(self) -> None:
+        self.available_calls = 0
+        self.paths: list[str] = []
+
+    def available(self) -> bool:
+        self.available_calls += 1
+        return True
+
+    def get_json(self, path: str) -> dict[str, object]:
+        self.paths.append(path)
+        raise AssertionError(f"Kubernetes API should not be called: {path}")
+
+
 class ServiceConsumptionMonitorTests(unittest.TestCase):
     def test_quantity_parsers_cover_kubernetes_and_cgroup_formats(self) -> None:
         self.assertAlmostEqual(parse_kubernetes_cpu_quantity("250m"), 0.25)
         self.assertEqual(parse_kubernetes_memory_quantity("512Mi"), 536_870_912)
         self.assertEqual(parse_cgroup_cpu_usage_micros("usage_usec 12500"), 12_500)
         self.assertAlmostEqual(parse_cgroup_cpu_limit_cores("200000 100000"), 2.0)
+
+    def test_disabled_node_metrics_do_not_call_kubernetes_api(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            settings = build_settings(Path(tmp_dir))
+            settings.service_consumption_node_metrics_enabled = False
+            monitor = ServiceConsumptionMonitor(
+                settings,
+                state_change_callback=lambda snapshot: None,
+            )
+            kubernetes_client = RecordingKubernetesClient()
+            monitor._kubernetes_client = kubernetes_client
+
+            metrics, status = monitor._collect_node_metrics()
+
+            self.assertEqual(
+                metrics,
+                {
+                    "cpuCoresUsed": None,
+                    "cpuCapacityCores": None,
+                    "memoryBytesUsed": None,
+                    "memoryCapacityBytes": None,
+                },
+            )
+            self.assertFalse(status["available"])
+            self.assertEqual(
+                status["detail"],
+                "Kubernetes node metrics collection is disabled.",
+            )
+            self.assertEqual(kubernetes_client.available_calls, 0)
+            self.assertEqual(kubernetes_client.paths, [])
+
+    def test_disabled_pvc_capacity_keeps_local_volume_usage_without_kubernetes_api(
+        self,
+    ) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            data_dir = Path(tmp_dir)
+            (data_dir / "usage.bin").write_bytes(b"usage")
+            settings = build_settings(data_dir)
+            settings.service_consumption_pvc_capacity_enabled = False
+            monitor = ServiceConsumptionMonitor(
+                settings,
+                state_change_callback=lambda snapshot: None,
+            )
+            kubernetes_client = RecordingKubernetesClient()
+            monitor._kubernetes_client = kubernetes_client
+
+            metrics, status = monitor._collect_persistent_volume_metrics()
+
+            self.assertTrue(status["available"])
+            self.assertGreaterEqual(metrics["bytesUsed"], 5)
+            self.assertIsNotNone(metrics["bytesCapacity"])
+            self.assertIsNone(metrics["bytesProvisioned"])
+            self.assertEqual(kubernetes_client.available_calls, 0)
+            self.assertEqual(kubernetes_client.paths, [])
 
     def test_state_payload_builds_recent_history_and_hourly_s3_series(self) -> None:
         with TemporaryDirectory() as tmp_dir:
