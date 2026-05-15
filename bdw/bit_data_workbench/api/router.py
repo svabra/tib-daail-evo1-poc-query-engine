@@ -290,7 +290,26 @@ def delete_s3_explorer_entry(
     except (ValueError, ClientError, BotoCoreError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return JSONResponse(jsonable_encoder(result))
+    return JSONResponse(jsonable_encoder(result), status_code=202)
+
+
+@router.get("/api/s3/delete-jobs")
+def list_s3_delete_jobs(
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return JSONResponse(jsonable_encoder(service.s3_delete_jobs_state()))
+
+
+@router.get("/api/s3/delete-jobs/{job_id}")
+def get_s3_delete_job(
+    job_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        payload = service.s3_delete_job_state(job_id=job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder(payload))
 
 
 @router.get("/api/s3/object/download")
@@ -1538,6 +1557,10 @@ async def stream_realtime_events(
         default=None,
         alias="downloadJobsVersion",
     ),
+    s3_delete_jobs_version: int | None = Query(
+        default=None,
+        alias="s3DeleteJobsVersion",
+    ),
     data_source_events_version: int | None = Query(
         default=None,
         alias="dataSourceEventsVersion",
@@ -1562,6 +1585,7 @@ async def stream_realtime_events(
             "python-jobs": python_jobs_version,
             "data-generation-jobs": data_generation_jobs_version,
             "download-jobs": download_jobs_version,
+            "s3-delete-jobs": s3_delete_jobs_version,
             "data-source-events": data_source_events_version,
             "service-consumption": service_consumption_version,
             "notebook-events": notebook_events_version,

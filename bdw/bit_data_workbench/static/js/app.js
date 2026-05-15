@@ -29,6 +29,7 @@ import { createDataProductsUi } from "./data-products-ui.js";
 import { createDataExchangeController } from "./data-exchange-controller.js";
 import { createDataSourceExplorerController } from "./data-source-explorers/controller.js";
 import { createDownloadJobsController } from "./download-jobs-controller.js";
+import { createS3DeleteJobsController } from "./s3-delete-jobs-controller.js";
 import { createEditorAutosizeManager } from "./editor-autosize-manager.js";
 import { createLocalWorkspaceDialogController } from "./local-workspace-dialog-controller.js";
 import { createLocalWorkspaceExportManager } from "./local-workspace-export-manager.js";
@@ -194,6 +195,9 @@ let dataGenerationJobsSummary = { runningCount: 0, totalCount: 0 };
 let downloadJobsStateVersion = null;
 let downloadJobsSnapshot = [];
 let downloadJobsSummary = { runningCount: 0, readyCount: 0, totalCount: 0 };
+let s3DeleteJobsStateVersion = null;
+let s3DeleteJobsSnapshot = [];
+let s3DeleteJobsSummary = { runningCount: 0, totalCount: 0 };
 let selectedIngestionRunbookId = "";
 let spotlightIngestionRunbookId = "";
 let ingestionRunbookSpotlightHandle = null;
@@ -781,6 +785,28 @@ const downloadJobsController = createDownloadJobsController({
   onStateChanged: syncDownloadJobsUi,
 });
 
+const s3DeleteJobsController = createS3DeleteJobsController({
+  blinkSourceCatalog: (...args) => blinkSourceCatalog(...args),
+  currentWorkspaceMode,
+  escapeHtml,
+  fetchJsonOrThrow,
+  getDeleteDialogOptions: s3ExplorerDeleteDialogOptions,
+  getPreferredLocationAfterDelete: s3ExplorerPreferredLocationAfterDelete,
+  loadS3ExplorerRoot,
+  onStateChanged: syncS3DeleteJobsUi,
+  refreshActiveDataSourceViews: async () => {
+    await refreshActiveDataSourceWorkbenchBrowser();
+    if (dataSourceExplorerPageRoot()) {
+      await dataSourceExplorerController.initializeCurrentPage();
+    }
+  },
+  refreshSidebar,
+  setPendingDeleteState: setS3PendingDeleteState,
+  setSidebarSourceOperationStatus,
+  showConfirmDialog,
+  showMessageDialog,
+});
+
 const dataSourceExplorerController = createDataSourceExplorerController({
   allLocalWorkspaceFolderPaths,
   copySourceQueryPath,
@@ -1164,6 +1190,11 @@ const {
       dismissedKeys: dismissedNotificationKeys,
       notificationItemKey,
     }),
+  getS3DeleteNotificationItems: () =>
+    s3DeleteJobsController.notificationItems({
+      dismissedKeys: dismissedNotificationKeys,
+      notificationItemKey,
+    }),
   getDismissedNotificationKeys: () => dismissedNotificationKeys,
   getQueryJobsSnapshot: () => queryJobsSnapshot,
   getQueryJobTerminalStatuses: () => queryJobTerminalStatuses,
@@ -1420,6 +1451,11 @@ const {
     version: downloadJobsStateVersion,
     snapshot: downloadJobsSnapshot,
     summary: downloadJobsSummary,
+  }),
+  getS3DeleteState: () => ({
+    version: s3DeleteJobsStateVersion,
+    snapshot: s3DeleteJobsSnapshot,
+    summary: s3DeleteJobsSummary,
   }),
   getDismissedNotificationKeys: () => dismissedNotificationKeys,
   getQueryState: currentQueryState,
@@ -2703,6 +2739,22 @@ function applyDownloadJobsState(snapshot) {
 
 async function loadDownloadJobsState() {
   return downloadJobsController.loadState();
+}
+
+function syncS3DeleteJobsUi() {
+  const state = s3DeleteJobsController.currentState();
+  s3DeleteJobsStateVersion = state.version;
+  s3DeleteJobsSnapshot = state.snapshot;
+  s3DeleteJobsSummary = state.summary;
+  renderQueryNotificationMenu();
+}
+
+function applyS3DeleteJobsState(snapshot) {
+  s3DeleteJobsController.applyState(snapshot);
+}
+
+async function loadS3DeleteJobsState() {
+  return s3DeleteJobsController.loadState();
 }
 
 async function prepareSourceS3Download(sourceObjectRoot) {
@@ -5284,6 +5336,9 @@ function applyRealtimeTopicSnapshot(topic, snapshot) {
     case "download-jobs":
       applyDownloadJobsState(snapshot);
       break;
+    case "s3-delete-jobs":
+      applyS3DeleteJobsState(snapshot);
+      break;
     case "data-source-events":
       applyDataSourceEventsState(snapshot);
       break;
@@ -5770,6 +5825,9 @@ function ensureRealtimeEventsEventSource() {
   if (downloadJobsStateVersion !== null) {
     params.set("downloadJobsVersion", String(downloadJobsStateVersion));
   }
+  if (s3DeleteJobsStateVersion !== null) {
+    params.set("s3DeleteJobsVersion", String(s3DeleteJobsStateVersion));
+  }
   if (dataSourceEventsStateVersion !== null) {
     params.set("dataSourceEventsVersion", String(dataSourceEventsStateVersion));
   }
@@ -5795,6 +5853,7 @@ function ensureRealtimeEventsEventSource() {
     "python-jobs",
     "data-generation-jobs",
     "download-jobs",
+    "s3-delete-jobs",
     "data-source-events",
     "service-consumption",
     "notebook-events",
@@ -5836,6 +5895,13 @@ function ensureRealtimeEventsEventSource() {
     if (downloadJobsStateVersion !== null) {
       refreshTasks.push(
         loadDownloadJobsState().catch(() => {
+          // Ignore transient reconnect issues.
+        })
+      );
+    }
+    if (s3DeleteJobsStateVersion !== null) {
+      refreshTasks.push(
+        loadS3DeleteJobsState().catch(() => {
           // Ignore transient reconnect issues.
         })
       );
@@ -7373,104 +7439,11 @@ async function deleteS3EntryDescriptor(
   descriptor,
   { refreshSidebarAfter = false, refreshExplorerAfter = false, showSidebarStatus = false } = {}
 ) {
-  const dialogOptions = s3ExplorerDeleteDialogOptions(descriptor);
-  if (!descriptor || !dialogOptions) {
-    return false;
-  }
-
-  const confirmation = await showConfirmDialog(dialogOptions);
-  if (!confirmation.confirmed) {
-    return null;
-  }
-
-  if (showSidebarStatus) {
-    const deleteTitle =
-      descriptor.entryKind === "bucket"
-        ? "Deleting bucket"
-        : descriptor.entryKind === "folder"
-          ? "Deleting folder"
-          : "Deleting object";
-    const deleteCopy =
-      descriptor.entryKind === "bucket"
-        ? `Deleting bucket "${descriptor.bucket}" from S3...`
-        : descriptor.entryKind === "folder"
-          ? `Deleting folder ${descriptor.path || s3ExplorerPath(descriptor.bucket, descriptor.prefix)} from S3...`
-          : `Deleting object ${descriptor.path || `s3://${descriptor.bucket}/${descriptor.prefix}`} from S3...`;
-    setSidebarSourceOperationStatus({
-      tone: "info",
-      title: deleteTitle,
-      copy: deleteCopy,
-    });
-  }
-
-  setS3PendingDeleteState(descriptor, true);
-
-  try {
-    const result = await fetchJsonOrThrow("/api/s3/explorer/entries", {
-      method: "DELETE",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        entryKind: descriptor.entryKind,
-        bucket: descriptor.bucket,
-        prefix: descriptor.prefix,
-      }),
-    });
-
-    if (refreshExplorerAfter) {
-      const preferredLocation = s3ExplorerPreferredLocationAfterDelete(descriptor);
-      await loadS3ExplorerRoot(preferredLocation);
-    }
-    if (refreshSidebarAfter) {
-      await refreshSidebar(currentWorkspaceMode());
-      if (descriptor.entryKind === "bucket") {
-        blinkSourceCatalog("workspace.s3");
-      }
-    }
-    await refreshActiveDataSourceWorkbenchBrowser();
-    if (showSidebarStatus) {
-      setSidebarSourceOperationStatus(
-        {
-          tone: "success",
-          title:
-            descriptor.entryKind === "bucket"
-              ? "Bucket deleted"
-              : descriptor.entryKind === "folder"
-                ? "Folder deleted"
-                : "Object deleted",
-          copy: String(result?.message || "").trim() || "The selected S3 entry was deleted.",
-        },
-        { autoClearMs: 6000 }
-      );
-    }
-    if (!refreshExplorerAfter && !refreshSidebarAfter) {
-      setS3PendingDeleteState(descriptor, false);
-    }
-    return result;
-  } catch (error) {
-    setS3PendingDeleteState(descriptor, false);
-    if (showSidebarStatus) {
-      setSidebarSourceOperationStatus(
-        {
-          tone: "danger",
-          title:
-            descriptor.entryKind === "bucket"
-              ? "Bucket delete failed"
-              : descriptor.entryKind === "folder"
-                ? "Folder delete failed"
-                : "Object delete failed",
-          copy:
-            error instanceof Error
-              ? error.message
-              : "The selected S3 entry could not be deleted.",
-        },
-        { autoClearMs: 8000 }
-      );
-    }
-    throw error;
-  }
+  return s3DeleteJobsController.startDelete(descriptor, {
+    refreshSidebarAfter,
+    refreshExplorerAfter,
+    showSidebarStatus,
+  });
 }
 
 async function createSidebarS3Bucket() {
@@ -9083,6 +9056,9 @@ const initialLoadTasks = [
   }),
   loadDownloadJobsState().catch((error) => {
     console.error("Failed to load prepared download jobs.", error);
+  }),
+  loadS3DeleteJobsState().catch((error) => {
+    console.error("Failed to load S3 delete jobs.", error);
   }),
   loadDataSourceEventsState().catch((error) => {
     console.error("Failed to load data source events.", error);

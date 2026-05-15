@@ -12,6 +12,7 @@ export function createIngestionController(helpers) {
     getDataGenerationJobsSnapshot,
     getDataGenerationTerminalStatuses,
     getDownloadNotificationItems = () => [],
+    getS3DeleteNotificationItems = () => [],
     getDismissedNotificationKeys,
     getQueryJobsSnapshot,
     getQueryJobTerminalStatuses,
@@ -246,8 +247,9 @@ export function createIngestionController(helpers) {
       markup: dataGenerationNotificationItemMarkup(job),
     }));
     const downloadNotifications = getDownloadNotificationItems();
+    const s3DeleteNotifications = getS3DeleteNotificationItems();
 
-    return [...downloadNotifications, ...dataGenerationNotifications, ...queryNotifications]
+    return [...s3DeleteNotifications, ...downloadNotifications, ...dataGenerationNotifications, ...queryNotifications]
       .filter((item) => !getDismissedNotificationKeys().has(item.dismissalKey))
       .sort((left, right) => Date.parse(right.updatedAt || "") - Date.parse(left.updatedAt || ""));
   }

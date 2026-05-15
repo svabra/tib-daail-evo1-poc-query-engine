@@ -72,13 +72,7 @@ export function createS3DataSourceExplorer(helpers) {
 
   function entrySecondaryText(entry) {
     if (entry.entryKind === "file") {
-      if (entry.queryAlias) {
-        return entry.queryAlias;
-      }
-      const metadata = `${String(entry.fileFormat || "file").toUpperCase()} - ${formatByteCount(
-        entry.sizeBytes
-      )}`;
-      return `${metadata} - not queryable yet`;
+      return entry.queryAlias ? "" : "Not queryable yet";
     }
     return entry.queryPath || String(entry.entryKind || "").toUpperCase();
   }
@@ -152,7 +146,11 @@ export function createS3DataSourceExplorer(helpers) {
                               ${publicationBadgeMarkup(entry.publishedDataProducts, escapeHtml)}
                               ${downloadJobsController?.s3IndicatorMarkup?.(entry.bucket, entry.prefix) || ""}
                             </span>
-                            <span>${escapeHtml(entrySecondaryText(entry))}</span>
+                            ${
+                              entrySecondaryText(entry)
+                                ? `<span>${escapeHtml(entrySecondaryText(entry))}</span>`
+                                : ""
+                            }
                             <span>${
                               isFile
                                 ? escapeHtml(

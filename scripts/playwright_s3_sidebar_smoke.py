@@ -597,6 +597,18 @@ async def run_smoke(args: argparse.Namespace) -> int:
             "Descriptor fallback bucket still exists after sidebar delete: "
             f"{descriptor_bucket}"
         )
+    delete_entry_statuses = [
+        status
+        for method, url, status in responses
+        if method == "DELETE" and "/api/s3/explorer/entries" in url
+    ]
+    if not delete_entry_statuses:
+        failures.append("No S3 delete job request was observed in the browser.")
+    elif any(status != 202 for status in delete_entry_statuses):
+        failures.append(
+            "S3 delete requests should start background jobs with HTTP 202, "
+            f"observed statuses: {delete_entry_statuses}"
+        )
 
     for method, url, status in responses:
         if "/api/s3/" in url:

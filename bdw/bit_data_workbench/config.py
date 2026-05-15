@@ -40,6 +40,12 @@ WORKBENCH_ENVIRONMENT_VARIABLES = (
     "BDW_QUERY_JOB_LOG_HEARTBEAT_SECONDS",
     "BDW_QUERY_JOB_LOG_TIMEZONE",
     "BDW_QUERY_JOB_DUCKDB_PROFILING_ENABLED",
+    "BDW_S3_DELETE_JOB_LOGGING_ENABLED",
+    "BDW_S3_DELETE_JOB_LOG_HEARTBEAT_SECONDS",
+    "BDW_S3_DELETE_JOB_LOG_TIMEZONE",
+    "BDW_S3_DELETE_MAX_CONCURRENT_JOBS",
+    "BDW_S3_DELETE_BUCKET_FINALIZE_TIMEOUT_SECONDS",
+    "BDW_S3_DELETE_JOB_RETENTION_HOURS",
     "BDW_INGESTION_UPLOAD_DIR",
     "BDW_INGESTION_UPLOAD_CHUNK_BYTES",
     "BDW_INGESTION_UPLOAD_MAX_ARCHIVE_BYTES",
@@ -564,6 +570,12 @@ class Settings:
     query_job_log_heartbeat_seconds: int = 10
     query_job_log_timezone: str = "Europe/Zurich"
     query_job_duckdb_profiling_enabled: bool = True
+    s3_delete_job_logging_enabled: bool = True
+    s3_delete_job_log_heartbeat_seconds: int = 10
+    s3_delete_job_log_timezone: str = "Europe/Zurich"
+    s3_delete_max_concurrent_jobs: int = 1
+    s3_delete_bucket_finalize_timeout_seconds: int = 180
+    s3_delete_job_retention_hours: int = 24
     ingestion_upload_dir: Path = field(
         default_factory=lambda: Path(tempfile.gettempdir()) / "bdw-ingestion-uploads"
     )
@@ -672,6 +684,30 @@ class Settings:
             query_job_duckdb_profiling_enabled=env_bool(
                 "BDW_QUERY_JOB_DUCKDB_PROFILING_ENABLED",
                 True,
+            ),
+            s3_delete_job_logging_enabled=env_bool(
+                "BDW_S3_DELETE_JOB_LOGGING_ENABLED",
+                True,
+            ),
+            s3_delete_job_log_heartbeat_seconds=max(
+                5,
+                env_int("BDW_S3_DELETE_JOB_LOG_HEARTBEAT_SECONDS", 10),
+            ),
+            s3_delete_job_log_timezone=env(
+                "BDW_S3_DELETE_JOB_LOG_TIMEZONE",
+                "Europe/Zurich",
+            ),
+            s3_delete_max_concurrent_jobs=max(
+                1,
+                env_int("BDW_S3_DELETE_MAX_CONCURRENT_JOBS", 1),
+            ),
+            s3_delete_bucket_finalize_timeout_seconds=max(
+                1,
+                env_int("BDW_S3_DELETE_BUCKET_FINALIZE_TIMEOUT_SECONDS", 180),
+            ),
+            s3_delete_job_retention_hours=max(
+                1,
+                env_int("BDW_S3_DELETE_JOB_RETENTION_HOURS", 24),
             ),
             ingestion_upload_dir=Path(
                 env(

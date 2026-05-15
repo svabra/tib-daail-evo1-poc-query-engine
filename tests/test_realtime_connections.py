@@ -43,6 +43,7 @@ class RealtimeConnectionsTests(unittest.TestCase):
 
         self.assertIn("python-jobs", REALTIME_TOPIC_ORDER)
         self.assertIn("download-jobs", REALTIME_TOPIC_ORDER)
+        self.assertIn("s3-delete-jobs", REALTIME_TOPIC_ORDER)
         self.assertLess(
             REALTIME_TOPIC_ORDER.index("query-jobs"),
             REALTIME_TOPIC_ORDER.index("python-jobs"),
@@ -50,6 +51,10 @@ class RealtimeConnectionsTests(unittest.TestCase):
         self.assertLess(
             REALTIME_TOPIC_ORDER.index("data-generation-jobs"),
             REALTIME_TOPIC_ORDER.index("download-jobs"),
+        )
+        self.assertLess(
+            REALTIME_TOPIC_ORDER.index("download-jobs"),
+            REALTIME_TOPIC_ORDER.index("s3-delete-jobs"),
         )
 
     def test_register_and_unregister_realtime_clients_publish_connection_count(

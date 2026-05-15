@@ -44,7 +44,8 @@ from .s3_storage import (
     s3_verify_value,
     upload_s3_file,
 )
-from .data_sources import DataSourceCreateRequest, DataSourceDeleteRequest, DataSourcePlugin
+from .s3_delete_jobs import S3DeleteJobManager
+from .data_sources import DataSourceCreateRequest, DataSourcePlugin
 from .data_sources.ddl import SourceDdlDownload, synthetic_source_ddl
 from .data_sources.explorer_payloads import build_data_source_explorer_payload
 from .data_sources.publication_links import annotate_catalogs_with_published_products
@@ -146,6 +147,7 @@ REALTIME_TOPIC_ORDER = (
     "python-jobs",
     "data-generation-jobs",
     "download-jobs",
+    "s3-delete-jobs",
     "data-source-events",
     "service-consumption",
     "notebook-events",
@@ -316,6 +318,14 @@ class WorkbenchService:
                 snapshot,
             ),
         )
+        self._s3_delete_jobs = S3DeleteJobManager(
+            settings=settings,
+            state_change_callback=lambda snapshot: self._publish_realtime_snapshot(
+                "s3-delete-jobs",
+                snapshot,
+            ),
+            completion_callback=self._complete_s3_delete_job,
+        )
         self._data_exchange_upload_completion_threads: list[Thread] = []
         self._local_workspace_query_sources = LocalWorkspaceQuerySourceManager(
             settings=settings,
@@ -389,6 +399,11 @@ class WorkbenchService:
         self._set_realtime_snapshot(
             "download-jobs",
             self._download_jobs.state_payload(),
+            notify=False,
+        )
+        self._set_realtime_snapshot(
+            "s3-delete-jobs",
+            self._s3_delete_jobs.state_payload(),
             notify=False,
         )
         self._set_realtime_snapshot(
@@ -983,6 +998,12 @@ class WorkbenchService:
     def download_job_state(self, *, job_id: str) -> dict[str, object]:
         return self._download_jobs.job_payload(job_id)
 
+    def s3_delete_jobs_state(self) -> dict[str, object]:
+        return self._s3_delete_jobs.state_payload()
+
+    def s3_delete_job_state(self, *, job_id: str) -> dict[str, object]:
+        return self._s3_delete_jobs.job_payload(job_id)
+
     def start_s3_download_job(
         self,
         *,
@@ -1025,6 +1046,9 @@ class WorkbenchService:
             token=token,
             range_header=range_header,
         )
+
+    def _complete_s3_delete_job(self, _job_payload: dict[str, Any]) -> None:
+        self._data_source_discovery.sync_source("workspace.s3", emit_event=True)
 
     def copy_data_exchange_file_to_shared_s3(
         self,
@@ -1597,15 +1621,11 @@ class WorkbenchService:
         ).payload
 
     def delete_s3_explorer_entry(self, *, entry_kind: str, bucket: str, prefix: str = "") -> dict[str, object]:
-        result = self._s3_plugin.delete(
-            DataSourceDeleteRequest(
-                kind=entry_kind,
-                container=bucket,
-                path=prefix,
-            )
+        return self._s3_delete_jobs.start_job(
+            entry_kind=entry_kind,
+            bucket=bucket,
+            prefix=prefix,
         )
-        self._data_source_discovery.sync_source("workspace.s3", emit_event=True)
-        return result.payload
 
     def download_s3_object(self, *, bucket: str, key: str, file_name: str = ""):
         return self._s3_plugin.download_object(bucket=bucket, key=key, file_name=file_name)

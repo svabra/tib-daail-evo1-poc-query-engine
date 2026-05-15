@@ -249,14 +249,6 @@
                       Data Product{% if source_object_published_products | length != 1 %}s{% endif %}
                     </span>
                   {% endif %}
-                  {% if source_object_query_path %}
-                    <small
-                      class="source-query-path-label"
-                      title="Query path: {{ source_object_query_path }}"
-                    >
-                      {{ source_object_query_path }}
-                    </small>
-                  {% endif %}
                   {% if source_object.s3_file_format %}
                     <small>{{ source_object.s3_file_format | upper }}</small>
                     <small>{{ source_object.size_bytes | format_byte_count }}</small>

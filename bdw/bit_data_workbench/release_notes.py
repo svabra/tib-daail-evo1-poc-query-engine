@@ -1,9 +1,35 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.4. Keep entries concise and
+# Derived from git history through version 0.9.5. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.5",
+        "releasedAt": "2026-05-15T16:20:17+02:00",
+        "features": [
+            (
+                "S3 object, folder, and bucket deletes now run as background "
+                "jobs so the UI receives an immediate accepted response instead "
+                "of waiting long enough to hit gateway timeouts."
+            ),
+            (
+                "Backend S3 delete logs now record every requested path, job "
+                "phase, throttled heartbeat, completion, and failure with "
+                "Zurich timestamps and aggregate delete counts."
+            ),
+            (
+                "Bucket deletes now handle object-store finalization lag by "
+                "staying in a finalizing state and retrying before reporting a "
+                "real failure."
+            ),
+            (
+                "The Data Sources sidebar and S3 explorer show compact file "
+                "names again while keeping exact SQL query paths available for "
+                "copy actions, tooltips, validation, and autocomplete."
+            ),
+        ],
+    },
     {
         "version": "0.9.4",
         "releasedAt": "2026-05-15T15:01:16+02:00",

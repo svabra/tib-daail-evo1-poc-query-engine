@@ -397,6 +397,8 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
         self.assertIn('data-source-catalog-source-id="workspace.s3"', body)
         self.assertIn('data-source-catalog-source-id="pg_oltp"', body)
         self.assertIn('data-source-catalog-source-id="pg_olap"', body)
+        self.assertIn('data-source-object-query-alias="s3.shared_finance.exports.orders.csv"', body)
+        self.assertNotIn("source-query-path-label", body)
 
     def test_browser_route_renders_dedicated_explorer_page(self) -> None:
         response = query_workbench_data_source_explorer(

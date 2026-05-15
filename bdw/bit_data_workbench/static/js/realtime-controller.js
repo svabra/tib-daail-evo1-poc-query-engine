@@ -11,6 +11,7 @@ export function createRealtimeController(helpers) {
     formatQueryDuration,
     getDataGenerationState,
     getDownloadState = () => ({ version: null, snapshot: [], summary: {} }),
+    getS3DeleteState = () => ({ version: null, snapshot: [], summary: {} }),
     getDismissedNotificationKeys,
     getQueryState,
     normalizeDataGenerationJob,
@@ -65,6 +66,10 @@ export function createRealtimeController(helpers) {
     return getDownloadState();
   }
 
+  function s3DeleteState() {
+    return getS3DeleteState();
+  }
+
   function pruneDismissedNotificationKeys() {
     const queryJobsSnapshot = queryState().snapshot;
     const dataGenerationJobsSnapshot = dataGenerationState().snapshot;
@@ -72,10 +77,15 @@ export function createRealtimeController(helpers) {
     const downloadJobsSnapshot = Array.isArray(downloadJobsState.snapshot)
       ? downloadJobsState.snapshot
       : [];
+    const s3DeleteJobsState = s3DeleteState();
+    const s3DeleteJobsSnapshot = Array.isArray(s3DeleteJobsState.snapshot)
+      ? s3DeleteJobsState.snapshot
+      : [];
     const validKeys = new Set([
       ...queryJobsSnapshot.map((job) => notificationItemKey("query", job)),
       ...dataGenerationJobsSnapshot.map((job) => notificationItemKey("ingestion", job)),
       ...downloadJobsSnapshot.map((job) => notificationItemKey("download", job)),
+      ...s3DeleteJobsSnapshot.map((job) => notificationItemKey("s3-delete", job)),
     ]);
     const dismissedNotificationKeys = getDismissedNotificationKeys();
     let changed = false;
@@ -88,6 +98,9 @@ export function createRealtimeController(helpers) {
         continue;
       }
       if (key.startsWith("download:") && downloadJobsState.version === null) {
+        continue;
+      }
+      if (key.startsWith("s3-delete:") && s3DeleteJobsState.version === null) {
         continue;
       }
       if (validKeys.has(key)) {
@@ -273,10 +286,12 @@ export function createRealtimeController(helpers) {
     const { summary: queryJobsSummary } = queryState();
     const { summary: dataGenerationJobsSummary } = dataGenerationState();
     const { summary: downloadJobsSummary } = downloadState();
+    const { summary: s3DeleteJobsSummary } = s3DeleteState();
     const hasRunningActivity =
       Number(queryJobsSummary.runningCount || 0) > 0 ||
       Number(dataGenerationJobsSummary.runningCount || 0) > 0 ||
-      Number(downloadJobsSummary?.runningCount || 0) > 0;
+      Number(downloadJobsSummary?.runningCount || 0) > 0 ||
+      Number(s3DeleteJobsSummary?.runningCount || 0) > 0;
     const badgeCount = visibleNotifications.length;
     countRoot.textContent = String(badgeCount);
     countRoot.hidden = badgeCount === 0;
