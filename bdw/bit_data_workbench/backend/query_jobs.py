@@ -935,7 +935,7 @@ class DuckDBQueryAccessCoordinator:
 
         with self._condition:
             if execution_mode == QUERY_EXECUTION_DUCKDB_READ:
-                while self._active_write or self._waiting_writes > 0:
+                while self._active_write:
                     if is_cancelled():
                         return False
                     if on_waiting is not None:

@@ -208,6 +208,45 @@ class DuckDBQueryAccessCoordinatorTests(TestCase):
         self.assertFalse(thread.is_alive())
         self.assertEqual(writer_result, [False])
 
+    def test_read_queries_are_not_blocked_by_waiting_writers(self) -> None:
+        coordinator = DuckDBQueryAccessCoordinator()
+        self.assertTrue(coordinator.acquire(QUERY_EXECUTION_DUCKDB_READ, lambda: False))
+
+        cancel_requested = threading.Event()
+        waiting_reported = threading.Event()
+        writer_result: list[bool] = []
+
+        def acquire_writer() -> None:
+            writer_result.append(
+                coordinator.acquire(
+                    QUERY_EXECUTION_DUCKDB_WRITE,
+                    cancel_requested.is_set,
+                    on_waiting=waiting_reported.set,
+                )
+            )
+
+        thread = threading.Thread(target=acquire_writer, daemon=True)
+        thread.start()
+
+        self.assertTrue(waiting_reported.wait(timeout=2))
+        read_waiting_reported = threading.Event()
+        self.assertTrue(
+            coordinator.acquire(
+                QUERY_EXECUTION_DUCKDB_READ,
+                lambda: False,
+                on_waiting=read_waiting_reported.set,
+            )
+        )
+        self.assertFalse(read_waiting_reported.is_set())
+
+        coordinator.release(QUERY_EXECUTION_DUCKDB_READ)
+        cancel_requested.set()
+        thread.join(timeout=2)
+        coordinator.release(QUERY_EXECUTION_DUCKDB_READ)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(writer_result, [False])
+
 
 class ProcessQueryJobManagerTests(TestCase):
     def setUp(self) -> None:

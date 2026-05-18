@@ -1,9 +1,25 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.6. Keep entries concise and
+# Derived from git history through version 0.9.7. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.7",
+        "releasedAt": "2026-05-18T11:25:57+02:00",
+        "features": [
+            (
+                "Read-only DuckDB query jobs no longer wait behind a pending "
+                "writer when no writer is active, preventing unrelated write-like "
+                "operations from causing long allocation waits for analyst queries."
+            ),
+            (
+                "Regression coverage now proves read queries can still start while "
+                "a writer is queued, while writers continue to wait for active reads "
+                "and active writes still block new readers."
+            ),
+        ],
+    },
     {
         "version": "0.9.6",
         "releasedAt": "2026-05-18T10:49:27+02:00",
