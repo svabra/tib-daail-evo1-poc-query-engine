@@ -1,9 +1,35 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.5. Keep entries concise and
+# Derived from git history through version 0.9.6. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.6",
+        "releasedAt": "2026-05-18T10:49:27+02:00",
+        "features": [
+            (
+                "The Query Workbench landing area now includes shortcut tiles "
+                "for creating a new notebook, continuing with the last notebook, "
+                "and opening Query Monitoring, with icons and tooltips for each action."
+            ),
+            (
+                "Query Runs now includes a Live Queries only toggle and stores "
+                "backend query progress events in the monitoring history so queued, "
+                "running, completed, failed, and cancelled work can be inspected."
+            ),
+            (
+                "SQL query jobs now report a timing breakdown across browser "
+                "pre-submit, backend preparation, DuckDB allocation wait, isolated "
+                "worker startup, engine execution, result fetch, delivery, and total time."
+            ),
+            (
+                "Backend query logs and progress events now distinguish real DuckDB "
+                "access waits from worker startup time and include DuckDB coordinator "
+                "state, making production queueing delays easier to diagnose."
+            ),
+        ],
+    },
     {
         "version": "0.9.5",
         "releasedAt": "2026-05-15T16:20:17+02:00",

@@ -16,6 +16,15 @@ export function normalizeQueryJob(job) {
   const averageMemoryRssBytes = Number(job.averageMemoryRssBytes);
   const peakMemoryRssBytes = Number(job.peakMemoryRssBytes);
   const workerExitCode = Number(job.workerExitCode);
+  const timings = {};
+  if (job.timings && typeof job.timings === "object") {
+    Object.entries(job.timings).forEach(([key, value]) => {
+      const numeric = Number(value);
+      if (key && Number.isFinite(numeric) && numeric >= 0) {
+        timings[key] = numeric;
+      }
+    });
+  }
 
   return {
     ...job,
@@ -67,6 +76,7 @@ export function normalizeQueryJob(job) {
     cancellationPhase: String(job.cancellationPhase ?? "").trim(),
     cancellationRequestedAt: String(job.cancellationRequestedAt ?? "").trim(),
     workerExitCode: Number.isFinite(workerExitCode) ? Math.round(workerExitCode) : null,
+    timings,
   };
 }
 

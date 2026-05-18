@@ -8,15 +8,22 @@ export function createNotebookTreeController(helpers) {
     defaultFolderPermissions,
     deleteTreeFolder,
     deriveFolderId,
+    applyWorkbenchTitle = () => {},
     dropTargetAcceptsNotebookDrop,
     folderCanDelete,
     folderCanEdit,
     folderIsShared,
     folderLabel,
+    getCurrentWorkspaceMode = () => "",
     getDraggedNotebook,
+    getHomePageRoot = () => null,
+    getQueryWorkbenchEntryPageRoot = () => null,
+    isLocalNotebookId = () => false,
     isUnassignedFolder,
     notebookTreeRoot,
     persistNotebookTree,
+    pushNotebookHistory = () => {},
+    pushQueryWorkbenchHistory = () => {},
     refreshSidebar,
     resolveAddTarget,
     resolveDropTarget,
@@ -44,8 +51,21 @@ export function createNotebookTreeController(helpers) {
       await refreshSidebar("notebook");
     }
 
+    const shouldPromoteToQueryWorkbench = Boolean(
+      getHomePageRoot() ||
+        getQueryWorkbenchEntryPageRoot() ||
+        getCurrentWorkspaceMode() !== "notebook"
+    );
     const target = resolveNotebookCreateTarget(createNotebookButton);
-    await createNotebook(target);
+    const notebookId = await createNotebook(target);
+    if (shouldPromoteToQueryWorkbench && notebookId) {
+      if (isLocalNotebookId(notebookId)) {
+        pushQueryWorkbenchHistory();
+      } else {
+        pushNotebookHistory(notebookId);
+      }
+      applyWorkbenchTitle("query");
+    }
     return true;
   }
 

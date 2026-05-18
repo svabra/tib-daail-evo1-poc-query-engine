@@ -25,6 +25,10 @@ export function createQueryRunsController(helpers) {
 
   function statusCopy(status) {
     switch (String(status || "").trim().toLowerCase()) {
+      case "queued":
+        return "Queued";
+      case "running":
+        return "Running";
       case "completed":
         return "Completed";
       case "failed":
@@ -57,6 +61,10 @@ export function createQueryRunsController(helpers) {
     return root?.dataset?.queryRunsShowCharts === "true";
   }
 
+  function queryRunsLiveOnly(root) {
+    return root?.dataset?.queryRunsLiveOnly === "true";
+  }
+
   function syncChartToggle(root) {
     const toggleButton = root?.querySelector?.("[data-query-runs-toggle-charts]");
     if (!(toggleButton instanceof HTMLButtonElement)) {
@@ -74,11 +82,31 @@ export function createQueryRunsController(helpers) {
     toggleButton.textContent = showCharts ? "Hide resource charts" : "Show resource charts";
   }
 
+  function syncLiveToggle(root) {
+    const toggleButton = root?.querySelector?.("[data-query-runs-toggle-live]");
+    if (!(toggleButton instanceof HTMLButtonElement)) {
+      return;
+    }
+    const liveOnly = queryRunsLiveOnly(root);
+    toggleButton.classList.toggle("is-on", liveOnly);
+    toggleButton.setAttribute("aria-pressed", liveOnly ? "true" : "false");
+    toggleButton.title = liveOnly
+      ? "Show all recorded and live query runs"
+      : "Show live queued and running queries only";
+  }
+
   function expandedSqlRuns(root) {
     if (!root._bdwQueryRunsExpandedSql) {
       root._bdwQueryRunsExpandedSql = new Set();
     }
     return root._bdwQueryRunsExpandedSql;
+  }
+
+  function expandedProgressRuns(root) {
+    if (!root._bdwQueryRunsExpandedProgress) {
+      root._bdwQueryRunsExpandedProgress = new Set();
+    }
+    return root._bdwQueryRunsExpandedProgress;
   }
 
   function runKey(run, index) {
@@ -128,6 +156,47 @@ export function createQueryRunsController(helpers) {
     return "n/a";
   }
 
+  function normalizedRunTimings(run) {
+    const timings = run?.timings && typeof run.timings === "object" ? run.timings : {};
+    const valueFor = (key) => {
+      const numeric = Number(timings[key]);
+      return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+    };
+    const backendTotalMs = valueFor("backendTotalMs");
+    const clientTotalMs = valueFor("clientTotalMs");
+    const totalMs =
+      clientTotalMs ??
+      backendTotalMs ??
+      (Number.isFinite(Number(run?.durationMs)) && Number(run.durationMs) >= 0 ? Number(run.durationMs) : null);
+    const deliveryMs =
+      clientTotalMs !== null && backendTotalMs !== null
+        ? Math.max(0, clientTotalMs - backendTotalMs)
+        : null;
+    return [
+      ["total", totalMs],
+      ["prepare", valueFor("backendPrepareMs")],
+      ["allocation", valueFor("engineAccessWaitMs")],
+      ["startup", valueFor("workerStartupMs")],
+      ["query", valueFor("engineQueryMs")],
+      ["fetch", valueFor("resultFetchMs")],
+      ["delivery", deliveryMs],
+    ].filter(([, value]) => value !== null && Number.isFinite(value));
+  }
+
+  function runTimingBreakdownMarkup(run) {
+    const parts = normalizedRunTimings(run);
+    if (!parts.length) {
+      return "";
+    }
+    return `
+      <small class="query-run-history-timing">
+        ${parts
+          .map(([label, value]) => `<span>${escapeHtml(label)} ${escapeHtml(formatQueryDuration(value))}</span>`)
+          .join("")}
+      </small>
+    `;
+  }
+
   function runResourceChartMarkup(run) {
     if (typeof queryResourceSparklineMarkup !== "function") {
       return "";
@@ -161,6 +230,146 @@ export function createQueryRunsController(helpers) {
     `;
   }
 
+  function runProgressEvents(run) {
+    return Array.isArray(run?.progressEvents) ? run.progressEvents : [];
+  }
+
+  function runProgressToggleMarkup(run, key, expanded) {
+    const events = runProgressEvents(run);
+    if (!events.length) {
+      return '<span class="query-run-history-muted">n/a</span>';
+    }
+    return `
+      <button
+        type="button"
+        class="query-run-history-sql-toggle"
+        data-query-run-progress-toggle
+        data-query-run-id="${escapeHtml(key)}"
+        aria-expanded="${expanded ? "true" : "false"}"
+      >
+        <span class="query-run-history-sql-chevron" aria-hidden="true"></span>
+        <span>${escapeHtml(events.length.toLocaleString())} event(s)</span>
+      </button>
+    `;
+  }
+
+  function progressEventTime(event) {
+    const displayTime = String(event?.displayTime || "").trim();
+    if (displayTime) {
+      return displayTime;
+    }
+    return formatRunDateTime(event?.occurredAt || "");
+  }
+
+  function formatProgressValue(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return "";
+    }
+    return `${numeric.toFixed(numeric >= 10 ? 1 : 2)}`;
+  }
+
+  function duckdbProfilePillsMarkup(profile) {
+    if (!profile || typeof profile !== "object") {
+      return "";
+    }
+    const summaryEntries = [
+      ["latency", profile.duckdb_latency_ms, "ms"],
+      ["cpu", profile.duckdb_cpu_ms, "ms"],
+      ["blocked", profile.duckdb_blocked_thread_ms, "ms"],
+      ["rows scanned", profile.duckdb_rows_scanned, ""],
+      ["rows returned", profile.duckdb_rows_returned, ""],
+      ["bytes read", profile.duckdb_bytes_read, "bytes"],
+      ["bytes written", profile.duckdb_bytes_written, "bytes"],
+      ["peak buffer", profile.duckdb_peak_buffer_memory_bytes, "bytes"],
+      ["peak temp", profile.duckdb_peak_temp_dir_bytes, "bytes"],
+      ["operators", profile.duckdb_operator_count, ""],
+    ]
+      .filter(([, value]) => value !== undefined && value !== null && value !== "")
+      .map(([label, value, unit]) => {
+        const copy = unit === "bytes"
+          ? formatByteCount(Number(value))
+          : `${formatProgressValue(value)}${unit ? ` ${unit}` : ""}`;
+        return `<span class="query-run-progress-pill"><strong>${escapeHtml(label)}</strong> ${escapeHtml(copy)}</span>`;
+      });
+    const topOperators = Array.isArray(profile.duckdb_top_operators)
+      ? profile.duckdb_top_operators.slice(0, 4)
+      : [];
+    const operatorMarkup = topOperators.length
+      ? `
+          <div class="query-run-progress-operators">
+            ${topOperators
+              .map((operator) => {
+                const timing = operator?.time_ms ?? operator?.cpu_ms;
+                const rows = operator?.rows_scanned ?? operator?.cardinality;
+                return `
+                  <span class="query-run-progress-operator">
+                    <strong>${escapeHtml(operator?.type || operator?.name || "operator")}</strong>
+                    ${timing !== undefined && timing !== null ? `<span>${escapeHtml(formatProgressValue(timing))} ms</span>` : ""}
+                    ${rows !== undefined && rows !== null ? `<span>${escapeHtml(Number(rows).toLocaleString())} rows</span>` : ""}
+                  </span>
+                `;
+              })
+              .join("")}
+          </div>
+        `
+      : "";
+    if (!summaryEntries.length && !operatorMarkup) {
+      return "";
+    }
+    return `
+      <div class="query-run-progress-duckdb">
+        ${summaryEntries.join("")}
+        ${operatorMarkup}
+      </div>
+    `;
+  }
+
+  function progressEventMarkup(event) {
+    const eventName = String(event?.event || "progress").replace(/_/g, " ");
+    const message = String(event?.message || event?.phase || "").trim();
+    const percent = Number(event?.duckdb_progress_percent ?? event?.progress);
+    const progressCopy = Number.isFinite(percent)
+      ? event?.duckdb_progress_percent !== undefined
+        ? `${percent.toFixed(1)}%`
+        : `${Math.round(percent * 100)}%`
+      : "";
+    const metrics = [
+      event?.elapsed_seconds !== undefined ? `${formatProgressValue(event.elapsed_seconds)}s` : "",
+      event?.cpu_percent !== undefined ? `CPU ${formatProgressValue(event.cpu_percent)}%` : "",
+      event?.ram_mb !== undefined ? `RAM ${formatProgressValue(event.ram_mb)} MB` : "",
+      progressCopy ? `DuckDB ${progressCopy}` : "",
+    ].filter(Boolean);
+    return `
+      <li class="query-run-progress-event">
+        <time datetime="${escapeHtml(String(event?.occurredAt || ""))}">${escapeHtml(progressEventTime(event))}</time>
+        <div>
+          <strong>${escapeHtml(eventName)}</strong>
+          ${message ? `<span>${escapeHtml(message)}</span>` : ""}
+          ${metrics.length ? `<small>${metrics.map((item) => escapeHtml(item)).join(" | ")}</small>` : ""}
+          ${duckdbProfilePillsMarkup(event?.duckdbProfile)}
+        </div>
+      </li>
+    `;
+  }
+
+  function runProgressRowMarkup(run, columnCount) {
+    const events = runProgressEvents(run);
+    if (!events.length) {
+      return "";
+    }
+    return `
+      <tr class="query-run-history-progress-row">
+        <td colspan="${escapeHtml(String(columnCount))}">
+          ${runTimingBreakdownMarkup(run)}
+          <ol class="query-run-progress-list">
+            ${events.map((event) => progressEventMarkup(event)).join("")}
+          </ol>
+        </td>
+      </tr>
+    `;
+  }
+
   function runSqlRowMarkup(run, columnCount) {
     const sql = String(run?.sql || "").trim();
     if (!sql) {
@@ -181,6 +390,7 @@ export function createQueryRunsController(helpers) {
   ) {
     const key = runKey(run, index);
     const sqlExpanded = expandedSqlRuns(root).has(key);
+    const progressExpanded = expandedProgressRuns(root).has(key);
     const status = String(run?.status || "").trim().toLowerCase();
     const title = String(run?.notebookTitle || run?.notebookId || "Notebook").trim();
     const message = run?.error || run?.message || "";
@@ -198,6 +408,7 @@ export function createQueryRunsController(helpers) {
         `
       : "";
     const sqlRow = sqlExpanded ? runSqlRowMarkup(run, columnCount) : "";
+    const progressRow = progressExpanded ? runProgressRowMarkup(run, columnCount) : "";
     const messageMarkup = message
       ? `<span class="query-run-history-message">${escapeHtml(message)}</span>`
       : "";
@@ -216,14 +427,19 @@ export function createQueryRunsController(helpers) {
         <td>${runStatusMarkup(status)}</td>
         <td><time datetime="${escapeHtml(String(started))}">${escapeHtml(formatRunDateTime(started))}</time></td>
         <td><time datetime="${escapeHtml(String(ended))}">${escapeHtml(formatRunDateTime(ended))}</time></td>
-        <td>${escapeHtml(formatQueryDuration(Number(run?.durationMs || 0)))}</td>
+        <td>
+          <span>${escapeHtml(formatQueryDuration(Number(run?.durationMs || 0)))}</span>
+          ${runTimingBreakdownMarkup(run)}
+        </td>
         <td>${escapeHtml(formatMetric(metrics.averageCpuPercent, formatCpu))}</td>
         <td>${escapeHtml(formatMetric(metrics.peakCpuPercent, formatCpu))}</td>
         <td>${escapeHtml(formatMetric(metrics.averageMemoryRssBytes, formatByteCount))}</td>
         <td>${escapeHtml(formatMetric(metrics.peakMemoryRssBytes, formatByteCount))}</td>
         <td>${escapeHtml(formatRows(run))}</td>
+        <td class="query-run-history-sql-cell">${runProgressToggleMarkup(run, key, progressExpanded)}</td>
         <td class="query-run-history-sql-cell">${runSqlToggleMarkup(run, key, sqlExpanded)}${includeNotebook ? "" : messageMarkup}</td>
       </tr>
+      ${progressRow}
       ${sqlRow}
       ${chartRow}
     `;
@@ -243,6 +459,7 @@ export function createQueryRunsController(helpers) {
       "RAM avg",
       "RAM peak",
       "Rows",
+      "Progress",
       "SQL",
     ];
     return `
@@ -284,11 +501,15 @@ export function createQueryRunsController(helpers) {
     const runs = Array.isArray(payload?.runs) ? payload.runs : [];
     root._bdwQueryRunsPayload = payload;
     syncChartToggle(root);
+    syncLiveToggle(root);
     if (statusRoot instanceof HTMLElement) {
+      const liveOnly = queryRunsLiveOnly(root);
       statusRoot.textContent = payload?.available === false
         ? payload?.message || "Query-run history is not available."
         : runs.length
-          ? `${runs.length} recorded run(s)`
+          ? liveOnly
+            ? `${runs.length} live query run(s)`
+            : `${runs.length} query run(s)`
           : emptyMessage(payload);
     }
     if (!runs.length) {
@@ -312,6 +533,9 @@ export function createQueryRunsController(helpers) {
       params.set("cellId", cellId);
     }
     params.set("limit", root.dataset.queryRunsLimit || "100");
+    if (queryRunsLiveOnly(root)) {
+      params.set("liveOnly", "1");
+    }
     const statusRoot = root.querySelector("[data-query-runs-status]");
     if (!quiet && statusRoot instanceof HTMLElement && root.dataset.queryRunsLoaded === "true") {
       statusRoot.textContent = "Refreshing recorded query runs...";
@@ -424,6 +648,45 @@ export function createQueryRunsController(helpers) {
       return true;
     }
 
+    const progressToggle = event.target.closest("[data-query-run-progress-toggle]");
+    if (progressToggle) {
+      event.preventDefault();
+      event.stopPropagation();
+      const root = progressToggle.closest("[data-query-runs-page], [data-notebook-query-runs]");
+      if (!(root instanceof HTMLElement)) {
+        return true;
+      }
+      const key = String(progressToggle.dataset.queryRunId || "").trim();
+      if (key) {
+        const expanded = expandedProgressRuns(root);
+        if (expanded.has(key)) {
+          expanded.delete(key);
+        } else {
+          expanded.add(key);
+        }
+      }
+      if (root._bdwQueryRunsPayload) {
+        renderList(root, root._bdwQueryRunsPayload);
+      } else {
+        await loadInto(root, { quiet: true });
+      }
+      return true;
+    }
+
+    const liveToggle = event.target.closest("[data-query-runs-toggle-live]");
+    if (liveToggle) {
+      event.preventDefault();
+      event.stopPropagation();
+      const root = liveToggle.closest("[data-query-runs-page], [data-notebook-query-runs]");
+      if (!(root instanceof HTMLElement)) {
+        return true;
+      }
+      root.dataset.queryRunsLiveOnly = queryRunsLiveOnly(root) ? "false" : "true";
+      syncLiveToggle(root);
+      await loadInto(root, { quiet: true });
+      return true;
+    }
+
     const toggleButton = event.target.closest("[data-query-runs-toggle-charts]");
     if (toggleButton) {
       event.preventDefault();
@@ -448,13 +711,13 @@ export function createQueryRunsController(helpers) {
   function refreshForQueryJobsSnapshot(snapshot) {
     const jobs = Array.isArray(snapshot?.jobs) ? snapshot.jobs : [];
     const terminalJobs = jobs.filter((job) => terminalStatuses.has(String(job?.status || "").trim().toLowerCase()));
-    if (!terminalJobs.length) {
-      return;
-    }
+    const liveJobs = jobs.filter((job) => !terminalStatuses.has(String(job?.status || "").trim().toLowerCase()));
     const roots = [pageRoot(), ...notebookRoots(document)].filter(Boolean);
     roots.forEach((root) => {
       if (terminalJobs.some((job) => rootMatchesJob(root, job))) {
         scheduleLoadInto(root);
+      } else if (queryRunsLiveOnly(root) && liveJobs.some((job) => rootMatchesJob(root, job))) {
+        scheduleLoadInto(root, { delayMs: 150, followUpDelayMs: 1500 });
       }
     });
   }

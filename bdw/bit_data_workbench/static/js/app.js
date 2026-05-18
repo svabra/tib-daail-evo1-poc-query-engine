@@ -278,6 +278,8 @@ const initialSqlEditorRows = 5;
 const populatedSqlEditorRows = 10;
 const defaultSqlEditorAutoRows = 10;
 const queryJobTerminalStatuses = new Set(["completed", "failed", "cancelled"]);
+const queryClientTimingStarts = new Map();
+const acknowledgedQueryClientTimings = new Set();
 const dataGenerationTerminalStatuses = new Set(["completed", "failed", "cancelled"]);
 const dataGenerationRunningStatuses = new Set(["queued", "running"]);
 let dismissedNotificationKeys = new Set();
@@ -1121,15 +1123,22 @@ const {
   defaultFolderPermissions,
   deleteTreeFolder,
   deriveFolderId,
+  applyWorkbenchTitle,
   dropTargetAcceptsNotebookDrop,
   folderCanDelete,
   folderCanEdit,
   folderIsShared,
   folderLabel,
+  getCurrentWorkspaceMode: currentWorkspaceMode,
   getDraggedNotebook: () => draggedNotebook,
+  getHomePageRoot: homePageRoot,
+  getQueryWorkbenchEntryPageRoot: queryWorkbenchEntryPageRoot,
+  isLocalNotebookId,
   isUnassignedFolder,
   notebookTreeRoot,
   persistNotebookTree,
+  pushNotebookHistory,
+  pushQueryWorkbenchHistory,
   refreshSidebar,
   resolveAddTarget,
   resolveDropTarget,
@@ -4761,6 +4770,9 @@ function applyWorkspaceCellState(workspaceRoot, cell, index, editable, totalCell
   } else {
     cellRoot.querySelector("[data-query-form]")?.insertAdjacentHTML("afterend", resultMarkup);
   }
+  if (cellLanguage !== "python" && job && queryJobTerminalStatuses.has(String(job.status || "").trim())) {
+    acknowledgeQueryClientTiming(job);
+  }
 }
 
 function workspaceCellIds(workspaceRoot) {
@@ -6184,6 +6196,8 @@ async function startQueryJobForForm(form) {
     return;
   }
 
+  const clientRunStartedPerf = performance.now();
+  const clientRunStartedAt = Date.now();
   const workspaceRoot = form.closest("[data-workspace-notebook]");
   const cellRoot = form.closest("[data-query-cell]");
   const notebookId = workspaceNotebookId(workspaceRoot);
@@ -6245,6 +6259,8 @@ async function startQueryJobForForm(form) {
   formData.set("notebook_title", currentWorkspaceNotebookTitle(workspaceRoot));
   formData.set("data_sources", selectedDataSourcesForCell(cellRoot).join("||"));
   formData.set("localRelations", JSON.stringify(localRelationMap));
+  formData.set("clientRunStartedAt", String(clientRunStartedAt));
+  formData.set("clientPreSubmitMs", String(Math.max(0, performance.now() - clientRunStartedPerf)));
 
   const response = await window.fetch("/api/query-jobs", {
     method: "POST",
@@ -6278,6 +6294,11 @@ async function startQueryJobForForm(form) {
     return;
   }
 
+  if (snapshot.jobId) {
+    queryClientTimingStarts.set(snapshot.jobId, {
+      startedPerf: clientRunStartedPerf,
+    });
+  }
   recordNotebookActivity(notebookId, "run");
   applyOptimisticQueryJobSnapshot({
     snapshot,
@@ -6550,6 +6571,48 @@ async function cancelQueryJob(jobId) {
       applyQueryJobsState,
       getQueryState: currentQueryState,
     });
+  }
+}
+
+async function acknowledgeQueryClientTiming(job) {
+  const jobId = String(job?.jobId || "").trim();
+  if (!jobId || !queryJobTerminalStatuses.has(String(job?.status || "").trim())) {
+    return;
+  }
+  if (acknowledgedQueryClientTimings.has(jobId)) {
+    return;
+  }
+  const timingStart = queryClientTimingStarts.get(jobId);
+  if (!timingStart || !Number.isFinite(Number(timingStart.startedPerf))) {
+    return;
+  }
+
+  acknowledgedQueryClientTimings.add(jobId);
+  const clientTotalMs = Math.max(0, performance.now() - Number(timingStart.startedPerf));
+  try {
+    const response = await window.fetch(`/api/query-jobs/${encodeURIComponent(jobId)}/client-timing`, {
+      method: "POST",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ clientTotalMs }),
+    });
+    if (!response.ok) {
+      return;
+    }
+    const snapshot = normalizeQueryJob(await response.json());
+    if (!snapshot) {
+      return;
+    }
+    queryClientTimingStarts.delete(jobId);
+    applyOptimisticQueryJobSnapshot({
+      snapshot,
+      applyQueryJobsState,
+      getQueryState: currentQueryState,
+    });
+  } catch (error) {
+    console.warn("Failed to record query client timing.", error);
   }
 }
 

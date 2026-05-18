@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import threading
@@ -151,6 +152,14 @@ class QueryJobPayloadTests(TestCase):
             cancellation_phase="interrupting",
             cancellation_requested_at="2026-05-13T00:00:02+00:00",
             worker_exit_code=-15,
+            timings={
+                "backendPrepareMs": 4.5,
+                "engineAccessWaitMs": 0.0,
+                "workerStartupMs": 12.0,
+                "engineQueryMs": 20.0,
+                "resultFetchMs": 3.0,
+                "backendTotalMs": 41.0,
+            },
         )
 
         payload = job.payload
@@ -166,6 +175,8 @@ class QueryJobPayloadTests(TestCase):
         self.assertEqual(payload["resourceSamples"][0]["elapsedMs"], 2000)
         self.assertEqual(payload["cancellationPhase"], "interrupting")
         self.assertEqual(payload["workerExitCode"], -15)
+        self.assertEqual(payload["timings"]["backendPrepareMs"], 4.5)
+        self.assertEqual(payload["timings"]["workerStartupMs"], 12.0)
 
 
 class DuckDBQueryAccessCoordinatorTests(TestCase):
@@ -279,6 +290,8 @@ class ProcessQueryJobManagerTests(TestCase):
                 data_sources=["workspace.s3"],
                 touched_relations=["test.sample_csv"],
                 touched_buckets=["test"],
+                client_pre_submit_ms=6.25,
+                backend_prepare_ms=3.5,
                 source_summaries=[
                     {
                         "relation": "test.sample_csv",
@@ -301,8 +314,12 @@ class ProcessQueryJobManagerTests(TestCase):
         output = "\n".join(captured.output)
         for event in (
             "queued",
+            "backend_prepared",
             "prepared",
+            "engine_allocated",
+            "worker_starting",
             "worker_started",
+            "querying",
             "fetching_rows",
             "completed",
         ):
@@ -317,10 +334,35 @@ class ProcessQueryJobManagerTests(TestCase):
         self.assertIn('"query_alias":"s3.test.sample.csv"', output)
         self.assertIn("duckdb_latency_ms=", output)
         self.assertIn("duckdb_rows_returned=", output)
+        self.assertIn("duckdb_operator_count=", output)
+        self.assertIn("client_pre_submit_ms=6.25", output)
+        self.assertIn("backend_prepare_ms=3.5", output)
+        self.assertIn("engine_access_wait_ms=", output)
+        self.assertIn("worker_startup_ms=", output)
+        self.assertIn("engine_query_ms=", output)
+        self.assertIn("result_fetch_ms=", output)
+        self.assertIn("backend_total_ms=", output)
         self.assertNotIn("select 8675309", output)
         self.assertNotIn("sensitive_value", output)
         self.assertNotIn("children", output)
         self.assertNotIn("query_name", output)
+        self.assertTrue(completed.progress_events)
+        stored_events = [event["event"] for event in completed.progress_events]
+        self.assertIn("queued", stored_events)
+        self.assertIn("completed", stored_events)
+        terminal_events = [
+            event for event in completed.progress_events if event.get("event") == "completed"
+        ]
+        self.assertTrue(terminal_events)
+        self.assertIn("duckdbProfile", terminal_events[-1])
+        self.assertIn("duckdb_operator_count", terminal_events[-1]["duckdbProfile"])
+        self.assertGreaterEqual(completed.timings.get("backendPrepareMs", -1), 0)
+        self.assertGreaterEqual(completed.timings.get("engineAccessWaitMs", -1), 0)
+        self.assertGreaterEqual(completed.timings.get("workerStartupMs", -1), 0)
+        self.assertGreaterEqual(completed.timings.get("engineQueryMs", -1), 0)
+        self.assertGreaterEqual(completed.timings.get("resultFetchMs", -1), 0)
+        self.assertGreaterEqual(completed.timings.get("backendTotalMs", -1), 0)
+        self.assertNotIn("select 8675309", json.dumps(completed.progress_events))
 
     def test_query_job_heartbeat_is_throttled_and_stops_after_cancellation(self) -> None:
         snapshot = QueryJobDefinition(
@@ -358,11 +400,23 @@ class ProcessQueryJobManagerTests(TestCase):
             self.manager._log_query_heartbeat_if_due(snapshot.job_id)
             self.assertEqual(log_info.call_count, 1)
             heartbeat_line = str(log_info.call_args.args[1])
-            self.assertIn('query_job_event="heartbeat"', heartbeat_line)
+            self.assertIn('query_job_event="progress"', heartbeat_line)
+            self.assertIn('progress_kind="heartbeat"', heartbeat_line)
             self.assertIn("duckdb_progress_percent=42.0", heartbeat_line)
+            self.assertIn("duckdb_coordinator_active_reads=", heartbeat_line)
+            self.assertIn("duckdb_coordinator_active_write=", heartbeat_line)
+            self.assertIn("duckdb_coordinator_waiting_writes=", heartbeat_line)
             self.assertIn("cpu_percent=12.35", heartbeat_line)
             self.assertIn("ram_mb=64.0", heartbeat_line)
             self.assertNotIn("private_table", heartbeat_line)
+            heartbeat_events = [
+                event for event in snapshot.progress_events if event.get("event") == "progress"
+            ]
+            self.assertEqual(len(heartbeat_events), 1)
+            self.assertEqual(heartbeat_events[0]["progress_kind"], "heartbeat")
+            self.assertEqual(heartbeat_events[0]["duckdb_progress_percent"], 42.0)
+            self.assertIn("displayTime", heartbeat_events[0])
+            self.assertNotIn("private_table", json.dumps(heartbeat_events))
 
             with self.manager._condition:
                 record.last_log_heartbeat_monotonic -= 11
@@ -462,6 +516,10 @@ class ProcessQueryJobManagerTests(TestCase):
         self.assertIn('query_job_event="failed"', output)
         self.assertIn("error=", output)
         self.assertNotIn("select * from", output.lower())
+        failed_events = [event for event in failed.progress_events if event.get("event") == "failed"]
+        self.assertTrue(failed_events)
+        self.assertIn("error", failed_events[-1])
+        self.assertNotIn("select * from", json.dumps(failed_events))
 
     def test_missing_duckdb_profile_summary_is_silent(self) -> None:
         missing_path = self.root / "missing-profile.json"
@@ -490,6 +548,84 @@ class ProcessQueryJobManagerTests(TestCase):
         self.assertIsNotNone(completed.process_id)
         self.assertEqual(completed.rows, [(1,)])
         self.assertEqual(completed.progress, 1.0)
+        self.assertEqual(completed.timings.get("engineAccessWaitMs"), 0.0)
+        for key in ("workerStartupMs", "engineQueryMs", "resultFetchMs", "backendTotalMs"):
+            self.assertGreaterEqual(completed.timings.get(key, -1), 0)
+
+    def test_file_backed_read_reports_duckdb_access_wait(self) -> None:
+        self.assertTrue(
+            self.manager._access_coordinator.acquire(QUERY_EXECUTION_DUCKDB_WRITE, lambda: False)
+        )
+        try:
+            job = self.manager.start_job(
+                sql="select 1 as value",
+                notebook_id="nb",
+                notebook_title="Notebook",
+                cell_id="cell-wait",
+                data_sources=["workspace.s3"],
+                touched_relations=["s3.test.sample.csv"],
+                touched_buckets=["test"],
+            )
+            waiting = wait_until(
+                lambda: self.manager.snapshot(job.job_id)
+                if self.manager.snapshot(job.job_id).progress_label == "Waiting for DuckDB access..."
+                else None,
+                timeout=5,
+            )
+            self.assertIsNotNone(waiting)
+            time.sleep(0.2)
+        finally:
+            self.manager._access_coordinator.release(QUERY_EXECUTION_DUCKDB_WRITE)
+
+        completed = wait_until(
+            lambda: self.manager.snapshot(job.job_id)
+            if self.manager.snapshot(job.job_id).status == "completed"
+            else None,
+            timeout=20,
+        )
+
+        self.assertIsNotNone(completed)
+        self.assertGreater(completed.timings.get("engineAccessWaitMs", 0), 0)
+        events = completed.progress_events
+        self.assertIn("engine_waiting", [event.get("event") for event in events])
+        waiting_events = [event for event in events if event.get("event") == "engine_waiting"]
+        self.assertTrue(waiting_events)
+        self.assertIn("duckdb_coordinator_active_write", waiting_events[-1])
+
+    def test_client_timing_ack_updates_terminal_payload_and_history_callback(self) -> None:
+        terminal_payloads: list[dict[str, object]] = []
+        manager = QueryJobManager(
+            settings=self.settings,
+            max_result_rows=self.settings.max_result_rows,
+            notebook_title_resolver=lambda _notebook_id: "Notebook",
+            metadata_refresher=lambda: None,
+            terminal_job_callback=terminal_payloads.append,
+        )
+        try:
+            job = manager.start_job(
+                sql="select 1 as value",
+                notebook_id="nb",
+                notebook_title="Notebook",
+                cell_id="cell-client",
+                data_sources=[],
+                client_pre_submit_ms=7.0,
+                backend_prepare_ms=2.0,
+            )
+            completed = wait_until(
+                lambda: manager.snapshot(job.job_id)
+                if manager.snapshot(job.job_id).status == "completed"
+                else None,
+                timeout=20,
+            )
+            self.assertIsNotNone(completed)
+
+            updated = manager.record_client_timing(job.job_id, client_total_ms=123.456)
+
+            self.assertEqual(updated.timings["clientTotalMs"], 123.456)
+            self.assertTrue(terminal_payloads)
+            self.assertEqual(terminal_payloads[-1]["timings"]["clientTotalMs"], 123.456)
+        finally:
+            manager.shutdown()
 
     def test_duckdb_read_queries_run_simultaneously_in_separate_processes(self) -> None:
         first = self.manager.start_job(

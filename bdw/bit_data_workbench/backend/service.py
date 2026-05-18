@@ -1290,13 +1290,54 @@ class WorkbenchService:
         cell_id: str = "",
         status: str = "",
         limit: int = 100,
+        live_only: bool = False,
     ) -> dict[str, object]:
-        return self._query_run_history.list_runs(
+        normalized_limit = max(1, min(500, int(limit or 100)))
+        live_runs = self._query_jobs.query_runs_payloads(
             notebook_id=notebook_id,
             cell_id=cell_id,
             status=status,
-            limit=limit,
+            live_only=True,
+            limit=normalized_limit,
         )
+        if live_only:
+            return {
+                "available": True,
+                "liveOnly": True,
+                "runs": live_runs[:normalized_limit],
+                "message": "No live query runs right now." if not live_runs else "",
+            }
+
+        history = self._query_run_history.list_runs(
+            notebook_id=notebook_id,
+            cell_id=cell_id,
+            status=status,
+            limit=normalized_limit,
+        )
+        history_runs = [
+            dict(run)
+            for run in (history.get("runs") or [])
+            if isinstance(run, dict)
+        ]
+        seen_job_ids = {str(run.get("jobId") or "") for run in live_runs}
+        combined_runs = live_runs + [
+            run for run in history_runs if str(run.get("jobId") or "") not in seen_job_ids
+        ]
+        combined_runs.sort(
+            key=lambda run: str(
+                run.get("completedAt")
+                or run.get("updatedAt")
+                or run.get("startedAt")
+                or ""
+            ),
+            reverse=True,
+        )
+        return {
+            **history,
+            "available": bool(history.get("available")) or bool(live_runs),
+            "liveOnly": False,
+            "runs": combined_runs[:normalized_limit],
+        }
 
     def query_run_detail(self, job_id: str) -> dict[str, object]:
         return self._query_run_history.get_run(job_id)
@@ -1362,7 +1403,9 @@ class WorkbenchService:
         data_sources: list[str] | None = None,
         local_relation_map: dict[str, str] | None = None,
         display_sql: str = "",
+        client_pre_submit_ms: float | None = None,
     ) -> dict[str, object]:
+        backend_prepare_started = time.perf_counter()
         user_sql = str(display_sql or sql or "")
         relation_index = self._query_source_relation_index(local_relation_map=local_relation_map)
         source_validation = self.validate_query_sources(
@@ -1379,6 +1422,7 @@ class WorkbenchService:
         execution_sql = self._rewrite_query_source_aliases(user_sql, relation_index, local_relation_map)
         query_analysis = self._analyze_query(user_sql, relation_index=relation_index)
         source_summaries = self._query_source_summaries(query_analysis.touched_relations)
+        backend_prepare_ms = (time.perf_counter() - backend_prepare_started) * 1000
         snapshot = self._query_jobs.start_job(
             sql=user_sql,
             execution_sql=execution_sql,
@@ -1389,6 +1433,8 @@ class WorkbenchService:
             touched_relations=query_analysis.touched_relations,
             touched_buckets=query_analysis.touched_buckets,
             source_summaries=source_summaries,
+            client_pre_submit_ms=client_pre_submit_ms,
+            backend_prepare_ms=backend_prepare_ms,
         )
         return snapshot.payload
 
@@ -1581,6 +1627,18 @@ class WorkbenchService:
 
     def cancel_query_job(self, job_id: str) -> dict[str, object]:
         snapshot = self._query_jobs.cancel_job(job_id)
+        return snapshot.payload
+
+    def record_query_client_timing(
+        self,
+        job_id: str,
+        *,
+        client_total_ms: float | None = None,
+    ) -> dict[str, object]:
+        snapshot = self._query_jobs.record_client_timing(
+            job_id,
+            client_total_ms=client_total_ms,
+        )
         return snapshot.payload
 
     def _record_query_run_history(self, job_payload: dict[str, object]) -> None:

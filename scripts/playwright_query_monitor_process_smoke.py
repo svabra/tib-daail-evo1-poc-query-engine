@@ -163,6 +163,8 @@ async def start_two_queries(page, cell_ids: list[str], timeout_ms: int) -> None:
             formData.set("cell_id", cell.dataset.cellId || "");
             formData.set("notebook_title", notebookTitle);
             formData.set("data_sources", "");
+            formData.set("clientRunStartedAt", String(Date.now()));
+            formData.set("clientPreSubmitMs", "0");
             const response = await fetch("/api/query-jobs", {
               method: "POST",
               body: formData,
@@ -226,6 +228,78 @@ async def wait_for_two_live_monitor_items(page, timeout_ms: int) -> list[int]:
           .slice(0, 2)
         """
     )
+
+
+async def assert_live_query_runs_page(browser, base_url: str, timeout_ms: int) -> None:
+    page = await browser.new_page(viewport={"width": 1280, "height": 900})
+    try:
+        await page.goto(
+            f"{base_url.rstrip('/')}/query-workbench/query-runs",
+            wait_until="domcontentloaded",
+            timeout=timeout_ms,
+        )
+        await page.locator("[data-query-runs-page]").wait_for(state="visible", timeout=timeout_ms)
+        await page.wait_for_function(
+            """
+            () => {
+              const root = document.querySelector("[data-query-runs-page]");
+              return root?.dataset.queryRunsLoaded === "true";
+            }
+            """,
+            timeout=timeout_ms,
+        )
+        await page.locator("[data-query-runs-toggle-live]").click(timeout=timeout_ms)
+        await page.wait_for_function(
+            """
+            () => {
+              const root = document.querySelector("[data-query-runs-page]");
+              const button = root?.querySelector("[data-query-runs-toggle-live]");
+              const text = root?.textContent || "";
+              return button instanceof HTMLButtonElement
+                && button.getAttribute("aria-pressed") === "true"
+                && root?.dataset.queryRunsLiveOnly === "true"
+                && !/Refreshing recorded query runs/i.test(text)
+                && (/live query run\\(s\\)/i.test(text) || /No live query runs right now/i.test(text));
+            }
+            """,
+            timeout=timeout_ms,
+        )
+        progress_state = await page.evaluate(
+            """
+            async () => {
+              const root = document.querySelector("[data-query-runs-page]");
+              const button = root?.querySelector("[data-query-run-progress-toggle]");
+              if (!(root instanceof HTMLElement)) {
+                throw new Error("Live Query Runs page is missing.");
+              }
+              if (!(button instanceof HTMLButtonElement)) {
+                return { noLiveRows: true };
+              }
+              const beforeExpanded = button.getAttribute("aria-expanded");
+              button.click();
+              await new Promise((resolve) => setTimeout(resolve, 200));
+              const row = root.querySelector(".query-run-history-progress-row");
+              const text = row?.textContent || "";
+              return {
+                beforeExpanded,
+                afterExpanded: root.querySelector("[data-query-run-progress-toggle]")?.getAttribute("aria-expanded"),
+                hasProgressRow: Boolean(row),
+                hasFriendlyTime: /\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2} (CET|CEST|UTC)/.test(text),
+                hasBackendPhase: /(queued|prepared|worker started|querying|progress)/i.test(text),
+              };
+            }
+            """
+        )
+        if progress_state.get("noLiveRows"):
+            return
+        if progress_state.get("beforeExpanded") != "false" or progress_state.get("afterExpanded") != "true":
+            raise RuntimeError(f"Live Query Runs progress toggle did not expand: {progress_state!r}.")
+        if not progress_state.get("hasProgressRow"):
+            raise RuntimeError(f"Live Query Runs progress row did not render: {progress_state!r}.")
+        if not progress_state.get("hasFriendlyTime") or not progress_state.get("hasBackendPhase"):
+            raise RuntimeError(f"Live Query Runs progress details were incomplete: {progress_state!r}.")
+    finally:
+        await page.close()
 
 
 async def assert_query_resource_chart_layout(
@@ -571,7 +645,20 @@ async def assert_query_run_history(page, timeout_ms: int, cell_ids: list[str]) -
           }
           return Array.isArray(payload.runs)
             && payload.runs.some((run) => run.status === "cancelled")
-            && payload.runs.some((run) => Array.isArray(run.resourceSamples) && run.resourceSamples.length > 0);
+            && payload.runs.some((run) => run.timings
+              && Number.isFinite(Number(run.timings.backendTotalMs))
+              && Number.isFinite(Number(run.timings.engineAccessWaitMs))
+              && Number.isFinite(Number(run.timings.workerStartupMs))
+              && Number.isFinite(Number(run.timings.engineQueryMs))
+              && Number.isFinite(Number(run.timings.resultFetchMs))
+            )
+            && payload.runs.some((run) => Array.isArray(run.resourceSamples) && run.resourceSamples.length > 0)
+            && payload.runs.some((run) =>
+              Array.isArray(run.progressEvents)
+              && run.progressEvents.some((event) =>
+                /\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2} (CET|CEST|UTC)/.test(event.displayTime || "")
+              )
+            );
         }
         """,
         timeout=timeout_ms,
@@ -665,9 +752,15 @@ async def assert_query_run_history(page, timeout_ms: int, cell_ids: list[str]) -
             && root.querySelector(".query-run-history-table")
             && root.querySelector(".query-run-history-row")
             && root.querySelector("[data-query-runs-toggle-charts]")
+            && root.querySelector("[data-query-run-progress-toggle]")
             && root.querySelector("[data-query-run-sql-toggle]")
             && /Start date/.test(text)
             && /End date/.test(text)
+            && /Progress/.test(text)
+            && /allocation/.test(text)
+            && /startup/.test(text)
+            && /query/.test(text)
+            && /fetch/.test(text)
             && /CPU avg/.test(text)
             && /RAM peak/.test(text)
             && !root.querySelector("[data-query-runs-refresh]")
@@ -677,6 +770,48 @@ async def assert_query_run_history(page, timeout_ms: int, cell_ids: list[str]) -
         arg=cell_ids,
         timeout=timeout_ms,
     )
+    progress_state = await page.evaluate(
+        """
+        async (cellIds) => {
+          const root = cellIds
+            .map((cellId) => document.querySelector(`[data-notebook-query-runs][data-query-runs-cell-id="${CSS.escape(cellId)}"]`))
+            .find((node) => node instanceof HTMLDetailsElement && node.open && node.querySelector("[data-query-run-progress-toggle]"));
+          const button = root?.querySelector("[data-query-run-progress-toggle]");
+          if (!(root instanceof HTMLElement) || !(button instanceof HTMLButtonElement)) {
+            throw new Error("Query Runs progress chevron is missing.");
+          }
+          const beforeExpanded = button.getAttribute("aria-expanded");
+          button.click();
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          const row = root.querySelector(".query-run-history-progress-row");
+          const text = row?.textContent || "";
+          return {
+            beforeExpanded,
+            afterExpanded: root.querySelector("[data-query-run-progress-toggle]")?.getAttribute("aria-expanded"),
+            hasProgressRow: Boolean(row),
+            hasFriendlyTime: /\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2} (CET|CEST|UTC)/.test(text),
+            hasBackendPhase: /(queued|prepared|worker started|querying|completed|cancelled|progress)/i.test(text),
+            hasTimingBreakdown: /total/.test(text)
+              && /prepare/.test(text)
+              && /allocation/.test(text)
+              && /startup/.test(text)
+              && /query/.test(text)
+              && /fetch/.test(text),
+          };
+        }
+        """,
+        cell_ids,
+    )
+    if progress_state.get("beforeExpanded") != "false" or progress_state.get("afterExpanded") != "true":
+        raise RuntimeError(f"Query Runs progress chevron did not expand: {progress_state!r}.")
+    if not progress_state.get("hasProgressRow"):
+        raise RuntimeError(f"Query Runs progress sub-row did not render: {progress_state!r}.")
+    if (
+        not progress_state.get("hasFriendlyTime")
+        or not progress_state.get("hasBackendPhase")
+        or not progress_state.get("hasTimingBreakdown")
+    ):
+        raise RuntimeError(f"Query Runs progress details were incomplete: {progress_state!r}.")
     sql_state = await page.evaluate(
         """
         async (cellIds) => {
@@ -812,6 +947,7 @@ async def run() -> None:
             await assert_resource_monitoring_ui(page, args.timeout_ms)
             await cancel_first_query_and_assert_visibility(page, args.timeout_ms)
             await assert_query_run_history(page, args.timeout_ms, cell_ids)
+            await assert_live_query_runs_page(browser, args.base_url, args.timeout_ms)
             print(f"Playwright query monitor process smoke passed for worker PIDs: {pids}.")
         finally:
             await cancel_remaining_queries(page)

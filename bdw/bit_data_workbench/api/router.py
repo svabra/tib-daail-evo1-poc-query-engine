@@ -144,6 +144,14 @@ class QueryExplainPayload(BaseModel):
     )
 
 
+class QueryJobClientTimingPayload(BaseModel):
+    client_total_ms: float | None = Field(
+        default=None,
+        validation_alias="clientTotalMs",
+        serialization_alias="clientTotalMs",
+    )
+
+
 class LocalWorkspaceQuerySourceDeletePayload(BaseModel):
     entry_id: str = Field(validation_alias="entryId", serialization_alias="entryId")
 
@@ -1150,6 +1158,7 @@ def query_runs_history(
     cell_id: str = Query("", alias="cellId"),
     status: str = Query(""),
     limit: int = Query(100, ge=1, le=500),
+    live_only: bool = Query(False, alias="liveOnly"),
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> JSONResponse:
     return JSONResponse(
@@ -1159,6 +1168,7 @@ def query_runs_history(
                 cell_id=cell_id,
                 status=status,
                 limit=limit,
+                live_only=live_only,
             )
         )
     )
@@ -1235,6 +1245,8 @@ def start_query_job(
     cell_id: str = Form(""),
     data_sources: str = Form(""),
     local_relations: str = Form(default="{}", alias="localRelations"),
+    client_run_started_at: str = Form("", alias="clientRunStartedAt"),
+    client_pre_submit_ms: float | None = Form(default=None, alias="clientPreSubmitMs"),
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> JSONResponse:
     try:
@@ -1257,9 +1269,27 @@ def start_query_job(
                 if str(key).strip() and str(value).strip()
             },
             display_sql=display_sql,
+            client_pre_submit_ms=client_pre_submit_ms,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(snapshot))
+
+
+@router.post("/api/query-jobs/{job_id}/client-timing")
+def record_query_job_client_timing(
+    job_id: str,
+    payload: QueryJobClientTimingPayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        snapshot = service.record_query_client_timing(
+            job_id,
+            client_total_ms=payload.client_total_ms,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return JSONResponse(jsonable_encoder(snapshot))
 

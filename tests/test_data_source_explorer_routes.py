@@ -311,6 +311,25 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
             body,
         )
 
+    def test_home_partial_renders_query_workbench_shortcuts(self) -> None:
+        response = index(
+            request=build_request("/", partial=True),
+            service=FakeWorkbenchService(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.body.decode("utf-8")
+        self.assertIn('data-home-query-workbench-entry', body)
+        self.assertIn('data-home-query-shortcut="create-notebook"', body)
+        self.assertIn('data-create-notebook', body)
+        self.assertIn('data-home-query-shortcut="continue-last"', body)
+        self.assertIn('data-home-continue-last-notebook', body)
+        self.assertIn('data-home-query-shortcut="query-monitoring"', body)
+        self.assertIn('data-open-query-runs', body)
+        self.assertIn("Create new notebook", body)
+        self.assertIn("Continue with last notebook", body)
+        self.assertIn("Open Query Monitoring", body)
+
     def test_management_page_uses_standalone_url_and_explorer_launcher(self) -> None:
         response = query_workbench_data_sources(
             request=build_request("/data-sources", partial=True),
@@ -433,6 +452,8 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
         body = response.body.decode("utf-8")
         self.assertIn('data-query-runs-page', body)
         self.assertIn('data-query-runs-list', body)
+        self.assertIn('data-query-runs-toggle-live', body)
+        self.assertIn('Live Queries only', body)
         self.assertIn('data-query-runs-toggle-charts', body)
         self.assertIn('Show resource charts', body)
         self.assertNotIn('data-query-runs-refresh', body)

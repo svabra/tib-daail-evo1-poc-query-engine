@@ -68,6 +68,46 @@ export function createHomeUi(helpers) {
     root.innerHTML = entries.map((entry) => notebookActivityMarkup(entry)).join("");
   }
 
+  function updateQueryWorkbenchShortcuts() {
+    const continueShortcut = document.querySelector("[data-home-continue-last-notebook]");
+    if (!continueShortcut) {
+      return;
+    }
+
+    const latestNotebook = recentNotebookActivityEntries(1)[0] || null;
+    const latestCopy = continueShortcut.querySelector("[data-home-continue-last-copy]");
+    const latestTooltip = continueShortcut.querySelector("[data-home-continue-last-tooltip]");
+    if (!latestNotebook) {
+      delete continueShortcut.dataset.openQueryWorkbench;
+      delete continueShortcut.dataset.openRecentNotebook;
+      continueShortcut.classList.add("is-disabled");
+      continueShortcut.setAttribute("aria-disabled", "true");
+      continueShortcut.title = "No recent notebook is available in this browser yet.";
+      if (latestCopy) {
+        latestCopy.textContent = "No recent notebook";
+      }
+      if (latestTooltip) {
+        latestTooltip.textContent = "No recent notebook is available in this browser yet.";
+      }
+      return;
+    }
+
+    const notebookTitle = latestNotebook.title || "Notebook";
+    continueShortcut.dataset.openQueryWorkbench = "";
+    continueShortcut.dataset.openRecentNotebook = latestNotebook.notebookId;
+    continueShortcut.classList.remove("is-disabled");
+    continueShortcut.setAttribute("aria-disabled", "false");
+    continueShortcut.title = `Continue with ${notebookTitle}.`;
+    if (latestCopy) {
+      latestCopy.textContent = notebookTitle;
+    }
+    if (latestTooltip) {
+      latestTooltip.textContent = `Open ${notebookTitle}, last touched ${formatRelativeTimestamp(
+        latestNotebook.touchedAt
+      )}.`;
+    }
+  }
+
   function ingestionActivityMarkup(job) {
     return `
       <button
@@ -88,6 +128,7 @@ export function createHomeUi(helpers) {
 
   function renderHomePage() {
     renderRecentNotebooks(homeRecentNotebooksRoot(), { limit: 3 });
+    updateQueryWorkbenchShortcuts();
 
     if (!homePageRoot()) {
       return;

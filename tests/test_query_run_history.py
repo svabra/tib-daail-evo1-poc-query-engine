@@ -17,7 +17,12 @@ if str(BDW_ROOT) not in sys.path:
 
 from bit_data_workbench.backend import query_run_history  # noqa: E402
 from bit_data_workbench.backend.query_run_history import QueryRunHistoryStore  # noqa: E402
-from bit_data_workbench.api.router import query_run_detail, query_runs_history  # noqa: E402
+from bit_data_workbench.api.router import (  # noqa: E402
+    QueryJobClientTimingPayload,
+    query_run_detail,
+    query_runs_history,
+    record_query_job_client_timing,
+)
 from bit_data_workbench.config import Settings  # noqa: E402
 from bit_data_workbench.version_info import current_repo_version  # noqa: E402
 
@@ -121,7 +126,25 @@ class QueryRunHistoryStoreTests(unittest.TestCase):
                 "memoryRssBytes": 1024,
                 "averageMemoryRssBytes": 900,
                 "peakMemoryRssBytes": 2048,
+                "timings": {
+                    "clientTotalMs": 250.0,
+                    "backendPrepareMs": 4.0,
+                    "engineAccessWaitMs": 1.0,
+                    "workerStartupMs": 20.0,
+                    "engineQueryMs": 100.0,
+                    "resultFetchMs": 10.0,
+                    "backendTotalMs": 180.0,
+                },
                 "resourceSamples": [{"elapsedMs": 2000, "cpuPercent": 12.0}],
+                "progressEvents": [
+                    {
+                        "occurredAt": "2026-05-13T10:00:00Z",
+                        "displayTime": "2026-05-13 12:00:00 CEST",
+                        "event": "completed",
+                        "message": "1 row(s) shown.",
+                        "duckdbProfile": {"duckdb_rows_returned": 1},
+                    }
+                ],
             }
         )
 
@@ -131,6 +154,10 @@ class QueryRunHistoryStoreTests(unittest.TestCase):
         self.assertNotIn("rows", payload)
         self.assertNotIn("columns", payload)
         self.assertEqual(payload["metrics"]["averageCpuPercent"], 8.0)
+        self.assertEqual(payload["timings"]["clientTotalMs"], 250.0)
+        self.assertEqual(payload["timings"]["engineQueryMs"], 100.0)
+        self.assertEqual(payload["progressEvents"][0]["event"], "completed")
+        self.assertEqual(payload["progressEvents"][0]["duckdbProfile"]["duckdb_rows_returned"], 1)
 
     def test_lists_failed_and_cancelled_runs_with_filters(self) -> None:
         self.store.record(
@@ -164,9 +191,14 @@ class QueryRunHistoryStoreTests(unittest.TestCase):
 class QueryRunHistoryApiTests(unittest.TestCase):
     def test_query_runs_api_returns_history_payload(self) -> None:
         class FakeService:
-            def query_runs_history(self, *, notebook_id="", cell_id="", status="", limit=100):
+            def __init__(self) -> None:
+                self.live_only = None
+
+            def query_runs_history(self, *, notebook_id="", cell_id="", status="", limit=100, live_only=False):
+                self.live_only = live_only
                 return {
                     "available": True,
+                    "liveOnly": live_only,
                     "runs": [
                         {
                             "jobId": "query-1",
@@ -177,17 +209,21 @@ class QueryRunHistoryApiTests(unittest.TestCase):
                     ],
                 }
 
+        service = FakeService()
         response = query_runs_history(
             notebook_id="nb",
             cell_id="cell",
             status="completed",
             limit=10,
-            service=FakeService(),
+            live_only=True,
+            service=service,
         )
 
         payload = json.loads(response.body.decode("utf-8"))
         self.assertEqual(payload["runs"][0]["jobId"], "query-1")
         self.assertEqual(payload["runs"][0]["status"], "completed")
+        self.assertTrue(payload["liveOnly"])
+        self.assertTrue(service.live_only)
 
     def test_query_run_detail_api_returns_single_record(self) -> None:
         class FakeService:
@@ -199,6 +235,30 @@ class QueryRunHistoryApiTests(unittest.TestCase):
         payload = json.loads(response.body.decode("utf-8"))
         self.assertEqual(payload["jobId"], "query-2")
         self.assertEqual(payload["status"], "cancelled")
+
+    def test_client_timing_api_updates_query_job(self) -> None:
+        class FakeService:
+            def __init__(self) -> None:
+                self.client_total_ms = None
+
+            def record_query_client_timing(self, job_id, *, client_total_ms=None):
+                self.client_total_ms = client_total_ms
+                return {
+                    "jobId": job_id,
+                    "status": "completed",
+                    "timings": {"clientTotalMs": client_total_ms},
+                }
+
+        service = FakeService()
+        response = record_query_job_client_timing(
+            "query-3",
+            payload=QueryJobClientTimingPayload(clientTotalMs=432.1),
+            service=service,
+        )
+
+        payload = json.loads(response.body.decode("utf-8"))
+        self.assertEqual(service.client_total_ms, 432.1)
+        self.assertEqual(payload["timings"]["clientTotalMs"], 432.1)
 
 
 if __name__ == "__main__":

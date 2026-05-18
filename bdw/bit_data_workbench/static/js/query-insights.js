@@ -194,6 +194,41 @@ export function createQueryInsights({
   }
 
   function buildQueryJobTimingInsight(job) {
+    const timings = job?.timings && typeof job.timings === "object" ? job.timings : {};
+    const timingValue = (key) => {
+      const numeric = Number(timings[key]);
+      return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+    };
+    const backendTotalMs = timingValue("backendTotalMs");
+    const clientTotalMs = timingValue("clientTotalMs");
+    const totalMs =
+      clientTotalMs ??
+      backendTotalMs ??
+      (Number.isFinite(Number(job?.durationMs)) && Number(job.durationMs) >= 0 ? Number(job.durationMs) : null);
+    const deliveryMs =
+      clientTotalMs !== null && backendTotalMs !== null
+        ? Math.max(0, clientTotalMs - backendTotalMs)
+        : null;
+    const parts = [
+      ["total", totalMs],
+      ["prepare", timingValue("backendPrepareMs")],
+      ["allocation", timingValue("engineAccessWaitMs")],
+      ["startup", timingValue("workerStartupMs")],
+      ["query", timingValue("engineQueryMs")],
+      ["fetch", timingValue("resultFetchMs") ?? (Number.isFinite(Number(job?.fetchMs)) ? Number(job.fetchMs) : null)],
+      ["delivery", deliveryMs],
+    ].filter(([, value]) => value !== null && Number.isFinite(value));
+
+    if (parts.length) {
+      return {
+        label: "timing",
+        value: parts.map(([label, value]) => `${label} ${formatQueryDuration(value)}`).join(" | "),
+        tone: "neutral",
+        title:
+          "Breaks the run into browser delivery, backend preparation, engine allocation, worker startup, query execution, and row fetching.",
+      };
+    }
+
     const firstRowMs = Number(job?.firstRowMs);
     if (!Number.isFinite(firstRowMs) || firstRowMs < 0) {
       return null;

@@ -30,21 +30,97 @@
       </p>
     </div>
     <div class="home-workbench-grid">
-      <a
-        href="/query-workbench"
-        class="home-workbench-card home-workbench-card-featured"
-        data-open-query-workbench
+      <section
+        class="home-workbench-card home-workbench-card-featured home-query-workbench-card"
+        aria-labelledby="home-query-workbench-title"
       >
-        <span class="home-workbench-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24">
-            <rect x="3.2" y="4.2" width="17.6" height="15.6" rx="2"></rect>
-            <path d="M4.7 9h14.6"></path>
-            <path d="M8.4 13.3 10.8 15.7 16 10.5"></path>
-          </svg>
-        </span>
-        <span class="home-workbench-title">Query Workbench</span>
-        <span class="home-workbench-copy">Open notebooks, run SQL, and compare execution behavior.</span>
-      </a>
+        <a
+          href="/query-workbench"
+          class="home-query-workbench-main"
+          data-open-query-workbench
+          data-home-query-workbench-entry
+          title="Open the Query Workbench notebook browser."
+        >
+          <span class="home-workbench-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <rect x="3.2" y="4.2" width="17.6" height="15.6" rx="2"></rect>
+              <path d="M4.7 9h14.6"></path>
+              <path d="M8.4 13.3 10.8 15.7 16 10.5"></path>
+            </svg>
+          </span>
+          <span class="home-workbench-title" id="home-query-workbench-title">Query Workbench</span>
+          <span class="home-workbench-copy">Open notebooks, run SQL, and compare execution behavior.</span>
+        </a>
+        <div class="home-query-shortcut-grid" aria-label="Query Workbench shortcuts">
+          <button
+            type="button"
+            class="home-query-shortcut-tile"
+            data-create-notebook
+            data-home-query-shortcut="create-notebook"
+            title="Create a notebook with one empty SQL cell."
+            aria-label="Create new notebook"
+          >
+            <span class="home-query-shortcut-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M6 4.2h7.9l4.1 4.1v11.5H6z"></path>
+                <path d="M13.9 4.2v4.1H18"></path>
+                <path d="M12 10.2v6.2"></path>
+                <path d="M8.9 13.3h6.2"></path>
+              </svg>
+            </span>
+            <span class="home-query-shortcut-title">Create new notebook</span>
+            <span class="home-query-shortcut-tooltip" role="tooltip">
+              Create a notebook with one empty SQL cell.
+            </span>
+          </button>
+          <button
+            type="button"
+            class="home-query-shortcut-tile is-disabled"
+            data-home-continue-last-notebook
+            data-home-query-shortcut="continue-last"
+            title="No recent notebook is available in this browser yet."
+            aria-label="Continue with the last notebook"
+            aria-disabled="true"
+          >
+            <span class="home-query-shortcut-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M5.2 5.1h13.6v13.8H5.2z"></path>
+                <path d="M8.2 9.1h7.6"></path>
+                <path d="M8.2 12.4h5.6"></path>
+                <path d="M15.1 14.5l2.4 2.2 3.2-4.2"></path>
+              </svg>
+            </span>
+            <span class="home-query-shortcut-title">Continue with last notebook</span>
+            <span class="home-query-shortcut-meta" data-home-continue-last-copy>No recent notebook</span>
+            <span class="home-query-shortcut-tooltip" role="tooltip" data-home-continue-last-tooltip>
+              No recent notebook is available in this browser yet.
+            </span>
+          </button>
+          <a
+            href="/query-workbench/query-runs"
+            class="home-query-shortcut-tile"
+            data-open-query-runs
+            data-home-query-shortcut="query-monitoring"
+            title="Open query monitoring and recorded query runs."
+            aria-label="Open Query Monitoring"
+          >
+            <span class="home-query-shortcut-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M4 5.2h16"></path>
+                <path d="M4 11.2h16"></path>
+                <path d="M4 17.2h16"></path>
+                <path d="M7.2 3.7v3"></path>
+                <path d="M11.8 9.7v3"></path>
+                <path d="M16.5 15.7v3"></path>
+              </svg>
+            </span>
+            <span class="home-query-shortcut-title">Open Query Monitoring</span>
+            <span class="home-query-shortcut-tooltip" role="tooltip">
+              Review running, completed, failed, and cancelled query executions.
+            </span>
+          </a>
+        </div>
+      </section>
       <a
         href="/data-products"
         class="home-workbench-card home-workbench-card-featured"

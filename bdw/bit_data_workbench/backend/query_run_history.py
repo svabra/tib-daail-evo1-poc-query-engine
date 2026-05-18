@@ -71,6 +71,11 @@ def _compact_query_job_payload(job: dict[str, Any]) -> dict[str, Any]:
         "updatedAt": job.get("updatedAt"),
         "completedAt": job.get("completedAt"),
         "durationMs": job.get("durationMs"),
+        "timings": {
+            str(key): float(value)
+            for key, value in (job.get("timings") or {}).items()
+            if isinstance(value, (int, float))
+        },
         "progressLabel": job.get("progressLabel"),
         "message": job.get("message"),
         "error": job.get("error"),
@@ -88,6 +93,7 @@ def _compact_query_job_payload(job: dict[str, Any]) -> dict[str, Any]:
         "workerExitCode": job.get("workerExitCode"),
         "metrics": metrics,
         "resourceSamples": list(job.get("resourceSamples") or []),
+        "progressEvents": list(job.get("progressEvents") or []),
     }
 
 

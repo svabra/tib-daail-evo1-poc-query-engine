@@ -593,6 +593,7 @@ class QueryJobDefinition:
     truncated: bool = False
     first_row_ms: float | None = None
     fetch_ms: float | None = None
+    timings: dict[str, float] = field(default_factory=dict)
     data_sources: list[str] = field(default_factory=list)
     source_types: list[str] = field(default_factory=list)
     touched_relations: list[str] = field(default_factory=list)
@@ -610,6 +611,7 @@ class QueryJobDefinition:
     cancellation_phase: str | None = None
     cancellation_requested_at: str | None = None
     worker_exit_code: int | None = None
+    progress_events: list[dict[str, Any]] = field(default_factory=list)
     can_cancel: bool = False
 
     @property
@@ -636,6 +638,11 @@ class QueryJobDefinition:
             "truncated": self.truncated,
             "firstRowMs": self.first_row_ms,
             "fetchMs": self.fetch_ms,
+            "timings": {
+                str(key): float(value)
+                for key, value in self.timings.items()
+                if isinstance(value, (int, float))
+            },
             "dataSources": list(self.data_sources),
             "sourceTypes": list(self.source_types),
             "touchedRelations": list(self.touched_relations),
@@ -653,6 +660,7 @@ class QueryJobDefinition:
             "cancellationPhase": self.cancellation_phase,
             "cancellationRequestedAt": self.cancellation_requested_at,
             "workerExitCode": self.worker_exit_code,
+            "progressEvents": [dict(event) for event in self.progress_events],
             "canCancel": self.can_cancel,
         }
 

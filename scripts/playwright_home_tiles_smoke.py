@@ -44,9 +44,25 @@ async def main() -> None:
         )
         page.on("request", lambda request: requests.append(f"{request.method} {request.url}"))
         try:
+            await open_home(page)
+            shortcut_count = await page.locator("[data-home-query-shortcut]").count()
+            if shortcut_count != 3:
+                raise RuntimeError(f"Expected 3 Query Workbench shortcuts, found {shortcut_count}.")
+            await page.locator("[data-home-query-shortcut='create-notebook']").wait_for(
+                state="visible",
+                timeout=args.timeout_ms,
+            )
+            await page.locator("[data-home-query-shortcut='continue-last']").wait_for(
+                state="visible",
+                timeout=args.timeout_ms,
+            )
+            await page.locator("[data-home-query-shortcut='query-monitoring']").wait_for(
+                state="visible",
+                timeout=args.timeout_ms,
+            )
             await click_tile_and_wait(
                 page,
-                ".home-workbench-card[data-open-query-workbench]",
+                "[data-home-query-workbench-entry]",
                 "[data-query-workbench-entry-page]",
                 {"/query-workbench"},
             )

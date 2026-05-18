@@ -37,11 +37,13 @@ QUERY_PROGRESS_POLL_SECONDS = 0.35
 QUERY_PARENT_POLL_SECONDS = 0.1
 QUERY_METRICS_SAMPLE_SECONDS = 1.0
 MAX_QUERY_RESOURCE_SAMPLES = 180
+MAX_QUERY_PROGRESS_EVENTS = 160
 QUERY_INTERRUPT_GRACE_SECONDS = 1.5
 QUERY_TERMINATE_GRACE_SECONDS = 1.5
 QUERY_LOG_MAX_LIST_ITEMS = 5
 QUERY_LOG_MAX_TEXT_CHARS = 320
 QUERY_LOG_MAX_ERROR_CHARS = 500
+QUERY_DUCKDB_PROFILE_MAX_OPERATORS = 8
 
 QUERY_EXECUTION_DUCKDB_READ = "duckdb-read"
 QUERY_EXECUTION_DUCKDB_WRITE = "duckdb-write"
@@ -90,6 +92,10 @@ def _query_log_timestamp(timezone_name: str) -> str:
     return datetime.now(UTC).astimezone(timezone).strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
+def _utc_now_z() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
 def _truncate_log_text(value: object, max_chars: int = QUERY_LOG_MAX_TEXT_CHARS) -> str:
     text = str(value or "").replace("\r", " ").replace("\n", " ").strip()
     if len(text) <= max_chars:
@@ -133,6 +139,16 @@ def _format_query_log_fields(fields: dict[str, object]) -> str:
         for key, value in fields.items()
         if value not in (None, "", [], {})
     )
+
+
+def _safe_timing_ms(value: object) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric < 0:
+        return None
+    return round(numeric, 3)
 
 
 def _capped_log_list(values: list[object]) -> tuple[list[object], int]:
@@ -365,6 +381,86 @@ def _profile_int(payload: dict[str, Any], key: str) -> int | None:
         return None
 
 
+def _profile_node_float_ms(payload: dict[str, Any], key: str) -> float | None:
+    value = payload.get(key)
+    if value is None:
+        return None
+    try:
+        return round(float(value) * 1000, 3)
+    except (TypeError, ValueError):
+        return None
+
+
+def _walk_duckdb_profile_operators(payload: dict[str, Any]) -> list[dict[str, object]]:
+    operators: list[dict[str, object]] = []
+
+    def visit(node: object) -> None:
+        if not isinstance(node, dict):
+            return
+        operator_name = str(node.get("operator_name") or "").strip()
+        operator_type = str(node.get("operator_type") or "").strip()
+        if operator_name or operator_type:
+            operator: dict[str, object] = {
+                "name": _truncate_log_text(operator_name or operator_type, 80),
+                "type": _truncate_log_text(operator_type or operator_name, 80),
+            }
+            timing_ms = _profile_node_float_ms(node, "operator_timing")
+            cpu_ms = _profile_node_float_ms(node, "cpu_time")
+            rows_scanned = _profile_int(node, "operator_rows_scanned")
+            cardinality = _profile_int(node, "operator_cardinality")
+            cumulative_cardinality = _profile_int(node, "cumulative_cardinality")
+            result_set_size = _profile_int(node, "result_set_size")
+            bytes_read = _profile_int(node, "total_bytes_read")
+            bytes_written = _profile_int(node, "total_bytes_written")
+            if timing_ms is not None:
+                operator["time_ms"] = timing_ms
+            if cpu_ms is not None:
+                operator["cpu_ms"] = cpu_ms
+            if rows_scanned is not None:
+                operator["rows_scanned"] = rows_scanned
+            if cardinality is not None:
+                operator["cardinality"] = cardinality
+            if cumulative_cardinality is not None:
+                operator["cumulative_cardinality"] = cumulative_cardinality
+            if result_set_size is not None:
+                operator["result_set_bytes"] = result_set_size
+            if bytes_read is not None:
+                operator["bytes_read"] = bytes_read
+            if bytes_written is not None:
+                operator["bytes_written"] = bytes_written
+            operators.append(operator)
+        for child in node.get("children") or []:
+            visit(child)
+
+    for child in payload.get("children") or []:
+        visit(child)
+    return operators
+
+
+def _duckdb_profile_operator_summary(payload: dict[str, Any]) -> dict[str, object]:
+    operators = _walk_duckdb_profile_operators(payload)
+    if not operators:
+        return {}
+
+    operator_types = sorted(
+        {
+            str(operator.get("type") or operator.get("name") or "").strip()
+            for operator in operators
+            if str(operator.get("type") or operator.get("name") or "").strip()
+        }
+    )
+    top_operators = sorted(
+        operators,
+        key=lambda operator: float(operator.get("time_ms") or operator.get("cpu_ms") or 0.0),
+        reverse=True,
+    )[:QUERY_DUCKDB_PROFILE_MAX_OPERATORS]
+    return {
+        "duckdb_operator_count": len(operators),
+        "duckdb_operator_types": operator_types[:QUERY_DUCKDB_PROFILE_MAX_OPERATORS],
+        "duckdb_top_operators": top_operators,
+    }
+
+
 def _read_duckdb_profile_summary(profile_path: Path | None) -> dict[str, object]:
     if profile_path is None:
         return {}
@@ -377,14 +473,19 @@ def _read_duckdb_profile_summary(profile_path: Path | None) -> dict[str, object]
         summary = {
             "duckdb_latency_ms": _profile_float_ms(payload, "latency"),
             "duckdb_cpu_ms": _profile_float_ms(payload, "cpu_time"),
+            "duckdb_blocked_thread_ms": _profile_float_ms(payload, "blocked_thread_time"),
             "duckdb_rows_returned": _profile_int(payload, "rows_returned"),
             "duckdb_rows_scanned": _profile_int(payload, "cumulative_rows_scanned"),
+            "duckdb_cumulative_cardinality": _profile_int(payload, "cumulative_cardinality"),
+            "duckdb_result_set_bytes": _profile_int(payload, "result_set_size"),
             "duckdb_bytes_read": _profile_int(payload, "total_bytes_read"),
             "duckdb_bytes_written": _profile_int(payload, "total_bytes_written"),
             "duckdb_peak_buffer_memory_bytes": _profile_int(payload, "system_peak_buffer_memory"),
             "duckdb_peak_temp_dir_bytes": _profile_int(payload, "system_peak_temp_dir_size"),
         }
-        return {key: value for key, value in summary.items() if value is not None}
+        compact_summary = {key: value for key, value in summary.items() if value is not None}
+        compact_summary.update(_duckdb_profile_operator_summary(payload))
+        return compact_summary
     except Exception:
         return {}
     finally:
@@ -416,11 +517,13 @@ def _execute_postgres_native_query(
     max_result_rows: int,
     event_queue: Any,
     started: float,
-) -> tuple[QueryResult, float | None]:
+) -> tuple[QueryResult, float | None, float, float]:
     first_row_ms: float | None = None
     with connection.cursor() as cursor:
+        query_started = time.perf_counter()
         cursor.execute(sql)
         columns = [column.name for column in (cursor.description or [])]
+        engine_query_ms = (time.perf_counter() - query_started) * 1000
         _put_worker_event(
             event_queue,
             {
@@ -428,6 +531,7 @@ def _execute_postgres_native_query(
                 "columns": columns,
                 "progressLabel": "Fetching rows..." if columns else "Finalizing...",
                 "message": "Query is fetching rows..." if columns else "Statement executed successfully.",
+                "timings": {"engineQueryMs": engine_query_ms},
             },
         )
 
@@ -435,6 +539,7 @@ def _execute_postgres_native_query(
         truncated = False
         row_count = 0
         message = "Statement executed successfully."
+        fetch_started = time.perf_counter()
 
         if columns:
             batch_size = max(1, min(25, max_result_rows))
@@ -465,6 +570,7 @@ def _execute_postgres_native_query(
                 )
                 if truncated:
                     break
+        result_fetch_ms = (time.perf_counter() - fetch_started) * 1000 if columns else 0.0
 
     return (
         QueryResult(
@@ -476,6 +582,8 @@ def _execute_postgres_native_query(
             message=message,
         ),
         first_row_ms,
+        engine_query_ms,
+        result_fetch_ms,
     )
 
 
@@ -486,10 +594,12 @@ def _execute_duckdb_query(
     max_result_rows: int,
     event_queue: Any,
     started: float,
-) -> tuple[QueryResult, float | None]:
+) -> tuple[QueryResult, float | None, float, float]:
     first_row_ms: float | None = None
+    query_started = time.perf_counter()
     cursor = connection.execute(sql)
     columns = [column[0] for column in cursor.description] if cursor.description else []
+    engine_query_ms = (time.perf_counter() - query_started) * 1000
     _put_worker_event(
         event_queue,
         {
@@ -497,6 +607,7 @@ def _execute_duckdb_query(
             "columns": columns,
             "progressLabel": "Fetching rows..." if columns else "Finalizing...",
             "message": "Query is streaming rows..." if columns else "Statement executed successfully.",
+            "timings": {"engineQueryMs": engine_query_ms},
         },
     )
 
@@ -504,6 +615,7 @@ def _execute_duckdb_query(
     truncated = False
     row_count = 0
     message = "Statement executed successfully."
+    fetch_started = time.perf_counter()
 
     if columns:
         batch_size = max(1, min(25, max_result_rows))
@@ -534,6 +646,7 @@ def _execute_duckdb_query(
             )
             if truncated:
                 break
+    result_fetch_ms = (time.perf_counter() - fetch_started) * 1000 if columns else 0.0
 
     return (
         QueryResult(
@@ -545,6 +658,8 @@ def _execute_duckdb_query(
             message=message,
         ),
         first_row_ms,
+        engine_query_ms,
+        result_fetch_ms,
     )
 
 
@@ -562,6 +677,8 @@ def _query_worker_entry(
     connection: Any = None
     execution_result: QueryResult | None = None
     first_row_ms: float | None = None
+    engine_query_ms: float = 0.0
+    result_fetch_ms: float = 0.0
     execution_error: Exception | None = None
     duckdb_profile_path: Path | None = None
 
@@ -601,10 +718,24 @@ def _query_worker_entry(
         )
 
         def execute_query() -> None:
-            nonlocal execution_result, first_row_ms, execution_error
+            nonlocal execution_result, first_row_ms, engine_query_ms, result_fetch_ms, execution_error
             try:
                 if execution_mode == QUERY_EXECUTION_POSTGRES_NATIVE:
-                    execution_result, first_row_ms = _execute_postgres_native_query(
+                    _put_worker_event(
+                        event_queue,
+                        {
+                            "type": "phase",
+                            "phase": "querying",
+                            "progressLabel": "Querying...",
+                            "message": "PostgreSQL is executing the statement.",
+                        },
+                    )
+                    (
+                        execution_result,
+                        first_row_ms,
+                        engine_query_ms,
+                        result_fetch_ms,
+                    ) = _execute_postgres_native_query(
                         connection=connection,
                         sql=sql,
                         max_result_rows=max_result_rows,
@@ -612,7 +743,21 @@ def _query_worker_entry(
                         started=started,
                     )
                 else:
-                    execution_result, first_row_ms = _execute_duckdb_query(
+                    _put_worker_event(
+                        event_queue,
+                        {
+                            "type": "phase",
+                            "phase": "querying",
+                            "progressLabel": "Querying...",
+                            "message": "DuckDB is planning and executing the statement.",
+                        },
+                    )
+                    (
+                        execution_result,
+                        first_row_ms,
+                        engine_query_ms,
+                        result_fetch_ms,
+                    ) = _execute_duckdb_query(
                         connection=connection,
                         sql=sql,
                         max_result_rows=max_result_rows,
@@ -657,6 +802,17 @@ def _query_worker_entry(
             progress_label = "Cancelling..." if cancel_event.is_set() else "Running..."
             if progress is not None and not cancel_event.is_set():
                 progress_label = f"Running... {progress * 100:.0f}%"
+            duckdb_progress = (
+                {
+                    "available": True,
+                    "fraction": progress,
+                    "percent": round(progress * 100, 1),
+                }
+                if progress is not None
+                else {"available": False}
+                if execution_mode != QUERY_EXECUTION_POSTGRES_NATIVE
+                else {}
+            )
             _put_worker_event(
                 event_queue,
                 {
@@ -664,6 +820,7 @@ def _query_worker_entry(
                     "durationMs": duration_ms,
                     "progress": progress,
                     "progressLabel": progress_label,
+                    "duckdbProgress": duckdb_progress,
                 },
             )
             time.sleep(QUERY_PROGRESS_POLL_SECONDS)
@@ -732,6 +889,10 @@ def _query_worker_entry(
                 "truncated": execution_result.truncated,
                 "firstRowMs": first_row_ms,
                 "fetchMs": max(0.0, duration_ms - first_row_ms) if first_row_ms is not None else None,
+                "timings": {
+                    "engineQueryMs": engine_query_ms,
+                    "resultFetchMs": result_fetch_ms,
+                },
             },
             duckdb_profile_summary,
         )
@@ -806,6 +967,14 @@ class DuckDBQueryAccessCoordinator:
                 self._active_write = False
             self._condition.notify_all()
 
+    def state(self) -> dict[str, object]:
+        with self._condition:
+            return {
+                "active_reads": self._active_reads,
+                "active_write": self._active_write,
+                "waiting_writes": self._waiting_writes,
+            }
+
 
 @dataclass(slots=True)
 class QueryJobRecord:
@@ -824,6 +993,7 @@ class QueryJobRecord:
     event_queue: Any | None = None
     thread: threading.Thread | None = None
     process_metrics: Any | None = None
+    process_start_monotonic: float = 0.0
     cpu_percent_initialized: bool = False
     last_metric_sample_monotonic: float = 0.0
     cpu_sample_total: float = 0.0
@@ -834,6 +1004,7 @@ class QueryJobRecord:
     access_acquired: bool = False
     last_log_heartbeat_monotonic: float = 0.0
     logged_events: set[str] = field(default_factory=set)
+    latest_duckdb_progress: dict[str, object] = field(default_factory=dict)
 
 
 class QueryJobManager:
@@ -875,6 +1046,8 @@ class QueryJobManager:
         touched_relations: list[str] | None = None,
         touched_buckets: list[str] | None = None,
         source_summaries: list[dict[str, object]] | None = None,
+        client_pre_submit_ms: float | None = None,
+        backend_prepare_ms: float | None = None,
     ) -> QueryJobDefinition:
         normalized_sql = sql.strip()
         if not normalized_sql:
@@ -887,6 +1060,14 @@ class QueryJobManager:
         now = utc_now_iso()
         resolved_title = notebook_title.strip() or self._notebook_title_resolver(notebook_id) or "Notebook"
         backend_name = "PostgreSQL Native" if execution_mode == QUERY_EXECUTION_POSTGRES_NATIVE else "VMTP DUCKDB"
+        timings: dict[str, float] = {}
+        for key, value in (
+            ("clientPreSubmitMs", client_pre_submit_ms),
+            ("backendPrepareMs", backend_prepare_ms),
+        ):
+            timing = _safe_timing_ms(value)
+            if timing is not None:
+                timings[key] = timing
         snapshot = QueryJobDefinition(
             job_id=f"query-{uuid.uuid4().hex}",
             notebook_id=notebook_id.strip(),
@@ -905,6 +1086,7 @@ class QueryJobManager:
             touched_buckets=[str(value).strip() for value in (touched_buckets or []) if str(value).strip()],
             backend_name=backend_name,
             execution_mode=execution_mode,
+            timings=timings,
             can_cancel=True,
         )
 
@@ -932,6 +1114,7 @@ class QueryJobManager:
             self._touch_locked()
 
         self._log_query_job_event(snapshot.job_id, "queued")
+        self._log_query_job_event(snapshot.job_id, "backend_prepared")
         self._log_query_job_event(snapshot.job_id, "prepared")
 
         worker = threading.Thread(
@@ -972,7 +1155,6 @@ class QueryJobManager:
                 record.snapshot.cancellation_requested_at = completed_at
                 record.snapshot.can_cancel = False
                 self._touch_locked()
-                terminal_payload = record.snapshot.payload
                 queued_cancel_snapshot = record.snapshot
             else:
                 record.snapshot.updated_at = utc_now_iso()
@@ -984,11 +1166,15 @@ class QueryJobManager:
                 self._touch_locked()
 
         self._log_query_job_event(job_id, "cancel_requested")
+        if queued_cancel_snapshot is not None:
+            self._log_query_job_event(job_id, "cancelled")
+            with self._condition:
+                record = self._jobs.get(job_id)
+                terminal_payload = record.snapshot.payload if record is not None else None
         if terminal_payload is not None and self._terminal_job_callback is not None:
             with suppress(Exception):
                 self._terminal_job_callback(terminal_payload)
         if queued_cancel_snapshot is not None:
-            self._log_query_job_event(job_id, "cancelled")
             return queued_cancel_snapshot
 
         if cancel_event is not None:
@@ -997,6 +1183,29 @@ class QueryJobManager:
 
         with self._condition:
             return self._jobs[job_id].snapshot
+
+    def record_client_timing(
+        self,
+        job_id: str,
+        *,
+        client_total_ms: float | None = None,
+    ) -> QueryJobDefinition:
+        terminal_payload: dict[str, Any] | None = None
+        with self._condition:
+            record = self._jobs.get(job_id)
+            if record is None:
+                raise KeyError(f"Unknown query job: {job_id}")
+            self._set_timing_locked(record, "clientTotalMs", client_total_ms)
+            record.snapshot.updated_at = utc_now_iso()
+            self._touch_locked()
+            snapshot = record.snapshot
+            if snapshot.status in TERMINAL_QUERY_STATUSES:
+                terminal_payload = snapshot.payload
+
+        if terminal_payload is not None and self._terminal_job_callback is not None:
+            with suppress(Exception):
+                self._terminal_job_callback(terminal_payload)
+        return snapshot
 
     def snapshot(self, job_id: str) -> QueryJobDefinition:
         with self._condition:
@@ -1009,6 +1218,50 @@ class QueryJobManager:
         with self._condition:
             return self._state_payload_locked()
 
+    def query_runs_payloads(
+        self,
+        *,
+        notebook_id: str = "",
+        cell_id: str = "",
+        status: str = "",
+        live_only: bool = False,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        normalized_notebook_id = str(notebook_id or "").strip()
+        normalized_cell_id = str(cell_id or "").strip()
+        normalized_status = str(status or "").strip().lower()
+        normalized_limit = max(1, min(500, int(limit or 100)))
+        with self._condition:
+            records = sorted(
+                self._jobs.values(),
+                key=lambda record: (
+                    record.snapshot.updated_at or record.snapshot.started_at,
+                    record.snapshot.job_id,
+                ),
+                reverse=True,
+            )
+            payloads: list[dict[str, Any]] = []
+            for record in records:
+                snapshot = record.snapshot
+                if snapshot.status not in RUNNING_QUERY_STATUSES:
+                    continue
+                if live_only and snapshot.status not in RUNNING_QUERY_STATUSES:
+                    continue
+                if normalized_notebook_id and snapshot.notebook_id != normalized_notebook_id:
+                    continue
+                if normalized_cell_id and snapshot.cell_id != normalized_cell_id:
+                    continue
+                if normalized_status and snapshot.status != normalized_status:
+                    continue
+                payload = snapshot.payload
+                payload["columns"] = []
+                payload["rows"] = []
+                payload["live"] = True
+                payloads.append(payload)
+                if len(payloads) >= normalized_limit:
+                    break
+            return payloads
+
     def _log_query_job_event(
         self,
         job_id: str,
@@ -1018,8 +1271,8 @@ class QueryJobManager:
         extra: dict[str, object] | None = None,
         once: bool = True,
     ) -> None:
-        if not bool(getattr(self._settings, "query_job_logging_enabled", True)):
-            return
+        should_log = bool(getattr(self._settings, "query_job_logging_enabled", True))
+        fields: dict[str, object] | None = None
         with self._condition:
             record = self._jobs.get(job_id)
             if record is None:
@@ -1029,12 +1282,18 @@ class QueryJobManager:
             if once:
                 record.logged_events.add(event)
             fields = self._query_job_log_fields(record, event=event, extra=extra or {})
-        logger.log(level, "[bdw-query] %s", _format_query_log_fields(fields))
+            self._append_progress_event_locked(record, event=event, fields=fields)
+            self._touch_locked()
+        if should_log and fields is not None:
+            logger.log(level, "[bdw-query] %s", _format_query_log_fields(fields))
 
     def _log_query_heartbeat_if_due(self, job_id: str) -> None:
         if not bool(getattr(self._settings, "query_job_logging_enabled", True)):
-            return
+            should_log = False
+        else:
+            should_log = True
         now_monotonic = time.monotonic()
+        fields: dict[str, object] | None = None
         with self._condition:
             record = self._jobs.get(job_id)
             if (
@@ -1053,8 +1312,103 @@ class QueryJobManager:
             ):
                 return
             record.last_log_heartbeat_monotonic = now_monotonic
-            fields = self._query_job_log_fields(record, event="heartbeat", extra={})
-        logger.info("[bdw-query] %s", _format_query_log_fields(fields))
+            fields = self._query_job_log_fields(
+                record,
+                event="progress",
+                extra={"progress_kind": "heartbeat", **self._coordinator_log_fields()},
+            )
+            self._append_progress_event_locked(record, event="progress", fields=fields)
+            self._touch_locked()
+        if should_log and fields is not None:
+            logger.info("[bdw-query] %s", _format_query_log_fields(fields))
+
+    def _append_progress_event_locked(
+        self,
+        record: QueryJobRecord,
+        *,
+        event: str,
+        fields: dict[str, object],
+    ) -> None:
+        snapshot = record.snapshot
+        progress_event: dict[str, object] = {
+            "occurredAt": _utc_now_z(),
+            "displayTime": str(fields.get("query_job_time") or ""),
+            "event": event,
+            "status": snapshot.status,
+            "phase": str(fields.get("progress_label") or snapshot.progress_label or ""),
+            "message": _truncate_log_text(snapshot.message or fields.get("message") or ""),
+            "durationMs": snapshot.duration_ms or self._elapsed_duration_ms_locked(record),
+            "progress": snapshot.progress,
+        }
+        if snapshot.timings:
+            progress_event["timings"] = dict(snapshot.timings)
+        for key in (
+            "job_id",
+            "notebook_id",
+            "notebook_title",
+            "cell_id",
+            "backend",
+            "execution_mode",
+            "process_id",
+            "elapsed_seconds",
+            "cpu_percent",
+            "ram_mb",
+            "row_count",
+            "rows_shown",
+            "truncated",
+            "worker_exit_code",
+            "cancellation_phase",
+            "error",
+            "progress_kind",
+            "data_sources",
+            "touched_relations",
+            "touched_buckets",
+            "s3_sources",
+            "duckdb_progress_fraction",
+            "duckdb_progress_percent",
+            "duckdb_progress_available",
+            "duckdb_coordinator_active_reads",
+            "duckdb_coordinator_active_write",
+            "duckdb_coordinator_waiting_writes",
+        ):
+            value = fields.get(key)
+            if value not in (None, "", [], {}):
+                progress_event[key] = value
+        duckdb_profile = {
+            key: value
+            for key, value in fields.items()
+            if key.startswith("duckdb_")
+            and key
+            not in {
+                "duckdb_progress_fraction",
+                "duckdb_progress_percent",
+                "duckdb_progress_available",
+            }
+            and value not in (None, "", [], {})
+        }
+        if duckdb_profile:
+            progress_event["duckdbProfile"] = duckdb_profile
+        snapshot.progress_events.append(progress_event)
+        if len(snapshot.progress_events) > MAX_QUERY_PROGRESS_EVENTS:
+            snapshot.progress_events = snapshot.progress_events[-MAX_QUERY_PROGRESS_EVENTS:]
+
+    def _set_timing_locked(self, record: QueryJobRecord, key: str, value: object) -> None:
+        timing = _safe_timing_ms(value)
+        if timing is None:
+            return
+        record.snapshot.timings[str(key)] = timing
+
+    def _merge_timings_locked(self, record: QueryJobRecord, timings: dict[str, object]) -> None:
+        for key, value in (timings or {}).items():
+            self._set_timing_locked(record, str(key), value)
+
+    def _coordinator_log_fields(self) -> dict[str, object]:
+        state = self._access_coordinator.state()
+        return {
+            "duckdb_coordinator_active_reads": state.get("active_reads"),
+            "duckdb_coordinator_active_write": state.get("active_write"),
+            "duckdb_coordinator_waiting_writes": state.get("waiting_writes"),
+        }
 
     def _query_job_log_fields(
         self,
@@ -1083,19 +1437,38 @@ class QueryJobManager:
             fields["duration_ms"] = round(float(snapshot.duration_ms), 3)
         if snapshot.progress_label:
             fields["progress_label"] = snapshot.progress_label
+        if snapshot.cancellation_phase:
+            fields["cancellation_phase"] = snapshot.cancellation_phase
         if (
             snapshot.progress is not None
-            and event == "heartbeat"
+            and event == "progress"
             and snapshot.status == "running"
             and snapshot.execution_mode != QUERY_EXECUTION_POSTGRES_NATIVE
         ):
+            fields["duckdb_progress_fraction"] = round(float(snapshot.progress), 4)
             fields["duckdb_progress_percent"] = round(float(snapshot.progress) * 100, 1)
-        if snapshot.cpu_percent is not None and event == "heartbeat":
+            fields["duckdb_progress_available"] = True
+        elif event == "progress" and snapshot.execution_mode != QUERY_EXECUTION_POSTGRES_NATIVE:
+            fields["duckdb_progress_available"] = False
+        if snapshot.cpu_percent is not None and event == "progress":
             fields["cpu_percent"] = round(float(snapshot.cpu_percent), 2)
-        if snapshot.memory_rss_bytes is not None and event == "heartbeat":
+        if snapshot.memory_rss_bytes is not None and event == "progress":
             fields["ram_mb"] = round(float(snapshot.memory_rss_bytes) / (1024 * 1024), 1)
-        if event == "heartbeat":
+        if event == "progress":
             fields["elapsed_seconds"] = round(self._elapsed_duration_ms_locked(record) / 1000, 1)
+        for timing_key, log_key in (
+            ("clientTotalMs", "client_total_ms"),
+            ("clientPreSubmitMs", "client_pre_submit_ms"),
+            ("backendPrepareMs", "backend_prepare_ms"),
+            ("engineAccessWaitMs", "engine_access_wait_ms"),
+            ("workerStartupMs", "worker_startup_ms"),
+            ("engineQueryMs", "engine_query_ms"),
+            ("resultFetchMs", "result_fetch_ms"),
+            ("backendTotalMs", "backend_total_ms"),
+        ):
+            value = snapshot.timings.get(timing_key)
+            if value is not None:
+                fields[log_key] = round(float(value), 3)
 
         data_sources, source_overflow = _capped_log_list(list(snapshot.data_sources))
         if data_sources:
@@ -1173,8 +1546,8 @@ class QueryJobManager:
                 record = self._jobs.get(job_id)
                 if record is None or record.snapshot.status in TERMINAL_QUERY_STATUSES:
                     return
-                record.snapshot.progress_label = "Queued..."
-                record.snapshot.message = "Waiting for an available query worker."
+                record.snapshot.progress_label = "Preparing query..."
+                record.snapshot.message = "Preparing query execution."
                 self._touch_locked()
 
             requires_duckdb_file_access = not (
@@ -1182,18 +1555,52 @@ class QueryJobManager:
                 or record.worker_database_path == ":memory:"
             )
             if requires_duckdb_file_access:
+                wait_started = time.monotonic()
+                wait_reported = False
+
+                def on_waiting() -> None:
+                    nonlocal wait_reported
+                    wait_reported = True
+                    with self._condition:
+                        waiting_record = self._jobs.get(job_id)
+                        if waiting_record is None or waiting_record.snapshot.status in TERMINAL_QUERY_STATUSES:
+                            return
+                        waiting_record.snapshot.progress_label = "Waiting for DuckDB access..."
+                        waiting_record.snapshot.message = "Waiting for DuckDB file access to become available."
+                        waiting_record.snapshot.updated_at = utc_now_iso()
+                        self._touch_locked()
+                    self._log_query_heartbeat_if_due(job_id)
+
                 access_acquired = self._access_coordinator.acquire(
                     record.execution_mode,
                     lambda: self._is_cancelled_or_terminal(job_id),
-                    on_waiting=lambda: self._log_query_heartbeat_if_due(job_id),
+                    on_waiting=on_waiting,
                 )
                 if not access_acquired:
                     return
+                access_wait_ms = (time.monotonic() - wait_started) * 1000 if wait_reported else 0.0
+            else:
+                access_wait_ms = 0.0
             with self._condition:
                 record = self._jobs.get(job_id)
                 if record is None or record.snapshot.status in TERMINAL_QUERY_STATUSES:
                     return
                 record.access_acquired = access_acquired
+                self._set_timing_locked(record, "engineAccessWaitMs", access_wait_ms)
+                record.snapshot.updated_at = utc_now_iso()
+                self._touch_locked()
+
+            if requires_duckdb_file_access and access_wait_ms > 0:
+                self._log_query_job_event(
+                    job_id,
+                    "engine_waiting",
+                    extra=self._coordinator_log_fields(),
+                )
+            self._log_query_job_event(
+                job_id,
+                "engine_allocated",
+                extra=self._coordinator_log_fields(),
+            )
 
             self._start_and_monitor_process(job_id)
         finally:
@@ -1235,16 +1642,19 @@ class QueryJobManager:
             record.process = process
             record.snapshot.status = "running"
             record.snapshot.progress = None
-            record.snapshot.progress_label = "Starting worker..."
+            record.snapshot.progress_label = "Starting isolated query worker..."
             record.snapshot.message = "Starting isolated query worker."
             record.snapshot.updated_at = utc_now_iso()
             self._touch_locked()
 
+        self._log_query_job_event(job_id, "worker_starting")
+        process_start_monotonic = time.monotonic()
         process.start()
         with self._condition:
             record = self._jobs.get(job_id)
             if record is None:
                 return
+            record.process_start_monotonic = process_start_monotonic
             record.snapshot.process_id = process.pid
             record.snapshot.updated_at = utc_now_iso()
             self._touch_locked()
@@ -1325,18 +1735,38 @@ class QueryJobManager:
             )
             with self._condition:
                 record = self._jobs.get(job_id)
-                if record is not None:
-                    record.final_received = True
+            if record is not None:
+                record.final_received = True
             return
+
+        duckdb_progress = event.get("duckdbProgress")
+        if isinstance(duckdb_progress, dict):
+            with self._condition:
+                record = self._jobs.get(job_id)
+                if record is not None:
+                    record.latest_duckdb_progress = dict(duckdb_progress)
 
         changes = self._payload_changes(event)
         if event_type == "started":
             changes.setdefault("progress_label", "Running...")
             changes.setdefault("message", "Running query in an isolated worker process.")
+            with self._condition:
+                record = self._jobs.get(job_id)
+                if record is not None and record.process_start_monotonic:
+                    self._set_timing_locked(
+                        record,
+                        "workerStartupMs",
+                        (time.monotonic() - record.process_start_monotonic) * 1000,
+                    )
+        if event_type == "phase":
+            changes.setdefault("progress_label", str(event.get("progressLabel") or "Querying..."))
+            changes.setdefault("message", str(event.get("message") or "Query is running."))
         if changes:
             self._patch_job(job_id, **changes)
         if event_type == "started":
             self._log_query_job_event(job_id, "worker_started")
+        elif event_type == "phase":
+            self._log_query_job_event(job_id, str(event.get("phase") or "querying").strip() or "querying")
         elif event_type == "columns":
             self._log_query_job_event(job_id, "fetching_rows")
         elif event_type == "cancellation":
@@ -1361,6 +1791,7 @@ class QueryJobManager:
             "fetchMs": "fetch_ms",
             "cancellationPhase": "cancellation_phase",
             "workerExitCode": "worker_exit_code",
+            "timings": "timings",
         }
         changes: dict[str, Any] = {}
         for source_key, target_key in mapping.items():
@@ -1558,6 +1989,9 @@ class QueryJobManager:
             for key, value in changes.items():
                 if key in {"columns", "rows"} and value is None:
                     continue
+                if key == "timings" and isinstance(value, dict):
+                    self._merge_timings_locked(record, value)
+                    continue
                 setattr(record.snapshot, key, value)
             record.snapshot.updated_at = utc_now_iso()
             self._touch_locked()
@@ -1583,11 +2017,19 @@ class QueryJobManager:
             if status == "cancelled":
                 record.snapshot.cancellation_phase = "cancelled"
                 record.snapshot.message = record.snapshot.message or "Query cancellation completed."
+            timings = changes.pop("timings", None)
+            if isinstance(timings, dict):
+                self._merge_timings_locked(record, timings)
+            backend_prepare_ms = float(record.snapshot.timings.get("backendPrepareMs") or 0.0)
+            self._set_timing_locked(
+                record,
+                "backendTotalMs",
+                self._elapsed_duration_ms_locked(record) + backend_prepare_ms,
+            )
             for key, value in changes.items():
                 if key in {"columns", "rows"} and value is None:
                     continue
                 setattr(record.snapshot, key, value)
-            terminal_payload = record.snapshot.payload
             self._prune_history_locked()
             self._touch_locked()
         log_level = logging.WARNING if status == "failed" else logging.INFO
@@ -1597,6 +2039,9 @@ class QueryJobManager:
             level=log_level,
             extra=duckdb_profile,
         )
+        with self._condition:
+            record = self._jobs.get(job_id)
+            terminal_payload = record.snapshot.payload if record is not None else None
         if terminal_payload is not None and self._terminal_job_callback is not None:
             with suppress(Exception):
                 self._terminal_job_callback(terminal_payload)

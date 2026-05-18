@@ -5,12 +5,20 @@
       <h2>Recorded Query Runs</h2>
       <p>Inspect completed, failed, and cancelled query executions with recorded CPU and RAM telemetry.</p>
     </div>
-    <button type="button" class="query-runs-chart-toggle" data-query-runs-toggle-charts aria-pressed="false" title="Show resource charts">
-      <span class="query-runs-chart-toggle-switch" aria-hidden="true">
-        <span class="query-runs-chart-toggle-thumb"></span>
-      </span>
-      <span class="query-runs-chart-toggle-copy" data-query-runs-toggle-label>Show resource charts</span>
-    </button>
+    <div class="query-runs-toggle-group" aria-label="Query run display options">
+      <button type="button" class="query-runs-chart-toggle" data-query-runs-toggle-live aria-pressed="false" title="Show live queued and running queries only">
+        <span class="query-runs-chart-toggle-switch" aria-hidden="true">
+          <span class="query-runs-chart-toggle-thumb"></span>
+        </span>
+        <span class="query-runs-chart-toggle-copy" data-query-runs-live-toggle-label>Live Queries only</span>
+      </button>
+      <button type="button" class="query-runs-chart-toggle" data-query-runs-toggle-charts aria-pressed="false" title="Show resource charts">
+        <span class="query-runs-chart-toggle-switch" aria-hidden="true">
+          <span class="query-runs-chart-toggle-thumb"></span>
+        </span>
+        <span class="query-runs-chart-toggle-copy" data-query-runs-toggle-label>Show resource charts</span>
+      </button>
+    </div>
   </div>
   <div class="query-runs-status" data-query-runs-status>No recorded query runs yet.</div>
   <div class="query-run-history-list" data-query-runs-list>
