@@ -593,7 +593,11 @@ class ProcessQueryJobManagerTests(TestCase):
 
     def test_file_backed_read_reports_duckdb_access_wait(self) -> None:
         self.assertTrue(
-            self.manager._access_coordinator.acquire(QUERY_EXECUTION_DUCKDB_WRITE, lambda: False)
+            self.manager._access_coordinator.acquire(
+                QUERY_EXECUTION_DUCKDB_WRITE,
+                lambda: False,
+                owner_job_id="writer-job",
+            )
         )
         try:
             job = self.manager.start_job(
@@ -614,7 +618,10 @@ class ProcessQueryJobManagerTests(TestCase):
             self.assertIsNotNone(waiting)
             time.sleep(0.2)
         finally:
-            self.manager._access_coordinator.release(QUERY_EXECUTION_DUCKDB_WRITE)
+            self.manager._access_coordinator.release(
+                QUERY_EXECUTION_DUCKDB_WRITE,
+                owner_job_id="writer-job",
+            )
 
         completed = wait_until(
             lambda: self.manager.snapshot(job.job_id)
@@ -630,6 +637,129 @@ class ProcessQueryJobManagerTests(TestCase):
         waiting_events = [event for event in events if event.get("event") == "engine_waiting"]
         self.assertTrue(waiting_events)
         self.assertIn("duckdb_coordinator_active_write", waiting_events[-1])
+        self.assertEqual(waiting_events[-1]["duckdb_lock_owner_job_id"], "writer-job")
+        self.assertEqual(completed.duckdb_execution_path, "shared-file-read")
+
+    def test_isolated_s3_csv_and_parquet_reads_skip_duckdb_file_lock(self) -> None:
+        parquet_path = self.root / "sample.parquet"
+        csv_path = self.root / "sample.csv"
+        with duckdb.connect(":memory:") as connection:
+            connection.execute(
+                f"COPY (SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS t(id, value)) "
+                f"TO '{parquet_path.as_posix()}' (FORMAT PARQUET)"
+            )
+        csv_path.write_text("id,value\n1,a\n2,b\n", encoding="utf-8")
+
+        self.assertTrue(
+            self.manager._access_coordinator.acquire(
+                QUERY_EXECUTION_DUCKDB_WRITE,
+                lambda: False,
+                owner_job_id="writer-job",
+            )
+        )
+        try:
+            job = self.manager.start_job(
+                sql=(
+                    "select "
+                    "(select count(*) from test.sample_parquet) as parquet_rows, "
+                    "(select count(*) from test.sample_csv) as csv_rows"
+                ),
+                notebook_id="nb",
+                notebook_title="Notebook",
+                cell_id="cell-isolated",
+                data_sources=["workspace.s3"],
+                touched_relations=["test.sample_parquet", "test.sample_csv"],
+                touched_buckets=["test"],
+                source_summaries=[
+                    {
+                        "relation": "test.sample_parquet",
+                        "query_alias": "s3.test.sample.parquet",
+                        "bucket": "test",
+                        "key": "sample.parquet",
+                        "path": f"s3://test/{parquet_path.name}",
+                        "format": "parquet",
+                        "query_sql": f"SELECT * FROM read_parquet('{parquet_path.as_posix()}')",
+                    },
+                    {
+                        "relation": "test.sample_csv",
+                        "query_alias": "s3.test.sample.csv",
+                        "bucket": "test",
+                        "key": "sample.csv",
+                        "path": f"s3://test/{csv_path.name}",
+                        "format": "csv",
+                        "query_sql": f"SELECT * FROM read_csv_auto('{csv_path.as_posix()}', HEADER = TRUE)",
+                    },
+                ],
+            )
+            completed = wait_until(
+                lambda: self.manager.snapshot(job.job_id)
+                if self.manager.snapshot(job.job_id).status == "completed"
+                else None,
+                timeout=20,
+            )
+        finally:
+            self.manager._access_coordinator.release(
+                QUERY_EXECUTION_DUCKDB_WRITE,
+                owner_job_id="writer-job",
+            )
+
+        self.assertIsNotNone(completed)
+        self.assertEqual(completed.rows, [(2, 2)])
+        self.assertEqual(completed.duckdb_execution_path, "isolated-read")
+        self.assertEqual(completed.timings.get("engineAccessWaitMs"), 0.0)
+        self.assertGreaterEqual(completed.timings.get("sourceBootstrapMs", -1), 0)
+        self.assertNotIn("engine_waiting", [event.get("event") for event in completed.progress_events])
+
+    def test_stale_duckdb_lock_owner_is_recovered(self) -> None:
+        stale_snapshot = QueryJobDefinition(
+            job_id="stale-writer",
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="stale",
+            sql="create table stale as select 1",
+            status="completed",
+            started_at=utc_now_iso(),
+            updated_at=utc_now_iso(),
+            completed_at=utc_now_iso(),
+            execution_mode=QUERY_EXECUTION_DUCKDB_WRITE,
+            duckdb_execution_path="shared-file-write",
+        )
+        stale_record = QueryJobRecord(
+            snapshot=stale_snapshot,
+            sort_index=1,
+            execution_mode=QUERY_EXECUTION_DUCKDB_WRITE,
+            execution_sql="create table stale as select 1",
+        )
+        with self.manager._condition:
+            self.manager._jobs[stale_snapshot.job_id] = stale_record
+        self.assertTrue(
+            self.manager._access_coordinator.acquire(
+                QUERY_EXECUTION_DUCKDB_WRITE,
+                lambda: False,
+                owner_job_id=stale_snapshot.job_id,
+            )
+        )
+
+        job = self.manager.start_job(
+            sql="select 1 as value",
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-recovery",
+            data_sources=["workspace.s3"],
+            touched_relations=["legacy.sample"],
+            touched_buckets=["legacy"],
+        )
+        completed = wait_until(
+            lambda: self.manager.snapshot(job.job_id)
+            if self.manager.snapshot(job.job_id).status == "completed"
+            else None,
+            timeout=20,
+        )
+
+        self.assertIsNotNone(completed)
+        self.assertEqual(completed.rows, [(1,)])
+        self.assertFalse(self.manager._access_coordinator.state()["active_write"])
+        self.assertIn("duckdb_lock_recovered", [event.get("event") for event in completed.progress_events])
 
     def test_client_timing_ack_updates_terminal_payload_and_history_callback(self) -> None:
         terminal_payloads: list[dict[str, object]] = []

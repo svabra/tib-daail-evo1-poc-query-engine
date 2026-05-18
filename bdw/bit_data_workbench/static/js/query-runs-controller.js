@@ -175,8 +175,9 @@ export function createQueryRunsController(helpers) {
     return [
       ["total", totalMs],
       ["prepare", valueFor("backendPrepareMs")],
-      ["allocation", valueFor("engineAccessWaitMs")],
+      ["file lock", valueFor("engineAccessWaitMs")],
       ["startup", valueFor("workerStartupMs")],
+      ["source setup", valueFor("sourceBootstrapMs")],
       ["query", valueFor("engineQueryMs")],
       ["fetch", valueFor("resultFetchMs")],
       ["delivery", deliveryMs],

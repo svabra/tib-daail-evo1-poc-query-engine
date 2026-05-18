@@ -15,9 +15,9 @@ import zipfile
 
 from ..config import Settings
 from .data_sources.s3.explorer import (
-    normalize_s3_bucket_name,
     normalize_s3_object_filename,
     normalize_s3_object_key,
+    normalize_s3_storage_bucket_name,
 )
 from .s3_hidden import DOWNLOAD_ARTIFACT_S3_PREFIX, DOWNLOAD_JOB_S3_PREFIX, reject_hidden_s3_location
 from .s3_storage import ensure_s3_bucket, iter_s3_keys, s3_client
@@ -275,7 +275,7 @@ class DownloadJobManager:
         filename: str = "",
         file_format: str = "",
     ) -> dict[str, Any]:
-        normalized_bucket = normalize_s3_bucket_name(bucket)
+        normalized_bucket = normalize_s3_storage_bucket_name(bucket)
         normalized_key = normalize_s3_object_key(key)
         reject_hidden_s3_location(
             normalized_bucket,
@@ -289,12 +289,6 @@ class DownloadJobManager:
             filename=source_filename,
             key=normalized_key,
         )
-        client = self._client()
-        metadata = client.head_object(Bucket=normalized_bucket, Key=normalized_key)
-        source_size = int(metadata.get("ContentLength") or 0)
-        etag = _strip_etag(metadata.get("ETag"))
-        if not etag:
-            etag = str(metadata.get("LastModified") or "")
         return self.start_prepared_source(
             {
                 "sourceKind": "s3_object",
@@ -302,8 +296,8 @@ class DownloadJobManager:
                 "key": normalized_key,
                 "filename": source_filename,
                 "sourceName": source_filename,
-                "sourceSizeBytes": source_size,
-                "sourceRevision": f"{etag}:{source_size}",
+                "sourceSizeBytes": 0,
+                "sourceRevision": f"unverified:{normalized_bucket}:{normalized_key}",
                 "format": normalized_format,
             }
         )
@@ -439,6 +433,20 @@ class DownloadJobManager:
         with self._lock:
             job = dict(self._require_job_locked(job_id))
         client = self._client()
+        metadata = client.head_object(
+            Bucket=str(job["sourceBucket"]),
+            Key=str(job["sourceKey"]),
+        )
+        source_size = int(metadata.get("ContentLength") or 0)
+        etag = _strip_etag(metadata.get("ETag"))
+        if not etag:
+            etag = str(metadata.get("LastModified") or "")
+        self._update_source_metadata(
+            job_id,
+            source_size=source_size,
+            source_revision=f"{etag}:{source_size}",
+        )
+        self._raise_if_cancelled(job_id)
         writer = MultipartS3UploadWriter(
             client=client,
             bucket=self._artifact_bucket(),
@@ -456,7 +464,7 @@ class DownloadJobManager:
         )
         source_body = source_response["Body"]
         bytes_processed = int(job.get("bytesProcessed") or 0)
-        source_size = max(0, int(job.get("sourceSizeBytes") or 0))
+        source_size = max(0, source_size)
         last_emit = time.monotonic()
         last_emit_bytes = 0
         try:
@@ -546,6 +554,35 @@ class DownloadJobManager:
             job["expiresAt"] = isoformat(expires_at)
             job["message"] = "Prepared ZIP download is ready."
             job["canCancel"] = False
+            self._touch_job_locked(job)
+            self._version += 1
+            self._persist_job_locked(job)
+            snapshot = self._state_payload_locked()
+        self._emit_state(snapshot)
+
+    def _update_source_metadata(
+        self,
+        job_id: str,
+        *,
+        source_size: int,
+        source_revision: str,
+    ) -> None:
+        snapshot: dict[str, Any] | None = None
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job or job.get("status") not in DOWNLOAD_RUNNING_STATUSES:
+                return
+            job["sourceSizeBytes"] = max(0, int(source_size or 0))
+            job["sourceRevision"] = str(source_revision or job["sourceSizeBytes"])
+            job["sourceFingerprint"] = "|".join(
+                [
+                    str(job.get("sourceKind") or ""),
+                    str(job.get("dataExchangeFileId") or job.get("sourceBucket") or ""),
+                    str(job.get("sourceKey") or ""),
+                    str(job.get("sourceRevision") or ""),
+                    str(job.get("sourceSizeBytes") or 0),
+                ]
+            )
             self._touch_job_locked(job)
             self._version += 1
             self._persist_job_locked(job)

@@ -166,13 +166,23 @@ export function sourceObjectS3DownloadDescriptor(sourceObjectRoot) {
   }
 
   const downloadable = String(sourceObjectRoot.dataset.s3Downloadable || "").trim().toLowerCase() === "true";
-  const bucket = String(sourceObjectRoot.dataset.s3Bucket || "").trim();
+  const path = String(sourceObjectRoot.dataset.s3Path || "").trim();
+  let bucket = String(sourceObjectRoot.dataset.s3Bucket || "").trim();
   const key = String(sourceObjectRoot.dataset.s3Key || "").trim();
+  if (!isValidS3BucketName(bucket) && path.startsWith("s3://")) {
+    try {
+      const parsedPath = new URL(path);
+      if (isValidS3BucketName(parsedPath.hostname)) {
+        bucket = parsedPath.hostname;
+      }
+    } catch (_error) {
+      // Keep the original bucket so the backend can return a precise validation error.
+    }
+  }
   if (!downloadable || !bucket || !key) {
     return null;
   }
 
-  const path = String(sourceObjectRoot.dataset.s3Path || "").trim();
   const keySegments = key.split("/").filter(Boolean);
   const displayName = sourceObjectDisplayName(sourceObjectRoot);
   const keyFileName = keySegments[keySegments.length - 1] || "";
@@ -192,7 +202,18 @@ export function sourceObjectS3GeneratedDownloadDescriptor(sourceObjectRoot, mode
   }
 
   const downloadKind = String(sourceObjectRoot.dataset.s3DownloadKind || "").trim();
-  const bucket = String(sourceObjectRoot.dataset.s3Bucket || "").trim();
+  const path = String(sourceObjectRoot.dataset.s3Path || "").trim();
+  let bucket = String(sourceObjectRoot.dataset.s3Bucket || "").trim();
+  if (!isValidS3BucketName(bucket) && path.startsWith("s3://")) {
+    try {
+      const parsedPath = new URL(path);
+      if (isValidS3BucketName(parsedPath.hostname)) {
+        bucket = parsedPath.hostname;
+      }
+    } catch (_error) {
+      // Keep the original bucket so the backend can return a precise validation error.
+    }
+  }
   const prefix = String(sourceObjectRoot.dataset.s3PartPrefix || "").trim();
   const fileFormat = String(
     sourceObjectRoot.dataset.s3PartFileFormat ||
@@ -279,8 +300,11 @@ export function sourceObjectDdlDescriptor(sourceObjectRoot) {
 }
 
 const S3_BUCKET_NAME_PATTERN = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/;
+const S3_BUCKET_CREATE_NAME_PATTERN = /^[a-z][a-z0-9.-]{1,61}[a-z0-9]$/;
 export const S3_BUCKET_NAME_VALIDATION_MESSAGE =
   "Bucket names must be 3-63 characters and use lowercase letters, numbers, dots, or hyphens.";
+export const S3_BUCKET_CREATE_VALIDATION_MESSAGE =
+  "Bucket names must normalize to 3-63 characters, start with a lowercase letter, and use lowercase letters, numbers, dots, or hyphens.";
 
 export function normalizeS3BucketNameInput(value) {
   return String(value ?? "").trim().toLowerCase();
@@ -291,9 +315,19 @@ export function isValidS3BucketName(value) {
 }
 
 export function normalizeS3BucketNameForCreate(value) {
-  const bucket = normalizeS3BucketNameInput(value);
-  if (!isValidS3BucketName(bucket)) {
-    throw new Error(S3_BUCKET_NAME_VALIDATION_MESSAGE);
+  let bucket = normalizeS3BucketNameInput(value)
+    .replace(/[^a-z0-9.-]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/\.+/g, ".")
+    .replace(/^[.-]+|[.-]+$/g, "");
+  if (/^[0-9]/.test(bucket)) {
+    bucket = `bdw-${bucket}`;
+  }
+  if (bucket.length > 63) {
+    bucket = bucket.slice(0, 63).replace(/[.-]+$/g, "");
+  }
+  if (!S3_BUCKET_CREATE_NAME_PATTERN.test(bucket)) {
+    throw new Error(S3_BUCKET_CREATE_VALIDATION_MESSAGE);
   }
   return bucket;
 }

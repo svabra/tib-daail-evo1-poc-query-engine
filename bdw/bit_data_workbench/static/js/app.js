@@ -180,6 +180,7 @@ let queryJobsStateVersion = null;
 let queryJobsSnapshot = [];
 let queryJobsSummary = { runningCount: 0, totalCount: 0 };
 let queryPerformanceState = { recent: [], stats: {} };
+const collapsedQueryResultKeys = new Set();
 let pythonJobsStateVersion = null;
 let pythonJobsSnapshot = [];
 let pythonJobsSummary = { runningCount: 0, totalCount: 0 };
@@ -580,6 +581,7 @@ const {
   escapeHtml,
   formatQueryDuration,
   formatQueryTimestamp,
+  isQueryResultCollapsed,
   queryJobElapsedMs,
   queryJobEventDateTimeCopy,
   queryJobIsRunning,
@@ -2843,10 +2845,10 @@ async function downloadSourceObjectDdl(sourceObjectRoot) {
   return true;
 }
 
-async function writeTextToClipboard(text) {
-  const value = String(text || "").trim();
+async function writeTextToClipboard(text, { trim = true, emptyMessage = "There is no query path to copy." } = {}) {
+  const value = trim ? String(text || "").trim() : String(text ?? "");
   if (!value) {
-    throw new Error("There is no query path to copy.");
+    throw new Error(emptyMessage);
   }
 
   if (navigator.clipboard?.writeText) {
@@ -2890,6 +2892,61 @@ async function copySourceQueryPath(sourceObjectRoot) {
     },
     { autoClearMs: 2500 }
   );
+  return true;
+}
+
+async function copyEditorSql(editorRoot, triggerButton = null) {
+  if (!(editorRoot instanceof Element)) {
+    return false;
+  }
+  const sqlText = currentEditorSql(editorRoot);
+  await writeTextToClipboard(sqlText, {
+    trim: false,
+    emptyMessage: "There is no SQL to copy.",
+  });
+  const textarea = editorRoot.querySelector("[data-editor-source]");
+  if (textarea && textarea.value !== sqlText) {
+    textarea.value = sqlText;
+  }
+  if (triggerButton instanceof HTMLButtonElement) {
+    const previousTitle = triggerButton.title;
+    triggerButton.classList.add("is-copied");
+    triggerButton.title = "Copied";
+    triggerButton.setAttribute("aria-label", "SQL copied");
+    window.setTimeout(() => {
+      triggerButton.classList.remove("is-copied");
+      triggerButton.title = previousTitle || "Copy SQL";
+      triggerButton.setAttribute("aria-label", "Copy SQL");
+    }, 1200);
+  }
+  return true;
+}
+
+function toggleQueryResultPanel(button) {
+  if (!(button instanceof HTMLButtonElement)) {
+    return false;
+  }
+  const resultRoot = button.closest("[data-cell-result]");
+  const body = resultRoot?.querySelector("[data-query-result-body]");
+  if (!(resultRoot instanceof Element) || !(body instanceof Element)) {
+    return false;
+  }
+
+  const key = String(resultRoot.dataset.queryResultCollapseKey || resultRoot.dataset.queryJobId || "").trim();
+  const expanded = button.getAttribute("aria-expanded") === "true";
+  const nextCollapsed = expanded;
+  if (key) {
+    if (nextCollapsed) {
+      collapsedQueryResultKeys.add(key);
+    } else {
+      collapsedQueryResultKeys.delete(key);
+    }
+  }
+  body.hidden = nextCollapsed;
+  resultRoot.dataset.queryResultCollapsed = nextCollapsed ? "true" : "false";
+  button.setAttribute("aria-expanded", nextCollapsed ? "false" : "true");
+  button.setAttribute("aria-label", nextCollapsed ? "Show result" : "Hide result");
+  button.title = nextCollapsed ? "Show result" : "Hide result";
   return true;
 }
 
@@ -4015,6 +4072,15 @@ function currentEditorSql(root) {
 
   const textarea = root.querySelector("[data-editor-source]");
   return textarea?.value ?? defaultEditorSql(textarea);
+}
+
+function queryResultCollapseKey(cellId, job = null) {
+  return String(job?.jobId || cellId || "").trim();
+}
+
+function isQueryResultCollapsed(cellId, job = null) {
+  const key = queryResultCollapseKey(cellId, job);
+  return Boolean(key && collapsedQueryResultKeys.has(key));
 }
 
 function editorExtensionsForLanguage(language, schema) {
@@ -8482,6 +8548,30 @@ document.body.addEventListener("click", async (event) => {
   if (modalCancelButton) {
     event.preventDefault();
     closeDialog(modalCancelButton.closest("dialog"), "cancel");
+    return;
+  }
+
+  const editorCopyButton = event.target.closest("[data-copy-editor-sql]");
+  if (editorCopyButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      await copyEditorSql(editorCopyButton.closest("[data-editor-root]"), editorCopyButton);
+    } catch (error) {
+      console.error("Failed to copy SQL from the editor.", error);
+      await showMessageDialog({
+        title: "Copy SQL failed",
+        copy: error instanceof Error ? error.message : "The SQL could not be copied to the clipboard.",
+      });
+    }
+    return;
+  }
+
+  const resultCollapseButton = event.target.closest("[data-query-result-toggle]");
+  if (resultCollapseButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleQueryResultPanel(resultCollapseButton);
     return;
   }
 

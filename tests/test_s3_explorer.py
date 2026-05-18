@@ -127,15 +127,15 @@ def test_normalize_s3_bucket_name_rejects_underscores() -> None:
         explorer.normalize_s3_bucket_name("client_bucket")
 
 
-def test_create_bucket_rejects_underscores_before_s3_call() -> None:
+def test_create_bucket_normalizes_sql_friendly_name_before_s3_call() -> None:
     explorer = import_s3_explorer()
     manager = explorer.S3ExplorerManager(_ConfiguredSettings())
 
     with patch.object(explorer, "ensure_s3_bucket") as ensure_s3_bucket:
-        with pytest.raises(ValueError, match="lowercase letters, numbers, dots, or hyphens"):
-            manager.create_bucket("client_bucket")
+        created = manager.create_bucket(" 1_3 imports ")
 
-    ensure_s3_bucket.assert_not_called()
+    ensure_s3_bucket.assert_called_once_with(manager._settings, "bdw-1-3-imports")
+    assert created.bucket == "bdw-1-3-imports"
 
 
 def test_create_bucket_normalizes_valid_bucket_name() -> None:
@@ -147,6 +147,42 @@ def test_create_bucket_normalizes_valid_bucket_name() -> None:
 
     ensure_s3_bucket.assert_called_once_with(manager._settings, "client-bucket")
     assert created.bucket == "client-bucket"
+
+
+def test_stream_object_allows_existing_digit_start_bucket() -> None:
+    explorer = import_s3_explorer()
+    manager = explorer.S3ExplorerManager(_ConfiguredSettings())
+    body = _TrackingBody(b"id,name\n1,alpha\n")
+    fake_client = _FakeS3Client(body)
+
+    with patch.object(explorer, "s3_client", return_value=fake_client):
+        artifact = manager.stream_object(
+            bucket="1-client-bucket",
+            key="exports/large.csv",
+            file_name="",
+        )
+
+    assert fake_client.get_object_calls == [
+        {"Bucket": "1-client-bucket", "Key": "exports/large.csv"}
+    ]
+    assert artifact.filename == "large.csv"
+
+
+def test_stream_object_rejects_sql_alias_bucket() -> None:
+    explorer = import_s3_explorer()
+    manager = explorer.S3ExplorerManager(_ConfiguredSettings())
+    body = _TrackingBody(b"id,name\n1,alpha\n")
+    fake_client = _FakeS3Client(body)
+
+    with patch.object(explorer, "s3_client", return_value=fake_client):
+        with pytest.raises(ValueError, match="physical bucket name"):
+            manager.stream_object(
+                bucket="n_1_client_bucket",
+                key="exports/large.csv",
+                file_name="",
+            )
+
+    assert fake_client.get_object_calls == []
 
 
 def test_delete_bucket_entry_cleans_contents_before_removing_bucket() -> None:

@@ -10,7 +10,7 @@ from playwright.async_api import async_playwright
 
 LONG_SQL = """
 select sum(sin(i) + random()) as total_value
-from range(200000000) as source_rows(i)
+from range(800000000) as source_rows(i)
 """
 
 SMOKE_NOTEBOOK_ID = "s3-smoke-test"
@@ -757,7 +757,7 @@ async def assert_query_run_history(page, timeout_ms: int, cell_ids: list[str]) -
             && /Start date/.test(text)
             && /End date/.test(text)
             && /Progress/.test(text)
-            && /allocation/.test(text)
+            && /file lock/.test(text)
             && /startup/.test(text)
             && /query/.test(text)
             && /fetch/.test(text)

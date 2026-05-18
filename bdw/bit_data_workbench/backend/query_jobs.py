@@ -26,6 +26,7 @@ except Exception:  # pragma: no cover
 from ..config import Settings
 from ..models import QueryJobDefinition, QueryJobMetricPoint, QueryResourceSample, QueryResult
 from .runtime_connections import create_duckdb_worker_connection, open_postgres_native_connection
+from .sql_utils import qualified_name
 
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,10 @@ QUERY_DUCKDB_PROFILE_MAX_OPERATORS = 8
 QUERY_EXECUTION_DUCKDB_READ = "duckdb-read"
 QUERY_EXECUTION_DUCKDB_WRITE = "duckdb-write"
 QUERY_EXECUTION_POSTGRES_NATIVE = "postgres-native"
+DUCKDB_EXECUTION_PATH_ISOLATED_READ = "isolated-read"
+DUCKDB_EXECUTION_PATH_SHARED_FILE_READ = "shared-file-read"
+DUCKDB_EXECUTION_PATH_SHARED_FILE_WRITE = "shared-file-write"
+DUCKDB_EXECUTION_PATH_POSTGRES_NATIVE = "postgres-native"
 READ_ONLY_START_KEYWORDS = {"select", "with", "values", "describe", "show", "summarize"}
 WRITE_START_KEYWORDS = {
     "alter",
@@ -663,6 +668,50 @@ def _execute_duckdb_query(
     )
 
 
+def _relation_parts(relation: object) -> tuple[str, ...]:
+    parts = [
+        part.strip().strip('"').strip("`").strip("[]")
+        for part in str(relation or "").split(".")
+        if part.strip()
+    ]
+    return tuple(parts)
+
+
+def _normalize_relation_key(value: object) -> str:
+    return ".".join(part.lower() for part in _relation_parts(value))
+
+
+def _is_direct_file_relation(value: object) -> bool:
+    normalized = str(value or "").strip().lower()
+    return normalized.startswith(("s3://", "http://", "https://", "file://"))
+
+
+def _source_summary_has_query_sql(summary: dict[str, object]) -> bool:
+    return bool(
+        str(summary.get("relation") or "").strip()
+        and str(summary.get("query_sql") or "").strip()
+    )
+
+
+def _bootstrap_duckdb_source_views(
+    connection: duckdb.DuckDBPyConnection,
+    source_summaries: list[dict[str, object]],
+) -> None:
+    for summary in source_summaries:
+        if not isinstance(summary, dict):
+            continue
+        relation_parts = _relation_parts(summary.get("relation"))
+        query_sql = str(summary.get("query_sql") or "").strip()
+        if not relation_parts or not query_sql:
+            continue
+        if len(relation_parts) > 1:
+            schema_parts = relation_parts[:-1]
+            connection.execute(f"CREATE SCHEMA IF NOT EXISTS {qualified_name(*schema_parts)}")
+        connection.execute(
+            f"CREATE OR REPLACE VIEW {qualified_name(*relation_parts)} AS {query_sql}"
+        )
+
+
 def _query_worker_entry(
     *,
     event_queue: Any,
@@ -672,6 +721,7 @@ def _query_worker_entry(
     execution_mode: str,
     max_result_rows: int,
     database_path: str | None = None,
+    source_summaries: list[dict[str, object]] | None = None,
 ) -> None:
     started = time.perf_counter()
     connection: Any = None
@@ -716,6 +766,31 @@ def _query_worker_entry(
                 "processId": os.getpid(),
             },
         )
+
+        if execution_mode != QUERY_EXECUTION_POSTGRES_NATIVE and source_summaries:
+            _put_worker_event(
+                event_queue,
+                {
+                    "type": "phase",
+                    "phase": "preparing_sources",
+                    "progressLabel": "Preparing query sources...",
+                    "message": "Preparing isolated query sources.",
+                },
+            )
+            bootstrap_started = time.perf_counter()
+            _bootstrap_duckdb_source_views(connection, source_summaries)
+            _put_worker_event(
+                event_queue,
+                {
+                    "type": "phase",
+                    "phase": "sources_prepared",
+                    "progressLabel": "Query sources ready.",
+                    "message": "Isolated query sources are ready.",
+                    "timings": {
+                        "sourceBootstrapMs": (time.perf_counter() - bootstrap_started) * 1000,
+                    },
+                },
+            )
 
         def execute_query() -> None:
             nonlocal execution_result, first_row_ms, engine_query_ms, result_fetch_ms, execution_error
@@ -922,6 +997,9 @@ class DuckDBQueryAccessCoordinator:
         self._active_reads = 0
         self._active_write = False
         self._waiting_writes = 0
+        self._read_owners: dict[str, float] = {}
+        self._write_owner_job_id = ""
+        self._write_owner_started_monotonic: float | None = None
 
     def acquire(
         self,
@@ -929,6 +1007,7 @@ class DuckDBQueryAccessCoordinator:
         is_cancelled: Any,
         *,
         on_waiting: Callable[[], None] | None = None,
+        owner_job_id: str = "",
     ) -> bool:
         if execution_mode == QUERY_EXECUTION_POSTGRES_NATIVE:
             return True
@@ -942,6 +1021,9 @@ class DuckDBQueryAccessCoordinator:
                         on_waiting()
                     self._condition.wait(timeout=0.1)
                 self._active_reads += 1
+                normalized_owner = str(owner_job_id or "").strip()
+                if normalized_owner:
+                    self._read_owners[normalized_owner] = time.monotonic()
                 return True
 
             self._waiting_writes += 1
@@ -953,26 +1035,70 @@ class DuckDBQueryAccessCoordinator:
                         on_waiting()
                     self._condition.wait(timeout=0.1)
                 self._active_write = True
+                self._write_owner_job_id = str(owner_job_id or "").strip()
+                self._write_owner_started_monotonic = time.monotonic()
                 return True
             finally:
                 self._waiting_writes = max(0, self._waiting_writes - 1)
 
-    def release(self, execution_mode: str) -> None:
+    def release(self, execution_mode: str, *, owner_job_id: str = "") -> None:
         if execution_mode == QUERY_EXECUTION_POSTGRES_NATIVE:
             return
         with self._condition:
             if execution_mode == QUERY_EXECUTION_DUCKDB_READ:
-                self._active_reads = max(0, self._active_reads - 1)
+                normalized_owner = str(owner_job_id or "").strip()
+                if normalized_owner and normalized_owner in self._read_owners:
+                    self._read_owners.pop(normalized_owner, None)
+                    self._active_reads = max(0, self._active_reads - 1)
+                elif not normalized_owner:
+                    self._active_reads = max(0, self._active_reads - 1)
+                    if self._active_reads == 0:
+                        self._read_owners.clear()
             else:
                 self._active_write = False
+                self._write_owner_job_id = ""
+                self._write_owner_started_monotonic = None
             self._condition.notify_all()
+
+    def force_release_owner(self, owner_job_id: str) -> bool:
+        normalized_owner = str(owner_job_id or "").strip()
+        if not normalized_owner:
+            return False
+        with self._condition:
+            released = False
+            if self._write_owner_job_id == normalized_owner and self._active_write:
+                self._active_write = False
+                self._write_owner_job_id = ""
+                self._write_owner_started_monotonic = None
+                released = True
+            if normalized_owner in self._read_owners:
+                self._read_owners.pop(normalized_owner, None)
+                self._active_reads = max(0, self._active_reads - 1)
+                released = True
+            if released:
+                self._condition.notify_all()
+            return released
 
     def state(self) -> dict[str, object]:
         with self._condition:
+            now_monotonic = time.monotonic()
+            write_owner_age_ms = (
+                (now_monotonic - self._write_owner_started_monotonic) * 1000
+                if self._write_owner_started_monotonic is not None
+                else None
+            )
+            read_owner_ages = {
+                owner: (now_monotonic - started) * 1000
+                for owner, started in self._read_owners.items()
+            }
             return {
                 "active_reads": self._active_reads,
                 "active_write": self._active_write,
                 "waiting_writes": self._waiting_writes,
+                "write_owner_job_id": self._write_owner_job_id,
+                "write_owner_age_ms": write_owner_age_ms,
+                "read_owner_job_ids": sorted(self._read_owners),
+                "read_owner_ages_ms": read_owner_ages,
             }
 
 
@@ -982,6 +1108,7 @@ class QueryJobRecord:
     sort_index: int
     execution_mode: str
     execution_sql: str
+    duckdb_execution_path: str = ""
     worker_database_path: str | None = None
     source_summaries: list[dict[str, object]] = field(default_factory=list)
     cancel_requested: bool = False
@@ -1005,6 +1132,7 @@ class QueryJobRecord:
     last_log_heartbeat_monotonic: float = 0.0
     logged_events: set[str] = field(default_factory=set)
     latest_duckdb_progress: dict[str, object] = field(default_factory=dict)
+    last_wait_coordinator_fields: dict[str, object] = field(default_factory=dict)
 
 
 class QueryJobManager:
@@ -1057,6 +1185,32 @@ class QueryJobManager:
         source_types = infer_source_types(source_ids)
         normalized_execution_sql = str(execution_sql or sql or "").strip()
         execution_mode = classify_query_execution(normalized_execution_sql, source_ids)
+        normalized_touched_relations = [
+            str(value).strip()
+            for value in (touched_relations or [])
+            if str(value).strip()
+        ]
+        normalized_touched_buckets = [
+            str(value).strip()
+            for value in (touched_buckets or [])
+            if str(value).strip()
+        ]
+        normalized_source_summaries = [
+            dict(item)
+            for item in (source_summaries or [])
+            if isinstance(item, dict)
+        ]
+        duckdb_execution_path = self._duckdb_execution_path(
+            execution_mode=execution_mode,
+            source_ids=source_ids,
+            touched_relations=normalized_touched_relations,
+            touched_buckets=normalized_touched_buckets,
+            source_summaries=normalized_source_summaries,
+        )
+        worker_database_path = self._worker_database_path(
+            execution_mode=execution_mode,
+            duckdb_execution_path=duckdb_execution_path,
+        )
         now = utc_now_iso()
         resolved_title = notebook_title.strip() or self._notebook_title_resolver(notebook_id) or "Notebook"
         backend_name = "PostgreSQL Native" if execution_mode == QUERY_EXECUTION_POSTGRES_NATIVE else "VMTP DUCKDB"
@@ -1082,10 +1236,11 @@ class QueryJobManager:
             message="Waiting to start.",
             data_sources=source_ids,
             source_types=source_types,
-            touched_relations=[str(value).strip() for value in (touched_relations or []) if str(value).strip()],
-            touched_buckets=[str(value).strip() for value in (touched_buckets or []) if str(value).strip()],
+            touched_relations=normalized_touched_relations,
+            touched_buckets=normalized_touched_buckets,
             backend_name=backend_name,
             execution_mode=execution_mode,
+            duckdb_execution_path=duckdb_execution_path,
             timings=timings,
             can_cancel=True,
         )
@@ -1097,17 +1252,9 @@ class QueryJobManager:
                 sort_index=self._sort_counter,
                 execution_mode=execution_mode,
                 execution_sql=normalized_execution_sql,
-                worker_database_path=self._worker_database_path(
-                    execution_mode=execution_mode,
-                    source_ids=source_ids,
-                    touched_relations=touched_relations,
-                    touched_buckets=touched_buckets,
-                ),
-                source_summaries=[
-                    dict(item)
-                    for item in (source_summaries or [])
-                    if isinstance(item, dict)
-                ],
+                duckdb_execution_path=duckdb_execution_path,
+                worker_database_path=worker_database_path,
+                source_summaries=normalized_source_summaries,
                 last_log_heartbeat_monotonic=time.monotonic(),
             )
             self._jobs[snapshot.job_id] = record
@@ -1349,6 +1496,7 @@ class QueryJobManager:
             "cell_id",
             "backend",
             "execution_mode",
+            "duckdb_execution_path",
             "process_id",
             "elapsed_seconds",
             "cpu_percent",
@@ -1370,6 +1518,10 @@ class QueryJobManager:
             "duckdb_coordinator_active_reads",
             "duckdb_coordinator_active_write",
             "duckdb_coordinator_waiting_writes",
+            "duckdb_lock_owner_job_id",
+            "duckdb_lock_owner_mode",
+            "duckdb_lock_owner_age_ms",
+            "duckdb_lock_queue_depth",
         ):
             value = fields.get(key)
             if value not in (None, "", [], {}):
@@ -1383,6 +1535,14 @@ class QueryJobManager:
                 "duckdb_progress_fraction",
                 "duckdb_progress_percent",
                 "duckdb_progress_available",
+                "duckdb_execution_path",
+                "duckdb_coordinator_active_reads",
+                "duckdb_coordinator_active_write",
+                "duckdb_coordinator_waiting_writes",
+                "duckdb_lock_owner_job_id",
+                "duckdb_lock_owner_mode",
+                "duckdb_lock_owner_age_ms",
+                "duckdb_lock_queue_depth",
             }
             and value not in (None, "", [], {})
         }
@@ -1404,11 +1564,89 @@ class QueryJobManager:
 
     def _coordinator_log_fields(self) -> dict[str, object]:
         state = self._access_coordinator.state()
-        return {
+        fields: dict[str, object] = {
             "duckdb_coordinator_active_reads": state.get("active_reads"),
             "duckdb_coordinator_active_write": state.get("active_write"),
             "duckdb_coordinator_waiting_writes": state.get("waiting_writes"),
+            "duckdb_lock_queue_depth": state.get("waiting_writes"),
         }
+        write_owner = str(state.get("write_owner_job_id") or "").strip()
+        if write_owner:
+            fields["duckdb_lock_owner_job_id"] = write_owner
+            fields["duckdb_lock_owner_mode"] = QUERY_EXECUTION_DUCKDB_WRITE
+            owner_age_ms = _safe_timing_ms(state.get("write_owner_age_ms"))
+            if owner_age_ms is not None:
+                fields["duckdb_lock_owner_age_ms"] = owner_age_ms
+        read_owners = state.get("read_owner_job_ids")
+        if isinstance(read_owners, list) and read_owners and not write_owner:
+            fields["duckdb_lock_owner_job_id"] = read_owners[0]
+            fields["duckdb_lock_owner_mode"] = QUERY_EXECUTION_DUCKDB_READ
+            read_ages = state.get("read_owner_ages_ms")
+            if isinstance(read_ages, dict):
+                owner_age_ms = _safe_timing_ms(read_ages.get(read_owners[0]))
+                if owner_age_ms is not None:
+                    fields["duckdb_lock_owner_age_ms"] = owner_age_ms
+        return fields
+
+    def _apply_coordinator_state_locked(
+        self,
+        record: QueryJobRecord,
+        state: dict[str, object],
+    ) -> None:
+        write_owner = str(state.get("write_owner_job_id") or "").strip()
+        waiting_writes = state.get("waiting_writes")
+        if write_owner:
+            record.snapshot.duckdb_lock_owner_job_id = write_owner
+            record.snapshot.duckdb_lock_owner_mode = QUERY_EXECUTION_DUCKDB_WRITE
+            owner_age_ms = _safe_timing_ms(state.get("write_owner_age_ms"))
+            record.snapshot.duckdb_lock_owner_age_ms = owner_age_ms
+        else:
+            read_owners = state.get("read_owner_job_ids")
+            if isinstance(read_owners, list) and read_owners:
+                owner = str(read_owners[0] or "").strip()
+                record.snapshot.duckdb_lock_owner_job_id = owner
+                record.snapshot.duckdb_lock_owner_mode = QUERY_EXECUTION_DUCKDB_READ
+                read_ages = state.get("read_owner_ages_ms")
+                owner_age_ms = None
+                if isinstance(read_ages, dict):
+                    owner_age_ms = _safe_timing_ms(read_ages.get(owner))
+                record.snapshot.duckdb_lock_owner_age_ms = owner_age_ms
+            else:
+                record.snapshot.duckdb_lock_owner_job_id = ""
+                record.snapshot.duckdb_lock_owner_mode = ""
+                record.snapshot.duckdb_lock_owner_age_ms = None
+        try:
+            record.snapshot.duckdb_lock_queue_depth = int(waiting_writes or 0)
+        except (TypeError, ValueError):
+            record.snapshot.duckdb_lock_queue_depth = None
+
+    def _recover_stale_coordinator_owner(self, waiting_job_id: str) -> None:
+        state = self._access_coordinator.state()
+        owner_job_id = str(state.get("write_owner_job_id") or "").strip()
+        if not owner_job_id or owner_job_id == waiting_job_id:
+            return
+
+        should_release = False
+        with self._condition:
+            owner_record = self._jobs.get(owner_job_id)
+            if owner_record is None:
+                return
+            owner_process = owner_record.process
+            if owner_record.snapshot.status in TERMINAL_QUERY_STATUSES:
+                should_release = True
+            elif owner_process is not None:
+                with suppress(Exception):
+                    should_release = not bool(owner_process.is_alive())
+
+        if not should_release:
+            return
+        if self._access_coordinator.force_release_owner(owner_job_id):
+            self._log_query_job_event(
+                waiting_job_id,
+                "duckdb_lock_recovered",
+                level=logging.WARNING,
+                extra={"duckdb_lock_owner_job_id": owner_job_id},
+            )
 
     def _query_job_log_fields(
         self,
@@ -1430,9 +1668,18 @@ class QueryJobManager:
             "status": snapshot.status,
             "backend": snapshot.backend_name,
             "execution_mode": snapshot.execution_mode,
+            "duckdb_execution_path": snapshot.duckdb_execution_path,
         }
         if snapshot.process_id is not None:
             fields["process_id"] = snapshot.process_id
+        if snapshot.duckdb_lock_owner_job_id:
+            fields["duckdb_lock_owner_job_id"] = snapshot.duckdb_lock_owner_job_id
+        if snapshot.duckdb_lock_owner_mode:
+            fields["duckdb_lock_owner_mode"] = snapshot.duckdb_lock_owner_mode
+        if snapshot.duckdb_lock_owner_age_ms is not None:
+            fields["duckdb_lock_owner_age_ms"] = round(float(snapshot.duckdb_lock_owner_age_ms), 3)
+        if snapshot.duckdb_lock_queue_depth is not None:
+            fields["duckdb_lock_queue_depth"] = snapshot.duckdb_lock_queue_depth
         if snapshot.duration_ms:
             fields["duration_ms"] = round(float(snapshot.duration_ms), 3)
         if snapshot.progress_label:
@@ -1461,6 +1708,7 @@ class QueryJobManager:
             ("clientPreSubmitMs", "client_pre_submit_ms"),
             ("backendPrepareMs", "backend_prepare_ms"),
             ("engineAccessWaitMs", "engine_access_wait_ms"),
+            ("sourceBootstrapMs", "source_bootstrap_ms"),
             ("workerStartupMs", "worker_startup_ms"),
             ("engineQueryMs", "engine_query_ms"),
             ("resultFetchMs", "result_fetch_ms"),
@@ -1550,10 +1798,10 @@ class QueryJobManager:
                 record.snapshot.message = "Preparing query execution."
                 self._touch_locked()
 
-            requires_duckdb_file_access = not (
-                record.execution_mode == QUERY_EXECUTION_POSTGRES_NATIVE
-                or record.worker_database_path == ":memory:"
-            )
+            requires_duckdb_file_access = record.duckdb_execution_path in {
+                DUCKDB_EXECUTION_PATH_SHARED_FILE_READ,
+                DUCKDB_EXECUTION_PATH_SHARED_FILE_WRITE,
+            }
             if requires_duckdb_file_access:
                 wait_started = time.monotonic()
                 wait_reported = False
@@ -1561,12 +1809,16 @@ class QueryJobManager:
                 def on_waiting() -> None:
                     nonlocal wait_reported
                     wait_reported = True
+                    wait_fields = self._coordinator_log_fields()
+                    self._recover_stale_coordinator_owner(job_id)
                     with self._condition:
                         waiting_record = self._jobs.get(job_id)
                         if waiting_record is None or waiting_record.snapshot.status in TERMINAL_QUERY_STATUSES:
                             return
                         waiting_record.snapshot.progress_label = "Waiting for DuckDB access..."
                         waiting_record.snapshot.message = "Waiting for DuckDB file access to become available."
+                        self._apply_coordinator_state_locked(waiting_record, self._access_coordinator.state())
+                        waiting_record.last_wait_coordinator_fields = dict(wait_fields)
                         waiting_record.snapshot.updated_at = utc_now_iso()
                         self._touch_locked()
                     self._log_query_heartbeat_if_due(job_id)
@@ -1575,6 +1827,7 @@ class QueryJobManager:
                     record.execution_mode,
                     lambda: self._is_cancelled_or_terminal(job_id),
                     on_waiting=on_waiting,
+                    owner_job_id=job_id,
                 )
                 if not access_acquired:
                     return
@@ -1587,14 +1840,22 @@ class QueryJobManager:
                     return
                 record.access_acquired = access_acquired
                 self._set_timing_locked(record, "engineAccessWaitMs", access_wait_ms)
+                self._apply_coordinator_state_locked(record, self._access_coordinator.state())
                 record.snapshot.updated_at = utc_now_iso()
                 self._touch_locked()
 
             if requires_duckdb_file_access and access_wait_ms > 0:
+                with self._condition:
+                    record = self._jobs.get(job_id)
+                    wait_fields = (
+                        dict(record.last_wait_coordinator_fields)
+                        if record is not None and record.last_wait_coordinator_fields
+                        else self._coordinator_log_fields()
+                    )
                 self._log_query_job_event(
                     job_id,
                     "engine_waiting",
-                    extra=self._coordinator_log_fields(),
+                    extra=wait_fields,
                 )
             self._log_query_job_event(
                 job_id,
@@ -1608,7 +1869,7 @@ class QueryJobManager:
                 record = self._jobs.get(job_id)
                 execution_mode = record.execution_mode if record is not None else QUERY_EXECUTION_DUCKDB_WRITE
             if access_acquired:
-                self._access_coordinator.release(execution_mode)
+                self._access_coordinator.release(execution_mode, owner_job_id=job_id)
             try:
                 self._metadata_refresher()
             except Exception:
@@ -1633,6 +1894,7 @@ class QueryJobManager:
                     "execution_mode": record.execution_mode,
                     "max_result_rows": self._max_result_rows,
                     "database_path": record.worker_database_path,
+                    "source_summaries": record.source_summaries,
                 },
                 daemon=True,
                 name=f"bdw-query-worker-{job_id[:8]}",
@@ -1686,18 +1948,53 @@ class QueryJobManager:
             record.process_metrics = None
 
     @staticmethod
-    def _worker_database_path(
+    def _duckdb_execution_path(
         *,
         execution_mode: str,
         source_ids: list[str],
         touched_relations: list[str] | None,
         touched_buckets: list[str] | None,
+        source_summaries: list[dict[str, object]] | None,
+    ) -> str:
+        if execution_mode == QUERY_EXECUTION_POSTGRES_NATIVE:
+            return DUCKDB_EXECUTION_PATH_POSTGRES_NATIVE
+        if execution_mode != QUERY_EXECUTION_DUCKDB_READ:
+            return DUCKDB_EXECUTION_PATH_SHARED_FILE_WRITE
+
+        normalized_touched_relations = [
+            str(relation or "").strip()
+            for relation in (touched_relations or [])
+            if str(relation or "").strip()
+        ]
+        if not source_ids and not normalized_touched_relations and not touched_buckets:
+            return DUCKDB_EXECUTION_PATH_ISOLATED_READ
+
+        relation_manifest = {
+            _normalize_relation_key(summary.get("relation"))
+            for summary in (source_summaries or [])
+            if isinstance(summary, dict) and _source_summary_has_query_sql(summary)
+        }
+        missing_relations = [
+            relation
+            for relation in normalized_touched_relations
+            if not _is_direct_file_relation(relation)
+            and _normalize_relation_key(relation) not in relation_manifest
+        ]
+        if missing_relations:
+            return DUCKDB_EXECUTION_PATH_SHARED_FILE_READ
+        return DUCKDB_EXECUTION_PATH_ISOLATED_READ
+
+    @staticmethod
+    def _worker_database_path(
+        *,
+        execution_mode: str,
+        duckdb_execution_path: str,
     ) -> str | None:
         if execution_mode != QUERY_EXECUTION_DUCKDB_READ:
             return None
-        if source_ids or touched_relations or touched_buckets:
-            return None
-        return ":memory:"
+        if duckdb_execution_path == DUCKDB_EXECUTION_PATH_ISOLATED_READ:
+            return ":memory:"
+        return None
 
     def _drain_worker_events(self, job_id: str) -> None:
         with self._condition:

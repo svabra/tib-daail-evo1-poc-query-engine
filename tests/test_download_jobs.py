@@ -134,7 +134,7 @@ def token_from_job(job: dict[str, object]) -> str:
 
 
 class DownloadJobManagerTests(unittest.TestCase):
-    def test_s3_download_job_creates_zip64_artifact_and_reuses_ready_revision(self) -> None:
+    def test_s3_download_job_creates_zip64_artifact(self) -> None:
         fake_s3 = FakeS3Client()
         fake_s3.objects[("workspace", "data/alpha.csv")] = b"id,name\n1,alpha\n2,beta\n"
         manager = manager_for(fake_s3)
@@ -146,14 +146,6 @@ class DownloadJobManagerTests(unittest.TestCase):
             file_format="csv",
         )
         ready = wait_for_status(manager, str(started["jobId"]), "ready")
-
-        reused = manager.start_s3_job(
-            bucket="workspace",
-            key="data/alpha.csv",
-            filename="alpha.csv",
-            file_format="csv",
-        )
-        self.assertEqual(reused["jobId"], started["jobId"])
 
         stream = manager.artifact_stream(
             job_id=str(ready["jobId"]),
@@ -169,6 +161,35 @@ class DownloadJobManagerTests(unittest.TestCase):
             self.assertEqual(archive.read("alpha.csv"), b"id,name\n1,alpha\n2,beta\n")
             self.assertTrue(info.file_size >= 0)
         self.assertEqual(manager._settings.download_compression_level, 9)
+        self.assertEqual(ready["sourceSizeBytes"], len(b"id,name\n1,alpha\n2,beta\n"))
+
+    def test_s3_download_job_is_created_before_missing_source_fails(self) -> None:
+        fake_s3 = FakeS3Client()
+        manager = manager_for(fake_s3)
+
+        started = manager.start_s3_job(
+            bucket="workspace",
+            key="data/missing.csv",
+            filename="missing.csv",
+            file_format="csv",
+        )
+
+        self.assertTrue(str(started["jobId"]).startswith("download-"))
+        failed = wait_for_status(manager, str(started["jobId"]), "failed")
+        self.assertEqual(failed["sourceBucket"], "workspace")
+        self.assertEqual(failed["sourceKey"], "data/missing.csv")
+
+    def test_s3_download_job_rejects_sql_alias_bucket_before_job_creation(self) -> None:
+        fake_s3 = FakeS3Client()
+        manager = manager_for(fake_s3)
+
+        with self.assertRaisesRegex(ValueError, "physical bucket name"):
+            manager.start_s3_job(
+                bucket="n_1_workspace",
+                key="data/alpha.csv",
+                filename="alpha.csv",
+                file_format="csv",
+            )
 
     def test_s3_download_job_rejects_internal_locations(self) -> None:
         fake_s3 = FakeS3Client()

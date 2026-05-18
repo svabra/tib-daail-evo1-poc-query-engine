@@ -7,6 +7,7 @@ export function createQueryUi(helpers) {
     queryJobEventDateTimeCopy,
     queryJobIsRunning,
     queryJobStatusCopy,
+    isQueryResultCollapsed = () => false,
   } = helpers;
 
   const bytesPerMegabyte = 1024 * 1024;
@@ -547,6 +548,8 @@ export function createQueryUi(helpers) {
       return emptyQueryResultsMarkup(cellId);
     }
 
+    const collapsed = Boolean(isQueryResultCollapsed(cellId, job));
+    const resultBodyId = `query-result-body-${cellId}`;
     const showExportActions = job.status === "completed" && job.columns.length > 0;
     const rowsBadge = queryRowsShownLabel(job);
     const showRowsBadge = queryJobIsRunning(job) || Number(job.rowsShown || 0) > 0 || Boolean(job.truncated);
@@ -597,6 +600,8 @@ export function createQueryUi(helpers) {
         class="result-panel"
         data-cell-result
         data-query-job-id="${escapeHtml(job.jobId || "")}" 
+        data-query-result-collapse-key="${escapeHtml(job.jobId || cellId || "")}"
+        data-query-result-collapsed="${collapsed ? "true" : "false"}"
       >
         <header class="result-header">
           <div class="result-header-copy">
@@ -607,11 +612,24 @@ export function createQueryUi(helpers) {
             </div>
           </div>
           <div class="result-header-actions">
+            <button
+              type="button"
+              class="result-collapse-toggle"
+              data-query-result-toggle
+              aria-label="${collapsed ? "Show result" : "Hide result"}"
+              aria-expanded="${collapsed ? "false" : "true"}"
+              aria-controls="${escapeHtml(resultBodyId)}"
+              title="${collapsed ? "Show result" : "Hide result"}"
+            >
+              <span class="result-collapse-chevron" aria-hidden="true"></span>
+            </button>
             <span class="result-badge${queryJobIsRunning(job) ? " is-live" : ""}" ${showRowsBadge ? "" : "hidden"}>${escapeHtml(rowsBadge)}</span>
             ${resultExportMenuMarkup(showExportActions, job.jobId || "")}
           </div>
         </header>
-        ${resultBody}
+        <div id="${escapeHtml(resultBodyId)}" class="result-body" data-query-result-body ${collapsed ? "hidden" : ""}>
+          ${resultBody}
+        </div>
       </section>
     `;
   }

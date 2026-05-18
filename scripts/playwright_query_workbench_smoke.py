@@ -48,6 +48,23 @@ async def ensure_query_notebook(page, base_url: str, timeout_ms: int) -> None:
 async def write_smoke_sql(page, timeout_ms: int) -> None:
     cell = page.locator("[data-query-cell]:visible").first
     await cell.wait_for(state="visible", timeout=timeout_ms)
+    editor_content = cell.locator(".cm-content").first
+    if await editor_content.count():
+        await editor_content.click()
+        control_key = "Meta+A" if sys.platform == "darwin" else "Control+A"
+        await page.keyboard.press(control_key)
+        await page.keyboard.type(SMOKE_SQL)
+        cell_handle = await cell.element_handle()
+        await page.wait_for_function(
+            """([cell, sql]) => {
+                const textarea = cell.querySelector("[data-editor-source]");
+                return textarea instanceof HTMLTextAreaElement && textarea.value === sql;
+            }""",
+            arg=[cell_handle, SMOKE_SQL],
+            timeout=timeout_ms,
+        )
+        return
+
     await cell.evaluate(
         """
         (cell, sql) => {
@@ -65,6 +82,55 @@ async def write_smoke_sql(page, timeout_ms: int) -> None:
         """,
         SMOKE_SQL,
     )
+
+
+async def assert_sql_copy_button(page, timeout_ms: int) -> None:
+    cell = page.locator("[data-query-cell]:visible").first
+    editor = cell.locator("[data-editor-root]").first
+    copy_button = editor.locator("[data-copy-editor-sql]").first
+    await copy_button.wait_for(state="attached", timeout=timeout_ms)
+    await page.mouse.move(5, 5)
+    button_handle = await copy_button.element_handle()
+    await page.wait_for_function(
+        """button => Number.parseFloat(getComputedStyle(button).opacity || "0") < 0.05""",
+        arg=button_handle,
+        timeout=timeout_ms,
+    )
+
+    opacity_before = await copy_button.evaluate("node => getComputedStyle(node).opacity")
+    if float(opacity_before) > 0.05:
+        raise RuntimeError("The SQL copy button is visible before hovering over the editor.")
+
+    await editor.hover()
+    await page.wait_for_function(
+        """button => Number.parseFloat(getComputedStyle(button).opacity || "0") > 0.9""",
+        arg=button_handle,
+        timeout=timeout_ms,
+    )
+    await copy_button.click()
+    copied = await page.evaluate("navigator.clipboard.readText()")
+    if copied.strip() != SMOKE_SQL:
+        raise RuntimeError(f"The SQL copy button copied {copied!r} instead of the editor SQL.")
+
+
+async def assert_result_collapse_toggle(page, timeout_ms: int) -> None:
+    cell = page.locator("[data-query-cell]:visible").first
+    result_root = cell.locator("[data-cell-result]").first
+    body = result_root.locator("[data-query-result-body]").first
+    toggle = result_root.locator("[data-query-result-toggle]").first
+    await toggle.wait_for(state="visible", timeout=timeout_ms)
+    await body.wait_for(state="visible", timeout=timeout_ms)
+
+    if (await toggle.get_attribute("aria-expanded")) != "true":
+        raise RuntimeError("The result collapse toggle did not start expanded.")
+    await toggle.click()
+    await body.wait_for(state="hidden", timeout=timeout_ms)
+    if (await toggle.get_attribute("aria-expanded")) != "false":
+        raise RuntimeError("The result collapse toggle did not mark the collapsed state.")
+    await toggle.click()
+    await body.wait_for(state="visible", timeout=timeout_ms)
+    if (await toggle.get_attribute("aria-expanded")) != "true":
+        raise RuntimeError("The result collapse toggle did not restore the expanded state.")
 
 
 async def run_query_and_assert_result(page, timeout_ms: int) -> str:
@@ -224,10 +290,12 @@ async def assert_notebook_load_scrolls_to_top(page, timeout_ms: int) -> None:
 async def run_smoke(args: argparse.Namespace) -> int:
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=args.headless)
-        page = await browser.new_page(
+        context = await browser.new_context(
             viewport={"width": 1440, "height": 1200},
             base_url=args.base_url.rstrip("/"),
+            permissions=["clipboard-read", "clipboard-write"],
         )
+        page = await context.new_page()
         console_messages: list[str] = []
         responses: list[tuple[str, str, int]] = []
         page.on(
@@ -250,7 +318,9 @@ async def run_smoke(args: argparse.Namespace) -> int:
         try:
             await ensure_query_notebook(page, args.base_url, args.timeout_ms)
             await write_smoke_sql(page, args.timeout_ms)
+            await assert_sql_copy_button(page, args.timeout_ms)
             job_id = await run_query_and_assert_result(page, args.timeout_ms)
+            await assert_result_collapse_toggle(page, args.timeout_ms)
             await assert_notebook_load_scrolls_to_top(page, args.timeout_ms)
         except (PlaywrightTimeoutError, RuntimeError) as exc:
             print(str(exc), file=sys.stderr)
@@ -259,9 +329,11 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     print(f"HTTP {method} {status} {url}", file=sys.stderr)
             for message in console_messages:
                 print(message, file=sys.stderr)
+            await context.close()
             await browser.close()
             return 1
 
+        await context.close()
         await browser.close()
 
     print(f"Playwright query workbench smoke passed for job {job_id}.")

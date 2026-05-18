@@ -195,6 +195,18 @@ export function createNotebookWorkspaceMarkup(helpers) {
             </div>
           </div>
           <div class="editor-frame" data-editor-root data-editor-name="sql-${escapeHtml(cell.cellId)}" data-editor-language="${escapeHtml(cellLanguage)}">
+            <button
+              type="button"
+              class="editor-copy-button"
+              data-copy-editor-sql
+              aria-label="Copy SQL"
+              title="Copy SQL"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="8" y="8" width="11" height="11" rx="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
             <textarea name="sql" data-editor-source data-default-sql="${escapeHtml(cell.sql)}" data-editor-language="${escapeHtml(cellLanguage)}" rows="${preferredSqlEditorRows(cell.sql)}" spellcheck="false">${escapeHtml(cell.sql)}</textarea>
           </div>
           <div class="query-source-validation" data-query-source-validation data-query-source-validation-status="unchecked" aria-live="polite" ${cellLanguage === "python" ? "hidden" : ""}>

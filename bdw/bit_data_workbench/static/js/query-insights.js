@@ -212,8 +212,9 @@ export function createQueryInsights({
     const parts = [
       ["total", totalMs],
       ["prepare", timingValue("backendPrepareMs")],
-      ["allocation", timingValue("engineAccessWaitMs")],
+      ["file lock", timingValue("engineAccessWaitMs")],
       ["startup", timingValue("workerStartupMs")],
+      ["source setup", timingValue("sourceBootstrapMs")],
       ["query", timingValue("engineQueryMs")],
       ["fetch", timingValue("resultFetchMs") ?? (Number.isFinite(Number(job?.fetchMs)) ? Number(job.fetchMs) : null)],
       ["delivery", deliveryMs],
@@ -225,7 +226,7 @@ export function createQueryInsights({
         value: parts.map(([label, value]) => `${label} ${formatQueryDuration(value)}`).join(" | "),
         tone: "neutral",
         title:
-          "Breaks the run into browser delivery, backend preparation, engine allocation, worker startup, query execution, and row fetching.",
+          "Breaks the run into browser delivery, backend preparation, shared DuckDB file lock wait, worker startup, isolated source setup, query execution, and row fetching.",
       };
     }
 

@@ -42,6 +42,7 @@ export function normalizeQueryJob(job) {
     fetchMs: Number.isFinite(fetchMs) ? Math.max(0, fetchMs) : null,
     progress: Number.isFinite(progress) ? Math.max(0, Math.min(1, progress)) : null,
     executionMode: String(job.executionMode ?? "").trim(),
+    duckdbExecutionPath: String(job.duckdbExecutionPath ?? "").trim(),
     processId: Number.isFinite(processId) && processId > 0 ? Math.round(processId) : null,
     cpuPercent: Number.isFinite(cpuPercent) ? Math.max(0, cpuPercent) : null,
     averageCpuPercent: Number.isFinite(averageCpuPercent) ? Math.max(0, averageCpuPercent) : null,

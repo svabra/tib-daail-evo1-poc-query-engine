@@ -255,7 +255,12 @@ export function createDownloadJobsController(helpers) {
       return;
     }
 
-    title.textContent = job.status === "ready" ? "ZIP download ready" : "Preparing ZIP download";
+    title.textContent =
+      job.status === "ready"
+        ? "ZIP download ready"
+        : job.status === "failed"
+          ? "Prepared ZIP failed"
+          : "Preparing ZIP download";
     const percent = progressPercent(job);
     body.innerHTML = `
       <div class="download-job-dialog-status">

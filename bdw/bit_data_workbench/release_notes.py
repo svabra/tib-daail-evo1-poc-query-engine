@@ -1,9 +1,41 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.7. Keep entries concise and
+# Derived from git history through version 0.9.8. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.8",
+        "releasedAt": "2026-05-18T13:43:12+02:00",
+        "features": [
+            (
+                "Read-only S3 and local workspace DuckDB queries now run in "
+                "isolated worker-local connections, avoiding long waits on the "
+                "shared DuckDB file lock while keeping process-based cancel and "
+                "kill handling."
+            ),
+            (
+                "Query timing and progress diagnostics now identify the DuckDB "
+                "execution path, shared-lock owner, queue depth, source setup time, "
+                "and stale lock recovery details."
+            ),
+            (
+                "Notebook SQL editors now expose a hover copy action, and query "
+                "result panels can be collapsed and expanded without losing the "
+                "rendered result state."
+            ),
+            (
+                "New S3 bucket names are normalized to SQL-friendly, S3-valid names, "
+                "while existing digit-start buckets continue to work for listing, "
+                "querying, CSV downloads, and prepared ZIP downloads."
+            ),
+            (
+                "Prepared S3 ZIP downloads now create a background job before "
+                "object validation, so production users see the download popup and "
+                "any later object-store failure is reported inside that job."
+            ),
+        ],
+    },
     {
         "version": "0.9.7",
         "releasedAt": "2026-05-18T11:25:57+02:00",

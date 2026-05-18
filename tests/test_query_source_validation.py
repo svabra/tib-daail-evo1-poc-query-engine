@@ -275,6 +275,7 @@ class QuerySourceValidationTests(unittest.TestCase):
                     "key": "",
                     "path": "",
                     "format": "",
+                    "query_sql": "",
                 }
             ],
         )

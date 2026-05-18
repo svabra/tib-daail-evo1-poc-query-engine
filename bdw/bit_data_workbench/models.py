@@ -600,6 +600,11 @@ class QueryJobDefinition:
     touched_buckets: list[str] = field(default_factory=list)
     backend_name: str = "duckdb"
     execution_mode: str = ""
+    duckdb_execution_path: str = ""
+    duckdb_lock_owner_job_id: str = ""
+    duckdb_lock_owner_mode: str = ""
+    duckdb_lock_owner_age_ms: float | None = None
+    duckdb_lock_queue_depth: int | None = None
     process_id: int | None = None
     cpu_percent: float | None = None
     average_cpu_percent: float | None = None
@@ -649,6 +654,11 @@ class QueryJobDefinition:
             "touchedBuckets": list(self.touched_buckets),
             "backendName": self.backend_name,
             "executionMode": self.execution_mode,
+            "duckdbExecutionPath": self.duckdb_execution_path,
+            "duckdbLockOwnerJobId": self.duckdb_lock_owner_job_id,
+            "duckdbLockOwnerMode": self.duckdb_lock_owner_mode,
+            "duckdbLockOwnerAgeMs": self.duckdb_lock_owner_age_ms,
+            "duckdbLockQueueDepth": self.duckdb_lock_queue_depth,
             "processId": self.process_id,
             "cpuPercent": self.cpu_percent,
             "averageCpuPercent": self.average_cpu_percent,

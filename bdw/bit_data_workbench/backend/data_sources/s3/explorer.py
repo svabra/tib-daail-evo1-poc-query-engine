@@ -35,6 +35,7 @@ from ...s3_hidden import normalize_data_exchange_prefix
 
 
 BUCKET_NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
+BUCKET_CREATE_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9.-]{1,61}[a-z0-9]$")
 
 
 def normalize_s3_prefix(prefix: str | None) -> str:
@@ -58,6 +59,32 @@ def normalize_s3_bucket_name(bucket_name: str) -> str:
             "Bucket names must be 3-63 characters and use lowercase letters, numbers, dots, or hyphens."
         )
     return normalized
+
+
+def normalize_s3_bucket_name_for_create(bucket_name: str) -> str:
+    normalized = str(bucket_name or "").strip().lower()
+    normalized = re.sub(r"[^a-z0-9.-]+", "-", normalized)
+    normalized = re.sub(r"-+", "-", normalized)
+    normalized = re.sub(r"\.+", ".", normalized).strip("-.")
+    if normalized and normalized[0].isdigit():
+        normalized = f"bdw-{normalized}"
+    if len(normalized) > 63:
+        normalized = normalized[:63].rstrip("-.")
+    if not BUCKET_CREATE_NAME_PATTERN.fullmatch(normalized):
+        raise ValueError(
+            "Bucket names must normalize to 3-63 characters, start with a lowercase letter, "
+            "and use lowercase letters, numbers, dots, or hyphens."
+        )
+    return normalized
+
+
+def normalize_s3_storage_bucket_name(bucket_name: str) -> str:
+    raw_value = str(bucket_name or "").strip()
+    if raw_value.startswith("s3.") or "_" in raw_value:
+        raise ValueError(
+            "S3 downloads require the physical bucket name, not a SQL query path or alias."
+        )
+    return normalize_s3_bucket_name(raw_value)
 
 
 def s3_path(bucket: str, prefix: str = "") -> str:
@@ -282,7 +309,7 @@ class S3ExplorerManager:
 
     def create_bucket(self, bucket_name: str) -> S3ExplorerEntry:
         self._ensure_configured()
-        normalized_bucket_name = normalize_s3_bucket_name(bucket_name)
+        normalized_bucket_name = normalize_s3_bucket_name_for_create(bucket_name)
         reject_hidden_s3_bucket(normalized_bucket_name, self._settings)
         ensure_s3_bucket(self._settings, normalized_bucket_name)
         return S3ExplorerEntry(
@@ -335,7 +362,7 @@ class S3ExplorerManager:
         file_name: str = "",
     ) -> S3ObjectDownloadArtifact:
         self._ensure_configured()
-        normalized_bucket = normalize_s3_bucket_name(bucket)
+        normalized_bucket = normalize_s3_storage_bucket_name(bucket)
         normalized_key = normalize_s3_object_key(key)
         reject_hidden_s3_location(
             normalized_bucket,
@@ -373,7 +400,7 @@ class S3ExplorerManager:
         file_name: str = "",
     ) -> S3ObjectDownloadStream:
         self._ensure_configured()
-        normalized_bucket = normalize_s3_bucket_name(bucket)
+        normalized_bucket = normalize_s3_storage_bucket_name(bucket)
         normalized_key = normalize_s3_object_key(key)
         reject_hidden_s3_location(
             normalized_bucket,

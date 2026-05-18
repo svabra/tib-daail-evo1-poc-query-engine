@@ -8107,6 +8107,7 @@ details:not([open]) > .tree-children {
 }
 
 .editor-frame {
+  position: relative;
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   min-height: 136px;
@@ -8117,6 +8118,53 @@ details:not([open]) > .tree-children {
 
 .editor-frame[data-editor-language="python"] {
   background: linear-gradient(180deg, rgba(250, 251, 255, 0.96), rgba(244, 248, 252, 0.98));
+}
+
+.editor-copy-button {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgba(192, 202, 212, 0.9);
+  border-radius: var(--radius-control);
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--accent-strong);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease, background 0.14s ease, border-color 0.14s ease;
+}
+
+.editor-copy-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.editor-frame:hover .editor-copy-button,
+.editor-copy-button:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.editor-copy-button:hover,
+.editor-copy-button:focus-visible,
+.editor-copy-button.is-copied {
+  border-color: rgba(11, 68, 121, 0.24);
+  background: rgba(236, 245, 252, 0.98);
+}
+
+.editor-frame[data-editor-language="python"] .editor-copy-button {
+  display: none;
 }
 
 .editor-frame textarea {
@@ -8234,6 +8282,43 @@ details:not([open]) > .tree-children {
   justify-content: flex-end;
   gap: 10px;
   flex-wrap: wrap;
+}
+
+.result-collapse-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(192, 202, 212, 0.9);
+  border-radius: var(--radius-control);
+  background: #fff;
+  color: var(--accent-strong);
+  cursor: pointer;
+}
+
+.result-collapse-toggle:hover,
+.result-collapse-toggle:focus-visible {
+  border-color: rgba(11, 68, 121, 0.24);
+  background: rgba(236, 245, 252, 0.98);
+}
+
+.result-collapse-chevron {
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 6px solid currentColor;
+  transition: transform 0.16s ease;
+}
+
+.result-collapse-toggle[aria-expanded="true"] .result-collapse-chevron {
+  transform: rotate(90deg);
+}
+
+.result-body {
+  display: grid;
+  gap: 14px;
 }
 
 .result-meta {

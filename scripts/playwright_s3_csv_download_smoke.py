@@ -26,7 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--s3-endpoint", default="http://127.0.0.1:9000")
     parser.add_argument("--s3-access-key", default="minioadmin")
     parser.add_argument("--s3-secret-key", default="minioadmin")
-    parser.add_argument("--bucket", default="vat-smoke-test")
+    parser.add_argument("--bucket", default="1-vat-smoke-test")
     parser.add_argument("--s3-smoke-prefix-root", default="playwright/s3-csv-download")
     parser.add_argument("--size-mib", type=int, default=8)
     parser.add_argument("--headless", action="store_true", default=True)

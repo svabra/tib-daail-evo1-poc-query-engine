@@ -448,6 +448,18 @@
             data-editor-name="sql-{{ cell.cell_id }}"
             data-editor-language="{{ cell_language }}"
           >
+            <button
+              type="button"
+              class="editor-copy-button"
+              data-copy-editor-sql
+              aria-label="Copy SQL"
+              title="Copy SQL"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="8" y="8" width="11" height="11" rx="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"></path>
+              </svg>
+            </button>
             <textarea
               name="sql"
               data-editor-source

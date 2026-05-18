@@ -1421,7 +1421,10 @@ class WorkbenchService:
 
         execution_sql = self._rewrite_query_source_aliases(user_sql, relation_index, local_relation_map)
         query_analysis = self._analyze_query(user_sql, relation_index=relation_index)
-        source_summaries = self._query_source_summaries(query_analysis.touched_relations)
+        source_summaries = self._query_source_summaries(
+            query_analysis.touched_relations,
+            local_relation_map=local_relation_map,
+        )
         backend_prepare_ms = (time.perf_counter() - backend_prepare_started) * 1000
         snapshot = self._query_jobs.start_job(
             sql=user_sql,
@@ -1559,7 +1562,12 @@ class WorkbenchService:
                 alias_map[normalized_alias] = normalized_physical
         return rewrite_query_aliases(sql, alias_map)
 
-    def _query_source_summaries(self, touched_relations: list[str] | None) -> list[dict[str, object]]:
+    def _query_source_summaries(
+        self,
+        touched_relations: list[str] | None,
+        *,
+        local_relation_map: dict[str, str] | None = None,
+    ) -> list[dict[str, object]]:
         touched_keys = {
             normalize_query_alias_key(relation)
             for relation in (touched_relations or [])
@@ -1568,6 +1576,9 @@ class WorkbenchService:
         if not touched_keys:
             return []
         summaries: list[dict[str, object]] = []
+        discovery = getattr(self, "_data_source_discovery", None)
+        s3_relation_specs = getattr(discovery, "s3_relation_specs", None)
+        specs = s3_relation_specs() if callable(s3_relation_specs) else {}
         with self._lock:
             catalogs = list(self._catalogs)
         for catalog in catalogs:
@@ -1578,6 +1589,7 @@ class WorkbenchService:
                         continue
                     if not str(source_object.s3_bucket or "").strip():
                         continue
+                    spec = specs.get(relation)
                     summaries.append(
                         {
                             "relation": relation,
@@ -1586,9 +1598,73 @@ class WorkbenchService:
                             "key": str(source_object.s3_key or "").strip(),
                             "path": str(source_object.s3_path or "").strip(),
                             "format": str(source_object.s3_file_format or "").strip(),
+                            "query_sql": str(getattr(spec, "query_sql", "") or "").strip(),
                         }
                     )
+        summaries.extend(
+            self._local_workspace_source_summaries(
+                touched_keys,
+                local_relation_map=local_relation_map,
+            )
+        )
         return summaries
+
+    def _local_workspace_source_summaries(
+        self,
+        touched_keys: set[str],
+        *,
+        local_relation_map: dict[str, str] | None = None,
+    ) -> list[dict[str, object]]:
+        physical_relations = {
+            str(value or "").strip()
+            for value in (local_relation_map or {}).values()
+            if str(value or "").strip()
+        }
+        physical_relations.update(
+            relation
+            for relation in (normalize_query_alias_key(item) for item in touched_keys)
+            if relation.startswith("workspace_local_")
+        )
+        summaries: list[dict[str, object]] = []
+        for relation in sorted(physical_relations):
+            if normalize_query_alias_key(relation) not in touched_keys and not relation.startswith("workspace_local_"):
+                continue
+            summary = self._local_workspace_source_summary(relation)
+            if summary:
+                summaries.append(summary)
+        return summaries
+
+    def _local_workspace_source_summary(self, relation: str) -> dict[str, object] | None:
+        parts = [part.strip().strip('"') for part in str(relation or "").split(".") if part.strip()]
+        if len(parts) != 2:
+            return None
+        schema_name, table_name = parts
+        if not schema_name.startswith("workspace_local_") or not table_name:
+            return None
+        source_root = self.settings.duckdb_database.parent / "local-workspace-query-sources" / schema_name
+        candidates = sorted(source_root.glob(f"{table_name}.*")) if source_root.exists() else []
+        if not candidates:
+            return None
+        local_path = candidates[0]
+        suffix = local_path.suffix.lower().lstrip(".")
+        if suffix == "parquet":
+            query_sql = f"SELECT * FROM read_parquet({sql_literal(local_path.as_posix())})"
+            source_format = "parquet"
+        elif suffix in {"json", "jsonl", "ndjson"}:
+            query_sql = f"SELECT * FROM read_json_auto({sql_literal(local_path.as_posix())})"
+            source_format = suffix
+        else:
+            query_sql = f"SELECT * FROM read_csv_auto({sql_literal(local_path.as_posix())}, HEADER = TRUE)"
+            source_format = suffix or "csv"
+        return {
+            "relation": relation,
+            "query_alias": "",
+            "bucket": "",
+            "key": local_path.name,
+            "path": local_path.as_posix(),
+            "format": source_format,
+            "query_sql": query_sql,
+        }
 
     def start_python_job(
         self,
