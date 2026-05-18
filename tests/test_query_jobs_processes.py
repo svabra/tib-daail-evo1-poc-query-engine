@@ -137,6 +137,10 @@ class QueryJobPayloadTests(TestCase):
             cpu_percent=12.5,
             average_cpu_percent=8.5,
             peak_cpu_percent=18.0,
+            cpu_capacity_percent=6.25,
+            average_cpu_capacity_percent=4.25,
+            peak_cpu_capacity_percent=9.0,
+            cpu_capacity_cores=2.0,
             memory_rss_bytes=1024,
             average_memory_rss_bytes=1536,
             peak_memory_rss_bytes=2048,
@@ -145,6 +149,8 @@ class QueryJobPayloadTests(TestCase):
                     elapsed_ms=2000,
                     cpu_percent=12.5,
                     average_cpu_percent=8.5,
+                    cpu_capacity_percent=6.25,
+                    average_cpu_capacity_percent=4.25,
                     memory_rss_bytes=1024,
                     average_memory_rss_bytes=1536,
                 )
@@ -169,10 +175,15 @@ class QueryJobPayloadTests(TestCase):
         self.assertEqual(payload["cpuPercent"], 12.5)
         self.assertEqual(payload["averageCpuPercent"], 8.5)
         self.assertEqual(payload["peakCpuPercent"], 18.0)
+        self.assertEqual(payload["cpuCapacityPercent"], 6.25)
+        self.assertEqual(payload["averageCpuCapacityPercent"], 4.25)
+        self.assertEqual(payload["peakCpuCapacityPercent"], 9.0)
+        self.assertEqual(payload["cpuCapacityCores"], 2.0)
         self.assertEqual(payload["memoryRssBytes"], 1024)
         self.assertEqual(payload["averageMemoryRssBytes"], 1536)
         self.assertEqual(payload["peakMemoryRssBytes"], 2048)
         self.assertEqual(payload["resourceSamples"][0]["elapsedMs"], 2000)
+        self.assertEqual(payload["resourceSamples"][0]["cpuCapacityPercent"], 6.25)
         self.assertEqual(payload["cancellationPhase"], "interrupting")
         self.assertEqual(payload["workerExitCode"], -15)
         self.assertEqual(payload["timings"]["backendPrepareMs"], 4.5)
@@ -319,6 +330,56 @@ class ProcessQueryJobManagerTests(TestCase):
         self.assertEqual(sampled.peak_memory_rss_bytes, 3000)
         self.assertEqual(len(sampled.resource_samples), 2)
 
+    def test_process_metrics_include_capacity_normalized_cpu(self) -> None:
+        class FakeProcessMetrics:
+            def __init__(self) -> None:
+                self.samples = iter([(200.0, 1000), (400.0, 3000)])
+                self.current = (0.0, 0)
+
+            def cpu_percent(self, interval=None) -> float:
+                self.current = next(self.samples)
+                return self.current[0]
+
+            def memory_info(self):
+                return SimpleNamespace(rss=self.current[1])
+
+            def children(self, recursive=True):
+                return []
+
+        self.manager._cpu_capacity_cores = 4.0
+        snapshot = QueryJobDefinition(
+            job_id="query-cpu-capacity-test",
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-1",
+            sql="select 1",
+            status="running",
+            started_at="2026-05-13T00:00:00+00:00",
+            updated_at="2026-05-13T00:00:00+00:00",
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+            cpu_capacity_cores=4.0,
+        )
+        record = QueryJobRecord(
+            snapshot=snapshot,
+            sort_index=1,
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+            execution_sql="select 1",
+            process_metrics=FakeProcessMetrics(),
+        )
+        with self.manager._condition:
+            self.manager._jobs[snapshot.job_id] = record
+
+        self.manager._sample_process_metrics(snapshot.job_id, force=True)
+        self.manager._sample_process_metrics(snapshot.job_id, force=True)
+
+        sampled = self.manager.snapshot(snapshot.job_id)
+        self.assertEqual(sampled.cpu_percent, 400.0)
+        self.assertEqual(sampled.cpu_capacity_percent, 100.0)
+        self.assertEqual(sampled.average_cpu_capacity_percent, 75.0)
+        self.assertEqual(sampled.peak_cpu_capacity_percent, 100.0)
+        self.assertEqual(sampled.cpu_capacity_cores, 4.0)
+        self.assertEqual(sampled.resource_samples[-1].cpu_capacity_percent, 100.0)
+
     def test_query_job_logs_lifecycle_metadata_and_duckdb_profile_summary(self) -> None:
         with self.assertLogs("bit_data_workbench.backend.query_jobs", level="INFO") as captured:
             job = self.manager.start_job(
@@ -462,6 +523,74 @@ class ProcessQueryJobManagerTests(TestCase):
                 record.cancel_requested = True
             self.manager._log_query_heartbeat_if_due(snapshot.job_id)
             self.assertEqual(log_info.call_count, 1)
+
+    def test_repeated_progress_events_are_compacted_with_first_and_last_occurrence(self) -> None:
+        snapshot = QueryJobDefinition(
+            job_id="query-repeated-progress",
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-1",
+            sql="select 1",
+            status="running",
+            started_at=utc_now_iso(),
+            updated_at=utc_now_iso(),
+            progress_label="Running...",
+            message="DuckDB is planning and executing the statement.",
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+            cpu_percent=10.0,
+            cpu_capacity_percent=5.0,
+            cpu_capacity_cores=2.0,
+            memory_rss_bytes=64 * 1024 * 1024,
+        )
+        record = QueryJobRecord(
+            snapshot=snapshot,
+            sort_index=1,
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+            execution_sql="select 1",
+            last_log_heartbeat_monotonic=time.monotonic() - 11,
+        )
+        with self.manager._condition:
+            self.manager._jobs[snapshot.job_id] = record
+
+        with patch.object(query_jobs_module.logger, "info"):
+            self.manager._log_query_heartbeat_if_due(snapshot.job_id)
+            with self.manager._condition:
+                record.last_log_heartbeat_monotonic -= 11
+                snapshot.cpu_percent = 20.0
+                snapshot.cpu_capacity_percent = 10.0
+            self.manager._log_query_heartbeat_if_due(snapshot.job_id)
+
+        progress_events = [
+            event for event in snapshot.progress_events if event.get("event") == "progress"
+        ]
+        self.assertEqual(len(progress_events), 1)
+        self.assertEqual(progress_events[0]["occurrenceCount"], 2)
+        self.assertIn("firstOccurredAt", progress_events[0])
+        self.assertIn("lastOccurredAt", progress_events[0])
+        self.assertEqual(progress_events[0]["cpu_percent"], 20.0)
+        self.assertEqual(progress_events[0]["cpu_capacity_percent"], 10.0)
+
+    def test_progress_event_retention_preserves_earliest_event(self) -> None:
+        events = [
+            {
+                "occurredAt": f"2026-05-13T00:00:{index:02d}+00:00",
+                "displayTime": f"event {index}",
+                "event": "progress",
+                "status": "running",
+                "message": f"event {index}",
+            }
+            for index in range(10)
+        ]
+
+        compacted = query_jobs_module._progress_events_with_preserved_edges(events, 5)
+
+        self.assertEqual(len(compacted), 5)
+        self.assertEqual(compacted[0]["message"], "event 0")
+        summary_event = next(
+            event for event in compacted if event["event"] == "progress_events_compacted"
+        )
+        self.assertIn("middle progress event(s)", summary_event["message"])
+        self.assertEqual(compacted[-1]["message"], "event 9")
 
     def test_prepared_query_log_caps_s3_source_summaries(self) -> None:
         snapshot = QueryJobDefinition(

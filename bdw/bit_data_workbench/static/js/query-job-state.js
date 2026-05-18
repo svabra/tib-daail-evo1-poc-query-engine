@@ -12,6 +12,10 @@ export function normalizeQueryJob(job) {
   const cpuPercent = Number(job.cpuPercent);
   const averageCpuPercent = Number(job.averageCpuPercent);
   const peakCpuPercent = Number(job.peakCpuPercent);
+  const cpuCapacityPercent = Number(job.cpuCapacityPercent);
+  const averageCpuCapacityPercent = Number(job.averageCpuCapacityPercent);
+  const peakCpuCapacityPercent = Number(job.peakCpuCapacityPercent);
+  const cpuCapacityCores = Number(job.cpuCapacityCores);
   const memoryRssBytes = Number(job.memoryRssBytes);
   const averageMemoryRssBytes = Number(job.averageMemoryRssBytes);
   const peakMemoryRssBytes = Number(job.peakMemoryRssBytes);
@@ -47,6 +51,14 @@ export function normalizeQueryJob(job) {
     cpuPercent: Number.isFinite(cpuPercent) ? Math.max(0, cpuPercent) : null,
     averageCpuPercent: Number.isFinite(averageCpuPercent) ? Math.max(0, averageCpuPercent) : null,
     peakCpuPercent: Number.isFinite(peakCpuPercent) ? Math.max(0, peakCpuPercent) : null,
+    cpuCapacityPercent: Number.isFinite(cpuCapacityPercent) ? Math.max(0, cpuCapacityPercent) : null,
+    averageCpuCapacityPercent: Number.isFinite(averageCpuCapacityPercent)
+      ? Math.max(0, averageCpuCapacityPercent)
+      : null,
+    peakCpuCapacityPercent: Number.isFinite(peakCpuCapacityPercent)
+      ? Math.max(0, peakCpuCapacityPercent)
+      : null,
+    cpuCapacityCores: Number.isFinite(cpuCapacityCores) && cpuCapacityCores > 0 ? cpuCapacityCores : null,
     memoryRssBytes: Number.isFinite(memoryRssBytes) ? Math.max(0, Math.round(memoryRssBytes)) : null,
     averageMemoryRssBytes: Number.isFinite(averageMemoryRssBytes)
       ? Math.max(0, Math.round(averageMemoryRssBytes))
@@ -60,12 +72,18 @@ export function normalizeQueryJob(job) {
             const elapsedMs = Number(sample?.elapsedMs);
             const sampleCpu = Number(sample?.cpuPercent);
             const sampleAverageCpu = Number(sample?.averageCpuPercent);
+            const sampleCpuCapacity = Number(sample?.cpuCapacityPercent);
+            const sampleAverageCpuCapacity = Number(sample?.averageCpuCapacityPercent);
             const sampleMemory = Number(sample?.memoryRssBytes);
             const sampleAverageMemory = Number(sample?.averageMemoryRssBytes);
             return {
               elapsedMs: Number.isFinite(elapsedMs) ? Math.max(0, elapsedMs) : 0,
               cpuPercent: Number.isFinite(sampleCpu) ? Math.max(0, sampleCpu) : null,
               averageCpuPercent: Number.isFinite(sampleAverageCpu) ? Math.max(0, sampleAverageCpu) : null,
+              cpuCapacityPercent: Number.isFinite(sampleCpuCapacity) ? Math.max(0, sampleCpuCapacity) : null,
+              averageCpuCapacityPercent: Number.isFinite(sampleAverageCpuCapacity)
+                ? Math.max(0, sampleAverageCpuCapacity)
+                : null,
               memoryRssBytes: Number.isFinite(sampleMemory) ? Math.max(0, Math.round(sampleMemory)) : null,
               averageMemoryRssBytes: Number.isFinite(sampleAverageMemory)
                 ? Math.max(0, Math.round(sampleAverageMemory))

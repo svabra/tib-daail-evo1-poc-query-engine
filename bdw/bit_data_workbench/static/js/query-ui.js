@@ -299,11 +299,17 @@ export function createQueryUi(helpers) {
     if (!samples.length) {
       return "";
     }
+    const cpuValueKey = samples.some((sample) => Number.isFinite(Number(sample.cpuCapacityPercent)))
+      ? "cpuCapacityPercent"
+      : "cpuPercent";
+    const averageCpuValueKey = samples.some((sample) => Number.isFinite(Number(sample.averageCpuCapacityPercent)))
+      ? "averageCpuCapacityPercent"
+      : "averageCpuPercent";
     const cpuMax = Math.max(
       1,
       100,
-      ...samples.map((sample) => Number(sample.cpuPercent || 0)),
-      ...samples.map((sample) => Number(sample.averageCpuPercent || 0))
+      ...samples.map((sample) => Number(sample[cpuValueKey] || 0)),
+      ...samples.map((sample) => Number(sample[averageCpuValueKey] || 0))
     );
     const compactClass = compact ? " query-resource-sparklines-compact" : "";
     const running = queryJobIsRunning(job);
@@ -312,10 +318,10 @@ export function createQueryUi(helpers) {
         ${queryResourceSparklineChartMarkup({
           label: "CPU",
           unitLabel: "%",
-          axisLabel: "CPU %",
+          axisLabel: cpuValueKey === "cpuCapacityPercent" ? "CPU capacity %" : "CPU core %",
           samples,
-          valueKey: "cpuPercent",
-          averageKey: "averageCpuPercent",
+          valueKey: cpuValueKey,
+          averageKey: averageCpuValueKey,
           maxValue: cpuMax,
           formatter: formatQueryCpuPercent,
           running,

@@ -556,6 +556,8 @@ class QueryResourceSample:
     elapsed_ms: float
     cpu_percent: float | None = None
     average_cpu_percent: float | None = None
+    cpu_capacity_percent: float | None = None
+    average_cpu_capacity_percent: float | None = None
     memory_rss_bytes: int | None = None
     average_memory_rss_bytes: int | None = None
 
@@ -565,6 +567,8 @@ class QueryResourceSample:
             "elapsedMs": self.elapsed_ms,
             "cpuPercent": self.cpu_percent,
             "averageCpuPercent": self.average_cpu_percent,
+            "cpuCapacityPercent": self.cpu_capacity_percent,
+            "averageCpuCapacityPercent": self.average_cpu_capacity_percent,
             "memoryRssBytes": self.memory_rss_bytes,
             "averageMemoryRssBytes": self.average_memory_rss_bytes,
         }
@@ -609,6 +613,10 @@ class QueryJobDefinition:
     cpu_percent: float | None = None
     average_cpu_percent: float | None = None
     peak_cpu_percent: float | None = None
+    cpu_capacity_percent: float | None = None
+    average_cpu_capacity_percent: float | None = None
+    peak_cpu_capacity_percent: float | None = None
+    cpu_capacity_cores: float | None = None
     memory_rss_bytes: int | None = None
     average_memory_rss_bytes: int | None = None
     peak_memory_rss_bytes: int | None = None
@@ -663,6 +671,10 @@ class QueryJobDefinition:
             "cpuPercent": self.cpu_percent,
             "averageCpuPercent": self.average_cpu_percent,
             "peakCpuPercent": self.peak_cpu_percent,
+            "cpuCapacityPercent": self.cpu_capacity_percent,
+            "averageCpuCapacityPercent": self.average_cpu_capacity_percent,
+            "peakCpuCapacityPercent": self.peak_cpu_capacity_percent,
+            "cpuCapacityCores": self.cpu_capacity_cores,
             "memoryRssBytes": self.memory_rss_bytes,
             "averageMemoryRssBytes": self.average_memory_rss_bytes,
             "peakMemoryRssBytes": self.peak_memory_rss_bytes,

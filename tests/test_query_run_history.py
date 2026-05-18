@@ -123,6 +123,10 @@ class QueryRunHistoryStoreTests(unittest.TestCase):
                 "cpuPercent": 12.0,
                 "averageCpuPercent": 8.0,
                 "peakCpuPercent": 18.0,
+                "cpuCapacityPercent": 6.0,
+                "averageCpuCapacityPercent": 4.0,
+                "peakCpuCapacityPercent": 9.0,
+                "cpuCapacityCores": 2.0,
                 "memoryRssBytes": 1024,
                 "averageMemoryRssBytes": 900,
                 "peakMemoryRssBytes": 2048,
@@ -154,6 +158,8 @@ class QueryRunHistoryStoreTests(unittest.TestCase):
         self.assertNotIn("rows", payload)
         self.assertNotIn("columns", payload)
         self.assertEqual(payload["metrics"]["averageCpuPercent"], 8.0)
+        self.assertEqual(payload["metrics"]["averageCpuCapacityPercent"], 4.0)
+        self.assertEqual(payload["metrics"]["cpuCapacityCores"], 2.0)
         self.assertEqual(payload["timings"]["clientTotalMs"], 250.0)
         self.assertEqual(payload["timings"]["engineQueryMs"], 100.0)
         self.assertEqual(payload["progressEvents"][0]["event"], "completed")

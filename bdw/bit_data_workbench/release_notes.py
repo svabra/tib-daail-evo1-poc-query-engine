@@ -1,9 +1,36 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.8. Keep entries concise and
+# Derived from git history through version 0.9.9. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.9",
+        "releasedAt": "2026-05-18T17:02:07+02:00",
+        "features": [
+            (
+                "Query Runs is now named Query Monitoring across the workbench, "
+                "including navigation shortcuts, headers, browser labels, and route tests."
+            ),
+            (
+                "Query Monitoring now keeps the oldest progress records and summarizes "
+                "repeated messages with occurrence counts plus first and last timestamps."
+            ),
+            (
+                "CPU telemetry is now reported as process capacity percent with raw "
+                "core-percent details preserved, while running DuckDB jobs no longer "
+                "show misleading 100 percent completion when live progress is unavailable."
+            ),
+            (
+                "Resource charts are shown above event details when enabled, and each "
+                "recorded query links back to the notebook that executed it."
+            ),
+            (
+                "Kostenbelege 3.1 now has a seeded data loader and ready-to-run notebooks "
+                "for OLTP Postgres, OLAP Postgres, and S3 Parquet sources."
+            ),
+        ],
+    },
     {
         "version": "0.9.8",
         "releasedAt": "2026-05-18T13:43:12+02:00",

@@ -1336,7 +1336,7 @@ function workbenchTitle(section = currentWorkbenchSection()) {
   }
 
   if (section === "query-runs") {
-    return "DAAIF Fabric - Query Runs";
+    return "DAAIF Fabric - Query Monitoring";
   }
 
   if (section === "loader") {
@@ -4729,7 +4729,7 @@ function cellQueryRunsPanelMarkup(notebookId, cellId) {
       <summary class="workspace-query-runs-summary">
         <span class="workspace-query-runs-title">
           <span class="workspace-query-runs-chevron" aria-hidden="true"></span>
-          <span class="workspace-tags-label">Query Runs</span>
+          <span class="workspace-tags-label">Query Monitoring</span>
         </span>
         <span class="query-runs-status" data-query-runs-status>No recorded query runs yet.</span>
       </summary>

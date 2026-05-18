@@ -309,6 +309,193 @@ def _build_mwa_abrechnung_performance_sql(
     )
 
 
+def _build_kostenbelege_3_1_sql(
+    *,
+    kbkp_relation: str,
+    kbpo_relation: str,
+    kbhp_relation: str,
+    kalender_relation: str,
+) -> str:
+    return f"""
+WITH UNIO AS
+    (
+    SELECT
+          KBKP.KBKP_Belegnummer                                                   AS KBKP_Belegnummer
+        , KBPO.KBPO_VtgKtoWiederholPos                                            AS KBPO_VtgKtoWiederholPos
+        , KBKP.DOCO_Belegart                                                      AS DOCO_Belegart
+        , KBKP.KBKP_BelegDt                                                       AS KBKP_BelegDt
+        , KBKP.KBKP_BuchungDt                                                     AS KBKP_BuchungDt
+        , KBKP.KBKP_ErstellungVon                                                 AS KBKP_ErstellungVon
+        , KBKP.KBKP_StorniertBelegNummer                                          AS KBKP_StorniertBelegNummer
+        , KBKP.KBKP_StornoBelegNummer                                             AS KBKP_StornoBelegNummer
+        , KBKP.DOCO_BelegHerkunft                                                 AS DOCO_BelegHerkunft
+        , KBPO.KBPO_VtgKtoPositionNr                                              AS KBPO_VtgKtoPositionNr
+        , KBPO.KBPO_Teilposition                                                  AS KBPO_Teilposition
+        , KBPO.GEFA_GeschaeftFall                                                 AS GEFA_GeschaeftFall
+        , KBPO.PART_Partner                                                       AS PART_Partner
+        , KBPO.KBPO_KtoFindMerkmal                                                AS KBPO_KtoFindMerkmal
+        , KBPO.DOCO_Hauptvorgang                                                  AS DOCO_Hauptvorgang
+        , KBPO.DOCO_Teilvorgang                                                   AS DOCO_Teilvorgang
+        , KBPO.DOCO_Belegtyp                                                      AS DOCO_Belegtyp
+        , KBPO.DOCO_VtrKtoTyp                                                     AS DOCO_VtrKtoTyp
+        , KBPO.DOCO_Waehrung                                                      AS DOCO_Waehrung
+        , KBPO.DOCO_FormArt                                                       AS DOCO_FormArt
+        , KBPO.KBPO_GesamtBetrag                                                  AS KBPO_GesamtBetrag
+        , KBPO.KBPO_TWhrBetrag                                                    AS KBPO_TWhrBetrag
+        , KBPO.KBPO_HbWaehrung                                                    AS KBPO_HbWaehrung
+        , KBPO.KBPO_HbBetrag                                                      AS KBPO_HbBetrag
+        , KBPO.KBPO_HWhrBetrag1                                                   AS KBPO_HWhrBetrag1
+        , KBPO.KBPO_Umrechnungkurs                                                AS KBPO_Umrechnungkurs
+        , KBPO.KBPO_NettoFaelligkeitDT                                            AS KBPO_NettoFaelligkeitDT
+        , KBPO.VTGP_VtrGegenstand                                                 AS VTGP_VtrGegenstand
+        , KBPO.KBPO_VtrKtoNummer                                                  AS KBPO_VtrKtoNummer
+        , KBPO.KBKP_ausgleichbelegnummer                                          AS KBKP_ausgleichbelegnummer
+        , KBPO.KBPO_ausgleichstatus                                               AS KBPO_ausgleichstatus
+        , KBPO.KBPO_Ausgleichgrund                                                AS KBPO_Ausgleichgrund
+        , KBPO.KBPO_AusgleichDt                                                   AS KBPO_AusgleichDt
+        , KBPO.KBPO_AusgleichBuchungDt                                            AS KBPO_AusgleichBuchungDt
+        , KBPO.KBPO_HBSachkto                                                     AS KBPO_HBSachkto
+        , COALESCE(KBHP.KBHP_SachKto, KBHH.KBHP_SachKto)                          AS KBHP_SachKto
+        , COALESCE(KBHP.KBHP_HBAbstimmschluessel, KBHH.KBHP_HBAbstimmschluessel)  AS KBHP_HBAbstimmschluessel
+        , KBPO.KBPO_Beschreibung                                                  AS KBPO_Beschreibung
+        , KBPO.DOCO_SteuerCd                                                      AS DOCO_SteuerCd
+        , KBPO.KBPO_WertInternDt                                                  AS KBPO_WertInternDt
+        , KBPO.KBPO_Bankverbindung                                                AS KBPO_Bankverbindung
+        , KBPO.DOCO_RecordArt                                                     AS DOCO_RecordArt
+        , KBKP.DOCO_Buchunggrund                                                  AS DOCO_Buchunggrund
+        , CAST('Originalposition' AS VARCHAR(20))                                 AS PositionsArt
+        , KALE.Datum                                                              AS Datum
+    FROM {kbkp_relation} KBKP
+    INNER JOIN {kalender_relation} KALE
+        ON  KALE.Datum BETWEEN KBKP.KBKP_TechBeginnDt AND KBKP.KBKP_TechEndeDt
+        AND KALE.Datum = CURRENT_DATE
+    INNER JOIN {kbpo_relation} KBPO
+        ON  KBKP.KBKP_Belegnummer = KBPO.KBKP_AusgleichBelegnummer
+        AND KALE.Datum BETWEEN KBPO.KBPO_TechBeginnDt AND KBPO.KBPO_TechEndeDt
+    LEFT JOIN {kbhp_relation} KBHP
+        ON  KBKP.KBKP_BelegNummer = KBHP.KBKP_BelegNummer
+        AND KBHP.KBHP_VTGKtoPositionNr = KBPO.KBPO_VtgKtoPositionNr
+        AND KALE.Datum BETWEEN KBHP.KBHP_TechBeginnDt AND KBHP.KBHP_TechEndeDt
+    LEFT JOIN {kbhp_relation} KBHH
+        ON  KBKP.KBKP_BelegNummer = KBHH.KBKP_BelegNummer
+        AND KALE.Datum BETWEEN KBHH.KBHP_TechBeginnDt AND KBHH.KBHP_TechEndeDt
+        AND KBHP.KBKP_BelegNummer IS NULL
+        AND KBHH.KBHP_VTGKtoPositionNr = 1
+    UNION ALL
+    SELECT
+          KBKP.KBKP_Belegnummer                                                   AS KBKP_Belegnummer
+        , KBPO.KBPO_VtgKtoWiederholPos                                            AS KBPO_VtgKtoWiederholPos
+        , KBKP.DOCO_Belegart                                                      AS DOCO_Belegart
+        , KBKP.KBKP_BelegDt                                                       AS KBKP_BelegDt
+        , KBKP.KBKP_BuchungDt                                                     AS KBKP_BuchungDt
+        , KBKP.KBKP_ErstellungVon                                                 AS KBKP_ErstellungVon
+        , KBKP.KBKP_StorniertBelegNummer                                          AS KBKP_StorniertBelegNummer
+        , KBKP.KBKP_StornoBelegNummer                                             AS KBKP_StornoBelegNummer
+        , KBKP.DOCO_BelegHerkunft                                                 AS DOCO_BelegHerkunft
+        , KBPO.KBPO_VtgKtoPositionNr                                              AS KBPO_VtgKtoPositionNr
+        , KBPO.KBPO_Teilposition                                                  AS KBPO_Teilposition
+        , KBPO.GEFA_GeschaeftFall                                                 AS GEFA_GeschaeftFall
+        , KBPO.PART_Partner                                                       AS PART_Partner
+        , KBPO.KBPO_KtoFindMerkmal                                                AS KBPO_KtoFindMerkmal
+        , KBPO.DOCO_Hauptvorgang                                                  AS DOCO_Hauptvorgang
+        , KBPO.DOCO_Teilvorgang                                                   AS DOCO_Teilvorgang
+        , KBPO.DOCO_Belegtyp                                                      AS DOCO_Belegtyp
+        , KBPO.DOCO_VtrKtoTyp                                                     AS DOCO_VtrKtoTyp
+        , KBPO.DOCO_Waehrung                                                      AS DOCO_Waehrung
+        , KBPO.DOCO_FormArt                                                       AS DOCO_FormArt
+        , KBPO.KBPO_GesamtBetrag                                                  AS KBPO_GesamtBetrag
+        , KBPO.KBPO_TWhrBetrag        * -1                                        AS KBPO_TWhrBetrag
+        , KBPO.KBPO_HbWaehrung                                                    AS KBPO_HbWaehrung
+        , KBPO.KBPO_HbBetrag          * -1                                        AS KBPO_HbBetrag
+        , KBPO.KBPO_HWhrBetrag1       * -1                                        AS KBPO_HWhrBetrag1
+        , KBPO.KBPO_Umrechnungkurs                                                AS KBPO_Umrechnungkurs
+        , KBPO.KBPO_NettoFaelligkeitDT                                            AS KBPO_NettoFaelligkeitDT
+        , KBPO.VTGP_VtrGegenstand                                                 AS VTGP_VtrGegenstand
+        , KBPO.KBPO_VtrKtoNummer                                                  AS KBPO_VtrKtoNummer
+        , KBPO.KBKP_AusgleichBelegnummer                                          AS KBKP_AusgleichBelegnummer
+        , KBPO.KBPO_AusgleichStatus                                               AS KBPO_AusgleichStatus
+        , KBPO.KBPO_Ausgleichgrund                                                AS KBPO_Ausgleichgrund
+        , KBKP.KBKP_BelegDt                                                       AS KBPO_AusgleichDt
+        , KBKP.KBKP_BuchungDt                                                     AS KBPO_AusgleichBuchungDt
+        , KBPO.KBPO_HBSachkto                                                     AS KBPO_HBSachkto
+        , COALESCE(KBHP.KBHP_SachKto, KBHH.KBHP_SachKto)                          AS KBHP_SachKto
+        , COALESCE(KBHP.KBHP_HBAbstimmschluessel, KBHH.KBHP_HBAbstimmschluessel)  AS KBHP_HBAbstimmschluessel
+        , KBPO.KBPO_Beschreibung                                                  AS KBPO_Beschreibung
+        , KBPO.DOCO_SteuerCd                                                      AS DOCO_SteuerCd
+        , KBPO.KBPO_WertInternDt                                                  AS KBPO_WertInternDt
+        , KBPO.KBPO_Bankverbindung                                                AS KBPO_Bankverbindung
+        , KBPO.DOCO_RecordArt                                                     AS DOCO_RecordArt
+        , KBKP.DOCO_Buchunggrund                                                  AS DOCO_Buchunggrund
+        , CAST('Ausgleichsposition' AS VARCHAR(20))                               AS PositionsArt
+        , KALE.Datum                                                              AS Datum
+    FROM {kbkp_relation} KBKP
+    INNER JOIN {kalender_relation} KALE
+        ON  KALE.Datum BETWEEN KBKP.KBKP_TechBeginnDt AND KBKP.KBKP_TechEndeDt
+        AND KALE.Datum = CURRENT_DATE
+    INNER JOIN {kbpo_relation} KBPO
+        ON  KBKP.KBKP_Belegnummer = KBPO.KBKP_AusgleichBelegnummer
+        AND KALE.Datum BETWEEN KBPO.KBPO_TechBeginnDt AND KBPO.KBPO_TechEndeDt
+    LEFT JOIN {kbhp_relation} KBHP
+        ON  KBKP.KBKP_BelegNummer = KBHP.KBKP_BelegNummer
+        AND KBHP.KBHP_VTGKtoPositionNr = KBPO.KBPO_VtgKtoPositionNr
+        AND KALE.Datum BETWEEN KBHP.KBHP_TechBeginnDt AND KBHP.KBHP_TechEndeDt
+    LEFT JOIN {kbhp_relation} KBHH
+        ON  KBKP.KBKP_BelegNummer = KBHH.KBKP_BelegNummer
+        AND KALE.Datum BETWEEN KBHH.KBHP_TechBeginnDt AND KBHH.KBHP_TechEndeDt
+        AND KBHP.KBKP_BelegNummer IS NULL
+        AND KBHH.KBHP_VTGKtoPositionNr = 1
+    )
+SELECT
+      UNIO.KBKP_Belegnummer                     AS Belegnummer
+    , UNIO.KBPO_VtgKtoWiederholPos              AS Wiederholungsposition
+    , UNIO.KBPO_VtgKtoPositionNr                AS Belegposition
+    , UNIO.KBPO_Teilposition                    AS Belegteilposition
+    , UNIO.DOCO_Belegart                        AS BelegartID
+    , UNIO.DOCO_BelegHerkunft                   AS HerkunftID
+    , UNIO.KBKP_ErstellungVon                   AS AngelegtVonID
+    , UNIO.KBKP_StornoBelegNummer               AS StorniertDurch
+    , UNIO.KBKP_StorniertBelegNummer            AS StornobelegZu
+    , UNIO.GEFA_GeschaeftFall                   AS GeschaeftsfallID
+    , UNIO.DOCO_Hauptvorgang                    AS HauptvorgangID
+    , UNIO.PART_Partner                         AS PartnerID
+    , UNIO.KBHP_SachKto                         AS SachkontoHBID
+    , UNIO.DOCO_Teilvorgang                     AS TeilvorgangID
+    , UNIO.DOCO_VtrKtoTyp                       AS VertragskontotypID
+    , UNIO.KBKP_ausgleichbelegnummer            AS Ausgleichsbelegnummer
+    , UNIO.KBPO_AusgleichDt                     AS Ausgleichsbelegdatum
+    , UNIO.KBPO_AusgleichBuchungDt              AS Ausgleichsbuchungsdatum
+    , UNIO.KBPO_Ausgleichgrund                  AS AusgleichsgrundID
+    , UNIO.KBKP_BelegDt                         AS Belegdatum
+    , UNIO.KBKP_BuchungDt                       AS Buchungsdatum
+    , UNIO.KBPO_NettofaelligkeitDt              AS Nettofaelligkeitsdatum
+    , UNIO.DOCO_SteuerCd                        AS SteuercodeAusFachsystem
+    , UNIO.KBPO_ausgleichstatus                 AS Ausgleichsstatus
+    , UNIO.KBPO_HbWaehrung                      AS WaehrungHauptbuchID
+    , UNIO.KBPO_HbBetrag                        AS BetragHauptbuch
+    , CAST('CHF' AS VARCHAR(3))                 AS HauswaehrungID
+    , UNIO.KBPO_HWhrBetrag1                     AS BetragHauswaehrung
+    , UNIO.KBPO_GesamtBetrag                    AS Gesamtbetrag
+    , UNIO.DOCO_Waehrung                        AS TransaktionWaehrung
+    , UNIO.KBPO_TWhrBetrag                      AS BetragTransaktionswaehrung
+    , UNIO.DOCO_FormArt                         AS Formart
+    , UNIO.KBPO_Umrechnungkurs                  AS Umrechnungskurs
+    , UNIO.KBKP_ausgleichbelegnummer            AS Ausgleichsbeleg
+    , UNIO.VTGP_VtrGegenstand                   AS Vertragsgegenstand
+    , UNIO.KBPO_VtrKtoNummer                    AS Vertragskontonummer
+    , UNIO.KBHP_HBAbstimmschluessel             AS Abstimmschluessel
+    , UNIO.KBPO_Beschreibung                    AS TextZurPosition
+    , UNIO.Positionsart                         AS Positionsart
+    , UNIO.KBPO_HBSachkto                       AS SachkontoNBID
+    , UNIO.KBPO_WertInternDt                    AS Zinsvalutadatum
+    , UNIO.KBPO_Bankverbindung                  AS BankverbindungID
+    , UNIO.DOCO_RecordArt                       AS RecordArt
+    , UNIO.KBPO_KtoFindMerkmal                  AS Kontenfindung
+    , UNIO.DOCO_Buchunggrund                    AS BuchungsgrundID
+    , UNIO.Datum                                AS TechnischesDatum
+FROM UNIO;
+""".strip()
+
+
 def build_static_notebooks(
     *,
     preferred_s3_relation: str | None,
@@ -324,6 +511,9 @@ def build_static_notebooks(
     mwa_s3_parquet_relations: dict[str, str | None],
     mwa_s3_csv_relations: dict[str, str | None],
     mwa_s3_json_relations: dict[str, str | None],
+    kostenbelege_3_1_oltp_relations: dict[str, str | None],
+    kostenbelege_3_1_olap_relations: dict[str, str | None],
+    kostenbelege_3_1_s3_relations: dict[str, str | None],
     union_oltp_relation: str | None,
     union_olap_relation: str | None,
     union_oltp_s3_relation: str | None,
@@ -633,6 +823,39 @@ def build_static_notebooks(
         )
         if all(mwa_s3_json_relations.values())
         else mwa_status_sql
+    )
+    kostenbelege_status_sql = (
+        "SELECT 'Run the Kostenbelege Multi-Source Loader (3.1) from the Loader Workbench first.' AS status;"
+    )
+    kostenbelege_3_1_oltp_sql = (
+        _build_kostenbelege_3_1_sql(
+            kbkp_relation=kostenbelege_3_1_oltp_relations["kbkp_2019"],
+            kbpo_relation=kostenbelege_3_1_oltp_relations["kbpo_2019"],
+            kbhp_relation=kostenbelege_3_1_oltp_relations["kbhp_2019"],
+            kalender_relation=kostenbelege_3_1_oltp_relations["dim_kalender"],
+        )
+        if all(kostenbelege_3_1_oltp_relations.values())
+        else kostenbelege_status_sql
+    )
+    kostenbelege_3_1_olap_sql = (
+        _build_kostenbelege_3_1_sql(
+            kbkp_relation=kostenbelege_3_1_olap_relations["kbkp_2019"],
+            kbpo_relation=kostenbelege_3_1_olap_relations["kbpo_2019"],
+            kbhp_relation=kostenbelege_3_1_olap_relations["kbhp_2019"],
+            kalender_relation=kostenbelege_3_1_olap_relations["dim_kalender"],
+        )
+        if all(kostenbelege_3_1_olap_relations.values())
+        else kostenbelege_status_sql
+    )
+    kostenbelege_3_1_s3_sql = (
+        _build_kostenbelege_3_1_sql(
+            kbkp_relation=kostenbelege_3_1_s3_relations["kbkp_2019"],
+            kbpo_relation=kostenbelege_3_1_s3_relations["kbpo_2019"],
+            kbhp_relation=kostenbelege_3_1_s3_relations["kbhp_2019"],
+            kalender_relation=kostenbelege_3_1_s3_relations["dim_kalender"],
+        )
+        if all(kostenbelege_3_1_s3_relations.values())
+        else kostenbelege_status_sql
     )
     cross_database_union_sql = (
         "-- Approximation: compare how the same tax-position reference shape behaves across OLTP and OLAP.\n"
@@ -1103,6 +1326,57 @@ def build_static_notebooks(
             tags=["performance", "multi-table", "contest", "postgres", "native"],
             tree_path=("PoC Tests", "Performance Evaluation", "Multi-Table Test"),
             linked_generator_id="pg_vs_s3_multi_table_loader",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="kostenbelege-3-1-oltp",
+            title="Kostenbelege (3.1) OLTP via DuckDB",
+            summary="Runs the Kostenbelege 3.1 union query against generated KBKP, KBPO, KBHP, and calendar tables in PostgreSQL OLTP through DuckDB.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="kostenbelege-3-1-oltp-cell-1",
+                    data_sources=["pg_oltp"],
+                    sql=kostenbelege_3_1_oltp_sql,
+                )
+            ],
+            tags=["performance", "kostenbelege", "3.1", "postgres", "oltp"],
+            tree_path=("PoC Tests", "Performance Evaluation", "Kostenbelege (3.1)"),
+            linked_generator_id="kostenbelege_3_1_multi_source_loader",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="kostenbelege-3-1-olap",
+            title="Kostenbelege (3.1) OLAP via DuckDB",
+            summary="Runs the Kostenbelege 3.1 union query against generated KBKP, KBPO, KBHP, and calendar tables in PostgreSQL OLAP through DuckDB.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="kostenbelege-3-1-olap-cell-1",
+                    data_sources=["pg_olap"],
+                    sql=kostenbelege_3_1_olap_sql,
+                )
+            ],
+            tags=["performance", "kostenbelege", "3.1", "postgres", "olap"],
+            tree_path=("PoC Tests", "Performance Evaluation", "Kostenbelege (3.1)"),
+            linked_generator_id="kostenbelege_3_1_multi_source_loader",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="kostenbelege-3-1-s3-parquet",
+            title="Kostenbelege (3.1) S3 Parquet via DuckDB",
+            summary="Runs the Kostenbelege 3.1 union query against generated S3-backed Parquet views for KBKP, KBPO, KBHP, and calendar data.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="kostenbelege-3-1-s3-parquet-cell-1",
+                    data_sources=["workspace.s3"],
+                    sql=kostenbelege_3_1_s3_sql,
+                )
+            ],
+            tags=["performance", "kostenbelege", "3.1", "s3", "parquet"],
+            tree_path=("PoC Tests", "Performance Evaluation", "Kostenbelege (3.1)"),
+            linked_generator_id="kostenbelege_3_1_multi_source_loader",
             can_edit=False,
             can_delete=False,
         ),

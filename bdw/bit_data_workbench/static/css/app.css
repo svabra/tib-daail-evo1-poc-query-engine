@@ -1117,6 +1117,17 @@ body.sidebar-collapsed .sidebar-resizer::before {
   white-space: normal;
 }
 
+.query-run-history-notebook-link {
+  color: var(--accent);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.query-run-history-notebook-link:hover,
+.query-run-history-notebook-link:focus-visible {
+  text-decoration: underline;
+}
+
 .query-run-history-sql-toggle {
   display: inline-flex;
   align-items: center;

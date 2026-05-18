@@ -147,6 +147,12 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         "mwa_abrechnung_entities",
         "mwa_abrechnungs_ziffern_entities",
     )
+    kostenbelege_3_1_object_names = (
+        "kbkp_2019",
+        "kbpo_2019",
+        "kbhp_2019",
+        "dim_kalender",
+    )
     preferred_s3_relation = _find_generated_s3_relation_by_object_name(
         catalogs,
         object_names=("vat_smoke",),
@@ -238,6 +244,24 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         )
         for object_name in mwa_object_names
     }
+    kostenbelege_3_1_oltp_relations = _find_relations_by_object_names(
+        catalogs,
+        catalog_name="pg_oltp",
+        schema_name="public",
+        object_names=kostenbelege_3_1_object_names,
+    )
+    kostenbelege_3_1_olap_relations = _find_relations_by_object_names(
+        catalogs,
+        catalog_name="pg_olap",
+        schema_name="public",
+        object_names=kostenbelege_3_1_object_names,
+    )
+    kostenbelege_3_1_s3_relations = _find_relations_by_object_names(
+        catalogs,
+        catalog_name="workspace",
+        schema_name="s3_3_1_imports_a08e7385",
+        object_names=kostenbelege_3_1_object_names,
+    )
     contest_postgres_native_relation = _strip_catalog_prefix(
         contest_postgres_relation, "pg_oltp"
     )
@@ -266,6 +290,9 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         mwa_s3_parquet_relations=mwa_s3_parquet_relations,
         mwa_s3_csv_relations=mwa_s3_csv_relations,
         mwa_s3_json_relations=mwa_s3_json_relations,
+        kostenbelege_3_1_oltp_relations=kostenbelege_3_1_oltp_relations,
+        kostenbelege_3_1_olap_relations=kostenbelege_3_1_olap_relations,
+        kostenbelege_3_1_s3_relations=kostenbelege_3_1_s3_relations,
         union_oltp_relation=union_oltp_relation,
         union_olap_relation=union_olap_relation,
         union_oltp_s3_relation=union_oltp_s3_relation,

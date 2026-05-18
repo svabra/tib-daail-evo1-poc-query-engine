@@ -12,6 +12,9 @@ if str(BDW_ROOT) not in sys.path:
 
 
 from bit_data_workbench.data_generator.helpers import loader_tree_bucket_name  # noqa: E402
+from bit_data_workbench.data_generator.kostenbelege_3_1 import (  # noqa: E402
+    GENERATOR as KOSTENBELEGE_GENERATOR,
+)
 from bit_data_workbench.data_generator.mwa_abrechnung import (  # noqa: E402
     GENERATOR as MWA_GENERATOR,
 )
@@ -44,6 +47,8 @@ class LoaderS3BucketNameTests(unittest.TestCase):
                 "poc-tests-performance-evaluation-single-table-test",
             MULTI_TABLE_GENERATOR._loader_bucket_name(base_bucket):
                 "poc-tests-performance-evaluation-multi-table-test",
+            KOSTENBELEGE_GENERATOR._loader_bucket_name(base_bucket):
+                "poc-tests-performance-evaluation-kostenbelege-3-1",
             MWA_GENERATOR._loader_bucket_name(base_bucket):
                 "poc-tests-performance-evaluation-mwa-abrechnung-3-2",
         }

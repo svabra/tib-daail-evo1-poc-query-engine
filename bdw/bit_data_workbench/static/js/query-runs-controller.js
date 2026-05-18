@@ -51,6 +51,10 @@ export function createQueryRunsController(helpers) {
       cpuPercent: metrics.cpuPercent ?? run?.cpuPercent,
       averageCpuPercent: metrics.averageCpuPercent ?? run?.averageCpuPercent,
       peakCpuPercent: metrics.peakCpuPercent ?? run?.peakCpuPercent,
+      cpuCapacityPercent: metrics.cpuCapacityPercent ?? run?.cpuCapacityPercent,
+      averageCpuCapacityPercent: metrics.averageCpuCapacityPercent ?? run?.averageCpuCapacityPercent,
+      peakCpuCapacityPercent: metrics.peakCpuCapacityPercent ?? run?.peakCpuCapacityPercent,
+      cpuCapacityCores: metrics.cpuCapacityCores ?? run?.cpuCapacityCores,
       memoryRssBytes: metrics.memoryRssBytes ?? run?.memoryRssBytes,
       averageMemoryRssBytes: metrics.averageMemoryRssBytes ?? run?.averageMemoryRssBytes,
       peakMemoryRssBytes: metrics.peakMemoryRssBytes ?? run?.peakMemoryRssBytes,
@@ -212,6 +216,22 @@ export function createQueryRunsController(helpers) {
     );
   }
 
+  function notebookLinkMarkup(run, title) {
+    const notebookId = String(run?.notebookId || "").trim();
+    if (!notebookId) {
+      return `<strong>${escapeHtml(title)}</strong>`;
+    }
+    const cellId = String(run?.cellId || "").trim();
+    return `
+      <a
+        href="/notebooks/${encodeURIComponent(notebookId)}"
+        class="query-run-history-notebook-link"
+        data-open-query-notebook="${escapeHtml(notebookId)}"
+        data-open-query-cell="${escapeHtml(cellId)}"
+      >${escapeHtml(title)}</a>
+    `;
+  }
+
   function runSqlToggleMarkup(run, key, expanded) {
     const sql = String(run?.sql || "").trim();
     if (!sql) {
@@ -235,6 +255,15 @@ export function createQueryRunsController(helpers) {
     return Array.isArray(run?.progressEvents) ? run.progressEvents : [];
   }
 
+  function progressEventOccurrenceCount(event) {
+    const count = Number(event?.occurrenceCount);
+    return Number.isFinite(count) && count > 1 ? Math.round(count) : 1;
+  }
+
+  function progressEventTotalCount(events) {
+    return events.reduce((total, event) => total + progressEventOccurrenceCount(event), 0);
+  }
+
   function runProgressToggleMarkup(run, key, expanded) {
     const events = runProgressEvents(run);
     if (!events.length) {
@@ -249,12 +278,19 @@ export function createQueryRunsController(helpers) {
         aria-expanded="${expanded ? "true" : "false"}"
       >
         <span class="query-run-history-sql-chevron" aria-hidden="true"></span>
-        <span>${escapeHtml(events.length.toLocaleString())} event(s)</span>
+        <span>${escapeHtml(progressEventTotalCount(events).toLocaleString())} event(s)</span>
       </button>
     `;
   }
 
   function progressEventTime(event) {
+    if (progressEventOccurrenceCount(event) > 1) {
+      const firstTime = String(event?.firstDisplayTime || event?.displayTime || "").trim();
+      const lastTime = String(event?.lastDisplayTime || "").trim();
+      if (firstTime && lastTime && firstTime !== lastTime) {
+        return `${firstTime} - ${lastTime}`;
+      }
+    }
     const displayTime = String(event?.displayTime || "").trim();
     if (displayTime) {
       return displayTime;
@@ -268,6 +304,21 @@ export function createQueryRunsController(helpers) {
       return "";
     }
     return `${numeric.toFixed(numeric >= 10 ? 1 : 2)}`;
+  }
+
+  function progressCpuMetric(event) {
+    const capacity = Number(event?.cpu_capacity_percent);
+    const raw = Number(event?.cpu_percent);
+    if (Number.isFinite(capacity)) {
+      const rawCopy = Number.isFinite(raw) && Math.abs(raw - capacity) >= 0.05
+        ? ` (${formatProgressValue(raw)}% core)`
+        : "";
+      return `CPU ${formatProgressValue(capacity)}% capacity${rawCopy}`;
+    }
+    if (Number.isFinite(raw)) {
+      return `CPU ${formatProgressValue(raw)}% core`;
+    }
+    return "";
   }
 
   function duckdbProfilePillsMarkup(profile) {
@@ -327,6 +378,7 @@ export function createQueryRunsController(helpers) {
   }
 
   function progressEventMarkup(event) {
+    const occurrenceCount = progressEventOccurrenceCount(event);
     const eventName = String(event?.event || "progress").replace(/_/g, " ");
     const message = String(event?.message || event?.phase || "").trim();
     const percent = Number(event?.duckdb_progress_percent ?? event?.progress);
@@ -337,7 +389,7 @@ export function createQueryRunsController(helpers) {
       : "";
     const metrics = [
       event?.elapsed_seconds !== undefined ? `${formatProgressValue(event.elapsed_seconds)}s` : "",
-      event?.cpu_percent !== undefined ? `CPU ${formatProgressValue(event.cpu_percent)}%` : "",
+      progressCpuMetric(event),
       event?.ram_mb !== undefined ? `RAM ${formatProgressValue(event.ram_mb)} MB` : "",
       progressCopy ? `DuckDB ${progressCopy}` : "",
     ].filter(Boolean);
@@ -345,7 +397,7 @@ export function createQueryRunsController(helpers) {
       <li class="query-run-progress-event">
         <time datetime="${escapeHtml(String(event?.occurredAt || ""))}">${escapeHtml(progressEventTime(event))}</time>
         <div>
-          <strong>${escapeHtml(eventName)}</strong>
+          <strong>${escapeHtml(occurrenceCount > 1 ? `${eventName} x${occurrenceCount.toLocaleString()}` : eventName)}</strong>
           ${message ? `<span>${escapeHtml(message)}</span>` : ""}
           ${metrics.length ? `<small>${metrics.map((item) => escapeHtml(item)).join(" | ")}</small>` : ""}
           ${duckdbProfilePillsMarkup(event?.duckdbProfile)}
@@ -416,7 +468,7 @@ export function createQueryRunsController(helpers) {
     const notebookCell = includeNotebook
       ? `
           <td class="query-run-history-title-cell">
-            <strong>${escapeHtml(title)}</strong>
+            ${notebookLinkMarkup(run, title)}
             <span>${escapeHtml(run?.cellId || "Cell")}</span>
             ${messageMarkup}
           </td>
@@ -432,17 +484,17 @@ export function createQueryRunsController(helpers) {
           <span>${escapeHtml(formatQueryDuration(Number(run?.durationMs || 0)))}</span>
           ${runTimingBreakdownMarkup(run)}
         </td>
-        <td>${escapeHtml(formatMetric(metrics.averageCpuPercent, formatCpu))}</td>
-        <td>${escapeHtml(formatMetric(metrics.peakCpuPercent, formatCpu))}</td>
+        <td>${escapeHtml(formatMetric(metrics.averageCpuCapacityPercent ?? metrics.averageCpuPercent, formatCpu))}</td>
+        <td>${escapeHtml(formatMetric(metrics.peakCpuCapacityPercent ?? metrics.peakCpuPercent, formatCpu))}</td>
         <td>${escapeHtml(formatMetric(metrics.averageMemoryRssBytes, formatByteCount))}</td>
         <td>${escapeHtml(formatMetric(metrics.peakMemoryRssBytes, formatByteCount))}</td>
         <td>${escapeHtml(formatRows(run))}</td>
         <td class="query-run-history-sql-cell">${runProgressToggleMarkup(run, key, progressExpanded)}</td>
         <td class="query-run-history-sql-cell">${runSqlToggleMarkup(run, key, sqlExpanded)}${includeNotebook ? "" : messageMarkup}</td>
       </tr>
+      ${chartRow}
       ${progressRow}
       ${sqlRow}
-      ${chartRow}
     `;
   }
 

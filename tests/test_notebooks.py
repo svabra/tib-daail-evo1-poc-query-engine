@@ -560,6 +560,106 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             {"mwa_abrechnung_multi_format_loader"},
         )
 
+    def test_build_notebooks_includes_kostenbelege_3_1_presets(
+        self,
+    ) -> None:
+        (
+            _,
+            _,
+            build_notebooks,
+            _,
+            _,
+            source_catalog_type,
+            source_object_type,
+            source_schema_type,
+        ) = import_notebook_helpers()
+
+        table_names = ("kbkp_2019", "kbpo_2019", "kbhp_2019", "dim_kalender")
+        catalogs = [
+            source_catalog_type(
+                name="pg_oltp",
+                schemas=[
+                    source_schema_type(
+                        name="public",
+                        objects=[
+                            source_object_type(
+                                name=table_name,
+                                kind="table",
+                                relation=f"pg_oltp.public.{table_name}",
+                            )
+                            for table_name in table_names
+                        ],
+                    )
+                ],
+            ),
+            source_catalog_type(
+                name="pg_olap",
+                schemas=[
+                    source_schema_type(
+                        name="public",
+                        objects=[
+                            source_object_type(
+                                name=table_name,
+                                kind="table",
+                                relation=f"pg_olap.public.{table_name}",
+                            )
+                            for table_name in table_names
+                        ],
+                    )
+                ],
+            ),
+            source_catalog_type(
+                name="workspace",
+                schemas=[
+                    source_schema_type(
+                        name="s3_3_1_imports_a08e7385",
+                        objects=[
+                            source_object_type(
+                                name=table_name,
+                                kind="view",
+                                relation=f"workspace.s3_3_1_imports_a08e7385.{table_name}",
+                            )
+                            for table_name in table_names
+                        ],
+                    )
+                ],
+            ),
+        ]
+
+        notebooks = {
+            notebook.notebook_id: notebook
+            for notebook in build_notebooks(catalogs)
+        }
+
+        self.assertEqual(
+            notebooks["kostenbelege-3-1-oltp"].cells[0].data_sources,
+            ["pg_oltp"],
+        )
+        self.assertEqual(
+            notebooks["kostenbelege-3-1-oltp"].tree_path,
+            ("PoC Tests", "Performance Evaluation", "Kostenbelege (3.1)"),
+        )
+        self.assertIn(
+            "FROM pg_oltp.public.kbkp_2019",
+            notebooks["kostenbelege-3-1-oltp"].cells[0].sql,
+        )
+        self.assertIn(
+            "INNER JOIN pg_olap.public.kbpo_2019",
+            notebooks["kostenbelege-3-1-olap"].cells[0].sql,
+        )
+        self.assertIn(
+            "FROM workspace.s3_3_1_imports_a08e7385.kbkp_2019",
+            notebooks["kostenbelege-3-1-s3-parquet"].cells[0].sql,
+        )
+        self.assertEqual(
+            {
+                notebooks["kostenbelege-3-1-oltp"].linked_generator_id,
+                notebooks["kostenbelege-3-1-olap"].linked_generator_id,
+                notebooks["kostenbelege-3-1-s3-parquet"].linked_generator_id,
+            },
+            {"kostenbelege_3_1_multi_source_loader"},
+        )
+
     def test_build_notebooks_includes_immutable_python_demo_presets(
         self,
     ) -> None:

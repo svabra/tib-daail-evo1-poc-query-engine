@@ -156,9 +156,142 @@ def _safe_timing_ms(value: object) -> float | None:
     return round(numeric, 3)
 
 
+def _read_positive_float(path: str) -> float | None:
+    try:
+        value = float(Path(path).read_text(encoding="utf-8").strip())
+    except Exception:
+        return None
+    return value if value > 0 else None
+
+
+def _cgroup_cpu_quota_cores() -> float | None:
+    cpu_max_path = Path("/sys/fs/cgroup/cpu.max")
+    if cpu_max_path.exists():
+        try:
+            quota_text, period_text, *_rest = cpu_max_path.read_text(encoding="utf-8").strip().split()
+            if quota_text != "max":
+                quota = float(quota_text)
+                period = float(period_text)
+                if quota > 0 and period > 0:
+                    return max(0.001, quota / period)
+        except Exception:
+            pass
+
+    quota = _read_positive_float("/sys/fs/cgroup/cpu/cpu.cfs_quota_us")
+    period = _read_positive_float("/sys/fs/cgroup/cpu/cpu.cfs_period_us")
+    if quota is not None and period is not None:
+        return max(0.001, quota / period)
+    return None
+
+
+def _effective_cpu_capacity_cores() -> float:
+    quota_cores = _cgroup_cpu_quota_cores()
+    if quota_cores is not None:
+        return quota_cores
+
+    if psutil is not None:
+        with suppress(Exception):
+            affinity = psutil.Process(os.getpid()).cpu_affinity()
+            if affinity:
+                return float(len(affinity))
+        with suppress(Exception):
+            count = psutil.cpu_count() or 0
+            if count > 0:
+                return float(count)
+
+    return float(os.cpu_count() or 1)
+
+
+def _cpu_capacity_percent(raw_cpu_percent: float, capacity_cores: float) -> float:
+    cores = max(0.001, float(capacity_cores or 1.0))
+    return max(0.0, float(raw_cpu_percent or 0.0) / cores)
+
+
 def _capped_log_list(values: list[object]) -> tuple[list[object], int]:
     compact_values = [value for value in values if value not in (None, "", [], {})]
     return compact_values[:QUERY_LOG_MAX_LIST_ITEMS], max(0, len(compact_values) - QUERY_LOG_MAX_LIST_ITEMS)
+
+
+def _progress_event_repeat_key(event: dict[str, object]) -> tuple[object, ...]:
+    return (
+        event.get("event"),
+        event.get("status"),
+        event.get("phase"),
+        event.get("message"),
+        event.get("progress_kind"),
+        event.get("backend"),
+        event.get("execution_mode"),
+        event.get("duckdb_execution_path"),
+        event.get("duckdb_progress_available"),
+    )
+
+
+def _merge_repeated_progress_event(
+    existing: dict[str, object],
+    incoming: dict[str, object],
+) -> dict[str, object]:
+    merged = dict(existing)
+    previous_count = int(merged.get("occurrenceCount") or 1)
+    if "firstOccurredAt" not in merged:
+        merged["firstOccurredAt"] = merged.get("occurredAt")
+    if "firstDisplayTime" not in merged:
+        merged["firstDisplayTime"] = merged.get("displayTime")
+    if "firstDurationMs" not in merged:
+        merged["firstDurationMs"] = merged.get("durationMs")
+
+    merged["occurrenceCount"] = previous_count + 1
+    merged["lastOccurredAt"] = incoming.get("occurredAt")
+    merged["lastDisplayTime"] = incoming.get("displayTime")
+    merged["lastDurationMs"] = incoming.get("durationMs")
+
+    for key, value in incoming.items():
+        if key in {
+            "occurredAt",
+            "displayTime",
+            "durationMs",
+            "firstOccurredAt",
+            "firstDisplayTime",
+            "firstDurationMs",
+            "occurrenceCount",
+        }:
+            continue
+        merged[key] = value
+    return merged
+
+
+def _progress_events_with_preserved_edges(
+    events: list[dict[str, object]],
+    limit: int,
+) -> list[dict[str, object]]:
+    if len(events) <= limit:
+        return events
+    if limit <= 2:
+        return events[:1] + events[-1:]
+
+    head_count = min(len(events), max(1, min(max(8, limit // 4), limit - 2)))
+    tail_count = max(1, limit - head_count - 1)
+    if head_count + tail_count >= len(events):
+        return events[:limit]
+
+    omitted = events[head_count:-tail_count]
+    first_omitted = omitted[0]
+    last_omitted = omitted[-1]
+    omitted_occurrences = sum(max(1, int(event.get("occurrenceCount") or 1)) for event in omitted)
+    summary_event = {
+        "occurredAt": first_omitted.get("occurredAt"),
+        "displayTime": first_omitted.get("displayTime"),
+        "lastOccurredAt": last_omitted.get("lastOccurredAt") or last_omitted.get("occurredAt"),
+        "lastDisplayTime": last_omitted.get("lastDisplayTime") or last_omitted.get("displayTime"),
+        "event": "progress_events_compacted",
+        "status": last_omitted.get("status") or first_omitted.get("status"),
+        "phase": "Progress events compacted",
+        "message": (
+            f"{omitted_occurrences} middle progress event(s) were summarized "
+            "to preserve the first and latest records."
+        ),
+        "occurrenceCount": omitted_occurrences,
+    }
+    return events[:head_count] + [summary_event] + events[-tail_count:]
 
 
 def _duckdb_sql_string(value: object) -> str:
@@ -874,6 +1007,8 @@ def _query_worker_entry(
                 if execution_mode != QUERY_EXECUTION_POSTGRES_NATIVE and connection is not None
                 else None
             )
+            if progress is not None and progress >= 0.999 and execution_thread.is_alive():
+                progress = None
             progress_label = "Cancelling..." if cancel_event.is_set() else "Running..."
             if progress is not None and not cancel_event.is_set():
                 progress_label = f"Running... {progress * 100:.0f}%"
@@ -1125,6 +1260,8 @@ class QueryJobRecord:
     last_metric_sample_monotonic: float = 0.0
     cpu_sample_total: float = 0.0
     cpu_sample_count: int = 0
+    cpu_capacity_sample_total: float = 0.0
+    cpu_capacity_sample_count: int = 0
     memory_sample_total: int = 0
     memory_sample_count: int = 0
     final_received: bool = False
@@ -1156,6 +1293,7 @@ class QueryJobManager:
         self._terminal_job_callback = terminal_job_callback
         self._access_coordinator = access_coordinator or DuckDBQueryAccessCoordinator()
         self._mp_context = multiprocessing_context or mp.get_context("spawn")
+        self._cpu_capacity_cores = _effective_cpu_capacity_cores()
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
         self._jobs: dict[str, QueryJobRecord] = {}
@@ -1241,6 +1379,7 @@ class QueryJobManager:
             backend_name=backend_name,
             execution_mode=execution_mode,
             duckdb_execution_path=duckdb_execution_path,
+            cpu_capacity_cores=self._cpu_capacity_cores,
             timings=timings,
             can_cancel=True,
         )
@@ -1500,6 +1639,8 @@ class QueryJobManager:
             "process_id",
             "elapsed_seconds",
             "cpu_percent",
+            "cpu_capacity_percent",
+            "cpu_capacity_cores",
             "ram_mb",
             "row_count",
             "rows_shown",
@@ -1548,9 +1689,22 @@ class QueryJobManager:
         }
         if duckdb_profile:
             progress_event["duckdbProfile"] = duckdb_profile
-        snapshot.progress_events.append(progress_event)
+        if (
+            snapshot.progress_events
+            and _progress_event_repeat_key(snapshot.progress_events[-1])
+            == _progress_event_repeat_key(progress_event)
+        ):
+            snapshot.progress_events[-1] = _merge_repeated_progress_event(
+                snapshot.progress_events[-1],
+                progress_event,
+            )
+        else:
+            snapshot.progress_events.append(progress_event)
         if len(snapshot.progress_events) > MAX_QUERY_PROGRESS_EVENTS:
-            snapshot.progress_events = snapshot.progress_events[-MAX_QUERY_PROGRESS_EVENTS:]
+            snapshot.progress_events = _progress_events_with_preserved_edges(
+                snapshot.progress_events,
+                MAX_QUERY_PROGRESS_EVENTS,
+            )
 
     def _set_timing_locked(self, record: QueryJobRecord, key: str, value: object) -> None:
         timing = _safe_timing_ms(value)
@@ -1699,6 +1853,10 @@ class QueryJobManager:
             fields["duckdb_progress_available"] = False
         if snapshot.cpu_percent is not None and event == "progress":
             fields["cpu_percent"] = round(float(snapshot.cpu_percent), 2)
+        if snapshot.cpu_capacity_percent is not None and event == "progress":
+            fields["cpu_capacity_percent"] = round(float(snapshot.cpu_capacity_percent), 2)
+        if snapshot.cpu_capacity_cores is not None and event == "progress":
+            fields["cpu_capacity_cores"] = round(float(snapshot.cpu_capacity_cores), 3)
         if snapshot.memory_rss_bytes is not None and event == "progress":
             fields["ram_mb"] = round(float(snapshot.memory_rss_bytes) / (1024 * 1024), 1)
         if event == "progress":
@@ -2129,13 +2287,27 @@ class QueryJobManager:
                 return
 
             normalized_cpu_percent = max(0.0, cpu_percent)
+            cpu_capacity_cores = max(
+                0.001,
+                float(record.snapshot.cpu_capacity_cores or self._cpu_capacity_cores or 1.0),
+            )
+            normalized_cpu_capacity_percent = _cpu_capacity_percent(
+                normalized_cpu_percent,
+                cpu_capacity_cores,
+            )
             normalized_memory_rss = max(0, memory_rss)
             record.last_metric_sample_monotonic = now_monotonic
             record.cpu_sample_total += normalized_cpu_percent
             record.cpu_sample_count += 1
+            record.cpu_capacity_sample_total += normalized_cpu_capacity_percent
+            record.cpu_capacity_sample_count += 1
             record.memory_sample_total += normalized_memory_rss
             record.memory_sample_count += 1
             average_cpu = record.cpu_sample_total / max(1, record.cpu_sample_count)
+            average_cpu_capacity = record.cpu_capacity_sample_total / max(
+                1,
+                record.cpu_capacity_sample_count,
+            )
             average_memory = int(record.memory_sample_total / max(1, record.memory_sample_count))
 
             record.snapshot.cpu_percent = normalized_cpu_percent
@@ -2144,6 +2316,13 @@ class QueryJobManager:
                 float(record.snapshot.peak_cpu_percent or 0.0),
                 normalized_cpu_percent,
             )
+            record.snapshot.cpu_capacity_percent = normalized_cpu_capacity_percent
+            record.snapshot.average_cpu_capacity_percent = average_cpu_capacity
+            record.snapshot.peak_cpu_capacity_percent = max(
+                float(record.snapshot.peak_cpu_capacity_percent or 0.0),
+                normalized_cpu_capacity_percent,
+            )
+            record.snapshot.cpu_capacity_cores = cpu_capacity_cores
             record.snapshot.memory_rss_bytes = normalized_memory_rss
             record.snapshot.average_memory_rss_bytes = average_memory
             record.snapshot.peak_memory_rss_bytes = max(
@@ -2155,6 +2334,8 @@ class QueryJobManager:
                     elapsed_ms=self._elapsed_duration_ms_locked(record),
                     cpu_percent=normalized_cpu_percent,
                     average_cpu_percent=average_cpu,
+                    cpu_capacity_percent=normalized_cpu_capacity_percent,
+                    average_cpu_capacity_percent=average_cpu_capacity,
                     memory_rss_bytes=normalized_memory_rss,
                     average_memory_rss_bytes=average_memory,
                 )

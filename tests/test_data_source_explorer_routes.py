@@ -452,6 +452,7 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
         body = response.body.decode("utf-8")
         self.assertIn('data-query-runs-page', body)
         self.assertIn('data-query-runs-list', body)
+        self.assertIn('Query Monitoring', body)
         self.assertIn('data-query-runs-toggle-live', body)
         self.assertIn('Live Queries only', body)
         self.assertIn('data-query-runs-toggle-charts', body)
