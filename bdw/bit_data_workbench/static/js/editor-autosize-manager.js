@@ -26,6 +26,7 @@ export function createEditorAutosizeManager({
     const editor = editorRegistry.get(root);
     const sizingState = editorSizingState(root);
     const baseRows = preferredSqlEditorRows(currentEditorSql(root));
+    const isExpanded = root.classList.contains("is-editor-expanded");
     if (editor) {
       const editorStyles = window.getComputedStyle(editor.dom);
       const scroller = editor.dom.querySelector(".cm-scroller");
@@ -48,7 +49,10 @@ export function createEditorAutosizeManager({
       );
       return {
         minHeight,
-        nextHeight: Math.max(minHeight, Math.min(contentHeight, maxAutoHeight)),
+        nextHeight: Math.max(
+          minHeight,
+          isExpanded ? contentHeight : Math.min(contentHeight, maxAutoHeight)
+        ),
       };
     }
 
@@ -75,7 +79,10 @@ export function createEditorAutosizeManager({
 
     return {
       minHeight,
-      nextHeight: Math.max(minHeight, Math.min(contentHeight, maxAutoHeight)),
+      nextHeight: Math.max(
+        minHeight,
+        isExpanded ? contentHeight : Math.min(contentHeight, maxAutoHeight)
+      ),
     };
   }
 
@@ -102,6 +109,14 @@ export function createEditorAutosizeManager({
 
   function markEditorInteracted(root) {
     editorSizingState(root).interacted = true;
+  }
+
+  function resetEditorManualSizing(root) {
+    if (!(root instanceof Element)) {
+      return;
+    }
+
+    editorSizingState(root).manual = false;
   }
 
   function autosizeEditor(root) {
@@ -132,5 +147,6 @@ export function createEditorAutosizeManager({
   return {
     autosizeEditor,
     markEditorInteracted,
+    resetEditorManualSizing,
   };
 }

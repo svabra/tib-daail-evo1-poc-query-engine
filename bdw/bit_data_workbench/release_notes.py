@@ -1,9 +1,30 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.11. Keep entries concise and
+# Derived from git history through version 0.9.12. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.12",
+        "releasedAt": "2026-05-19T11:04:53+02:00",
+        "features": [
+            (
+                "SQL notebook editors now include an expand/collapse control "
+                "next to Copy SQL, allowing long SQL cells to grow to their "
+                "full content height and then return to the default size."
+            ),
+            (
+                "Query in new notebook now opens the notebook immediately with "
+                "a runnable SELECT * query, then enriches it with explicit "
+                "columns after source metadata arrives if the cell was not edited."
+            ),
+            (
+                "Creating and opening local notebooks now avoids a full notebook "
+                "sidebar metadata sweep, keeping the plus-button flow responsive "
+                "as the notebook tree grows."
+            ),
+        ],
+    },
     {
         "version": "0.9.11",
         "releasedAt": "2026-05-19T10:32:28+02:00",

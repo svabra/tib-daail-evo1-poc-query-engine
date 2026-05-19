@@ -543,7 +543,11 @@ const { decorateQueryJobsWithInsights } = createQueryInsights({
   sourceLabelsForIds,
 });
 
-const { autosizeEditor, markEditorInteracted } = createEditorAutosizeManager({
+const {
+  autosizeEditor,
+  markEditorInteracted,
+  resetEditorManualSizing,
+} = createEditorAutosizeManager({
   currentEditorSql,
   defaultAutoRows: defaultSqlEditorAutoRows,
   editorRegistry,
@@ -2938,6 +2942,44 @@ async function copyEditorSql(editorRoot, triggerButton = null) {
   return true;
 }
 
+function syncEditorExpandButton(editorRoot) {
+  if (!(editorRoot instanceof Element)) {
+    return;
+  }
+
+  const button = editorRoot.querySelector("[data-expand-editor]");
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+
+  const expanded = editorRoot.classList.contains("is-editor-expanded");
+  button.textContent = expanded ? "-" : "+";
+  button.title = expanded ? "Collapse SQL editor" : "Expand SQL editor";
+  button.setAttribute("aria-label", button.title);
+  button.setAttribute("aria-pressed", expanded ? "true" : "false");
+}
+
+function setEditorExpanded(editorRoot, expanded) {
+  if (!(editorRoot instanceof Element)) {
+    return false;
+  }
+
+  editorRoot.classList.toggle("is-editor-expanded", expanded);
+  resetEditorManualSizing(editorRoot);
+  autosizeEditor(editorRoot);
+  window.requestAnimationFrame(() => autosizeEditor(editorRoot));
+  syncEditorExpandButton(editorRoot);
+  return true;
+}
+
+function toggleEditorExpanded(editorRoot) {
+  if (!(editorRoot instanceof Element)) {
+    return false;
+  }
+
+  return setEditorExpanded(editorRoot, !editorRoot.classList.contains("is-editor-expanded"));
+}
+
 function toggleQueryResultPanel(button) {
   if (!(button instanceof HTMLButtonElement)) {
     return false;
@@ -4200,6 +4242,7 @@ function createEditor(root) {
 
 function initializeEditors(root = document) {
   root.querySelectorAll("[data-editor-root]").forEach((editorRoot) => {
+    syncEditorExpandButton(editorRoot);
     createEditor(editorRoot);
     querySourceValidationController.refreshCell(editorRoot.closest("[data-query-cell]"));
   });
@@ -4378,7 +4421,10 @@ function renderLocalNotebookWorkspace(notebookId, options = {}) {
   applyWorkbenchTitle("query");
   processHtmx(panel);
   initializeEditors(panel);
-  applyNotebookMetadata();
+  const metaRoot = panel.querySelector("[data-notebook-meta]");
+  if (metaRoot) {
+    applyWorkspaceMetadata(metaRoot, metadata);
+  }
   if (currentSidebarMode() !== "notebook") {
     refreshSidebar("notebook")
       .then(() => {
@@ -8583,6 +8629,14 @@ document.body.addEventListener("click", async (event) => {
         copy: error instanceof Error ? error.message : "The SQL could not be copied to the clipboard.",
       });
     }
+    return;
+  }
+
+  const editorExpandButton = event.target.closest("[data-expand-editor]");
+  if (editorExpandButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleEditorExpanded(editorExpandButton.closest("[data-editor-root]"));
     return;
   }
 

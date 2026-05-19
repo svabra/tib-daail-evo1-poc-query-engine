@@ -8131,10 +8131,10 @@ details:not([open]) > .tree-children {
   background: linear-gradient(180deg, rgba(250, 251, 255, 0.96), rgba(244, 248, 252, 0.98));
 }
 
-.editor-copy-button {
+.editor-copy-button,
+.editor-expand-button {
   position: absolute;
   top: 8px;
-  right: 8px;
   z-index: 3;
   display: inline-flex;
   align-items: center;
@@ -8151,6 +8151,16 @@ details:not([open]) > .tree-children {
   transition: opacity 0.14s ease, background 0.14s ease, border-color 0.14s ease;
 }
 
+.editor-copy-button {
+  right: 8px;
+}
+
+.editor-expand-button {
+  right: 44px;
+  padding: 0;
+  font: 800 1rem/1 var(--font-sans);
+}
+
 .editor-copy-button svg {
   width: 16px;
   height: 16px;
@@ -8162,19 +8172,26 @@ details:not([open]) > .tree-children {
 }
 
 .editor-frame:hover .editor-copy-button,
-.editor-copy-button:focus-visible {
+.editor-frame:hover .editor-expand-button,
+.editor-copy-button:focus-visible,
+.editor-expand-button:focus-visible,
+.editor-expand-button[aria-pressed="true"] {
   opacity: 1;
   pointer-events: auto;
 }
 
 .editor-copy-button:hover,
 .editor-copy-button:focus-visible,
-.editor-copy-button.is-copied {
+.editor-copy-button.is-copied,
+.editor-expand-button:hover,
+.editor-expand-button:focus-visible,
+.editor-expand-button[aria-pressed="true"] {
   border-color: rgba(11, 68, 121, 0.24);
   background: rgba(236, 245, 252, 0.98);
 }
 
-.editor-frame[data-editor-language="python"] .editor-copy-button {
+.editor-frame[data-editor-language="python"] .editor-copy-button,
+.editor-frame[data-editor-language="python"] .editor-expand-button {
   display: none;
 }
 

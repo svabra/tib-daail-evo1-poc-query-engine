@@ -1,4 +1,4 @@
-import { sourceQueryDescriptor } from "./source-metadata-utils.js";
+import { sourceQueryDescriptor, sourceQuerySql } from "./source-metadata-utils.js";
 
 export function createSourceQueryActions(helpers) {
   const {
@@ -18,12 +18,14 @@ export function createSourceQueryActions(helpers) {
     setSelectedSourceObjectState = () => {},
   } = helpers;
 
-  async function loadSourceObjectFields(sourceObjectRoot) {
+  async function loadSourceObjectFields(sourceObjectRoot, { alertOnFailure = true } = {}) {
     try {
       return await selectSourceObject(sourceObjectRoot);
     } catch (error) {
       console.error("Failed to load source object fields.", error);
-      window.alert("The fields for this source object could not be loaded.");
+      if (alertOnFailure) {
+        window.alert("The fields for this source object could not be loaded.");
+      }
       return null;
     }
   }
@@ -58,12 +60,51 @@ export function createSourceQueryActions(helpers) {
     return insertSourceQueryIntoCurrentNotebook(sourceObjectRoot, { runImmediately: true });
   }
 
-  async function loadFieldsForSourceQuery(sourceObjectRoot) {
+  async function loadFieldsForSourceQuery(sourceObjectRoot, options = {}) {
     if (isLocalWorkspaceSourceObject(sourceObjectRoot)) {
       setSelectedSourceObjectState(sourceObjectRoot);
       return [];
     }
-    return loadSourceObjectFields(sourceObjectRoot);
+    return loadSourceObjectFields(sourceObjectRoot, options);
+  }
+
+  function updateSourceQueryCellWhenUnchanged(notebookId, cellId, expectedSql, nextSql) {
+    if (!notebookId || !cellId || !nextSql || nextSql === expectedSql) {
+      return false;
+    }
+
+    const metadata = getNotebookMetadata(notebookId);
+    const cells = Array.isArray(metadata?.cells) ? metadata.cells : [];
+    const currentCell = cells.find((cell) => cell.cellId === cellId);
+    if (!currentCell || currentCell.sql !== expectedSql) {
+      return false;
+    }
+
+    setNotebookCells(
+      notebookId,
+      cells.map((cell) => (cell.cellId === cellId ? { ...cell, sql: nextSql } : cell)),
+      { rerender: true }
+    );
+    return true;
+  }
+
+  function enrichSourceQueryNotebook(notebookId, cellId, sourceObjectRoot, sourceDescriptor, initialSql) {
+    loadFieldsForSourceQuery(sourceObjectRoot, { alertOnFailure: false })
+      .then((fields) => {
+        if (!fields?.length) {
+          return;
+        }
+
+        updateSourceQueryCellWhenUnchanged(
+          notebookId,
+          cellId,
+          initialSql,
+          sourceQuerySql(sourceDescriptor.relation, fields)
+        );
+      })
+      .catch((error) => {
+        console.error("Failed to enrich the source query with explicit fields.", error);
+      });
   }
 
   async function querySourceInNewNotebook(sourceObjectRoot) {
@@ -81,16 +122,14 @@ export function createSourceQueryActions(helpers) {
       return null;
     }
 
-    const fields = await loadFieldsForSourceQuery(sourceObjectRoot);
-    if (!fields) {
-      return null;
-    }
-
-    const nextCell = createSourceQueryCellState(sourceDescriptor, fields);
+    setSelectedSourceObjectState(sourceObjectRoot);
+    const nextCell = createSourceQueryCellState(sourceDescriptor, []);
     setActiveCellId(nextCell.cellId);
-    return createNotebook(targetContainer, {
+    const notebookId = await createNotebook(targetContainer, {
       cells: [nextCell],
     });
+    enrichSourceQueryNotebook(notebookId, nextCell.cellId, sourceObjectRoot, sourceDescriptor, nextCell.sql);
+    return notebookId;
   }
 
   return {

@@ -207,6 +207,14 @@ export function createNotebookWorkspaceMarkup(helpers) {
                 <path d="M5 15H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1"></path>
               </svg>
             </button>
+            <button
+              type="button"
+              class="editor-expand-button"
+              data-expand-editor
+              aria-label="Expand SQL editor"
+              aria-pressed="false"
+              title="Expand SQL editor"
+            >+</button>
             <textarea name="sql" data-editor-source data-default-sql="${escapeHtml(cell.sql)}" data-editor-language="${escapeHtml(cellLanguage)}" rows="${preferredSqlEditorRows(cell.sql)}" spellcheck="false">${escapeHtml(cell.sql)}</textarea>
           </div>
           <div class="query-source-validation" data-query-source-validation data-query-source-validation-status="unchecked" aria-live="polite" ${cellLanguage === "python" ? "hidden" : ""}>
