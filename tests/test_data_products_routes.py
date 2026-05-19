@@ -516,6 +516,7 @@ class DataProductsRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.body.decode("utf-8")
+        self.assertIn("Data Analytics and AI Feed", body)
         self.assertIn("topbar-workbench-tooltip-title", body)
         self.assertIn("Query Workbench", body)
         self.assertIn(

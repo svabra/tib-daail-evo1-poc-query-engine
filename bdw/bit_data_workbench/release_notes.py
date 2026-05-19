@@ -1,9 +1,19 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.15. Keep entries concise and
+# Derived from git history through version 0.9.16. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.16",
+        "releasedAt": "2026-05-19T12:35:24+02:00",
+        "features": [
+            (
+                "The shell tagline now reads Data Analytics and AI Feed, "
+                "matching the updated DAAIF Factory browser and page branding."
+            ),
+        ],
+    },
     {
         "version": "0.9.15",
         "releasedAt": "2026-05-19T12:25:34+02:00",
