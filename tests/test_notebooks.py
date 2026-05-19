@@ -659,6 +659,22 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             "FROM workspace.s3_3_1_imports_a08e7385.kbkp_2019",
             notebooks["kostenbelege-3-1-s3-parquet"].cells[0].sql,
         )
+        self.assertEqual(
+            notebooks["kostenbelege-3-1-s3-parquet-optimized"].cells[0].data_sources,
+            ["workspace.s3"],
+        )
+        self.assertIn(
+            "WITH current_kalender AS",
+            notebooks["kostenbelege-3-1-s3-parquet-optimized"].cells[0].sql,
+        )
+        self.assertIn(
+            "resolved_positions AS",
+            notebooks["kostenbelege-3-1-s3-parquet-optimized"].cells[0].sql,
+        )
+        self.assertIn(
+            "CROSS JOIN (VALUES",
+            notebooks["kostenbelege-3-1-s3-parquet-optimized"].cells[0].sql,
+        )
         self.assertIn(
             'FROM public.kbkp_2019 KBKP',
             notebooks["kostenbelege-3-1-oltp-native"].cells[0].sql,
@@ -672,6 +688,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
                 notebooks["kostenbelege-3-1-oltp"].linked_generator_id,
                 notebooks["kostenbelege-3-1-olap"].linked_generator_id,
                 notebooks["kostenbelege-3-1-s3-parquet"].linked_generator_id,
+                notebooks["kostenbelege-3-1-s3-parquet-optimized"].linked_generator_id,
                 notebooks["kostenbelege-3-1-oltp-native"].linked_generator_id,
                 notebooks["kostenbelege-3-1-olap-native"].linked_generator_id,
             },
@@ -696,6 +713,10 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
                 {
                     "notebookId": "kostenbelege-3-1-s3-parquet",
                     "title": "Kostenbelege (3.1) S3 Parquet via DuckDB",
+                },
+                {
+                    "notebookId": "kostenbelege-3-1-s3-parquet-optimized",
+                    "title": "Kostenbelege (3.1) S3 Parquet Optimized via DuckDB",
                 },
                 {
                     "notebookId": "kostenbelege-3-1-oltp-native",

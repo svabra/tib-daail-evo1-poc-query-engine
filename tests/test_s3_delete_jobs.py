@@ -66,7 +66,14 @@ def build_settings(**overrides):
 
 def s3_error(code: str, message: str = "") -> ClientError:
     return ClientError(
-        {"Error": {"Code": code, "Message": message or code}},
+        {
+            "Error": {"Code": code, "Message": message or code},
+            "ResponseMetadata": {
+                "HTTPStatusCode": 400,
+                "RequestId": f"{code.lower()}-request",
+                "RetryAttempts": 0,
+            },
+        },
         code,
     )
 
@@ -84,7 +91,19 @@ class _ObjectDeleteClient:
 
     def delete_objects(self, **kwargs):
         self.delete_objects_calls.append(list(kwargs["Delete"]["Objects"]))
-        return {}
+        return {
+            "ResponseMetadata": {
+                "HTTPStatusCode": 200,
+                "RequestId": "delete-objects-request",
+                "RetryAttempts": 0,
+            }
+        }
+
+
+class _FailingDeleteObjectsClient(_ObjectDeleteClient):
+    def delete_objects(self, **kwargs):
+        self.delete_objects_calls.append(list(kwargs["Delete"]["Objects"]))
+        raise s3_error("InternalError", "backend delete failed")
 
 
 class _FinalizingBucketClient:
@@ -110,7 +129,13 @@ class _FinalizingBucketClient:
 
     def delete_bucket(self, **_kwargs):
         self.delete_bucket_calls += 1
-        return None
+        return {
+            "ResponseMetadata": {
+                "HTTPStatusCode": 204,
+                "RequestId": "delete-bucket-request",
+                "RetryAttempts": 0,
+            }
+        }
 
     def delete_objects(self, **_kwargs):
         raise AssertionError("Empty bucket finalization should not delete object batches.")
@@ -142,14 +167,22 @@ class S3DeleteJobTests(unittest.TestCase):
             prefix="exports/data.csv",
         )
 
-        response = api_router.delete_s3_explorer_entry(
-            payload,
-            service=_FakeDeleteService(),
-        )
+        with self.assertLogs(
+            "bit_data_workbench.backend.s3_delete_jobs",
+            level="INFO",
+        ) as logs:
+            response = api_router.delete_s3_explorer_entry(
+                payload,
+                service=_FakeDeleteService(),
+            )
 
         self.assertEqual(response.status_code, 202)
         self.assertIn(b'"jobId":"s3-delete-test"', response.body)
         self.assertIn(b'"status":"queued"', response.body)
+        output = "\n".join(logs.output)
+        self.assertIn('s3_delete_event="client_request_received"', output)
+        self.assertIn('s3_delete_event="client_request_accepted"', output)
+        self.assertIn('job_id="s3-delete-test"', output)
 
     def test_object_delete_logs_requested_and_completed_path(self) -> None:
         client = _ObjectDeleteClient()
@@ -177,8 +210,40 @@ class S3DeleteJobTests(unittest.TestCase):
         self.assertEqual(client.delete_objects_calls, [[{"Key": "exports/data.csv", "VersionId": "v1"}]])
         output = "\n".join(logs.output)
         self.assertIn('s3_delete_event="requested"', output)
+        self.assertIn('s3_delete_event="s3_delete_request_invoked"', output)
+        self.assertIn('s3_delete_event="s3_delete_response"', output)
+        self.assertIn('s3_delete_event="s3_delete_confirmed"', output)
         self.assertIn('s3_delete_event="completed"', output)
+        self.assertIn('operation="DeleteObjects"', output)
+        self.assertIn('"http_status_code":200', output)
+        self.assertIn('request_id":"delete-objects-request"', output)
         self.assertIn('path="s3://test-bucket/exports/data.csv"', output)
+
+    def test_delete_object_failure_logs_s3_request_and_response_details(self) -> None:
+        client = _FailingDeleteObjectsClient()
+        manager = S3DeleteJobManager(
+            settings=build_settings(),
+            s3_client_factory=lambda _settings: client,
+            run_jobs_inline=True,
+        )
+
+        with self.assertLogs(
+            "bit_data_workbench.backend.s3_delete_jobs",
+            level="WARNING",
+        ) as logs:
+            job = manager.start_job(
+                entry_kind="file",
+                bucket="test-bucket",
+                prefix="exports/data.csv",
+            )
+
+        self.assertEqual(job["status"], "failed")
+        output = "\n".join(logs.output)
+        self.assertIn('s3_delete_event="s3_delete_request_failed"', output)
+        self.assertIn('s3_delete_event="failed"', output)
+        self.assertIn('operation="DeleteObjects"', output)
+        self.assertIn('error_code="InternalError"', output)
+        self.assertIn('"http_status_code":400', output)
 
     def test_bucket_delete_stays_finalizing_until_bucket_disappears(self) -> None:
         client = _FinalizingBucketClient(disappear_after_head_calls=3)
@@ -204,7 +269,12 @@ class S3DeleteJobTests(unittest.TestCase):
         self.assertEqual(job["status"], "completed")
         self.assertIn("finalizing", observed_statuses)
         self.assertGreaterEqual(client.delete_bucket_calls, 1)
-        self.assertIn('s3_delete_event="bucket_finalizing"', "\n".join(logs.output))
+        output = "\n".join(logs.output)
+        self.assertIn('s3_delete_event="bucket_finalizing"', output)
+        self.assertIn('operation="DeleteBucket"', output)
+        self.assertIn('s3_delete_event="s3_delete_response"', output)
+        self.assertIn('s3_delete_event="s3_delete_confirmed"', output)
+        self.assertIn('request_id":"delete-bucket-request"', output)
 
     def test_bucket_delete_fails_only_after_finalize_timeout(self) -> None:
         client = _FinalizingBucketClient(disappear_after_head_calls=None)

@@ -101,6 +101,115 @@ def _public_error_text(error: Exception) -> str:
     return _truncate_log_text(str(error) or error.__class__.__name__)
 
 
+def _s3_response_summary(response: object) -> dict[str, object] | str:
+    if not isinstance(response, dict):
+        return _truncate_log_text(response)
+
+    metadata = response.get("ResponseMetadata") or {}
+    summary: dict[str, object] = {}
+    if isinstance(metadata, dict):
+        summary.update(
+            {
+                "http_status_code": metadata.get("HTTPStatusCode"),
+                "request_id": metadata.get("RequestId"),
+                "host_id": metadata.get("HostId"),
+                "retry_attempts": metadata.get("RetryAttempts"),
+            }
+        )
+        headers = metadata.get("HTTPHeaders") or {}
+        if isinstance(headers, dict):
+            summary["x_amz_request_id"] = (
+                headers.get("x-amz-request-id")
+                or headers.get("x-amz-id-2")
+                or headers.get("x-minio-deployment-id")
+            )
+
+    deleted = response.get("Deleted")
+    if isinstance(deleted, list):
+        summary["deleted_count"] = len(deleted)
+        summary["deleted_sample"] = deleted[:5]
+
+    errors = response.get("Errors")
+    if isinstance(errors, list):
+        summary["error_count"] = len(errors)
+        summary["error_sample"] = [
+            {
+                "key": item.get("Key"),
+                "version_id": item.get("VersionId"),
+                "code": item.get("Code"),
+                "message": item.get("Message"),
+            }
+            for item in errors[:5]
+            if isinstance(item, dict)
+        ]
+
+    for key in ("DeleteMarker", "VersionId"):
+        if key in response:
+            summary[key] = response.get(key)
+
+    return {key: value for key, value in summary.items() if value not in (None, "", [], {})}
+
+
+def _s3_error_response_summary(error: Exception) -> dict[str, object] | str:
+    s3_error = _caused_by_s3_client_error(error)
+    if s3_error is not None:
+        return _s3_response_summary(s3_error.response)
+    return _public_error_text(error)
+
+
+def _caused_by_s3_client_error(error: Exception) -> ClientError | None:
+    current: BaseException | None = error
+    while current is not None:
+        if isinstance(current, ClientError):
+            return current
+        current = current.__cause__
+    return None
+
+
+def _s3_error_code_for_log(error: Exception) -> str | None:
+    return _s3_error_code(error) or (
+        _s3_error_code(caused_by)
+        if (caused_by := _caused_by_s3_client_error(error)) is not None
+        else None
+    )
+
+
+def _object_batch_log_summary(objects: list[str | dict[str, str]]) -> dict[str, object]:
+    keys: list[str] = []
+    versioned_count = 0
+    for item in objects:
+        if isinstance(item, str):
+            keys.append(item)
+            continue
+        key = str(item.get("Key") or "").strip()
+        if key:
+            keys.append(key)
+        if str(item.get("VersionId") or "").strip():
+            versioned_count += 1
+
+    return {
+        "object_count": len(objects),
+        "versioned_object_count": versioned_count,
+        "first_key": keys[0] if keys else "",
+        "last_key": keys[-1] if keys else "",
+    }
+
+
+def log_s3_delete_backend_event(
+    event: str,
+    fields: dict[str, object],
+    *,
+    level: int = logging.INFO,
+    timezone_name: str = "Europe/Zurich",
+) -> None:
+    payload = {
+        "s3_delete_time": _delete_log_timestamp(timezone_name),
+        "s3_delete_event": event,
+        **fields,
+    }
+    logger.log(level, "[bdw-s3-delete] %s", _format_log_fields(payload))
+
+
 class S3DeleteJobManager:
     def __init__(
         self,
@@ -225,7 +334,17 @@ class S3DeleteJobManager:
     def _execute_delete(self, job_id: str) -> None:
         with self._lock:
             job = dict(self._require_job_locked(job_id))
+        self._log_job_event_by_id(
+            job_id,
+            "s3_client_create_invoked",
+            extra={
+                "entry_kind": job.get("entryKind"),
+                "bucket": job.get("bucket"),
+                "prefix": job.get("prefix"),
+            },
+        )
         client = self._s3_client_factory(self._settings)
+        self._log_job_event_by_id(job_id, "s3_client_created")
         entry_kind = str(job["entryKind"])
         bucket = str(job["bucket"])
         prefix = str(job.get("prefix") or "")
@@ -290,6 +409,20 @@ class S3DeleteJobManager:
                 message=f"Failed to list object versions for {key}; checking fallback.",
                 error=_public_error_text(exc),
             )
+            self._log_job_event_by_id(
+                job_id,
+                "s3_list_failed",
+                level=logging.WARNING,
+                extra={
+                    "operation": "ListObjectVersions",
+                    "bucket": bucket,
+                    "prefix": key,
+                    "exact_key": key,
+                    "error": _public_error_text(exc),
+                    "error_code": _s3_error_code_for_log(exc),
+                    "s3_response": _s3_error_response_summary(exc),
+                },
+            )
             if _is_missing_bucket_error(exc):
                 raise ValueError(f"The S3 bucket '{bucket}' does not exist.") from exc
             if not _version_listing_fallback_allowed(exc):
@@ -319,6 +452,19 @@ class S3DeleteJobManager:
                 message=f"Failed to list object versions under {prefix}; checking fallback.",
                 error=_public_error_text(exc),
             )
+            self._log_job_event_by_id(
+                job_id,
+                "s3_list_failed",
+                level=logging.WARNING,
+                extra={
+                    "operation": "ListObjectVersions",
+                    "bucket": bucket,
+                    "prefix": prefix,
+                    "error": _public_error_text(exc),
+                    "error_code": _s3_error_code_for_log(exc),
+                    "s3_response": _s3_error_response_summary(exc),
+                },
+            )
             if _is_missing_bucket_error(exc):
                 raise ValueError(f"The S3 bucket '{bucket}' does not exist.") from exc
             if not _version_listing_fallback_allowed(exc):
@@ -345,6 +491,19 @@ class S3DeleteJobManager:
                 message="Failed to list bucket object versions; checking fallback.",
                 error=_public_error_text(exc),
             )
+            self._log_job_event_by_id(
+                job_id,
+                "s3_list_failed",
+                level=logging.WARNING,
+                extra={
+                    "operation": "ListObjectVersions",
+                    "bucket": bucket,
+                    "prefix": "",
+                    "error": _public_error_text(exc),
+                    "error_code": _s3_error_code_for_log(exc),
+                    "s3_response": _s3_error_response_summary(exc),
+                },
+            )
             if _is_missing_bucket_error(exc):
                 raise ValueError(f"The S3 bucket '{bucket}' does not exist.") from exc
             if _version_listing_access_denied(exc):
@@ -370,6 +529,16 @@ class S3DeleteJobManager:
         matched = 0
         listed = 0
         batch: list[dict[str, str]] = []
+        self._log_job_event_by_id(
+            job_id,
+            "s3_list_request_invoked",
+            extra={
+                "operation": "ListObjectVersions",
+                "bucket": bucket,
+                "prefix": prefix,
+                "exact_key": exact_key,
+            },
+        )
         for item in iter_s3_object_versions(client, bucket, prefix):
             listed += 1
             if exact_key is not None and item.get("Key") != exact_key:
@@ -398,12 +567,34 @@ class S3DeleteJobManager:
                 deleted_keys=deleted,
                 progress=0.75,
             )
+        self._log_job_event_by_id(
+            job_id,
+            "s3_list_completed",
+            extra={
+                "operation": "ListObjectVersions",
+                "bucket": bucket,
+                "prefix": prefix,
+                "exact_key": exact_key,
+                "listed_versions": listed,
+                "matched_versions": matched,
+                "deleted_keys": deleted,
+            },
+        )
         return deleted, matched
 
     def _delete_visible_prefix_keys(self, job_id: str, client: Any, bucket: str, prefix: str) -> int:
         deleted = 0
         batch: list[str] = []
         listed = 0
+        self._log_job_event_by_id(
+            job_id,
+            "s3_list_request_invoked",
+            extra={
+                "operation": "ListObjectsV2",
+                "bucket": bucket,
+                "prefix": prefix,
+            },
+        )
         for key in iter_s3_keys(client, bucket, prefix):
             listed += 1
             batch.append(key)
@@ -427,6 +618,17 @@ class S3DeleteJobManager:
             listed_keys=listed,
             deleted_keys=deleted,
             progress=0.75,
+        )
+        self._log_job_event_by_id(
+            job_id,
+            "s3_list_completed",
+            extra={
+                "operation": "ListObjectsV2",
+                "bucket": bucket,
+                "prefix": prefix,
+                "listed_keys": listed,
+                "deleted_keys": deleted,
+            },
         )
         return deleted
 
@@ -457,7 +659,50 @@ class S3DeleteJobManager:
         with self._lock:
             job = self._jobs.get(job_id)
             deleted_batches = int(job.get("deletedBatches") or 0) + 1 if job else 1
-        deleted = delete_s3_objects(client, bucket, objects)
+        batch_summary = _object_batch_log_summary(objects)
+        request_fields = {
+            "operation": "DeleteObjects",
+            "bucket": bucket,
+            "batch_number": deleted_batches,
+            **batch_summary,
+        }
+        self._log_job_event_by_id(
+            job_id,
+            "s3_delete_request_invoked",
+            extra=request_fields,
+        )
+        try:
+            deleted = delete_s3_objects(
+                client,
+                bucket,
+                objects,
+                response_callback=lambda payload: self._log_s3_delete_response(
+                    job_id,
+                    payload,
+                    batch_number=deleted_batches,
+                ),
+            )
+        except Exception as exc:
+            self._log_job_event_by_id(
+                job_id,
+                "s3_delete_request_failed",
+                level=logging.WARNING,
+                extra={
+                    **request_fields,
+                    "error": _public_error_text(exc),
+                    "error_code": _s3_error_code_for_log(exc),
+                    "s3_response": _s3_error_response_summary(exc),
+                },
+            )
+            raise
+        self._log_job_event_by_id(
+            job_id,
+            "s3_delete_confirmed",
+            extra={
+                **request_fields,
+                "deleted_keys": deleted,
+            },
+        )
         self._update_job(
             job_id,
             phase="deleting_batch",
@@ -465,6 +710,29 @@ class S3DeleteJobManager:
             deleted_batches=deleted_batches,
         )
         return deleted
+
+    def _log_s3_delete_response(
+        self,
+        job_id: str,
+        payload: dict[str, object],
+        *,
+        batch_number: int,
+    ) -> None:
+        operation = str(payload.get("operation") or "DeleteObjects").strip()
+        response = payload.get("response")
+        self._log_job_event_by_id(
+            job_id,
+            "s3_delete_response",
+            extra={
+                "operation": operation,
+                "bucket": payload.get("bucket"),
+                "key": payload.get("key"),
+                "version_id": payload.get("version_id"),
+                "batch_number": batch_number,
+                "object_count": payload.get("object_count"),
+                "s3_response": _s3_response_summary(response),
+            },
+        )
 
     def _finalize_bucket_delete(self, job_id: str, client: Any, bucket: str) -> None:
         timeout_seconds = max(
@@ -488,10 +756,53 @@ class S3DeleteJobManager:
             self._log_job_event_by_id(job_id, "bucket_finalizing", extra={"attempt": attempt})
 
             try:
-                client.delete_bucket(Bucket=bucket)
+                self._log_job_event_by_id(
+                    job_id,
+                    "s3_delete_request_invoked",
+                    extra={
+                        "operation": "DeleteBucket",
+                        "bucket": bucket,
+                        "bucket_delete_attempts": attempt,
+                    },
+                )
+                response = client.delete_bucket(Bucket=bucket)
+                self._log_job_event_by_id(
+                    job_id,
+                    "s3_delete_response",
+                    extra={
+                        "operation": "DeleteBucket",
+                        "bucket": bucket,
+                        "bucket_delete_attempts": attempt,
+                        "s3_response": _s3_response_summary(response),
+                    },
+                )
             except (ClientError, BotoCoreError) as exc:
                 if _is_missing_bucket_error(exc):
+                    self._log_job_event_by_id(
+                        job_id,
+                        "s3_delete_confirmed",
+                        extra={
+                            "operation": "DeleteBucket",
+                            "bucket": bucket,
+                            "bucket_delete_attempts": attempt,
+                            "confirmation": "bucket_already_absent",
+                            "s3_response": _s3_error_response_summary(exc),
+                        },
+                    )
                     return
+                self._log_job_event_by_id(
+                    job_id,
+                    "s3_delete_request_failed",
+                    level=logging.WARNING,
+                    extra={
+                        "operation": "DeleteBucket",
+                        "bucket": bucket,
+                        "bucket_delete_attempts": attempt,
+                        "error": _public_error_text(exc),
+                        "error_code": _s3_error_code_for_log(exc),
+                        "s3_response": _s3_error_response_summary(exc),
+                    },
+                )
                 if not _bucket_delete_retry_allowed(exc):
                     _raise_s3_operation_error(exc, action="delete the bucket", bucket=bucket)
                 self._update_job(
@@ -504,6 +815,16 @@ class S3DeleteJobManager:
                 )
 
             if not self._bucket_exists(client, bucket):
+                self._log_job_event_by_id(
+                    job_id,
+                    "s3_delete_confirmed",
+                    extra={
+                        "operation": "DeleteBucket",
+                        "bucket": bucket,
+                        "bucket_delete_attempts": attempt,
+                        "confirmation": "bucket_not_found_after_delete",
+                    },
+                )
                 return
 
             if self._monotonic() >= deadline:
@@ -594,7 +915,7 @@ class S3DeleteJobManager:
                 job,
                 "failed",
                 level=logging.WARNING,
-                extra={"error": job["error"], "error_code": _s3_error_code(error)},
+                extra={"error": job["error"], "error_code": _s3_error_code_for_log(error)},
             )
         self._emit_state(snapshot_to_emit)
 

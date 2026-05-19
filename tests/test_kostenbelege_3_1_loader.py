@@ -16,6 +16,7 @@ if str(BDW_ROOT) not in sys.path:
 
 
 from bit_data_workbench.backend.notebook_presets import (  # noqa: E402
+    _build_kostenbelege_3_1_optimized_sql,
     _build_kostenbelege_3_1_sql,
 )
 from bit_data_workbench.data_generator.kostenbelege_3_1 import (  # noqa: E402
@@ -149,6 +150,52 @@ class Kostenbelege31LoaderTests(unittest.TestCase):
                 connection.execute(f"SELECT COUNT(*) FROM ({query_sql}) q").fetchone()[0],
                 0,
             )
+        finally:
+            connection.close()
+
+    def test_optimized_kostenbelege_query_matches_original_semantics(self) -> None:
+        connection = duckdb.connect(":memory:")
+        try:
+            connection.execute(f"CREATE TEMP TABLE kbkp AS {kbkp_2019_select(0, 80)}")
+            connection.execute(f"CREATE TEMP TABLE kbpo AS {kbpo_2019_select(0, 160, 80)}")
+            connection.execute(f"CREATE TEMP TABLE kbhp AS {kbhp_2019_select(0, 160, 80)}")
+            connection.execute(f"CREATE TEMP TABLE kale AS {dim_kalender_select(0, 61)}")
+
+            original_sql = _build_kostenbelege_3_1_sql(
+                kbkp_relation="kbkp",
+                kbpo_relation="kbpo",
+                kbhp_relation="kbhp",
+                kalender_relation="kale",
+            ).rstrip().rstrip(";")
+            optimized_sql = _build_kostenbelege_3_1_optimized_sql(
+                kbkp_relation="kbkp",
+                kbpo_relation="kbpo",
+                kbhp_relation="kbhp",
+                kalender_relation="kale",
+            ).rstrip().rstrip(";")
+
+            symmetric_difference_count = connection.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM (
+                    (SELECT * FROM ({original_sql}) original_query
+                     EXCEPT ALL
+                     SELECT * FROM ({optimized_sql}) optimized_query)
+                    UNION ALL
+                    (SELECT * FROM ({optimized_sql}) optimized_query
+                     EXCEPT ALL
+                     SELECT * FROM ({original_sql}) original_query)
+                ) differences
+                """
+            ).fetchone()[0]
+            optimized_plan = "\n".join(
+                str(row[1] if len(row) > 1 else row[0])
+                for row in connection.execute(f"EXPLAIN {optimized_sql}").fetchall()
+            )
+
+            self.assertEqual(symmetric_difference_count, 0)
+            self.assertIn("HASH_JOIN", optimized_plan)
+            self.assertNotIn("BLOCKWISE_NL_JOIN", optimized_plan)
         finally:
             connection.close()
 

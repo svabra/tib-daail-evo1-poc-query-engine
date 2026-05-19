@@ -1,9 +1,30 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.10. Keep entries concise and
+# Derived from git history through version 0.9.11. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.11",
+        "releasedAt": "2026-05-19T10:32:28+02:00",
+        "features": [
+            (
+                "Kostenbelege 3.1 now includes an optimized S3 Parquet DuckDB "
+                "notebook that preserves the original fallback semantics while "
+                "splitting the KBHP lookup into hash-joinable branches."
+            ),
+            (
+                "Notebook browser titles now include the active notebook name, "
+                "so copied notebook URLs resolve to meaningful tab names such as "
+                "DAAIF Fabric - Notebook XY."
+            ),
+            (
+                "S3 object, folder, and bucket deletes now emit detailed backend "
+                "diagnostic logs for client requests, S3 list/delete invocations, "
+                "S3 responses, confirmations, and failures."
+            ),
+        ],
+    },
     {
         "version": "0.9.10",
         "releasedAt": "2026-05-19T10:08:54+02:00",

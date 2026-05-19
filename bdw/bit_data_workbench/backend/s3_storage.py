@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 import hashlib
 import logging
 import re
@@ -377,7 +377,16 @@ def _is_null_version_id(version_id: object) -> bool:
     return _normalized_version_id(version_id) is None and str(version_id or "").strip().lower() == "null"
 
 
-def delete_s3_object(client, bucket: str, identifier: dict[str, str]) -> None:
+S3DeleteResponseCallback = Callable[[dict[str, object]], None]
+
+
+def delete_s3_object(
+    client,
+    bucket: str,
+    identifier: dict[str, str],
+    *,
+    response_callback: S3DeleteResponseCallback | None = None,
+) -> None:
     kwargs = {
         "Bucket": bucket,
         "Key": identifier["Key"],
@@ -386,7 +395,17 @@ def delete_s3_object(client, bucket: str, identifier: dict[str, str]) -> None:
     if version_id:
         kwargs["VersionId"] = version_id
     try:
-        client.delete_object(**kwargs)
+        response = client.delete_object(**kwargs)
+        if response_callback is not None:
+            response_callback(
+                {
+                    "operation": "DeleteObject",
+                    "bucket": bucket,
+                    "key": identifier["Key"],
+                    "version_id": version_id,
+                    "response": response,
+                }
+            )
     except (ClientError, BotoCoreError) as exc:
         _log_s3_delete_failure(
             "DeleteObject",
@@ -401,10 +420,19 @@ def delete_s3_object(client, bucket: str, identifier: dict[str, str]) -> None:
             and _object_delete_fallback_allowed(exc)
         ):
             try:
-                client.delete_object(
+                response = client.delete_object(
                     Bucket=bucket,
                     Key=identifier["Key"],
                 )
+                if response_callback is not None:
+                    response_callback(
+                        {
+                            "operation": "DeleteObject[fallback]",
+                            "bucket": bucket,
+                            "key": identifier["Key"],
+                            "response": response,
+                        }
+                    )
                 return
             except (ClientError, BotoCoreError) as retry_exc:
                 _log_s3_delete_failure(
@@ -429,15 +457,28 @@ def delete_s3_objects_individually(
     client,
     bucket: str,
     objects: list[dict[str, str]],
+    *,
+    response_callback: S3DeleteResponseCallback | None = None,
 ) -> int:
     deleted = 0
     for identifier in objects:
-        delete_s3_object(client, bucket, identifier)
+        delete_s3_object(
+            client,
+            bucket,
+            identifier,
+            response_callback=response_callback,
+        )
         deleted += 1
     return deleted
 
 
-def delete_s3_objects(client, bucket: str, objects: list[str | dict[str, str]]) -> int:
+def delete_s3_objects(
+    client,
+    bucket: str,
+    objects: list[str | dict[str, str]],
+    *,
+    response_callback: S3DeleteResponseCallback | None = None,
+) -> int:
     if not objects:
         return 0
 
@@ -461,6 +502,15 @@ def delete_s3_objects(client, bucket: str, objects: list[str | dict[str, str]]) 
                     "Quiet": True,
                 },
             )
+            if response_callback is not None:
+                response_callback(
+                    {
+                        "operation": "DeleteObjects",
+                        "bucket": bucket,
+                        "object_count": len(identifiers),
+                        "response": response,
+                    }
+                )
         except (ClientError, BotoCoreError) as exc:
             _log_s3_delete_failure(
                 "DeleteObjects",
@@ -473,6 +523,7 @@ def delete_s3_objects(client, bucket: str, objects: list[str | dict[str, str]]) 
                     client,
                     bucket,
                     identifiers,
+                    response_callback=response_callback,
                 )
                 continue
             _raise_s3_operation_error(
@@ -495,6 +546,7 @@ def delete_s3_objects(client, bucket: str, objects: list[str | dict[str, str]]) 
                 client,
                 bucket,
                 error_identifiers,
+                response_callback=response_callback,
             )
     return deleted
 

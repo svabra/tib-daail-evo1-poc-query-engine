@@ -120,7 +120,10 @@ class SidebarLabelTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.body.decode("utf-8")
         self.assertIn("abcdefghijklmnopqrstuvwxa[..].csv", body)
-        self.assertIn('title="abcdefghijklmnopqrstuvwxabcdefghijklmnop.csv"', body)
+        self.assertIn(
+            'title="abcdefghijklmnopqrstuvwxabcdefghijklmnop.csv | Query path: workspace.s3.csv_imports.abcdefghijklmnopqrstuvwx"',
+            body,
+        )
         self.assertIn("CSV", body)
         self.assertIn("1.5 KB", body)
         self.assertIn("Create data product ...", body)

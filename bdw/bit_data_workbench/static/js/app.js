@@ -1350,6 +1350,22 @@ function workbenchTitle(section = currentWorkbenchSection()) {
   return "DAAIF Fabric - Query Workbench";
 }
 
+function browserTitleForNotebook(notebookTitle = "") {
+  const normalizedTitle = String(notebookTitle || "").trim();
+  return `DAAIF Fabric - ${normalizedTitle || "Notebook"}`;
+}
+
+function workbenchBrowserTitle(section = currentWorkbenchSection()) {
+  if (section === "query") {
+    const workspaceRoot = document.querySelector("[data-workspace-notebook]");
+    if (workspaceRoot) {
+      return browserTitleForNotebook(currentWorkspaceNotebookTitle(workspaceRoot));
+    }
+  }
+
+  return workbenchTitle(section);
+}
+
 function applyWorkbenchTitle(section = currentWorkbenchSection()) {
   const title = workbenchTitle(section);
   const brandTitle = document.querySelector(".brand-copy h1");
@@ -1357,7 +1373,7 @@ function applyWorkbenchTitle(section = currentWorkbenchSection()) {
     brandTitle.textContent = title;
   }
   if (typeof document !== "undefined") {
-    document.title = title;
+    document.title = workbenchBrowserTitle(section);
   }
 }
 
@@ -4340,6 +4356,7 @@ function renderEmptyWorkspace() {
     </article>
   `;
   syncShellVisibility();
+  applyWorkbenchTitle("query");
   if (currentSidebarMode() !== "notebook") {
     refreshSidebar("notebook").catch((error) => {
       console.error("Failed to restore the notebook sidebar.", error);
@@ -4358,6 +4375,7 @@ function renderLocalNotebookWorkspace(notebookId, options = {}) {
   const metadata = notebookMetadata(notebookId);
   panel.innerHTML = buildWorkspaceMarkup(notebookId, metadata, activeCellId);
   syncShellVisibility();
+  applyWorkbenchTitle("query");
   processHtmx(panel);
   initializeEditors(panel);
   applyNotebookMetadata();
@@ -5001,6 +5019,7 @@ function applyNotebookMetadata() {
   applySidebarSearchFilter();
   syncVisibleQueryCells();
   syncVisiblePythonCells();
+  applyWorkbenchTitle();
 }
 
 async function renameNotebook(notebookId) {

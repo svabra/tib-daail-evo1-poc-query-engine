@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
 from urllib.parse import quote
 
@@ -14,6 +15,7 @@ from botocore.exceptions import ClientError
 from starlette.background import BackgroundTask
 
 from ..backend.service import WorkbenchService
+from ..backend.s3_delete_jobs import log_s3_delete_backend_event
 from ..dependencies import get_workbench_service
 
 
@@ -289,6 +291,14 @@ def delete_s3_explorer_entry(
     payload: S3ExplorerDeletePayload,
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> JSONResponse:
+    log_s3_delete_backend_event(
+        "client_request_received",
+        {
+            "entry_kind": payload.entry_kind,
+            "bucket": payload.bucket,
+            "prefix": payload.prefix,
+        },
+    )
     try:
         result = service.delete_s3_explorer_entry(
             entry_kind=payload.entry_kind,
@@ -296,8 +306,29 @@ def delete_s3_explorer_entry(
             prefix=payload.prefix,
         )
     except (ValueError, ClientError, BotoCoreError) as exc:
+        log_s3_delete_backend_event(
+            "client_request_failed",
+            {
+                "entry_kind": payload.entry_kind,
+                "bucket": payload.bucket,
+                "prefix": payload.prefix,
+                "error": str(exc),
+            },
+            level=logging.WARNING,
+        )
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    log_s3_delete_backend_event(
+        "client_request_accepted",
+        {
+            "job_id": result.get("jobId"),
+            "entry_kind": result.get("entryKind") or payload.entry_kind,
+            "bucket": result.get("bucket") or payload.bucket,
+            "prefix": result.get("prefix") or payload.prefix,
+            "path": result.get("path"),
+            "status": result.get("status"),
+        },
+    )
     return JSONResponse(jsonable_encoder(result), status_code=202)
 
 

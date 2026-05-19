@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{ title }}</title>
+    <title>{{ document_title | default(title) }}</title>
     <link rel="icon" type="image/png" href="/static/img/favicon.png">
     <link rel="shortcut icon" href="/static/img/favicon.ico">
     <link rel="stylesheet" href="/static/css/app.css?v={{ runtime.timestamp_utc | urlencode }}">

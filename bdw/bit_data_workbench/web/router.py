@@ -37,6 +37,11 @@ def brand_title_for_mode(workspace_mode: str) -> str:
     return "DAAIF Fabric - Query Workbench"
 
 
+def browser_title_for_notebook(active_notebook) -> str:
+    notebook_title = str(getattr(active_notebook, "title", "") or "").strip()
+    return f"DAAIF Fabric - {notebook_title or 'Notebook'}"
+
+
 def _display_value(value: object, fallback: str = "Not configured") -> str:
     if value is None:
         return fallback
@@ -710,13 +715,16 @@ def notebook_workspace(
         return templates.TemplateResponse(
             request=request,
             name="index.html",
-            context=shell_context(
-                request,
-                service,
-                active_notebook=notebook,
-                workspace_mode="notebook",
-                workspace_partial_template="partials/workspace.html",
-            ),
+            context={
+                **shell_context(
+                    request,
+                    service,
+                    active_notebook=notebook,
+                    workspace_mode="notebook",
+                    workspace_partial_template="partials/workspace.html",
+                ),
+                "document_title": browser_title_for_notebook(notebook),
+            },
         )
 
     return templates.TemplateResponse(
