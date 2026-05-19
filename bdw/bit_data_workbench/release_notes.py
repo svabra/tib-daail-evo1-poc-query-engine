@@ -1,9 +1,25 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.9. Keep entries concise and
+# Derived from git history through version 0.9.10. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.10",
+        "releasedAt": "2026-05-19T10:08:54+02:00",
+        "features": [
+            (
+                "Kostenbelege 3.1 now includes linked native PostgreSQL notebooks "
+                "for OLTP and OLAP so loader users can compare the same query "
+                "against DuckDB-over-S3, DuckDB-over-Postgres, and direct Postgres."
+            ),
+            (
+                "The native PostgreSQL Kostenbelege notebooks quote generated "
+                "mixed-case source columns, allowing the direct Postgres execution "
+                "path to run the 3.1 query successfully."
+            ),
+        ],
+    },
     {
         "version": "0.9.9",
         "releasedAt": "2026-05-18T17:02:07+02:00",

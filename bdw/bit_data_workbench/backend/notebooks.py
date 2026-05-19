@@ -273,6 +273,14 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         object_name: _strip_catalog_prefix(relation, "pg_oltp")
         for object_name, relation in mwa_postgres_relations.items()
     }
+    kostenbelege_3_1_oltp_native_relations = {
+        object_name: _strip_catalog_prefix(relation, "pg_oltp")
+        for object_name, relation in kostenbelege_3_1_oltp_relations.items()
+    }
+    kostenbelege_3_1_olap_native_relations = {
+        object_name: _strip_catalog_prefix(relation, "pg_olap")
+        for object_name, relation in kostenbelege_3_1_olap_relations.items()
+    }
 
     notebooks = build_static_notebooks(
         preferred_s3_relation=preferred_s3_relation,
@@ -292,6 +300,8 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         mwa_s3_json_relations=mwa_s3_json_relations,
         kostenbelege_3_1_oltp_relations=kostenbelege_3_1_oltp_relations,
         kostenbelege_3_1_olap_relations=kostenbelege_3_1_olap_relations,
+        kostenbelege_3_1_oltp_native_relations=kostenbelege_3_1_oltp_native_relations,
+        kostenbelege_3_1_olap_native_relations=kostenbelege_3_1_olap_native_relations,
         kostenbelege_3_1_s3_relations=kostenbelege_3_1_s3_relations,
         union_oltp_relation=union_oltp_relation,
         union_olap_relation=union_olap_relation,

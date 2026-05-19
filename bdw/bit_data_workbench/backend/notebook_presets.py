@@ -3,7 +3,103 @@
 
 from __future__ import annotations
 
+import re
+
 from ..models import NotebookCellDefinition, NotebookDefinition
+
+
+KOSTENBELEGE_3_1_SOURCE_COLUMNS = {
+    "KBKP": (
+        "KBKP_Belegnummer",
+        "DOCO_Belegart",
+        "KBKP_BelegDt",
+        "KBKP_BuchungDt",
+        "KBKP_ErstellungVon",
+        "KBKP_StorniertBelegNummer",
+        "KBKP_StornoBelegNummer",
+        "DOCO_BelegHerkunft",
+        "DOCO_Buchunggrund",
+        "KBKP_TechBeginnDt",
+        "KBKP_TechEndeDt",
+    ),
+    "KBPO": (
+        "KBPO_PositionId",
+        "KBKP_AusgleichBelegnummer",
+        "KBPO_VtgKtoWiederholPos",
+        "KBPO_VtgKtoPositionNr",
+        "KBPO_Teilposition",
+        "GEFA_GeschaeftFall",
+        "PART_Partner",
+        "KBPO_KtoFindMerkmal",
+        "DOCO_Hauptvorgang",
+        "DOCO_Teilvorgang",
+        "DOCO_Belegtyp",
+        "DOCO_VtrKtoTyp",
+        "DOCO_Waehrung",
+        "DOCO_FormArt",
+        "KBPO_GesamtBetrag",
+        "KBPO_TWhrBetrag",
+        "KBPO_HbWaehrung",
+        "KBPO_HbBetrag",
+        "KBPO_HWhrBetrag1",
+        "KBPO_Umrechnungkurs",
+        "KBPO_NettoFaelligkeitDT",
+        "VTGP_VtrGegenstand",
+        "KBPO_VtrKtoNummer",
+        "KBPO_AusgleichStatus",
+        "KBPO_Ausgleichgrund",
+        "KBPO_AusgleichDt",
+        "KBPO_AusgleichBuchungDt",
+        "KBPO_HBSachkto",
+        "KBPO_Beschreibung",
+        "DOCO_SteuerCd",
+        "KBPO_WertInternDt",
+        "KBPO_Bankverbindung",
+        "DOCO_RecordArt",
+        "KBPO_TechBeginnDt",
+        "KBPO_TechEndeDt",
+    ),
+    "KBHP": (
+        "KBHP_Id",
+        "KBKP_BelegNummer",
+        "KBHP_VTGKtoPositionNr",
+        "KBHP_SachKto",
+        "KBHP_HBAbstimmschluessel",
+        "KBHP_TechBeginnDt",
+        "KBHP_TechEndeDt",
+    ),
+    "KBHH": (
+        "KBHP_Id",
+        "KBKP_BelegNummer",
+        "KBHP_VTGKtoPositionNr",
+        "KBHP_SachKto",
+        "KBHP_HBAbstimmschluessel",
+        "KBHP_TechBeginnDt",
+        "KBHP_TechEndeDt",
+    ),
+    "KALE": ("Datum",),
+}
+KOSTENBELEGE_3_1_SOURCE_COLUMN_LOOKUP = {
+    alias: {column.lower(): column for column in columns}
+    for alias, columns in KOSTENBELEGE_3_1_SOURCE_COLUMNS.items()
+}
+
+
+def _quote_kostenbelege_3_1_source_columns(sql: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        alias = match.group(1)
+        column = match.group(2)
+        canonical_column = KOSTENBELEGE_3_1_SOURCE_COLUMN_LOOKUP.get(alias, {}).get(
+            column.lower(),
+            column,
+        )
+        return f'{alias}."{canonical_column}"'
+
+    return re.sub(
+        r"\b(KBKP|KBPO|KBHP|KBHH|KALE)\.([A-Za-z_][A-Za-z0-9_]*)",
+        replace,
+        sql,
+    )
 
 
 def _build_multi_table_performance_sql(
@@ -315,8 +411,9 @@ def _build_kostenbelege_3_1_sql(
     kbpo_relation: str,
     kbhp_relation: str,
     kalender_relation: str,
+    quote_source_columns: bool = False,
 ) -> str:
-    return f"""
+    sql = f"""
 WITH UNIO AS
     (
     SELECT
@@ -494,6 +591,9 @@ SELECT
     , UNIO.Datum                                AS TechnischesDatum
 FROM UNIO;
 """.strip()
+    if not quote_source_columns:
+        return sql
+    return _quote_kostenbelege_3_1_source_columns(sql)
 
 
 def build_static_notebooks(
@@ -513,6 +613,8 @@ def build_static_notebooks(
     mwa_s3_json_relations: dict[str, str | None],
     kostenbelege_3_1_oltp_relations: dict[str, str | None],
     kostenbelege_3_1_olap_relations: dict[str, str | None],
+    kostenbelege_3_1_oltp_native_relations: dict[str, str | None],
+    kostenbelege_3_1_olap_native_relations: dict[str, str | None],
     kostenbelege_3_1_s3_relations: dict[str, str | None],
     union_oltp_relation: str | None,
     union_olap_relation: str | None,
@@ -845,6 +947,28 @@ def build_static_notebooks(
             kalender_relation=kostenbelege_3_1_olap_relations["dim_kalender"],
         )
         if all(kostenbelege_3_1_olap_relations.values())
+        else kostenbelege_status_sql
+    )
+    kostenbelege_3_1_oltp_native_sql = (
+        _build_kostenbelege_3_1_sql(
+            kbkp_relation=kostenbelege_3_1_oltp_native_relations["kbkp_2019"],
+            kbpo_relation=kostenbelege_3_1_oltp_native_relations["kbpo_2019"],
+            kbhp_relation=kostenbelege_3_1_oltp_native_relations["kbhp_2019"],
+            kalender_relation=kostenbelege_3_1_oltp_native_relations["dim_kalender"],
+            quote_source_columns=True,
+        )
+        if all(kostenbelege_3_1_oltp_native_relations.values())
+        else kostenbelege_status_sql
+    )
+    kostenbelege_3_1_olap_native_sql = (
+        _build_kostenbelege_3_1_sql(
+            kbkp_relation=kostenbelege_3_1_olap_native_relations["kbkp_2019"],
+            kbpo_relation=kostenbelege_3_1_olap_native_relations["kbpo_2019"],
+            kbhp_relation=kostenbelege_3_1_olap_native_relations["kbhp_2019"],
+            kalender_relation=kostenbelege_3_1_olap_native_relations["dim_kalender"],
+            quote_source_columns=True,
+        )
+        if all(kostenbelege_3_1_olap_native_relations.values())
         else kostenbelege_status_sql
     )
     kostenbelege_3_1_s3_sql = (
@@ -1375,6 +1499,40 @@ def build_static_notebooks(
                 )
             ],
             tags=["performance", "kostenbelege", "3.1", "s3", "parquet"],
+            tree_path=("PoC Tests", "Performance Evaluation", "Kostenbelege (3.1)"),
+            linked_generator_id="kostenbelege_3_1_multi_source_loader",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="kostenbelege-3-1-oltp-native",
+            title="Kostenbelege (3.1) OLTP via Native PostgreSQL",
+            summary="Runs the Kostenbelege 3.1 union query directly in PostgreSQL OLTP with quoted source columns for the generated mixed-case schema.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="kostenbelege-3-1-oltp-native-cell-1",
+                    data_sources=["pg_oltp_native"],
+                    sql=kostenbelege_3_1_oltp_native_sql,
+                )
+            ],
+            tags=["performance", "kostenbelege", "3.1", "postgres", "native"],
+            tree_path=("PoC Tests", "Performance Evaluation", "Kostenbelege (3.1)"),
+            linked_generator_id="kostenbelege_3_1_multi_source_loader",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="kostenbelege-3-1-olap-native",
+            title="Kostenbelege (3.1) OLAP via Native PostgreSQL",
+            summary="Runs the Kostenbelege 3.1 union query directly in PostgreSQL OLAP with quoted source columns for the generated mixed-case schema.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="kostenbelege-3-1-olap-native-cell-1",
+                    data_sources=["pg_olap_native"],
+                    sql=kostenbelege_3_1_olap_native_sql,
+                )
+            ],
+            tags=["performance", "kostenbelege", "3.1", "postgres", "native"],
             tree_path=("PoC Tests", "Performance Evaluation", "Kostenbelege (3.1)"),
             linked_generator_id="kostenbelege_3_1_multi_source_loader",
             can_edit=False,

@@ -316,7 +316,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
         self,
     ) -> None:
         (
-            _,
+            build_generator_notebook_links,
             _,
             build_notebooks,
             _,
@@ -367,7 +367,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
         self,
     ) -> None:
         (
-            _,
+            build_generator_notebook_links,
             _,
             build_notebooks,
             _,
@@ -564,7 +564,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
         self,
     ) -> None:
         (
-            _,
+            build_generator_notebook_links,
             _,
             build_notebooks,
             _,
@@ -639,6 +639,14 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             notebooks["kostenbelege-3-1-oltp"].tree_path,
             ("PoC Tests", "Performance Evaluation", "Kostenbelege (3.1)"),
         )
+        self.assertEqual(
+            notebooks["kostenbelege-3-1-oltp-native"].cells[0].data_sources,
+            ["pg_oltp_native"],
+        )
+        self.assertEqual(
+            notebooks["kostenbelege-3-1-olap-native"].cells[0].data_sources,
+            ["pg_olap_native"],
+        )
         self.assertIn(
             "FROM pg_oltp.public.kbkp_2019",
             notebooks["kostenbelege-3-1-oltp"].cells[0].sql,
@@ -651,13 +659,53 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             "FROM workspace.s3_3_1_imports_a08e7385.kbkp_2019",
             notebooks["kostenbelege-3-1-s3-parquet"].cells[0].sql,
         )
+        self.assertIn(
+            'FROM public.kbkp_2019 KBKP',
+            notebooks["kostenbelege-3-1-oltp-native"].cells[0].sql,
+        )
+        self.assertIn(
+            'KALE."Datum" BETWEEN KBKP."KBKP_TechBeginnDt"',
+            notebooks["kostenbelege-3-1-oltp-native"].cells[0].sql,
+        )
         self.assertEqual(
             {
                 notebooks["kostenbelege-3-1-oltp"].linked_generator_id,
                 notebooks["kostenbelege-3-1-olap"].linked_generator_id,
                 notebooks["kostenbelege-3-1-s3-parquet"].linked_generator_id,
+                notebooks["kostenbelege-3-1-oltp-native"].linked_generator_id,
+                notebooks["kostenbelege-3-1-olap-native"].linked_generator_id,
             },
             {"kostenbelege_3_1_multi_source_loader"},
+        )
+        self.assertEqual(
+            [
+                reference.payload
+                for reference in build_generator_notebook_links(notebooks.values())[
+                    "kostenbelege_3_1_multi_source_loader"
+                ]
+            ],
+            [
+                {
+                    "notebookId": "kostenbelege-3-1-oltp",
+                    "title": "Kostenbelege (3.1) OLTP via DuckDB",
+                },
+                {
+                    "notebookId": "kostenbelege-3-1-olap",
+                    "title": "Kostenbelege (3.1) OLAP via DuckDB",
+                },
+                {
+                    "notebookId": "kostenbelege-3-1-s3-parquet",
+                    "title": "Kostenbelege (3.1) S3 Parquet via DuckDB",
+                },
+                {
+                    "notebookId": "kostenbelege-3-1-oltp-native",
+                    "title": "Kostenbelege (3.1) OLTP via Native PostgreSQL",
+                },
+                {
+                    "notebookId": "kostenbelege-3-1-olap-native",
+                    "title": "Kostenbelege (3.1) OLAP via Native PostgreSQL",
+                },
+            ],
         )
 
     def test_build_notebooks_includes_immutable_python_demo_presets(
