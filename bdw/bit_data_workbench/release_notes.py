@@ -1,9 +1,21 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.12. Keep entries concise and
+# Derived from git history through version 0.9.13. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.13",
+        "releasedAt": "2026-05-19T11:21:03+02:00",
+        "features": [
+            (
+                "DuckDB read-only query workers now skip transient S3 source "
+                "view bootstrapping when they must use the shared workspace "
+                "database, avoiding CREATE failures on immutable notebooks "
+                "that resolve through the read-only workspace path."
+            ),
+        ],
+    },
     {
         "version": "0.9.12",
         "releasedAt": "2026-05-19T11:04:53+02:00",

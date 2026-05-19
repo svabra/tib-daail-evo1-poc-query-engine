@@ -2042,6 +2042,12 @@ class QueryJobManager:
             cancel_event = self._mp_context.Event()
             if record.cancel_requested:
                 cancel_event.set()
+            worker_source_summaries = record.source_summaries
+            if (
+                record.execution_mode == QUERY_EXECUTION_DUCKDB_READ
+                and record.duckdb_execution_path != DUCKDB_EXECUTION_PATH_ISOLATED_READ
+            ):
+                worker_source_summaries = []
             process = self._mp_context.Process(
                 target=_query_worker_entry,
                 kwargs={
@@ -2052,7 +2058,7 @@ class QueryJobManager:
                     "execution_mode": record.execution_mode,
                     "max_result_rows": self._max_result_rows,
                     "database_path": record.worker_database_path,
-                    "source_summaries": record.source_summaries,
+                    "source_summaries": worker_source_summaries,
                 },
                 daemon=True,
                 name=f"bdw-query-worker-{job_id[:8]}",

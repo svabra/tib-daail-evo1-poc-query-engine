@@ -21,6 +21,7 @@ if str(BDW_ROOT) not in sys.path:
 
 from bit_data_workbench.backend import query_jobs as query_jobs_module  # noqa: E402
 from bit_data_workbench.backend.query_jobs import (  # noqa: E402
+    DUCKDB_EXECUTION_PATH_SHARED_FILE_READ,
     QUERY_EXECUTION_DUCKDB_READ,
     QUERY_EXECUTION_DUCKDB_WRITE,
     QUERY_EXECUTION_POSTGRES_NATIVE,
@@ -838,6 +839,47 @@ class ProcessQueryJobManagerTests(TestCase):
         self.assertEqual(completed.timings.get("engineAccessWaitMs"), 0.0)
         self.assertGreaterEqual(completed.timings.get("sourceBootstrapMs", -1), 0)
         self.assertNotIn("engine_waiting", [event.get("event") for event in completed.progress_events])
+
+    def test_shared_file_read_does_not_bootstrap_sources_in_read_only_workspace(self) -> None:
+        connection = duckdb.connect(str(self.settings.duckdb_database))
+        try:
+            connection.execute("CREATE TABLE existing_relation AS SELECT 1 AS value")
+        finally:
+            connection.close()
+
+        job = self.manager.start_job(
+            sql="SELECT value FROM existing_relation",
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-shared-file-read-bootstrap",
+            data_sources=["workspace.s3"],
+            touched_relations=["existing_relation", "s3.unused_source"],
+            touched_buckets=["test"],
+            source_summaries=[
+                {
+                    "relation": "s3.unused_source",
+                    "query_alias": "s3.test.unused.parquet",
+                    "bucket": "test",
+                    "key": "unused.parquet",
+                    "path": "s3://test/unused.parquet",
+                    "format": "parquet",
+                    "query_sql": "SELECT 1 AS value",
+                },
+            ],
+        )
+
+        completed = wait_until(
+            lambda: self.manager.snapshot(job.job_id)
+            if self.manager.snapshot(job.job_id).status in {"completed", "failed"}
+            else None,
+            timeout=20,
+        )
+
+        self.assertIsNotNone(completed)
+        self.assertEqual(completed.status, "completed", completed.error)
+        self.assertEqual(completed.rows, [(1,)])
+        self.assertEqual(completed.duckdb_execution_path, DUCKDB_EXECUTION_PATH_SHARED_FILE_READ)
+        self.assertNotIn("sourceBootstrapMs", completed.timings)
 
     def test_stale_duckdb_lock_owner_is_recovered(self) -> None:
         stale_snapshot = QueryJobDefinition(
