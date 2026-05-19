@@ -3,9 +3,11 @@ from __future__ import annotations
 import re
 import shutil
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import Any, BinaryIO, Protocol
+import time
+from typing import Any, BinaryIO, Callable, Protocol
 
 import duckdb
 from boto3.s3.transfer import TransferConfig
@@ -18,6 +20,10 @@ from .dialect import normalize_csv_delimiter
 from .s3_formats import build_csv_s3_upload_artifact, normalize_csv_s3_storage_format
 from .validation import validate_csv_file
 from ...s3_hidden import reject_hidden_s3_location
+
+
+logger = logging.getLogger(__name__)
+ProgressCallback = Callable[[dict[str, Any]], None]
 
 
 class CsvUpload(Protocol):
@@ -87,6 +93,38 @@ def duckdb_type_to_postgres_type(type_name: str) -> str:
         return "TIME"
     return "TEXT"
 
+
+def _file_size(path: Path) -> int:
+    try:
+        return path.stat().st_size
+    except OSError:
+        return 0
+
+
+def _emit_progress(
+    callback: ProgressCallback | None,
+    *,
+    phase: str,
+    message: str,
+    detail: str = "",
+    **diagnostics: object,
+) -> None:
+    if callback is None:
+        return
+    callback(
+        {
+            "phase": phase,
+            "message": message,
+            "detail": detail,
+            "diagnostics": {
+                key: value
+                for key, value in diagnostics.items()
+                if str(key).strip() and value is not None
+            },
+        }
+    )
+
+
 def inspect_csv_file(
     local_path: Path,
     *,
@@ -146,6 +184,7 @@ class CsvIngestionManager:
         has_header: bool = True,
         replace_existing: bool = True,
         storage_format: str = "csv",
+        progress_callback: ProgressCallback | None = None,
     ) -> dict[str, Any]:
         with TemporaryDirectory() as temp_dir:
             sources, failures = self._materialize_uploads(
@@ -164,6 +203,7 @@ class CsvIngestionManager:
                 replace_existing=replace_existing,
                 storage_format=storage_format,
                 initial_imports=failures,
+                progress_callback=progress_callback,
             )
 
     def import_csv_sources(
@@ -180,6 +220,7 @@ class CsvIngestionManager:
         replace_existing: bool = True,
         storage_format: str = "csv",
         initial_imports: list[dict[str, Any]] | None = None,
+        progress_callback: ProgressCallback | None = None,
     ) -> dict[str, Any]:
         normalized_target_id = str(target_id or "").strip()
         if normalized_target_id not in {"workspace.s3", "pg_oltp", "pg_olap"}:
@@ -240,6 +281,22 @@ class CsvIngestionManager:
                 file_name = source.file_name
                 local_path = source.local_path
                 try:
+                    logger.info(
+                        "CSV ingestion file start: file=%r target=%s size_bytes=%s storage_format=%s",
+                        file_name,
+                        normalized_target_id,
+                        _file_size(local_path),
+                        storage_format,
+                    )
+                    _emit_progress(
+                        progress_callback,
+                        phase="csv_validate",
+                        message=f"Validating {file_name}.",
+                        detail="Step 2 of 2: checking CSV structure before import.",
+                        fileName=file_name,
+                        targetId=normalized_target_id,
+                        sizeBytes=_file_size(local_path),
+                    )
                     resolved_delimiter = validate_csv_file(
                         local_path,
                         delimiter=delimiter,
@@ -254,6 +311,7 @@ class CsvIngestionManager:
                             delimiter=resolved_delimiter,
                             has_header=has_header,
                             storage_format=storage_format,
+                            progress_callback=progress_callback,
                         )
                     else:
                         result = self._import_csv_to_postgres(
@@ -267,6 +325,22 @@ class CsvIngestionManager:
                             replace_existing=replace_existing,
                         )
                 except Exception as exc:
+                    logger.exception(
+                        "CSV ingestion file failed: file=%r target=%s storage_format=%s size_bytes=%s",
+                        file_name,
+                        normalized_target_id,
+                        storage_format,
+                        _file_size(local_path),
+                    )
+                    _emit_progress(
+                        progress_callback,
+                        phase="csv_failed",
+                        message=f"Failed to import {file_name}.",
+                        detail=str(exc),
+                        fileName=file_name,
+                        targetId=normalized_target_id,
+                        storageFormat=storage_format,
+                    )
                     imports.append(
                         {
                             "fileName": file_name,
@@ -378,21 +452,96 @@ class CsvIngestionManager:
         delimiter: str = "",
         has_header: bool = True,
         storage_format: str = "csv",
+        progress_callback: ProgressCallback | None = None,
     ) -> dict[str, Any]:
         normalized_bucket = str(bucket or "").strip() or str(self._settings.s3_bucket or "").strip()
         if not normalized_bucket:
             raise ValueError("Provide a bucket or configure S3_BUCKET before importing CSV files.")
 
-        upload_artifact = build_csv_s3_upload_artifact(
-            local_path=local_path,
-            file_name=file_name,
-            storage_format=normalize_csv_s3_storage_format(storage_format),
-            delimiter=delimiter,
-            has_header=has_header,
+        normalized_storage_format = normalize_csv_s3_storage_format(storage_format)
+        source_size = _file_size(local_path)
+        logger.info(
+            "CSV S3 import prepare: file=%r source_size_bytes=%s bucket=%r prefix=%r storage_format=%s endpoint=%r use_ssl=%s verify_ssl=%s url_style=%r",
+            file_name,
+            source_size,
+            normalized_bucket,
+            prefix,
+            normalized_storage_format,
+            self._settings.s3_endpoint,
+            self._settings.s3_use_ssl,
+            self._settings.s3_verify_ssl,
+            self._settings.s3_url_style,
+        )
+        _emit_progress(
+            progress_callback,
+            phase="s3_prepare",
+            message=f"Preparing {file_name} for S3.",
+            detail=f"Step 2 of 2: resolving target object and {normalized_storage_format.upper()} storage format.",
+            fileName=file_name,
+            bucket=normalized_bucket,
+            prefix=prefix,
+            storageFormat=normalized_storage_format,
+            sourceSizeBytes=source_size,
         )
         normalized_prefix = "/".join(
             segment for segment in str(prefix or "").split("/") if str(segment).strip()
         )
+        convert_started = time.perf_counter()
+        try:
+            if normalized_storage_format == "csv":
+                _emit_progress(
+                    progress_callback,
+                    phase="s3_preserve_csv",
+                    message=f"Using uploaded CSV bytes for {file_name}.",
+                    detail="Step 2 of 2: no Parquet conversion requested; the CSV object will be uploaded as-is.",
+                    fileName=file_name,
+                    bucket=normalized_bucket,
+                    storageFormat=normalized_storage_format,
+                )
+            else:
+                _emit_progress(
+                    progress_callback,
+                    phase="s3_convert_start",
+                    message=f"Converting {file_name} to {normalized_storage_format.upper()}.",
+                    detail="Step 2 of 2: DuckDB is transforming the staged CSV before S3 upload.",
+                    fileName=file_name,
+                    storageFormat=normalized_storage_format,
+                    sourceSizeBytes=source_size,
+                )
+            upload_artifact = build_csv_s3_upload_artifact(
+                local_path=local_path,
+                file_name=file_name,
+                storage_format=normalized_storage_format,
+                delimiter=delimiter,
+                has_header=has_header,
+            )
+        except Exception as exc:
+            logger.exception(
+                "CSV S3 import transform failed: file=%r storage_format=%s source_size_bytes=%s",
+                file_name,
+                normalized_storage_format,
+                source_size,
+            )
+            raise ValueError(
+                f"Failed to prepare '{file_name}' as {normalized_storage_format.upper()} before S3 upload: {exc}"
+            ) from exc
+
+        artifact_size = _file_size(upload_artifact.local_path)
+        if normalized_storage_format != "csv":
+            _emit_progress(
+                progress_callback,
+                phase="s3_convert_done",
+                message=f"Converted {file_name} to {upload_artifact.file_name}.",
+                detail=(
+                    "Step 2 of 2: conversion completed; preparing the S3 write."
+                ),
+                fileName=file_name,
+                storedFileName=upload_artifact.file_name,
+                storageFormat=upload_artifact.storage_format,
+                sourceSizeBytes=source_size,
+                artifactSizeBytes=artifact_size,
+                elapsedMs=round((time.perf_counter() - convert_started) * 1000),
+            )
         key = (
             f"{normalized_prefix}/{upload_artifact.file_name}"
             if normalized_prefix
@@ -404,20 +553,132 @@ class CsvIngestionManager:
             self._settings,
             data_exchange_prefix=self._settings.data_exchange_prefix,
         )
-        ensure_s3_bucket(self._settings, normalized_bucket)
-        client = self._s3_client_factory(self._settings)
-        upload_s3_file(
-            client,
-            local_path=upload_artifact.local_path,
+        _emit_progress(
+            progress_callback,
+            phase="s3_bucket_check",
+            message=f"Checking S3 bucket {normalized_bucket}.",
+            detail="Step 2 of 2: verifying that the target bucket is accessible.",
             bucket=normalized_bucket,
             key=key,
-            metadata=upload_artifact.metadata,
-            transfer_config=TransferConfig(
-                multipart_threshold=64 * 1024 * 1024,
-                multipart_chunksize=64 * 1024 * 1024,
-                max_concurrency=4,
-            ),
         )
+        try:
+            bucket_created = ensure_s3_bucket(self._settings, normalized_bucket)
+        except Exception as exc:
+            logger.exception(
+                "CSV S3 import bucket access failed: file=%r bucket=%r key=%r endpoint=%r",
+                file_name,
+                normalized_bucket,
+                key,
+                self._settings.s3_endpoint,
+            )
+            raise ValueError(
+                f"Failed to access or create S3 bucket '{normalized_bucket}' before uploading '{key}': {exc}"
+            ) from exc
+        _emit_progress(
+            progress_callback,
+            phase="s3_bucket_ready",
+            message=f"S3 bucket {normalized_bucket} is ready.",
+            detail="Step 2 of 2: bucket access succeeded; creating the S3 client for upload.",
+            bucket=normalized_bucket,
+            key=key,
+            bucketCreated=bool(bucket_created),
+        )
+        client = self._s3_client_factory(self._settings)
+        _emit_progress(
+            progress_callback,
+            phase="s3_upload_start",
+            message=f"Uploading {upload_artifact.file_name} to S3.",
+            detail="Step 2 of 2: invoking the S3 PutObject/multipart upload.",
+            fileName=file_name,
+            storedFileName=upload_artifact.file_name,
+            bucket=normalized_bucket,
+            key=key,
+            artifactSizeBytes=artifact_size,
+        )
+        upload_started = time.perf_counter()
+        try:
+            upload_s3_file(
+                client,
+                local_path=upload_artifact.local_path,
+                bucket=normalized_bucket,
+                key=key,
+                metadata=upload_artifact.metadata,
+                transfer_config=TransferConfig(
+                    multipart_threshold=64 * 1024 * 1024,
+                    multipart_chunksize=64 * 1024 * 1024,
+                    max_concurrency=4,
+                ),
+            )
+        except Exception as exc:
+            logger.exception(
+                "CSV S3 import upload failed: file=%r stored_file=%r bucket=%r key=%r artifact_size_bytes=%s endpoint=%r",
+                file_name,
+                upload_artifact.file_name,
+                normalized_bucket,
+                key,
+                artifact_size,
+                self._settings.s3_endpoint,
+            )
+            raise ValueError(
+                f"S3 upload failed for '{upload_artifact.file_name}' to s3://{normalized_bucket}/{key}: {exc}"
+            ) from exc
+
+        verification: dict[str, object] = {}
+        try:
+            response = client.head_object(Bucket=normalized_bucket, Key=key)
+            metadata = response.get("ResponseMetadata") or {}
+            verification = {
+                "contentLength": response.get("ContentLength"),
+                "etag": str(response.get("ETag") or "").strip('"'),
+                "httpStatusCode": metadata.get("HTTPStatusCode"),
+                "requestId": metadata.get("RequestId"),
+            }
+            logger.info(
+                "CSV S3 import upload confirmed: file=%r bucket=%r key=%r size_bytes=%s verification=%s elapsed_ms=%s",
+                file_name,
+                normalized_bucket,
+                key,
+                artifact_size,
+                verification,
+                round((time.perf_counter() - upload_started) * 1000),
+            )
+            _emit_progress(
+                progress_callback,
+                phase="s3_upload_done",
+                message=f"Uploaded {upload_artifact.file_name} to S3.",
+                detail="Step 2 of 2: S3 upload returned success and the object metadata was readable.",
+                fileName=file_name,
+                storedFileName=upload_artifact.file_name,
+                bucket=normalized_bucket,
+                key=key,
+                artifactSizeBytes=artifact_size,
+                elapsedMs=round((time.perf_counter() - upload_started) * 1000),
+                verification=verification,
+            )
+        except Exception as exc:
+            logger.warning(
+                "CSV S3 import upload returned success but HeadObject verification failed: file=%r bucket=%r key=%r detail=%s",
+                file_name,
+                normalized_bucket,
+                key,
+                exc,
+                exc_info=True,
+            )
+            _emit_progress(
+                progress_callback,
+                phase="s3_upload_done",
+                message=f"Uploaded {upload_artifact.file_name} to S3.",
+                detail=(
+                    "Step 2 of 2: upload returned success, but object metadata verification failed. "
+                    f"Technical detail: {exc}"
+                ),
+                fileName=file_name,
+                storedFileName=upload_artifact.file_name,
+                bucket=normalized_bucket,
+                key=key,
+                artifactSizeBytes=artifact_size,
+                elapsedMs=round((time.perf_counter() - upload_started) * 1000),
+            )
         return {
             "destination": "s3",
             "bucket": normalized_bucket,
@@ -426,6 +687,8 @@ class CsvIngestionManager:
             "storedFileName": upload_artifact.file_name,
             "path": f"s3://{normalized_bucket}/{key}",
             "storageFormat": upload_artifact.storage_format,
+            "uploadedBytes": artifact_size,
+            "s3Verification": verification,
         }
 
     def _import_csv_to_postgres(

@@ -2004,8 +2004,56 @@ class WorkbenchService:
         storage_format: str,
     ) -> None:
         normalized_target_id = str(target_id or "").strip()
+
+        def update_processing(progress: dict[str, object]) -> None:
+            try:
+                self._csv_upload_sessions.update_processing_step(
+                    session_id,
+                    phase=str(progress.get("phase") or "processing"),
+                    message=str(progress.get("message") or "Processing CSV upload."),
+                    detail=str(progress.get("detail") or ""),
+                    diagnostics=(
+                        progress.get("diagnostics")
+                        if isinstance(progress.get("diagnostics"), dict)
+                        else None
+                    ),
+                )
+            except Exception:
+                logger.exception(
+                    "Failed to persist CSV upload processing step: session_id=%s progress=%s",
+                    session_id,
+                    progress,
+                )
+
         try:
+            update_processing(
+                {
+                    "phase": "staged_files",
+                    "message": "Reading staged upload files.",
+                    "detail": "Step 2 of 2: validating server-side staged upload files before import.",
+                    "diagnostics": {
+                        "targetId": normalized_target_id,
+                        "bucket": bucket,
+                        "prefix": prefix,
+                        "storageFormat": storage_format,
+                    },
+                }
+            )
             sources = self._csv_upload_sessions.source_files(session_id)
+            update_processing(
+                {
+                    "phase": "import_start",
+                    "message": "Starting CSV import.",
+                    "detail": "Step 2 of 2: server worker is importing staged files into the selected target.",
+                    "diagnostics": {
+                        "targetId": normalized_target_id,
+                        "fileCount": len(sources),
+                        "bucket": bucket,
+                        "prefix": prefix,
+                        "storageFormat": storage_format,
+                    },
+                }
+            )
             payload = self._csv_ingestion.import_csv_sources(
                 sources=sources,
                 target_id=normalized_target_id,
@@ -2017,6 +2065,19 @@ class WorkbenchService:
                 has_header=has_header,
                 replace_existing=replace_existing,
                 storage_format=storage_format,
+                progress_callback=update_processing,
+            )
+            update_processing(
+                {
+                    "phase": "metadata_refresh",
+                    "message": "Refreshing query metadata.",
+                    "detail": "Step 2 of 2: import finished; refreshing the data source catalog.",
+                    "diagnostics": {
+                        "targetId": normalized_target_id,
+                        "importedCount": payload.get("importedCount"),
+                        "failedCount": payload.get("failedCount"),
+                    },
+                }
             )
             result = self._finalize_csv_import_payload(payload, normalized_target_id)
             self._csv_upload_sessions.finish_processing_success(session_id, result)

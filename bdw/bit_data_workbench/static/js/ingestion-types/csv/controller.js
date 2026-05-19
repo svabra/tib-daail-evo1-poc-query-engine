@@ -97,6 +97,7 @@ export function createCsvIngestionController(helpers) {
   let activeEntryId = "";
   let previewState = emptyPreviewState();
   let previewRequestVersion = 0;
+  let lastLoggedProcessingSignature = "";
 
   function workbenchRoot() {
     return document.querySelector("[data-ingestion-workbench-page]");
@@ -966,10 +967,55 @@ export function createCsvIngestionController(helpers) {
     `;
   }
 
-  function serverProcessingProgressDetail(fileEntries = []) {
+  function serverProcessingProgressDetail(fileEntries = [], sessionState = null) {
+    const processingMessage = String(sessionState?.processingMessage || "").trim();
+    const processingDetail = String(sessionState?.processingDetail || "").trim();
+    if (processingMessage || processingDetail) {
+      const normalizedDetail = processingDetail.replace(/^Step 2 of 2:\s*/i, "");
+      const statusCopy = [processingMessage, normalizedDetail]
+        .filter(Boolean)
+        .join(" ");
+      return `Step 2 of 2: ${statusCopy || "Processing server-side import."}`;
+    }
     const hasArchive = fileEntries.some((entry) => isZipFile(entry?.file));
     const archiveCopy = hasArchive ? "Extracting ZIP archive contents. " : "";
     return `Step 2 of 2: Upload complete. ${archiveCopy}Transforming file to match target data format.`;
+  }
+
+  function logCsvUploadProcessingState(payload, context = "poll") {
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+    const signature = [
+      context,
+      payload.status || "",
+      payload.processingPhase || "",
+      payload.processingMessage || "",
+      payload.processingDetail || "",
+      payload.processingUpdatedAt || "",
+    ].join("|");
+    if (signature === lastLoggedProcessingSignature) {
+      return;
+    }
+    lastLoggedProcessingSignature = signature;
+    const logPayload = {
+      sessionId: payload.sessionId,
+      status: payload.status,
+      phase: payload.processingPhase,
+      message: payload.processingMessage,
+      detail: payload.processingDetail,
+      updatedAt: payload.processingUpdatedAt,
+      recentEvents: Array.isArray(payload.processingEvents)
+        ? payload.processingEvents.slice(-5)
+        : [],
+    };
+    if (payload.status === "failed") {
+      console.error("[csv-ingestion] Step 2 server-side processing failed", logPayload);
+      return;
+    }
+    if (payload.status === "processing" || payload.processingPhase) {
+      console.info("[csv-ingestion] Step 2 server-side processing", logPayload);
+    }
   }
 
   function syncSubmitState() {
@@ -1188,7 +1234,16 @@ export function createCsvIngestionController(helpers) {
       return payload.result;
     }
     if (payload?.status === "failed") {
-      throw new Error(payload?.error || "The CSV files could not be imported.");
+      const detail = [
+        payload?.error,
+        payload?.processingMessage,
+        payload?.processingDetail,
+      ]
+        .map((item) => String(item || "").trim())
+        .filter(Boolean)
+        .filter((item, index, items) => items.indexOf(item) === index)
+        .join(" ");
+      throw new Error(detail || "The CSV files could not be imported.");
     }
     return null;
   }
@@ -1204,6 +1259,7 @@ export function createCsvIngestionController(helpers) {
         response,
         "The CSV upload processing status could not be read."
       );
+      logCsvUploadProcessingState(payload, "poll");
       const result = csvUploadCompletionResult(payload);
       if (result) {
         return result;
@@ -1211,7 +1267,7 @@ export function createCsvIngestionController(helpers) {
       setUploadProgress({
         label: "Processing ...",
         phase: "processing",
-        detail: serverProcessingProgressDetail(fileEntries),
+        detail: serverProcessingProgressDetail(fileEntries, payload),
         transferredBytes: totalBytes,
         totalBytes,
         indeterminate: true,
@@ -1229,6 +1285,7 @@ export function createCsvIngestionController(helpers) {
       response,
       "The CSV files could not be imported."
     );
+    logCsvUploadProcessingState(payload, "complete");
     const result = csvUploadCompletionResult(payload);
     if (result) {
       return result;

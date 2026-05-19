@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from pathlib import Path
+import time
 
 import duckdb
 
@@ -10,6 +12,7 @@ from .dialect import csv_s3_metadata, normalize_csv_delimiter
 
 
 SUPPORTED_CSV_S3_STORAGE_FORMATS = {"csv", "json", "parquet"}
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,6 +97,14 @@ def _convert_csv_file_for_s3_storage(
     connection = duckdb.connect(":memory:")
     try:
         try:
+            started = time.perf_counter()
+            logger.info(
+                "CSV S3 transform start: source=%r target=%r storage_format=%s all_varchar=%s",
+                source_path.as_posix(),
+                target_path.as_posix(),
+                normalized_storage_format,
+                False,
+            )
             _copy_csv_to_storage_format(
                 connection=connection,
                 source_path=source_path,
@@ -103,10 +114,32 @@ def _convert_csv_file_for_s3_storage(
                 has_header=has_header,
                 all_varchar=False,
             )
+            logger.info(
+                "CSV S3 transform completed: source=%r target=%r storage_format=%s target_size_bytes=%s elapsed_ms=%s",
+                source_path.as_posix(),
+                target_path.as_posix(),
+                normalized_storage_format,
+                target_path.stat().st_size if target_path.exists() else 0,
+                round((time.perf_counter() - started) * 1000),
+            )
         except duckdb.Error as exc:
             if not _should_retry_csv_conversion_as_varchar(exc):
+                logger.exception(
+                    "CSV S3 transform failed without retry: source=%r target=%r storage_format=%s",
+                    source_path.as_posix(),
+                    target_path.as_posix(),
+                    normalized_storage_format,
+                )
                 raise
+            logger.warning(
+                "CSV S3 transform hit a type conversion error; retrying with ALL_VARCHAR: source=%r target=%r storage_format=%s detail=%s",
+                source_path.as_posix(),
+                target_path.as_posix(),
+                normalized_storage_format,
+                exc,
+            )
             target_path.unlink(missing_ok=True)
+            retry_started = time.perf_counter()
             _copy_csv_to_storage_format(
                 connection=connection,
                 source_path=source_path,
@@ -115,6 +148,14 @@ def _convert_csv_file_for_s3_storage(
                 delimiter=delimiter,
                 has_header=has_header,
                 all_varchar=True,
+            )
+            logger.info(
+                "CSV S3 transform retry completed: source=%r target=%r storage_format=%s target_size_bytes=%s elapsed_ms=%s",
+                source_path.as_posix(),
+                target_path.as_posix(),
+                normalized_storage_format,
+                target_path.stat().st_size if target_path.exists() else 0,
+                round((time.perf_counter() - retry_started) * 1000),
             )
     finally:
         connection.close()

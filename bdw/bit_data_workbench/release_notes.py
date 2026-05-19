@@ -1,9 +1,21 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.16. Keep entries concise and
+# Derived from git history through version 0.9.17. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.17",
+        "releasedAt": "2026-05-19T12:53:04+02:00",
+        "features": [
+            (
+                "CSV ingestion now exposes server-side Step 2 diagnostics in "
+                "the UI, browser console, upload-session state, and backend "
+                "logs, including CSV validation, conversion, S3 bucket checks, "
+                "S3 upload start/completion, and object verification."
+            ),
+        ],
+    },
     {
         "version": "0.9.16",
         "releasedAt": "2026-05-19T12:35:24+02:00",

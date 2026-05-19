@@ -682,10 +682,42 @@ def upload_s3_file(
     kwargs = {}
     if transfer_config is not None:
         kwargs["Config"] = transfer_config
-    if extra_args:
-        client.upload_file(str(local_path), bucket, key, ExtraArgs=extra_args, **kwargs)
-        return
-    client.upload_file(str(local_path), bucket, key, **kwargs)
+    try:
+        size_bytes = local_path.stat().st_size
+    except OSError:
+        size_bytes = 0
+    logger.info(
+        "S3 upload start: bucket=%r key=%r local_path=%r size_bytes=%s metadata_keys=%s multipart_config=%s",
+        bucket,
+        key,
+        local_path.as_posix(),
+        size_bytes,
+        sorted((extra_args or {}).get("Metadata", {}).keys()),
+        transfer_config is not None,
+    )
+    try:
+        if extra_args:
+            client.upload_file(str(local_path), bucket, key, ExtraArgs=extra_args, **kwargs)
+        else:
+            client.upload_file(str(local_path), bucket, key, **kwargs)
+    except Exception as exc:
+        logger.exception(
+            "S3 upload failed: bucket=%r key=%r local_path=%r size_bytes=%s code=%r detail=%s",
+            bucket,
+            key,
+            local_path.as_posix(),
+            size_bytes,
+            _s3_error_code(exc),
+            _s3_error_message(exc),
+        )
+        raise
+    logger.info(
+        "S3 upload request completed: bucket=%r key=%r local_path=%r size_bytes=%s",
+        bucket,
+        key,
+        local_path.as_posix(),
+        size_bytes,
+    )
 
 
 def download_s3_file(client, *, bucket: str, key: str, local_path: Path) -> None:
@@ -822,7 +854,16 @@ def ensure_s3_bucket(
     base_delay_seconds: float = 0.2,
 ) -> bool:
     client = s3_client(settings)
+    logger.info(
+        "S3 bucket ensure start: bucket=%r endpoint=%r use_ssl=%s verify_ssl=%s url_style=%r",
+        bucket,
+        settings.s3_endpoint,
+        settings.s3_use_ssl,
+        settings.s3_verify_ssl,
+        settings.s3_url_style,
+    )
     if _bucket_is_accessible(client, bucket):
+        logger.info("S3 bucket already accessible: bucket=%r", bucket)
         return False
 
     created = False
@@ -830,24 +871,59 @@ def ensure_s3_bucket(
         try:
             client.create_bucket(Bucket=bucket)
             created = True
+            logger.info(
+                "S3 bucket create request completed: bucket=%r attempt=%s",
+                bucket,
+                create_attempt + 1,
+            )
             break
         except Exception as exc:
             error_code = _s3_error_code(exc)
             if error_code in {"BucketAlreadyExists", "BucketAlreadyOwnedByYou"}:
+                logger.info(
+                    "S3 bucket create reported existing bucket: bucket=%r code=%r",
+                    bucket,
+                    error_code,
+                )
                 break
             if error_code == "OperationAborted" and create_attempt + 1 < max_create_attempts:
+                logger.warning(
+                    "S3 bucket create operation aborted; retrying: bucket=%r attempt=%s detail=%s",
+                    bucket,
+                    create_attempt + 1,
+                    _s3_error_message(exc),
+                )
                 time.sleep(base_delay_seconds * (create_attempt + 1))
                 continue
             if _bucket_is_accessible(client, bucket):
+                logger.info(
+                    "S3 bucket became accessible after create failure: bucket=%r code=%r",
+                    bucket,
+                    error_code,
+                )
                 return False
+            logger.exception(
+                "S3 bucket ensure failed during create: bucket=%r attempt=%s code=%r detail=%s",
+                bucket,
+                create_attempt + 1,
+                error_code,
+                _s3_error_message(exc),
+            )
             raise
 
     for ready_attempt in range(max_ready_attempts):
         if _bucket_is_accessible(client, bucket):
+            logger.info(
+                "S3 bucket ready: bucket=%r created=%s ready_attempt=%s",
+                bucket,
+                created,
+                ready_attempt + 1,
+            )
             return created
         time.sleep(base_delay_seconds * (ready_attempt + 1))
 
     client.list_objects_v2(Bucket=bucket, MaxKeys=1)
+    logger.info("S3 bucket ready after final list check: bucket=%r created=%s", bucket, created)
     return created
 
 

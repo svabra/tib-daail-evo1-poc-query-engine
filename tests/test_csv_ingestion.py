@@ -625,6 +625,44 @@ class CsvIngestionManagerTests(TestCase):
             [("id", "BIGINT"), ("name", "VARCHAR")],
         )
 
+    def test_import_csv_files_to_s3_reports_step_two_progress(self) -> None:
+        fake_client = FakeS3Client()
+        manager = CsvIngestionManager(
+            settings=make_settings(),
+            postgres_connection_factory=lambda target: None,
+            s3_client_factory=lambda settings: fake_client,
+        )
+        upload = FakeUpload("vat_smoke.csv", b"id,name\n1,alpha\n")
+        events: list[dict[str, object]] = []
+
+        with patch(
+            "bit_data_workbench.backend.ingestion_types.csv.manager.ensure_s3_bucket"
+        ):
+            payload = manager.import_csv_files(
+                files=[upload],
+                target_id="workspace.s3",
+                bucket="csv-imports",
+                prefix="incoming",
+                delimiter=",",
+                has_header=True,
+                storage_format="csv",
+                progress_callback=events.append,
+            )
+
+        self.assertEqual(payload["importedCount"], 1)
+        phases = [event.get("phase") for event in events]
+        self.assertIn("csv_validate", phases)
+        self.assertIn("s3_prepare", phases)
+        self.assertIn("s3_preserve_csv", phases)
+        self.assertIn("s3_bucket_check", phases)
+        self.assertIn("s3_upload_start", phases)
+        self.assertIn("s3_upload_done", phases)
+        upload_start = next(event for event in events if event.get("phase") == "s3_upload_start")
+        diagnostics = upload_start.get("diagnostics")
+        self.assertIsInstance(diagnostics, dict)
+        self.assertEqual(diagnostics["bucket"], "csv-imports")
+        self.assertEqual(diagnostics["key"], "incoming/vat_smoke.csv")
+
     def test_import_csv_files_to_s3_parquet_handles_late_string_type_drift(self) -> None:
         fake_client = FakeS3Client()
         manager = CsvIngestionManager(
@@ -999,6 +1037,21 @@ class CsvUploadSessionManagerTests(TestCase):
 
             self.assertEqual(processing_state["status"], "processing")
             self.assertTrue(processing_state["processingStarted"])
+            self.assertEqual(processing_state["processingPhase"], "queued")
+            self.assertIn("Queued server-side import", processing_state["processingMessage"])
+            self.assertEqual(len(processing_state["processingEvents"]), 1)
+
+            step_state = manager.update_processing_step(
+                session_id,
+                phase="s3_upload_start",
+                message="Uploading large.csv to S3.",
+                detail="Step 2 of 2: invoking the S3 upload.",
+                diagnostics={"bucket": "workspace", "key": "large.csv"},
+            )
+            self.assertEqual(step_state["processingPhase"], "s3_upload_start")
+            self.assertEqual(step_state["processingMessage"], "Uploading large.csv to S3.")
+            self.assertEqual(step_state["processingEvents"][-1]["diagnostics"]["key"], "large.csv")
+
             already_processing = manager.start_processing(session_id)
             self.assertFalse(already_processing["processingStarted"])
 

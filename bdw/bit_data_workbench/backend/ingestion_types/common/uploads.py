@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import json
+import logging
 from pathlib import Path
 import shutil
 from threading import RLock
@@ -10,6 +11,9 @@ from typing import Callable
 import uuid
 
 from ....config import Settings
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -214,6 +218,17 @@ class IngestionUploadSessionManager:
                         file_path,
                     )
                 )
+            logger.info(
+                "%s upload session staged files ready: session_id=%s file_count=%s total_bytes=%s",
+                self._format_label,
+                session_id,
+                len(sources),
+                sum(
+                    int(item.get("sizeBytes") or 0)
+                    for item in (state.get("files") or [])
+                    if isinstance(item, dict)
+                ),
+            )
             return sources
 
     def start_processing(self, session_id: str) -> dict[str, object]:
@@ -231,23 +246,110 @@ class IngestionUploadSessionManager:
                     raise ValueError("Upload session is not complete yet.")
             state["status"] = "processing"
             state["processingStartedAt"] = _isoformat(_utc_now())
+            state["processingPhase"] = "queued"
+            state["processingMessage"] = "Queued server-side import."
+            state["processingDetail"] = (
+                "Step 2 of 2: upload complete; waiting for the backend worker."
+            )
+            state["processingUpdatedAt"] = state["processingStartedAt"]
+            state["processingEvents"] = [
+                {
+                    "at": state["processingStartedAt"],
+                    "phase": state["processingPhase"],
+                    "message": state["processingMessage"],
+                    "detail": state["processingDetail"],
+                }
+            ]
             state.pop("processingCompletedAt", None)
             state.pop("result", None)
             state.pop("error", None)
             self._write_state(session_id, state)
+            logger.info(
+                "%s upload session entered server-side processing: session_id=%s file_count=%s total_bytes=%s",
+                self._format_label,
+                session_id,
+                len([item for item in (state.get("files") or []) if isinstance(item, dict)]),
+                sum(
+                    int(item.get("sizeBytes") or 0)
+                    for item in (state.get("files") or [])
+                    if isinstance(item, dict)
+                ),
+            )
             public_state = self._public_state(state)
             public_state["processingStarted"] = True
             return public_state
+
+    def update_processing_step(
+        self,
+        session_id: str,
+        *,
+        phase: str,
+        message: str,
+        detail: str = "",
+        diagnostics: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        normalized_phase = str(phase or "processing").strip() or "processing"
+        normalized_message = str(message or "Processing server-side import.").strip()
+        normalized_detail = str(detail or "").strip()
+        safe_diagnostics = {
+            str(key): value
+            for key, value in (diagnostics or {}).items()
+            if str(key).strip()
+        }
+        with self._lock:
+            state = self._read_state(session_id)
+            now = _isoformat(_utc_now())
+            event: dict[str, object] = {
+                "at": now,
+                "phase": normalized_phase,
+                "message": normalized_message,
+                "detail": normalized_detail,
+            }
+            if safe_diagnostics:
+                event["diagnostics"] = safe_diagnostics
+            events = [
+                item for item in (state.get("processingEvents") or [])
+                if isinstance(item, dict)
+            ]
+            events.append(event)
+            state["processingPhase"] = normalized_phase
+            state["processingMessage"] = normalized_message
+            state["processingDetail"] = normalized_detail
+            state["processingUpdatedAt"] = now
+            state["processingEvents"] = events[-30:]
+            self._write_state(session_id, state)
+
+        logger.info(
+            "%s upload session processing step: session_id=%s phase=%s message=%s detail=%s diagnostics=%s",
+            self._format_label,
+            session_id,
+            normalized_phase,
+            normalized_message,
+            normalized_detail,
+            safe_diagnostics,
+        )
+        return self.session_state(session_id)
 
     def finish_processing_success(self, session_id: str, result: dict[str, object]) -> dict[str, object]:
         with self._lock:
             state = self._read_state(session_id)
             state["status"] = "completed"
             state["processingCompletedAt"] = _isoformat(_utc_now())
+            state["processingPhase"] = "completed"
+            state["processingMessage"] = "Server-side import completed."
+            state["processingDetail"] = "Step 2 of 2: import result is ready."
+            state["processingUpdatedAt"] = state["processingCompletedAt"]
             state["result"] = result
             state.pop("error", None)
             self._remove_staged_files(session_id)
             self._write_state(session_id, state)
+            logger.info(
+                "%s upload session completed: session_id=%s imported=%s failed=%s",
+                self._format_label,
+                session_id,
+                result.get("importedCount") if isinstance(result, dict) else None,
+                result.get("failedCount") if isinstance(result, dict) else None,
+            )
             return self._public_state(state)
 
     def finish_processing_failure(self, session_id: str, error: str) -> dict[str, object]:
@@ -256,8 +358,18 @@ class IngestionUploadSessionManager:
             state["status"] = "failed"
             state["processingCompletedAt"] = _isoformat(_utc_now())
             state["error"] = str(error or f"The {self._format_label} files could not be imported.")
+            state["processingPhase"] = "failed"
+            state["processingMessage"] = "Server-side import failed."
+            state["processingDetail"] = state["error"]
+            state["processingUpdatedAt"] = state["processingCompletedAt"]
             state.pop("result", None)
             self._write_state(session_id, state)
+            logger.warning(
+                "%s upload session failed: session_id=%s error=%s",
+                self._format_label,
+                session_id,
+                state["error"],
+            )
             return self._public_state(state)
 
     def cancel_session(self, session_id: str) -> dict[str, object]:
@@ -340,6 +452,11 @@ class IngestionUploadSessionManager:
         raise KeyError("Unknown upload session file.")
 
     def _public_state(self, state: dict[str, object]) -> dict[str, object]:
+        processing_events = [
+            item
+            for item in (state.get("processingEvents") or [])
+            if isinstance(item, dict)
+        ]
         return {
             "sessionId": state.get("sessionId"),
             "createdAt": state.get("createdAt"),
@@ -347,6 +464,11 @@ class IngestionUploadSessionManager:
             "status": state.get("status") or "uploading",
             "processingStartedAt": state.get("processingStartedAt"),
             "processingCompletedAt": state.get("processingCompletedAt"),
+            "processingPhase": state.get("processingPhase"),
+            "processingMessage": state.get("processingMessage"),
+            "processingDetail": state.get("processingDetail"),
+            "processingUpdatedAt": state.get("processingUpdatedAt"),
+            "processingEvents": processing_events[-12:],
             "result": state.get("result") if isinstance(state.get("result"), dict) else None,
             "error": state.get("error"),
             "chunkSizeBytes": state.get("chunkSizeBytes"),
