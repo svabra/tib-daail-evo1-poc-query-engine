@@ -240,6 +240,52 @@ class Kostenbelege31LoaderTests(unittest.TestCase):
         self.assertIn("Dropped 8 PostgreSQL table(s)", result.message)
         self.assertIn("removed 4 S3 view(s)", result.message)
 
+    def test_loader_reports_setup_and_batch_start_before_first_batch_finishes(self) -> None:
+        connection = FakeConnection()
+        reports: list[dict[str, object]] = []
+        settings = SimpleNamespace(
+            pg_oltp_database="oltp",
+            pg_olap_database="olap",
+            s3_bucket="loader-bucket",
+        )
+        context = SimpleNamespace(
+            settings=settings,
+            job_id="progress-test",
+            requested_size_gb=0.01,
+            connect=lambda: connection,
+            report=lambda **changes: reports.append(dict(changes)),
+            raise_if_cancelled=lambda: None,
+        )
+
+        with (
+            patch("bit_data_workbench.data_generator.kostenbelege_3_1.ensure_s3_bucket"),
+            patch("bit_data_workbench.data_generator.kostenbelege_3_1.delete_s3_bucket", return_value=0),
+            patch("bit_data_workbench.data_generator.kostenbelege_3_1.s3_client", return_value=object()),
+            patch("bit_data_workbench.data_generator.kostenbelege_3_1.upload_s3_file"),
+        ):
+            result = GENERATOR.run(context)
+
+        labels = [str(report.get("progress_label") or "") for report in reports]
+        messages = [str(report.get("message") or "") for report in reports]
+
+        self.assertEqual(result.generated_rows, 15311)
+        self.assertIn("Opening loader connection...", labels)
+        self.assertIn("Cleaning existing S3 objects...", labels)
+        self.assertTrue(
+            any(
+                label == "Writing kbkp_2019 batch 1 / 1"
+                and message.startswith("Writing rows 1-")
+                for label, message in zip(labels, messages, strict=True)
+            )
+        )
+        self.assertTrue(
+            any(
+                label == "Writing kbkp_2019 batch 1 / 1"
+                and message.startswith("Wrote ")
+                for label, message in zip(labels, messages, strict=True)
+            )
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -380,7 +380,20 @@ class Kostenbelege31DataGenerator(DataGenerator):
         bucket_name = self._loader_bucket_name(settings.s3_bucket)
         object_prefix = f"s3://{bucket_name}/generated/{target_name}"
         primary_relation_name = "pg_oltp.public.kbkp_2019 + pg_olap.public.kbkp_2019"
+        context.report(
+            progress=0.0,
+            progress_label="Opening loader connection...",
+            message=(
+                "Opening an exclusive DuckDB worker connection before preparing "
+                "Kostenbelege 3.1 targets."
+            ),
+        )
         connection = context.connect()
+        context.report(
+            progress=0.0,
+            progress_label="Opening S3 client...",
+            message="Opening the S3 client for Kostenbelege 3.1 Parquet uploads.",
+        )
         s3_upload_client = s3_client(settings)
         written_targets = self._written_targets(root_prefix=object_prefix)
 
@@ -397,10 +410,40 @@ class Kostenbelege31DataGenerator(DataGenerator):
                 target_path=object_prefix,
                 written_targets=written_targets,
             )
+            context.raise_if_cancelled()
+            context.report(
+                progress=0.0,
+                progress_label="Ensuring S3 bucket...",
+                message=f"Ensuring loader bucket s3://{bucket_name} exists.",
+            )
             ensure_s3_bucket(settings, bucket_name)
+            context.raise_if_cancelled()
+            context.report(
+                progress=0.0,
+                progress_label="Dropping old PostgreSQL tables...",
+                message="Dropping previous Kostenbelege 3.1 OLTP and OLAP tables.",
+            )
             self._drop_postgres_tables(connection)
+            context.raise_if_cancelled()
+            context.report(
+                progress=0.0,
+                progress_label="Dropping old S3 views...",
+                message="Dropping previous Kostenbelege 3.1 S3 Parquet views.",
+            )
             self._drop_s3_views(connection)
+            context.raise_if_cancelled()
+            context.report(
+                progress=0.0,
+                progress_label="Cleaning existing S3 objects...",
+                message=f"Deleting existing objects from loader bucket s3://{bucket_name}.",
+            )
             delete_s3_bucket(settings, bucket_name)
+            context.raise_if_cancelled()
+            context.report(
+                progress=0.0,
+                progress_label="Rechecking S3 bucket...",
+                message=f"Rechecking loader bucket s3://{bucket_name} after cleanup.",
+            )
             ensure_s3_bucket(settings, bucket_name)
 
             processed_rows = 0
@@ -419,6 +462,14 @@ class Kostenbelege31DataGenerator(DataGenerator):
                     olap_relation_name = f"pg_olap.public.{table_name}"
                     s3_prefix = f"{object_prefix}/parquet/{table_name}"
 
+                    context.raise_if_cancelled()
+                    context.report(
+                        progress=processed_rows / total_generated_rows,
+                        progress_label=f"Creating {table_name} tables...",
+                        message=f"Creating OLTP and OLAP tables for {table_name}.",
+                        generated_rows=processed_rows,
+                        generated_size_gb=approximate_size_gb(processed_rows, self.approximate_row_bytes),
+                    )
                     connection.execute(f"CREATE TABLE {oltp_relation} ({', '.join(columns)})")
                     connection.execute(f"CREATE TABLE {olap_relation} ({', '.join(columns)})")
 
@@ -435,6 +486,20 @@ class Kostenbelege31DataGenerator(DataGenerator):
                         )
                         local_parquet_path.parent.mkdir(parents=True, exist_ok=True)
 
+                        context.report(
+                            progress=processed_rows / total_generated_rows,
+                            progress_label=f"Writing {table_name} batch {batch_index} / {batch_count}",
+                            message=(
+                                f"Writing rows {start_row + 1:,}-{end_row:,} for {table_name} "
+                                f"into OLTP, OLAP, and {s3_prefix}."
+                            ),
+                            target_name=target_name,
+                            target_relation=primary_relation_name,
+                            target_path=object_prefix,
+                            written_targets=written_targets,
+                            generated_rows=processed_rows,
+                            generated_size_gb=approximate_size_gb(processed_rows, self.approximate_row_bytes),
+                        )
                         connection.execute(f"INSERT INTO {oltp_relation} {select_sql}")
                         connection.execute(f"INSERT INTO {olap_relation} {select_sql}")
                         connection.execute(
@@ -474,6 +539,18 @@ class Kostenbelege31DataGenerator(DataGenerator):
                             generated_size_gb=approximate_size_gb(processed_rows, self.approximate_row_bytes),
                         )
 
+                    context.raise_if_cancelled()
+                    context.report(
+                        progress=processed_rows / total_generated_rows,
+                        progress_label=f"Creating {table_name} S3 view...",
+                        message=f"Creating the DuckDB S3 Parquet view for {table_name}.",
+                        target_name=target_name,
+                        target_relation=primary_relation_name,
+                        target_path=object_prefix,
+                        written_targets=written_targets,
+                        generated_rows=processed_rows,
+                        generated_size_gb=approximate_size_gb(processed_rows, self.approximate_row_bytes),
+                    )
                     s3_query = duckdb_scan_query("parquet", [f"{s3_prefix}/*.parquet"])
                     connection.execute(f"CREATE OR REPLACE VIEW {s3_relation} AS {s3_query}")
 

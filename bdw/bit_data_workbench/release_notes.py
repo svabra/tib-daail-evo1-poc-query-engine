@@ -1,9 +1,21 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.13. Keep entries concise and
+# Derived from git history through version 0.9.14. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.14",
+        "releasedAt": "2026-05-19T11:41:41+02:00",
+        "features": [
+            (
+                "The Kostenbelege 3.1 loader now reports each setup step and "
+                "batch start before the writes run, making slow production "
+                "runs visible while it opens connections, cleans S3, creates "
+                "tables, and pushes OLTP, OLAP, and S3 Parquet data."
+            ),
+        ],
+    },
     {
         "version": "0.9.13",
         "releasedAt": "2026-05-19T11:21:03+02:00",
