@@ -2,9 +2,11 @@ import {
   actionButtonMarkup,
   detailCardMarkup,
   explorerEmptyStateMarkup,
-  publicationBadgeMarkup,
   publicationLinksMarkup,
+  sourceActionMenuMarkup,
   sourceObjectElement,
+  sourceObjectRowMarkup,
+  sourcePublicationBadgeMarkup,
   sourceSchemaElement,
 } from "./utils.js";
 
@@ -15,7 +17,10 @@ export function createS3DataSourceExplorer(helpers) {
     formatByteCount,
     copySourceQueryPath,
     openDataProductPublishDialog,
+    querySourceInCurrentNotebook,
+    querySourceInNewNotebook,
     showMessageDialog,
+    viewSourceData,
     downloadSourceObjectDdl,
     downloadSourceS3Object,
     downloadJobsController,
@@ -77,6 +82,190 @@ export function createS3DataSourceExplorer(helpers) {
     return entry.queryPath || String(entry.entryKind || "").toUpperCase();
   }
 
+  function publicationMenuItems(publishedProducts) {
+    const normalizedProducts = Array.isArray(publishedProducts) ? publishedProducts : [];
+    return normalizedProducts.map((product) => ({
+      label: normalizedProducts.length === 1
+        ? "Open Data Product"
+        : `Open Data Product - ${product.title || product.slug || "source"}`,
+      href: product.documentationPath || "",
+      title: "Open the published Data Product page",
+    }));
+  }
+
+  function fileActionMenuMarkup(entry) {
+    const publishedItems = publicationMenuItems(entry.publishedDataProducts);
+    const queryable = Boolean(String(entry.queryAlias || entry.relation || "").trim());
+    const isCsv = String(entry.fileFormat || "").trim().toLowerCase() === "csv";
+    return sourceActionMenuMarkup(
+      [
+        ...publishedItems,
+        publishedItems.length ? "separator" : null,
+        {
+          label: "View Data",
+          action: "view",
+          attrs: { "data-view-source-data": true },
+          title: queryable
+            ? "Insert and run a query with all fields in the current notebook"
+            : "This object is not queryable yet.",
+          disabled: !queryable,
+        },
+        {
+          label: "Query in current notebook",
+          action: "query-current",
+          attrs: { "data-query-source-current": true },
+          title: queryable
+            ? "Insert a query into the current notebook"
+            : "This object is not queryable yet.",
+          disabled: !queryable,
+        },
+        {
+          label: "Query in new notebook",
+          action: "query-new",
+          attrs: { "data-query-source-new": true },
+          title: queryable
+            ? "Create a new notebook with this query"
+            : "This object is not queryable yet.",
+          disabled: !queryable,
+        },
+        {
+          label: "Copy query path",
+          action: "copy-query-path",
+          attrs: { "data-copy-query-path": true },
+          title: queryable
+            ? "Copy the SQL query path for this object"
+            : "This object is not queryable yet.",
+          disabled: !queryable,
+        },
+        {
+          label: "Create data product ...",
+          action: "create-data-product",
+          attrs: { "data-create-data-product": true },
+          title: "Publish this object as a managed data product",
+        },
+        "separator",
+        {
+          label: "Download S3 object",
+          action: "download",
+          attrs: { "data-download-source-s3-object": true },
+          title: "Download the underlying S3 object",
+        },
+        isCsv
+          ? {
+              label: "Prepare ZIP download",
+              action: "prepare-zip",
+              attrs: { "data-prepare-source-s3-download": true },
+              title: "Prepare a resumable ZIP download for this CSV object",
+            }
+          : null,
+        {
+          label: "Download DDL",
+          action: "download-ddl",
+          attrs: { "data-download-source-ddl": true },
+          title: "Download DDL for this source",
+        },
+      ],
+      escapeHtml
+    );
+  }
+
+  function locationActionMenuMarkup(entry) {
+    const publishedItems = publicationMenuItems(entry.publishedDataProducts);
+    const canPublishBucket = String(entry.entryKind || "").toLowerCase() === "bucket" && entry.bucket && !entry.prefix;
+    return sourceActionMenuMarkup(
+      [
+        ...publishedItems,
+        publishedItems.length ? "separator" : null,
+        canPublishBucket
+          ? {
+              label: "Create data product ...",
+              action: "publish-bucket",
+              attrs: { "data-create-data-product-bucket": true },
+              title: "Publish this bucket as a managed data product",
+            }
+          : null,
+      ],
+      escapeHtml,
+      { label: "Location actions" }
+    );
+  }
+
+  function fileRowMarkup(entry, state) {
+    const queryPath = String(entry.queryAlias || entry.relation || "").trim();
+    const displayName = entry.displayName || entry.name || "";
+    const fileFormat = String(entry.fileFormat || "file").toUpperCase();
+    return sourceObjectRowMarkup(
+      {
+        kind: "file",
+        displayName,
+        title: `${displayName}${queryPath ? ` | Query path: ${queryPath}` : ""}`,
+        searchable: `${displayName} ${entry.name || ""} ${queryPath} ${entry.path || ""} ${fileFormat}`,
+        selected:
+          state.selectedEntry?.bucket === entry.bucket &&
+          state.selectedEntry?.prefix === entry.prefix,
+        attrs: {
+          "data-source-object": true,
+          "data-source-object-kind": "file",
+          "data-source-object-name": entry.name || "",
+          "data-source-object-display-name": displayName,
+          "data-source-object-relation": entry.relation || "",
+          "data-source-object-query-alias": entry.queryAlias || "",
+          "data-source-option-id": "workspace.s3",
+          "data-s3-bucket": entry.bucket || "",
+          "data-s3-key": entry.prefix || "",
+          "data-s3-path": entry.path || "",
+          "data-s3-file-format": entry.fileFormat || "",
+          "data-s3-downloadable": "true",
+          "data-s3-size-bytes": entry.sizeBytes || 0,
+          "data-data-source-explorer-s3-file": entry.prefix || "",
+          "data-bucket": entry.bucket || "",
+          "data-prefix": entry.prefix || "",
+          "data-entry-kind": entry.entryKind || "",
+          "data-published-data-products": JSON.stringify(entry.publishedDataProducts || []),
+        },
+        meta: `
+          ${sourcePublicationBadgeMarkup(entry.publishedDataProducts, escapeHtml)}
+          ${
+            queryPath
+              ? `<small class="source-query-path-label" title="${escapeHtml(`Query path: ${queryPath}`)}">${escapeHtml(queryPath)}</small>`
+              : `<small>${escapeHtml(entrySecondaryText(entry))}</small>`
+          }
+          <small>${escapeHtml(fileFormat)}</small>
+          <small>${escapeHtml(formatByteCount(entry.sizeBytes))}</small>
+        `,
+        labelExtras: downloadJobsController?.s3IndicatorMarkup?.(entry.bucket, entry.prefix) || "",
+        actions: fileActionMenuMarkup(entry),
+      },
+      escapeHtml
+    );
+  }
+
+  function locationRowMarkup(entry) {
+    const kind = String(entry.entryKind || "").toLowerCase() === "bucket" ? "bucket" : "folder";
+    const title = entry.queryPath || entry.path || entry.name || "";
+    return sourceObjectRowMarkup(
+      {
+        kind,
+        displayName: entry.name || "",
+        title,
+        searchable: `${entry.name || ""} ${entry.queryPath || ""} ${entry.path || ""} ${entry.entryKind || ""}`,
+        attrs: {
+          "data-data-source-explorer-s3-location": true,
+          "data-bucket": entry.bucket || "",
+          "data-prefix": entry.prefix || "",
+          "data-entry-kind": entry.entryKind || "",
+        },
+        meta: `
+          ${sourcePublicationBadgeMarkup(entry.publishedDataProducts, escapeHtml)}
+          ${entrySecondaryText(entry) ? `<small>${escapeHtml(entrySecondaryText(entry))}</small>` : ""}
+        `,
+        actions: locationActionMenuMarkup(entry),
+        extraClass: "data-source-explorer-location-object",
+      },
+      escapeHtml
+    );
+  }
+
   function renderNavigation(root) {
     const state = explorerState(root);
     const navigation = navigationRoot(root);
@@ -95,7 +284,7 @@ export function createS3DataSourceExplorer(helpers) {
     }
 
     navigation.innerHTML = `
-      <div class="data-source-explorer-tree">
+      <div class="source-tree data-source-explorer-source-tree">
         <div class="data-source-explorer-breadcrumbs">
           ${(snapshot.breadcrumbs || [])
             .map(
@@ -116,56 +305,15 @@ export function createS3DataSourceExplorer(helpers) {
         ${
           (snapshot.entries || []).length
             ? `
-                <div class="data-source-explorer-group-body">
+                <ul class="source-object-list data-source-explorer-root-object-list">
                   ${snapshot.entries
-                    .map((entry) => {
-                      const isFile = entry.entryKind === "file";
-                      const active =
-                        isFile &&
-                        state.selectedEntry?.bucket === entry.bucket &&
-                        state.selectedEntry?.prefix === entry.prefix
-                          ? " is-active"
-                          : "";
-                      return `
-                        <button
-                          type="button"
-                          class="data-source-explorer-object${active}"
-                          ${
-                            isFile
-                              ? `data-data-source-explorer-s3-file="${escapeHtml(entry.prefix || "")}"`
-                              : `data-data-source-explorer-s3-location`
-                          }
-                          data-bucket="${escapeHtml(entry.bucket || "")}"
-                          data-prefix="${escapeHtml(entry.prefix || "")}"
-                          data-entry-kind="${escapeHtml(entry.entryKind || "")}"
-                          title="${escapeHtml(entry.queryAlias || entry.queryPath || entry.path || "")}"
-                        >
-                          <span class="data-source-explorer-object-copy">
-                            <span class="data-source-explorer-object-title-row">
-                              <strong>${escapeHtml(entry.name || "")}</strong>
-                              ${publicationBadgeMarkup(entry.publishedDataProducts, escapeHtml)}
-                              ${downloadJobsController?.s3IndicatorMarkup?.(entry.bucket, entry.prefix) || ""}
-                            </span>
-                            ${
-                              entrySecondaryText(entry)
-                                ? `<span>${escapeHtml(entrySecondaryText(entry))}</span>`
-                                : ""
-                            }
-                            <span>${
-                              isFile
-                                ? escapeHtml(
-                                    `${String(entry.fileFormat || "file").toUpperCase()} • ${formatByteCount(
-                                      entry.sizeBytes
-                                    )}`
-                                  )
-                                : escapeHtml(String(entry.entryKind || "").toUpperCase())
-                            }</span>
-                          </span>
-                        </button>
-                      `;
-                    })
+                    .map((entry) =>
+                      entry.entryKind === "file"
+                        ? fileRowMarkup(entry, state)
+                        : locationRowMarkup(entry)
+                    )
                     .join("")}
-                </div>
+                </ul>
               `
             : explorerEmptyStateMarkup(
                 snapshot.emptyMessage || "This Shared Workspace location is empty.",
@@ -175,6 +323,7 @@ export function createS3DataSourceExplorer(helpers) {
         }
       </div>
     `;
+    downloadJobsController?.syncPreparedDownloadIndicators?.(navigation);
   }
 
   function renderDetail(root) {
@@ -353,10 +502,151 @@ export function createS3DataSourceExplorer(helpers) {
     }
   }
 
+  async function selectFile(root, fileButton, { renderAfter = true } = {}) {
+    const state = explorerState(root);
+    if (!state?.snapshot) {
+      return;
+    }
+    state.selectedEntry = (state.snapshot.entries || []).find(
+      (entry) =>
+        entry.entryKind === "file" &&
+        String(entry.prefix || "") ===
+          String(fileButton.dataset.dataSourceExplorerS3File || "").trim() &&
+        String(entry.bucket || "") === String(fileButton.dataset.bucket || "").trim()
+    ) || null;
+    if (renderAfter) {
+      await render(root);
+    }
+  }
+
   async function handleClick(event, root) {
     if (downloadJobsController?.handleClick && (await downloadJobsController.handleClick(event))) {
       event.stopPropagation();
       return true;
+    }
+
+    const actionButton = event.target.closest("[data-data-source-explorer-action]");
+    if (actionButton && root.contains(actionButton)) {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const actionFile = actionButton.closest("[data-data-source-explorer-s3-file]");
+      if (actionFile && root.contains(actionFile)) {
+        await selectFile(root, actionFile, { renderAfter: true });
+      }
+
+      const state = explorerState(root);
+      if (!state?.snapshot) {
+        return true;
+      }
+
+      const action = String(
+        actionButton.dataset.dataSourceExplorerAction || ""
+      ).trim();
+
+      if (action === "view") {
+        const descriptor = selectedFileDescriptor(state);
+        const viewed =
+          descriptor instanceof Element ? await viewSourceData?.(descriptor) : false;
+        if (viewed === false) {
+          await showMessageDialog({
+            title: "Notebook required",
+            copy: "Open an editable notebook first, or use 'Query In New Notebook'.",
+          });
+        }
+        return true;
+      }
+
+      if (action === "query-current") {
+        const descriptor = selectedFileDescriptor(state);
+        const inserted =
+          descriptor instanceof Element ? await querySourceInCurrentNotebook?.(descriptor) : false;
+        if (inserted === false) {
+          await showMessageDialog({
+            title: "Notebook required",
+            copy: "Open an editable notebook first, or use 'Query In New Notebook'.",
+          });
+        }
+        return true;
+      }
+
+      if (action === "query-new") {
+        const descriptor = selectedFileDescriptor(state);
+        if (descriptor instanceof Element) {
+          await querySourceInNewNotebook?.(descriptor);
+        }
+        return true;
+      }
+
+      if (action === "copy-query-path") {
+        const descriptor = selectedFileDescriptor(state);
+        if (!(descriptor instanceof Element) || (await copySourceQueryPath?.(descriptor)) === false) {
+          await showMessageDialog({
+            title: "Query path unavailable",
+            copy: "This Shared Workspace object does not expose a query path yet.",
+          });
+        }
+        return true;
+      }
+
+      if (action === "download") {
+        const descriptor = selectedFileDescriptor(state);
+        if (!(descriptor instanceof Element) || downloadSourceS3Object(descriptor) === false) {
+          await showMessageDialog({
+            title: "S3 download unavailable",
+            copy: "Choose a concrete Shared Workspace object before downloading it.",
+          });
+        }
+        return true;
+      }
+
+      if (action === "download-ddl") {
+        const descriptor = selectedFileDescriptor(state);
+        if (!(descriptor instanceof Element) || (await downloadSourceObjectDdl(descriptor)) === false) {
+          await showMessageDialog({
+            title: "DDL download unavailable",
+            copy: "Choose a concrete Shared Workspace object before downloading DDL.",
+          });
+        }
+        return true;
+      }
+
+      if (action === "prepare-zip") {
+        const descriptor = selectedFileDescriptor(state);
+        if (!(descriptor instanceof Element) || (await prepareSourceS3Download?.(descriptor)) === false) {
+          await showMessageDialog({
+            title: "Prepared ZIP unavailable",
+            copy: "Choose a concrete CSV object before preparing a ZIP download.",
+          });
+        }
+        return true;
+      }
+
+      if (action === "create-data-product") {
+        const descriptor = selectedFileDescriptor(state);
+        if (descriptor instanceof Element) {
+          await openDataProductPublishDialog({
+            sourceObjectRoot: descriptor,
+          });
+        }
+        return true;
+      }
+
+      if (action === "publish-bucket") {
+        const locationButton = actionButton.closest("[data-data-source-explorer-s3-location]");
+        await openDataProductPublishDialog({
+          sourceSchemaRoot: sourceSchemaElement(
+            locationButton?.dataset.bucket || state.snapshot.bucket || ""
+          ),
+        });
+        return true;
+      }
+
+      return false;
+    }
+
+    if (event.target.closest("[data-source-action-menu]")) {
+      return false;
     }
 
     const locationButton = event.target.closest(
@@ -376,95 +666,7 @@ export function createS3DataSourceExplorer(helpers) {
     if (fileButton && root.contains(fileButton)) {
       event.preventDefault();
       event.stopPropagation();
-      const state = explorerState(root);
-      if (!state?.snapshot) {
-        return true;
-      }
-      state.selectedEntry = (state.snapshot.entries || []).find(
-        (entry) =>
-          entry.entryKind === "file" &&
-          String(entry.prefix || "") ===
-            String(fileButton.dataset.dataSourceExplorerS3File || "").trim() &&
-          String(entry.bucket || "") === String(fileButton.dataset.bucket || "").trim()
-      ) || null;
-      await render(root);
-      return true;
-    }
-
-    const actionButton = event.target.closest("[data-data-source-explorer-action]");
-    if (!(actionButton && root.contains(actionButton))) {
-      return false;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-
-    const action = String(
-      actionButton.dataset.dataSourceExplorerAction || ""
-    ).trim();
-    const state = explorerState(root);
-    if (!state?.snapshot) {
-      return true;
-    }
-
-    if (action === "copy-query-path") {
-      const descriptor = selectedFileDescriptor(state);
-      if (!(descriptor instanceof Element) || (await copySourceQueryPath?.(descriptor)) === false) {
-        await showMessageDialog({
-          title: "Query path unavailable",
-          copy: "This Shared Workspace object does not expose a query path yet.",
-        });
-      }
-      return true;
-    }
-
-    if (action === "download") {
-      const descriptor = selectedFileDescriptor(state);
-      if (!(descriptor instanceof Element) || downloadSourceS3Object(descriptor) === false) {
-        await showMessageDialog({
-          title: "S3 download unavailable",
-          copy: "Choose a concrete Shared Workspace object before downloading it.",
-        });
-      }
-      return true;
-    }
-
-    if (action === "download-ddl") {
-      const descriptor = selectedFileDescriptor(state);
-      if (!(descriptor instanceof Element) || (await downloadSourceObjectDdl(descriptor)) === false) {
-        await showMessageDialog({
-          title: "DDL download unavailable",
-          copy: "Choose a concrete Shared Workspace object before downloading DDL.",
-        });
-      }
-      return true;
-    }
-
-    if (action === "prepare-zip") {
-      const descriptor = selectedFileDescriptor(state);
-      if (!(descriptor instanceof Element) || (await prepareSourceS3Download?.(descriptor)) === false) {
-        await showMessageDialog({
-          title: "Prepared ZIP unavailable",
-          copy: "Choose a concrete CSV object before preparing a ZIP download.",
-        });
-      }
-      return true;
-    }
-
-    if (action === "create-data-product") {
-      const descriptor = selectedFileDescriptor(state);
-      if (descriptor instanceof Element) {
-        await openDataProductPublishDialog({
-          sourceObjectRoot: descriptor,
-        });
-      }
-      return true;
-    }
-
-    if (action === "publish-bucket") {
-      await openDataProductPublishDialog({
-        sourceSchemaRoot: sourceSchemaElement(state.snapshot.bucket || ""),
-      });
+      await selectFile(root, fileButton);
       return true;
     }
 

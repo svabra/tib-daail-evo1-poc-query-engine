@@ -1,9 +1,22 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.17. Keep entries concise and
+# Derived from git history through version 0.9.18. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.18",
+        "releasedAt": "2026-05-19T20:25:32+02:00",
+        "features": [
+            (
+                "The Data Sources workbench now reuses the notebook source-tree "
+                "browser for Shared Workspace S3, Local Workspace IndexDB, and "
+                "PostgreSQL sources, keeping catalog, bucket, folder, object, "
+                "and row action visuals consistent while preserving the "
+                "right-side selection details."
+            ),
+        ],
+    },
     {
         "version": "0.9.17",
         "releasedAt": "2026-05-19T12:53:04+02:00",

@@ -835,6 +835,7 @@ const dataSourceExplorerController = createDataSourceExplorerController({
   prepareSourceS3Download,
   querySourceInCurrentNotebook,
   querySourceInNewNotebook,
+  renderLocalWorkspaceSidebarEntries: () => renderLocalWorkspaceSidebarEntries(),
   showMessageDialog,
   viewSourceData,
 });

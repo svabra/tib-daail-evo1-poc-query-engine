@@ -4371,6 +4371,14 @@ details:not([open]) > .tree-children {
   align-content: start;
 }
 
+.data-source-explorer-browser .source-tree[data-source-tree-scope="explorer"] {
+  align-content: start;
+}
+
+.data-source-explorer-browser .sidebar-source-operation-status {
+  margin-bottom: 12px;
+}
+
 .data-source-explorer-group {
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);

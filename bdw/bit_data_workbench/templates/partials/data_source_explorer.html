@@ -147,8 +147,20 @@
               <h4>Browse {{ selected_data_source.name }}</h4>
               <p>Objects appear here using the explorer flow for this source type.</p>
             </div>
-            <div class="data-source-explorer-browser" data-data-source-explorer-navigation>
-              <p class="home-empty">Loading explorer...</p>
+            <div
+              class="data-source-explorer-browser"
+              data-data-source-explorer-navigation
+              data-data-source-explorer-source-tree-browser
+            >
+              {% if inline_browse_catalogs %}
+                {% set source_tree_catalogs = inline_browse_catalogs %}
+                {% set source_tree_scope = 'explorer' %}
+                {% set source_tree_force_source_option_id = inline_source_option_id %}
+                {% set source_tree_open_catalogs = true %}
+                {% include "partials/source_tree.html" %}
+              {% else %}
+                <p class="home-empty">Loading explorer...</p>
+              {% endif %}
             </div>
           </section>
           <aside class="data-source-explorer-detail-panel">

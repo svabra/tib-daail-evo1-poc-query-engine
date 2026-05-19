@@ -2,7 +2,10 @@ import {
   actionButtonMarkup,
   detailCardMarkup,
   explorerEmptyStateMarkup,
+  sourceActionMenuMarkup,
   sourceObjectElement,
+  sourceObjectRowMarkup,
+  sourceSchemaDetailsMarkup,
 } from "./utils.js";
 import { localWorkspaceQueryAliases } from "../query-alias-utils.js";
 
@@ -113,23 +116,109 @@ export function createLocalWorkspaceDataSourceExplorer(helpers) {
     });
   }
 
+  function entryActionMenuMarkup() {
+    return sourceActionMenuMarkup(
+      [
+        {
+          label: "View Data",
+          action: "view",
+          attrs: { "data-view-source-data": true },
+          title: "Insert and run a query with all fields in the current notebook",
+        },
+        {
+          label: "Query in current notebook",
+          action: "query-current",
+          attrs: { "data-query-source-current": true },
+          title: "Insert a query into the current notebook",
+        },
+        {
+          label: "Query in new notebook",
+          action: "query-new",
+          attrs: { "data-query-source-new": true },
+          title: "Create a new notebook with this query",
+        },
+        {
+          label: "Copy query path",
+          action: "copy-query-path",
+          attrs: { "data-copy-query-path": true },
+          title: "Copy the SQL query path for this Local Workspace file",
+        },
+        {
+          label: "Create data product ...",
+          action: "create-data-product",
+          attrs: { "data-create-data-product": true },
+          title: "Start the managed publication flow for this file",
+        },
+        "separator",
+        {
+          label: "Download",
+          action: "download",
+          attrs: { "data-download-local-workspace-object": true },
+          title: "Download the Local Workspace file",
+        },
+        {
+          label: "Download DDL",
+          action: "download-ddl",
+          attrs: { "data-download-source-ddl": true },
+          title: "Download DDL for this Local Workspace file",
+        },
+      ],
+      escapeHtml
+    );
+  }
+
   function entryButtonMarkup(entry, state) {
     const queryPath = entryQueryPath(entry, state);
-    const displayPath = queryPath || localWorkspaceDisplayPath(entry.folderPath, entry.fileName);
-    return `
-      <button
-        type="button"
-        class="data-source-explorer-object${state.selectedEntryId === entry.id ? " is-active" : ""}"
-        data-data-source-explorer-local-entry="${escapeHtml(entry.id)}"
-      >
-        <span class="data-source-explorer-object-copy">
-          <strong>${escapeHtml(entry.fileName)}</strong>
-          <span>${escapeHtml(
-            `${String(entry.exportFormat || "file").toUpperCase()} • ${displayPath}`
-          )}</span>
-        </span>
-      </button>
-    `;
+    const displayPath = localWorkspaceDisplayPath(entry.folderPath, entry.fileName);
+    const formatLabel = String(entry.exportFormat || "file").toUpperCase();
+    const queryAlias = localWorkspaceQueryAliases(state.entries).get(entry.id) || "";
+    return sourceObjectRowMarkup(
+      {
+        kind: "file",
+        displayName: entry.fileName,
+        title: `${entry.fileName} | Query path: ${queryPath}`,
+        searchable: `${entry.fileName} ${displayPath} ${formatLabel} ${queryPath}`,
+        selected: state.selectedEntryId === entry.id,
+        attrs: {
+          "data-source-object": true,
+          "data-source-object-kind": "file",
+          "data-source-object-name": entry.fileName,
+          "data-source-object-display-name": entry.fileName,
+          "data-source-object-relation": localWorkspaceRelation(entry.id),
+          "data-source-object-query-alias": queryAlias,
+          "data-source-option-id": "workspace.local",
+          "data-local-workspace-entry-id": entry.id,
+          "data-local-workspace-folder-path": entry.folderPath,
+          "data-local-workspace-export-format": entry.exportFormat,
+          "data-local-workspace-size-bytes": entry.sizeBytes,
+          "data-local-workspace-created-at": entry.createdAt,
+          "data-local-workspace-column-count": entry.columnCount,
+          "data-local-workspace-row-count": entry.rowCount,
+          "data-local-workspace-mime-type": entry.mimeType,
+          "data-data-source-explorer-local-entry": entry.id,
+        },
+        meta: `
+          <small class="source-query-path-label" title="${escapeHtml(`Query path: ${queryPath}`)}">${escapeHtml(queryPath)}</small>
+          <small>${escapeHtml(formatLabel)}</small>
+          <small title="${escapeHtml(displayPath)}">${escapeHtml(formatByteCount(entry.sizeBytes))}</small>
+        `,
+        actions: entryActionMenuMarkup(),
+      },
+      escapeHtml
+    );
+  }
+
+  function folderSummaryLabel(node) {
+    const folderCount = node.folders.size;
+    const fileCount = node.entries.length;
+    const segments = [];
+    if (folderCount) {
+      segments.push(`${folderCount} folder${folderCount === 1 ? "" : "s"}`);
+    }
+    if (fileCount || !segments.length) {
+      segments.push(`${fileCount} file${fileCount === 1 ? "" : "s"}`);
+    }
+    return segments.join(" | ");
   }
 
   function folderMarkup(node, state) {
@@ -143,18 +232,25 @@ export function createLocalWorkspaceDataSourceExplorer(helpers) {
       .map((entry) => entryButtonMarkup(entry, state))
       .join("");
 
-    return `
-      <details class="data-source-explorer-group" open>
-        <summary>
-          <span>${escapeHtml(node.name)}</span>
-          <small>${escapeHtml(String(node.entries.length))} file(s)</small>
-        </summary>
-        <div class="data-source-explorer-group-body">
-          ${childFolders}
-          ${files}
-        </div>
-      </details>
-    `;
+    return sourceSchemaDetailsMarkup(
+      {
+        label: node.name,
+        searchable: `${node.name} ${localWorkspaceDisplayPath(node.path)}`,
+        attrs: {
+          "data-local-workspace-folder-node": true,
+          "data-local-workspace-folder-path": node.path,
+        },
+        meta: `<small>${escapeHtml(folderSummaryLabel(node))}</small>`,
+        iconKind: "folder",
+        children: `
+          <div class="local-workspace-folder-branch">
+            ${childFolders}
+            ${files ? `<ul class="source-object-list">${files}</ul>` : ""}
+          </div>
+        `,
+      },
+      escapeHtml
+    );
   }
 
   function renderNavigation(root) {
@@ -185,9 +281,9 @@ export function createLocalWorkspaceDataSourceExplorer(helpers) {
       .join("");
 
     navigation.innerHTML = `
-      <div class="data-source-explorer-tree">
+      <div class="source-tree data-source-explorer-source-tree">
         ${folderMarkupHtml}
-        ${rootFiles ? `<div class="data-source-explorer-group-body">${rootFiles}</div>` : ""}
+        ${rootFiles ? `<ul class="source-object-list data-source-explorer-root-object-list">${rootFiles}</ul>` : ""}
       </div>
     `;
   }
@@ -269,100 +365,116 @@ export function createLocalWorkspaceDataSourceExplorer(helpers) {
     await render(root);
   }
 
+  async function selectEntry(root, entryId, { renderAfter = true } = {}) {
+    const state = explorerState(root);
+    if (!state) {
+      return;
+    }
+    state.selectedEntryId = String(entryId || "").trim();
+    if (renderAfter) {
+      await render(root);
+    }
+  }
+
   async function handleClick(event, root) {
+    const actionButton = event.target.closest("[data-data-source-explorer-action]");
+    if (actionButton && root.contains(actionButton)) {
+      event.preventDefault();
+      event.stopPropagation();
+
+      const actionEntry = actionButton.closest("[data-data-source-explorer-local-entry]");
+      if (actionEntry && root.contains(actionEntry)) {
+        await selectEntry(root, actionEntry.dataset.dataSourceExplorerLocalEntry || "", {
+          renderAfter: true,
+        });
+      }
+
+      const descriptor = selectedDescriptorElement(explorerState(root));
+      if (!(descriptor instanceof Element)) {
+        return true;
+      }
+
+      const action = String(
+        actionButton.dataset.dataSourceExplorerAction || ""
+      ).trim();
+      if (action === "view") {
+        const viewed = await viewSourceData(descriptor);
+        if (viewed === false) {
+          await showMessageDialog({
+            title: "Notebook required",
+            copy: "Open an editable notebook first, or use 'Query In New Notebook'.",
+          });
+        }
+        return true;
+      }
+
+      if (action === "query-current") {
+        const inserted = await querySourceInCurrentNotebook(descriptor);
+        if (inserted === false) {
+          await showMessageDialog({
+            title: "Notebook required",
+            copy: "Open an editable notebook first, or use 'Query In New Notebook'.",
+          });
+        }
+        return true;
+      }
+
+      if (action === "query-new") {
+        await querySourceInNewNotebook(descriptor);
+        return true;
+      }
+
+      if (action === "copy-query-path") {
+        if ((await copySourceQueryPath?.(descriptor)) === false) {
+          await showMessageDialog({
+            title: "Query path unavailable",
+            copy: "This Local Workspace file does not expose a query path.",
+          });
+        }
+        return true;
+      }
+
+      if (action === "create-data-product") {
+        await openDataProductPublishDialog({
+          sourceObjectRoot: descriptor,
+        });
+        return true;
+      }
+
+      if (action === "download") {
+        const downloaded = await downloadLocalWorkspaceExportFromSource(descriptor);
+        if (downloaded === false) {
+          await showMessageDialog({
+            title: "Download unavailable",
+            copy: "The selected Local Workspace file could not be downloaded from browser storage.",
+          });
+        }
+        return true;
+      }
+
+      if (action === "download-ddl") {
+        const downloaded = await downloadSourceObjectDdl(descriptor);
+        if (downloaded === false) {
+          await showMessageDialog({
+            title: "DDL download unavailable",
+            copy: "The selected Local Workspace file could not be prepared for DDL generation.",
+          });
+        }
+        return true;
+      }
+
+      return false;
+    }
+
+    if (event.target.closest("[data-source-action-menu]")) {
+      return false;
+    }
+
     const entryButton = event.target.closest("[data-data-source-explorer-local-entry]");
     if (entryButton && root.contains(entryButton)) {
       event.preventDefault();
       event.stopPropagation();
-      const state = explorerState(root);
-      if (!state) {
-        return true;
-      }
-      state.selectedEntryId =
-        entryButton.dataset.dataSourceExplorerLocalEntry || "";
-      await render(root);
-      return true;
-    }
-
-    const actionButton = event.target.closest("[data-data-source-explorer-action]");
-    if (!(actionButton && root.contains(actionButton))) {
-      return false;
-    }
-
-    event.preventDefault();
-    event.stopPropagation();
-
-    const descriptor = selectedDescriptorElement(explorerState(root));
-    if (!(descriptor instanceof Element)) {
-      return true;
-    }
-
-    const action = String(
-      actionButton.dataset.dataSourceExplorerAction || ""
-    ).trim();
-    if (action === "view") {
-      const viewed = await viewSourceData(descriptor);
-      if (viewed === false) {
-        await showMessageDialog({
-          title: "Notebook required",
-          copy: "Open an editable notebook first, or use 'Query In New Notebook'.",
-        });
-      }
-      return true;
-    }
-
-    if (action === "query-current") {
-      const inserted = await querySourceInCurrentNotebook(descriptor);
-      if (inserted === false) {
-        await showMessageDialog({
-          title: "Notebook required",
-          copy: "Open an editable notebook first, or use 'Query In New Notebook'.",
-        });
-      }
-      return true;
-    }
-
-    if (action === "query-new") {
-      await querySourceInNewNotebook(descriptor);
-      return true;
-    }
-
-    if (action === "copy-query-path") {
-      if ((await copySourceQueryPath?.(descriptor)) === false) {
-        await showMessageDialog({
-          title: "Query path unavailable",
-          copy: "This Local Workspace file does not expose a query path.",
-        });
-      }
-      return true;
-    }
-
-    if (action === "create-data-product") {
-      await openDataProductPublishDialog({
-        sourceObjectRoot: descriptor,
-      });
-      return true;
-    }
-
-    if (action === "download") {
-      const downloaded = await downloadLocalWorkspaceExportFromSource(descriptor);
-      if (downloaded === false) {
-        await showMessageDialog({
-          title: "Download unavailable",
-          copy: "The selected Local Workspace file could not be downloaded from browser storage.",
-        });
-      }
-      return true;
-    }
-
-    if (action === "download-ddl") {
-      const downloaded = await downloadSourceObjectDdl(descriptor);
-      if (downloaded === false) {
-        await showMessageDialog({
-          title: "DDL download unavailable",
-          copy: "The selected Local Workspace file could not be prepared for DDL generation.",
-        });
-      }
+      await selectEntry(root, entryButton.dataset.dataSourceExplorerLocalEntry || "");
       return true;
     }
 
