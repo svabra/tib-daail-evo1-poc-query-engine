@@ -93,7 +93,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="DAAIF Fabric",
+    title="DAAIF Factory",
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,

@@ -1,1 +1,1 @@
-"""DAAIF Fabric application package."""
+"""DAAIF Factory application package."""

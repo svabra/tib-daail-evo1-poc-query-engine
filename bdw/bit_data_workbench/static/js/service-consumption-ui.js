@@ -135,7 +135,7 @@ function serviceMixSectorLabelConfig(service) {
     default: {
       const label = String(service?.label || "Service")
         .trim()
-        .replace(/^DAAIF(?:L)?(?:\s+Fabric)?(?:\s*-\s*)?\s*/i, "")
+        .replace(/^DAAIF(?:L)?(?:\s+(?:Fabric|Factory))?(?:\s*-\s*)?\s*/i, "")
         .replace(/\s+Service$/i, "")
         .replace(/\s+/g, " ");
       return {

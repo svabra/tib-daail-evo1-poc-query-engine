@@ -36,6 +36,6 @@ def data_exchange_page(
                 workspace_partial_template="partials/data_exchange_workbench.html",
                 shell_sidebar_hidden=True,
             ),
-            "title": "DAAIF Fabric - DataExchange Workbench",
+            "title": "DAAIF Factory - DataExchange Workbench",
         },
     )

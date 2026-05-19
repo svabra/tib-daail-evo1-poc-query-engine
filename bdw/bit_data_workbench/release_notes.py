@@ -1,9 +1,21 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.14. Keep entries concise and
+# Derived from git history through version 0.9.15. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.15",
+        "releasedAt": "2026-05-19T12:25:34+02:00",
+        "features": [
+            (
+                "The workbench has been softly renamed to DAAIF Factory "
+                "across page headings, browser titles, runtime branding, "
+                "and visible application service labels without changing "
+                "routes, identifiers, or backend behavior."
+            ),
+        ],
+    },
     {
         "version": "0.9.14",
         "releasedAt": "2026-05-19T11:41:41+02:00",
@@ -61,7 +73,7 @@ RELEASE_NOTES: list[dict[str, object]] = [
             (
                 "Notebook browser titles now include the active notebook name, "
                 "so copied notebook URLs resolve to meaningful tab names such as "
-                "DAAIF Fabric - Notebook XY."
+                "DAAIF Factory - Notebook XY."
             ),
             (
                 "S3 object, folder, and bucket deletes now emit detailed backend "
@@ -404,7 +416,7 @@ RELEASE_NOTES: list[dict[str, object]] = [
                 "stream, and show a quiet empty state instead of an endless loading message."
             ),
             (
-                "The workbench shell now uses DAAIF Fabric branding, shows realtime SSE connection "
+                "The workbench shell now uses DAAIF Factory branding, shows realtime SSE connection "
                 "status in the top bar, and exposes Query Runs from navigation."
             ),
             (

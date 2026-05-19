@@ -1405,7 +1405,7 @@ class ServiceConsumptionMonitor:
     ) -> dict[str, object]:
         component_labels = {
             "container": "container service",
-            "application": "DAAIF Fabric application service",
+            "application": "DAAIF Factory application service",
             "s3": "S3",
             "filesystem": "file system service",
             "pg": "PG service",
@@ -1580,7 +1580,7 @@ class ServiceConsumptionMonitor:
             },
             {
                 "key": "application",
-                "label": "DAAIF Fabric Application Service",
+                "label": "DAAIF Factory Application Service",
                 "subtitle": "Shared application fee prorated across the year",
                 "costYtdChf": application_total,
                 "shareOfTotalPercent": self._service_share_percent(

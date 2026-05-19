@@ -99,8 +99,8 @@ class BrowserTitleTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.body.decode("utf-8")
-        self.assertIn("<title>DAAIF Fabric - Revenue Analysis</title>", body)
-        self.assertIn("<h1>DAAIF Fabric - Query Workbench</h1>", body)
+        self.assertIn("<title>DAAIF Factory - Revenue Analysis</title>", body)
+        self.assertIn("<h1>DAAIF Factory - Query Workbench</h1>", body)
 
     def test_notebook_editor_renders_expand_control_next_to_copy_sql(self) -> None:
         response = notebook_workspace(

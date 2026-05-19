@@ -481,7 +481,7 @@ class DataProductsRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.body.decode("utf-8")
-        self.assertIn("DAAIF Fabric - Data Products Workbench", body)
+        self.assertIn("DAAIF Factory - Data Products Workbench", body)
         self.assertIn("shell-sidebar-hidden", body)
         self.assertIn('data-open-data-products-workbench', body)
 

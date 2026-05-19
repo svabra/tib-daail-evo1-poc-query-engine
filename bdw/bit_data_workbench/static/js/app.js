@@ -1307,7 +1307,7 @@ function applicationVersion() {
   }
 
   const overlayVersion = Array.from(document.querySelectorAll(".app-version-overlay-row"))
-    .find((row) => row.querySelector(".app-version-overlay-label")?.textContent?.trim() === "DAAIF Fabric")
+    .find((row) => row.querySelector(".app-version-overlay-label")?.textContent?.trim() === "DAAIF Factory")
     ?.querySelector(".app-version-overlay-value")
     ?.textContent?.trim() || "";
   if (overlayVersion) {
@@ -1320,43 +1320,43 @@ function applicationVersion() {
 
 function workbenchTitle(section = currentWorkbenchSection()) {
   if (section === "home") {
-    return "DAAIF Fabric";
+    return "DAAIF Factory";
   }
 
   if (section === "data-sources") {
-    return "DAAIF Fabric - Data Source Workbench";
+    return "DAAIF Factory - Data Source Workbench";
   }
 
   if (section === "data-products") {
-    return "DAAIF Fabric - Data Products Workbench";
+    return "DAAIF Factory - Data Products Workbench";
   }
 
   if (section === "data-exchange") {
-    return "DAAIF Fabric - DataExchange Workbench";
+    return "DAAIF Factory - DataExchange Workbench";
   }
 
   if (section === "service-consumption") {
-    return "DAAIF Fabric - Service Consumption";
+    return "DAAIF Factory - Service Consumption";
   }
 
   if (section === "query-runs") {
-    return "DAAIF Fabric - Query Monitoring";
+    return "DAAIF Factory - Query Monitoring";
   }
 
   if (section === "loader") {
-    return "DAAIF Fabric - Loader Workbench";
+    return "DAAIF Factory - Loader Workbench";
   }
 
   if (section === "ingestion") {
-    return "DAAIF Fabric - Ingestion Workbench";
+    return "DAAIF Factory - Ingestion Workbench";
   }
 
-  return "DAAIF Fabric - Query Workbench";
+  return "DAAIF Factory - Query Workbench";
 }
 
 function browserTitleForNotebook(notebookTitle = "") {
   const normalizedTitle = String(notebookTitle || "").trim();
-  return `DAAIF Fabric - ${normalizedTitle || "Notebook"}`;
+  return `DAAIF Factory - ${normalizedTitle || "Notebook"}`;
 }
 
 function workbenchBrowserTitle(section = currentWorkbenchSection()) {

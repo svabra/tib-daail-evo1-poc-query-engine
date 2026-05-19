@@ -343,7 +343,7 @@ class ServiceConsumptionRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.body.decode("utf-8")
-        self.assertIn("DAAIF Fabric - Service Consumption", body)
+        self.assertIn("DAAIF Factory - Service Consumption", body)
         self.assertIn("shell-sidebar-hidden", body)
         self.assertIn('data-open-service-consumption', body)
         self.assertNotIn('data-service-consumption-card="cpu"', body)

@@ -30,7 +30,7 @@ from bit_data_workbench.models import SourceCatalog, SourceObject, SourceSchema 
 def make_settings(root: Path) -> Settings:
     return Settings(
         service_name="bit-data-workbench",
-        ui_title="DAAIF Fabric",
+        ui_title="DAAIF Factory",
         image_version="test",
         port=8000,
         duckdb_database=root / "workspace.duckdb",

@@ -87,7 +87,7 @@ def data_products_page(
                 workspace_partial_template="partials/data_products_workbench.html",
                 shell_sidebar_hidden=True,
             ),
-            "title": "DAAIF Fabric - Data Products Workbench",
+            "title": "DAAIF Factory - Data Products Workbench",
             **context,
         },
     )

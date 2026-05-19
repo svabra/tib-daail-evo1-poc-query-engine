@@ -31,15 +31,15 @@ def is_partial_request(request: Request) -> bool:
 
 def brand_title_for_mode(workspace_mode: str) -> str:
     if workspace_mode == "loader":
-        return "DAAIF Fabric - Loader Workbench"
+        return "DAAIF Factory - Loader Workbench"
     if workspace_mode == "ingestion":
-        return "DAAIF Fabric - Ingestion Workbench"
-    return "DAAIF Fabric - Query Workbench"
+        return "DAAIF Factory - Ingestion Workbench"
+    return "DAAIF Factory - Query Workbench"
 
 
 def browser_title_for_notebook(active_notebook) -> str:
     notebook_title = str(getattr(active_notebook, "title", "") or "").strip()
-    return f"DAAIF Fabric - {notebook_title or 'Notebook'}"
+    return f"DAAIF Factory - {notebook_title or 'Notebook'}"
 
 
 def _display_value(value: object, fallback: str = "Not configured") -> str:
@@ -522,7 +522,7 @@ def index(
                 workspace_partial_template="partials/home.html",
                 shell_sidebar_hidden=True,
             ),
-            "title": "DAAIF Fabric",
+            "title": "DAAIF Factory",
             **build_home_data_source_context(service),
         },
     )
@@ -625,7 +625,7 @@ def query_workbench_data_sources(
                 ),
                 shell_sidebar_hidden=True,
             ),
-            "title": "DAAIF Fabric - Data Source Workbench",
+            "title": "DAAIF Factory - Data Source Workbench",
             **context,
         },
     )
@@ -662,7 +662,7 @@ def query_workbench_data_source_explorer(
                 ),
                 shell_sidebar_hidden=True,
             ),
-            "title": "DAAIF Fabric - Data Source Workbench",
+            "title": "DAAIF Factory - Data Source Workbench",
             **context,
         },
     )
@@ -694,7 +694,7 @@ def service_consumption_page(
                 workspace_partial_template="partials/service_consumption.html",
                 shell_sidebar_hidden=True,
             ),
-            "title": "DAAIF Fabric - Service Consumption",
+            "title": "DAAIF Factory - Service Consumption",
             **context,
         },
     )
