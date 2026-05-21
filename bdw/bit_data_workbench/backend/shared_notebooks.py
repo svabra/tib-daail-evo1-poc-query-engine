@@ -11,6 +11,7 @@ from urllib.parse import quote
 
 from ..config import Settings
 from ..models import NotebookCellDefinition, NotebookDefinition, NotebookVersionDefinition
+from .query_options import normalize_query_options
 from .s3_hidden import shared_notebooks_bucket_name
 from .s3_storage import ensure_s3_bucket, iter_s3_keys, s3_client
 
@@ -138,6 +139,7 @@ def notebook_cell_from_payload(payload: object) -> NotebookCellDefinition | None
             for source_id in payload.get("dataSources", payload.get("data_sources", [])) or []
             if str(source_id).strip()
         ],
+        query_options=normalize_query_options(payload.get("queryOptions")),
     )
 
 

@@ -31,6 +31,11 @@ class NotebookCellPayload(BaseModel):
         validation_alias="dataSources",
         serialization_alias="dataSources",
     )
+    query_options: dict[str, object] = Field(
+        default_factory=dict,
+        validation_alias="queryOptions",
+        serialization_alias="queryOptions",
+    )
 
 
 class NotebookVersionPayload(BaseModel):
@@ -144,6 +149,30 @@ class QueryExplainPayload(BaseModel):
         validation_alias="localRelations",
         serialization_alias="localRelations",
     )
+    query_options: dict[str, object] = Field(
+        default_factory=dict,
+        validation_alias="queryOptions",
+        serialization_alias="queryOptions",
+    )
+
+
+class QueryCachePayload(BaseModel):
+    sql: str = ""
+    data_sources: list[str] = Field(
+        default_factory=list,
+        validation_alias="dataSources",
+        serialization_alias="dataSources",
+    )
+    local_relations: dict[str, str] = Field(
+        default_factory=dict,
+        validation_alias="localRelations",
+        serialization_alias="localRelations",
+    )
+    query_options: dict[str, object] = Field(
+        default_factory=dict,
+        validation_alias="queryOptions",
+        serialization_alias="queryOptions",
+    )
 
 
 class QueryJobClientTimingPayload(BaseModel):
@@ -165,6 +194,35 @@ class CsvUploadSessionFilePayload(BaseModel):
 
 class CsvUploadSessionCreatePayload(BaseModel):
     files: list[CsvUploadSessionFilePayload] = Field(default_factory=list)
+
+
+class ParquetOptimizationPayload(BaseModel):
+    mode: str = "off"
+    hive_partitioning: bool = Field(
+        default=False,
+        validation_alias="hivePartitioning",
+        serialization_alias="hivePartitioning",
+    )
+    partition_columns: list[str] = Field(
+        default_factory=list,
+        validation_alias="partitionColumns",
+        serialization_alias="partitionColumns",
+    )
+    sort_columns: list[str] = Field(
+        default_factory=list,
+        validation_alias="sortColumns",
+        serialization_alias="sortColumns",
+    )
+    create_duckdb_cache: bool = Field(
+        default=False,
+        validation_alias="createDuckdbCache",
+        serialization_alias="createDuckdbCache",
+    )
+    index_columns: list[str] = Field(
+        default_factory=list,
+        validation_alias="indexColumns",
+        serialization_alias="indexColumns",
+    )
 
 
 class CsvUploadSessionCompletePayload(BaseModel):
@@ -197,6 +255,11 @@ class CsvUploadSessionCompletePayload(BaseModel):
         validation_alias="storageFormat",
         serialization_alias="storageFormat",
     )
+    parquet_optimization: ParquetOptimizationPayload = Field(
+        default_factory=ParquetOptimizationPayload,
+        validation_alias="parquetOptimization",
+        serialization_alias="parquetOptimization",
+    )
 
 
 FileUploadSessionFilePayload = CsvUploadSessionFilePayload
@@ -221,6 +284,11 @@ class FileUploadSessionCompletePayload(BaseModel):
         default=True,
         validation_alias="replaceExisting",
         serialization_alias="replaceExisting",
+    )
+    parquet_optimization: ParquetOptimizationPayload = Field(
+        default_factory=ParquetOptimizationPayload,
+        validation_alias="parquetOptimization",
+        serialization_alias="parquetOptimization",
     )
 
 
@@ -614,6 +682,7 @@ def import_csv_files(
     has_header: bool = Form(True, alias="hasHeader"),
     replace_existing: bool = Form(True, alias="replaceExisting"),
     storage_format: str = Form("csv", alias="storageFormat"),
+    parquet_optimization: str = Form("", alias="parquetOptimization"),
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> JSONResponse:
     try:
@@ -628,6 +697,7 @@ def import_csv_files(
             has_header=has_header,
             replace_existing=replace_existing,
             storage_format=storage_format,
+            parquet_optimization=parquet_optimization,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -713,6 +783,7 @@ def complete_csv_upload_session(
             has_header=payload.has_header,
             replace_existing=payload.replace_existing,
             storage_format=payload.storage_format,
+            parquet_optimization=payload.parquet_optimization.model_dump(by_alias=True),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -816,6 +887,7 @@ def _complete_file_upload_session(
             schema_name=payload.schema_name,
             table_prefix=payload.table_prefix,
             replace_existing=payload.replace_existing,
+            parquet_optimization=payload.parquet_optimization.model_dump(by_alias=True),
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -837,6 +909,22 @@ def _cancel_file_upload_session(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse(jsonable_encoder(state))
+
+
+@router.post("/api/ingestion/parquet/schema-preview")
+async def preview_parquet_schema(
+    file: UploadFile = File(...),
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        await file.seek(0)
+        payload = service.preview_parquet_schema(
+            file_name=file.filename or "",
+            input_file=file.file,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder(payload))
 
 
 @router.post("/api/ingestion/parquet/upload-sessions")
@@ -1260,10 +1348,74 @@ def explain_query(
                 for key, value in payload.local_relations.items()
                 if str(key).strip() and str(value).strip()
             },
+            query_options=payload.query_options,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    return JSONResponse(jsonable_encoder(result))
+
+
+@router.post("/api/query-cache/preview")
+def query_cache_preview(
+    payload: QueryCachePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        result = service.query_cache_preview(
+            sql=payload.sql,
+            data_sources=payload.data_sources,
+            local_relation_map={
+                str(key): str(value)
+                for key, value in payload.local_relations.items()
+                if str(key).strip() and str(value).strip()
+            },
+            query_options=payload.query_options,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder(result))
+
+
+@router.post("/api/query-cache/rehydrate")
+def rehydrate_query_cache(
+    payload: QueryCachePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        result = service.rehydrate_query_cache(
+            sql=payload.sql,
+            data_sources=payload.data_sources,
+            local_relation_map={
+                str(key): str(value)
+                for key, value in payload.local_relations.items()
+                if str(key).strip() and str(value).strip()
+            },
+            query_options=payload.query_options,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder(result))
+
+
+@router.post("/api/query-cache/expire")
+def expire_query_cache(
+    payload: QueryCachePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        result = service.expire_query_cache(
+            sql=payload.sql,
+            data_sources=payload.data_sources,
+            local_relation_map={
+                str(key): str(value)
+                for key, value in payload.local_relations.items()
+                if str(key).strip() and str(value).strip()
+            },
+            query_options=payload.query_options,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse(jsonable_encoder(result))
 
 
@@ -1276,6 +1428,7 @@ def start_query_job(
     cell_id: str = Form(""),
     data_sources: str = Form(""),
     local_relations: str = Form(default="{}", alias="localRelations"),
+    query_options: str = Form(default="{}", alias="queryOptions"),
     client_run_started_at: str = Form("", alias="clientRunStartedAt"),
     client_pre_submit_ms: float | None = Form(default=None, alias="clientPreSubmitMs"),
     service: WorkbenchService = Depends(get_workbench_service),
@@ -1287,6 +1440,12 @@ def start_query_job(
             raise ValueError("The Local Workspace relation map is not valid JSON.") from exc
         if not isinstance(local_relation_map, dict):
             raise ValueError("The Local Workspace relation map must be a JSON object.")
+        try:
+            query_options_payload = json.loads(query_options or "{}")
+        except json.JSONDecodeError as exc:
+            raise ValueError("The queryOptions payload is not valid JSON.") from exc
+        if not isinstance(query_options_payload, dict):
+            raise ValueError("The queryOptions payload must be a JSON object.")
 
         snapshot = service.start_query_job(
             sql=sql,
@@ -1300,6 +1459,7 @@ def start_query_job(
                 if str(key).strip() and str(value).strip()
             },
             display_sql=display_sql,
+            query_options=query_options_payload,
             client_pre_submit_ms=client_pre_submit_ms,
         )
     except ValueError as exc:

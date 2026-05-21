@@ -405,6 +405,37 @@ def _build_mwa_abrechnung_performance_sql(
     )
 
 
+def _build_mwa_art_index_demo_sql(
+    *,
+    abrechnung_relation: str,
+) -> str:
+    return f"""
+-- DuckDB ART indexes apply to DuckDB tables, not directly to S3 Parquet views.
+-- This cell materializes the S3 Parquet relation, creates a single-column ART index,
+-- then uses EXPLAIN ANALYZE to verify that the point lookup can use an index scan.
+CREATE SCHEMA IF NOT EXISTS art_demo;
+
+DROP TABLE IF EXISTS art_demo.mwa_abrechnung_entities_cache;
+
+CREATE TABLE art_demo.mwa_abrechnung_entities_cache AS
+SELECT *
+FROM {abrechnung_relation};
+
+CREATE INDEX mwa_abrechnung_art_id_idx
+ON art_demo.mwa_abrechnung_entities_cache (id_);
+
+EXPLAIN ANALYZE
+SELECT
+  id_,
+  status,
+  einreiche_datum,
+  rounded_total,
+  partner_id
+FROM art_demo.mwa_abrechnung_entities_cache
+WHERE id_ = 1;
+""".strip()
+
+
 def _build_kostenbelege_3_1_sql(
     *,
     kbkp_relation: str,
@@ -776,6 +807,7 @@ def build_static_notebooks(
     union_olap_relation: str | None,
     union_oltp_s3_relation: str | None,
     union_s3_relation: str | None,
+    parquet_performance_option_relations: dict[str, str | None],
 ) -> list[NotebookDefinition]:
     s3_sql = (
         "SELECT\n"
@@ -1066,6 +1098,13 @@ def build_static_notebooks(
         if all(mwa_s3_parquet_relations.values())
         else mwa_status_sql
     )
+    mwa_s3_parquet_art_index_sql = (
+        _build_mwa_art_index_demo_sql(
+            abrechnung_relation=mwa_s3_parquet_relations["mwa_abrechnung_entities"],
+        )
+        if mwa_s3_parquet_relations["mwa_abrechnung_entities"]
+        else mwa_status_sql
+    )
     mwa_s3_csv_sql = (
         _build_mwa_abrechnung_performance_sql(
             abrechnung_relation=mwa_s3_csv_relations["mwa_abrechnung_entities"],
@@ -1299,6 +1338,75 @@ def build_static_notebooks(
         if union_oltp_s3_relation and union_s3_relation
         else "SELECT 'Run the PostgreSQL OLTP + S3 UNION Loader from the Loader Workbench first.' AS status;"
     )
+    parquet_performance_status_sql = (
+        "SELECT 'Run the matching Federal Tax Parquet Optimization loader from the Loader Workbench first.' AS status;"
+    )
+
+    def federal_tax_parquet_performance_sql(relation: str | None, layout_label: str) -> str:
+        if not relation:
+            return parquet_performance_status_sql
+        return (
+            f"-- Federal tax Parquet optimization layout: {layout_label}.\n"
+            "-- Compare filtered and aggregate reads across the same generated federal tax data.\n"
+            "WITH scoped_tax AS (\n"
+            "  SELECT\n"
+            "    taxpayer_id,\n"
+            "    tax_year,\n"
+            "    canton,\n"
+            "    income_chf,\n"
+            "    deductions_chf,\n"
+            "    taxable_income_chf,\n"
+            "    tax_rate_percent,\n"
+            "    tax_due_chf,\n"
+            "    payment_status,\n"
+            "    filing_date\n"
+            f"  FROM {relation}\n"
+            "  WHERE tax_year = 2025\n"
+            ")\n"
+            "SELECT\n"
+            "  tax_year,\n"
+            "  canton,\n"
+            "  COUNT(*) AS filing_count,\n"
+            "  CAST(ROUND(SUM(income_chf), 2) AS DECIMAL(18,2)) AS income_total_chf,\n"
+            "  CAST(ROUND(SUM(tax_due_chf), 2) AS DECIMAL(18,2)) AS tax_due_total_chf,\n"
+            "  CAST(ROUND(AVG(tax_rate_percent), 2) AS DECIMAL(8,2)) AS avg_tax_rate_percent,\n"
+            "  SUM(CASE WHEN payment_status = 'overdue' THEN 1 ELSE 0 END) AS overdue_count,\n"
+            "  MIN(filing_date) AS first_filing_date,\n"
+            "  MAX(filing_date) AS last_filing_date\n"
+            "FROM scoped_tax\n"
+            "GROUP BY tax_year, canton\n"
+            "ORDER BY tax_due_total_chf DESC, filing_count DESC, canton\n"
+            "LIMIT 25;"
+        )
+
+    def federal_tax_parquet_duckdb_cache_relation(relation: str | None) -> str | None:
+        normalized_relation = str(relation or "").strip()
+        if not normalized_relation or "." not in normalized_relation:
+            return None
+        schema_name, table_name = normalized_relation.rsplit(".", 1)
+        return f"{schema_name}.{table_name}_duckdb_cache"
+
+    def federal_tax_parquet_cache_lookup_sql(relation: str | None) -> str:
+        if not relation:
+            return parquet_performance_status_sql
+        return (
+            "-- Loader-created DuckDB ART cache lookup.\n"
+            "-- The cache-only loader materializes the generated S3 Parquet data into this\n"
+            "-- local DuckDB table and creates an ART index on taxpayer_id in the background.\n"
+            "-- This lookup measures that cached table directly instead of scanning S3 Parquet.\n"
+            "SELECT\n"
+            "  taxpayer_id,\n"
+            "  tax_year,\n"
+            "  canton,\n"
+            "  income_chf,\n"
+            "  taxable_income_chf,\n"
+            "  tax_due_chf,\n"
+            "  payment_status,\n"
+            "  filing_date\n"
+            f"FROM {relation}\n"
+            "WHERE taxpayer_id = 'TX-100001';"
+        )
+
     oltp_write_test_table = "public.notebook_oltp_write_test"
     oltp_write_test_setup_sql = (
         "-- Reset the OLTP write-test table so the notebook can be rerun safely.\n"
@@ -1514,6 +1622,123 @@ def build_static_notebooks(
             tags=["sql", "union", "postgres", "oltp", "s3"],
             tree_path=("PoC Tests", "SQL Functionalities"),
             linked_generator_id="pg_union_sql_functionality_s3_loader",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="federal-tax-parquet-optimization-off",
+            title="Federal Tax Parquet Optimization - Off",
+            summary="Queries the federal tax S3 Parquet layout written as one object without partitioning, sorting, or DuckDB cache indexes.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="federal-tax-parquet-optimization-off-cell-1",
+                    data_sources=["workspace.s3"],
+                    query_options={"duckdb": {"parquetHivePartitioning": "auto"}},
+                    sql=federal_tax_parquet_performance_sql(
+                        parquet_performance_option_relations.get("federal_tax_parquet_off"),
+                        "Off",
+                    ),
+                )
+            ],
+            tags=["performance", "parquet", "federal-tax", "optimization", "off"],
+            tree_path=("PoC Tests", "Performance Options"),
+            linked_generator_id="parquet_performance_options_off_loader",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="federal-tax-parquet-optimization-recommended",
+            title="Federal Tax Parquet Optimization - Recommended",
+            summary="Queries the federal tax S3 Parquet layout written by the recommended mode, currently a conservative single-object Parquet write.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="federal-tax-parquet-optimization-recommended-cell-1",
+                    data_sources=["workspace.s3"],
+                    query_options={"duckdb": {"parquetHivePartitioning": "auto"}},
+                    sql=federal_tax_parquet_performance_sql(
+                        parquet_performance_option_relations.get("federal_tax_parquet_recommended"),
+                        "Recommended",
+                    ),
+                )
+            ],
+            tags=["performance", "parquet", "federal-tax", "optimization", "recommended"],
+            tree_path=("PoC Tests", "Performance Options"),
+            linked_generator_id="parquet_performance_options_recommended_loader",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="federal-tax-parquet-optimization-manual-no-hive",
+            title="Federal Tax Parquet Optimization - Manual Partition Hive Off",
+            summary="Queries the federal tax S3 Parquet layout written into tax_year folders while keeping the partition column inside the Parquet files.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="federal-tax-parquet-optimization-manual-no-hive-cell-1",
+                    data_sources=["workspace.s3"],
+                    query_options={"duckdb": {"parquetHivePartitioning": "off"}},
+                    sql=federal_tax_parquet_performance_sql(
+                        parquet_performance_option_relations.get("federal_tax_parquet_manual_partition"),
+                        "Manual partition, Hive off",
+                    ),
+                )
+            ],
+            tags=["performance", "parquet", "federal-tax", "optimization", "manual", "partitioned"],
+            tree_path=("PoC Tests", "Performance Options"),
+            linked_generator_id="parquet_performance_options_manual_partition_no_hive_loader",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="federal-tax-parquet-optimization-manual-hive",
+            title="Federal Tax Parquet Optimization - Manual Partition Hive On",
+            summary="Queries the federal tax S3 Parquet layout written into Hive-style tax_year folders and read with Hive partition interpretation enabled.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="federal-tax-parquet-optimization-manual-hive-cell-1",
+                    data_sources=["workspace.s3"],
+                    query_options={"duckdb": {"parquetHivePartitioning": "on"}},
+                    sql=federal_tax_parquet_performance_sql(
+                        parquet_performance_option_relations.get("federal_tax_parquet_manual_hive"),
+                        "Manual partition, Hive on",
+                    ),
+                )
+            ],
+            tags=["performance", "parquet", "federal-tax", "optimization", "manual", "hive"],
+            tree_path=("PoC Tests", "Performance Options"),
+            linked_generator_id="parquet_performance_options_manual_partition_hive_loader",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="federal-tax-parquet-optimization-manual-cache",
+            title="Federal Tax Parquet Optimization - Manual Cache Only",
+            summary="Queries the federal tax S3 Parquet cache-only layout and includes an ART index demonstration after local DuckDB materialization.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="federal-tax-parquet-optimization-manual-cache-cell-1",
+                    data_sources=["workspace.s3"],
+                    query_options={"duckdb": {"parquetHivePartitioning": "auto"}},
+                    sql=federal_tax_parquet_performance_sql(
+                        federal_tax_parquet_duckdb_cache_relation(
+                            parquet_performance_option_relations.get("federal_tax_parquet_manual_cache")
+                        ),
+                        "Manual cache only DuckDB table",
+                    ),
+                ),
+                NotebookCellDefinition(
+                    cell_id="federal-tax-parquet-optimization-manual-cache-cell-2",
+                    data_sources=["workspace.s3"],
+                    query_options={"duckdb": {"parquetHivePartitioning": "auto"}},
+                    sql=federal_tax_parquet_cache_lookup_sql(
+                        federal_tax_parquet_duckdb_cache_relation(
+                            parquet_performance_option_relations.get("federal_tax_parquet_manual_cache")
+                        )
+                    ),
+                ),
+            ],
+            tags=["performance", "parquet", "federal-tax", "optimization", "manual", "art"],
+            tree_path=("PoC Tests", "Performance Options"),
+            linked_generator_id="parquet_performance_options_manual_cache_only_loader",
             can_edit=False,
             can_delete=False,
         ),
@@ -1764,6 +1989,11 @@ def build_static_notebooks(
                     cell_id="mwa-abrechnung-s3-parquet-cell-1",
                     data_sources=["workspace.s3"],
                     sql=mwa_s3_parquet_sql,
+                ),
+                NotebookCellDefinition(
+                    cell_id="mwa-abrechnung-s3-parquet-art-index-cell-2",
+                    data_sources=["workspace.s3"],
+                    sql=mwa_s3_parquet_art_index_sql,
                 )
             ],
             tags=["performance", "mwa", "abrechnung", "s3", "parquet"],

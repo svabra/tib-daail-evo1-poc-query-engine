@@ -67,11 +67,13 @@ from .ingestion_types.csv import (
     CsvUploadSessionManager,
     attach_query_sources_to_csv_imports,
 )
+from .ingestion_types.parquet_optimization import normalize_parquet_optimization_settings
 from .ingestion_types.tabular import (
     FILE_INGESTOR_SPECS,
     FileIngestionManager,
     FileUploadFileRequest,
     FileUploadSessionManager,
+    preview_parquet_upload_schema,
 )
 from .local_workspace_query_sources import LocalWorkspaceQuerySourceManager
 from .local_workspace_transfers import LocalWorkspaceTransferManager
@@ -89,6 +91,8 @@ from .query_aliases import (
     unique_query_aliases,
 )
 from .query_source_validation import QUERY_SOURCE_INVALID, validate_query_sources
+from .query_cache import cache_preview, expire_cache, hydrate_cache
+from .query_options import normalize_query_options, parquet_hive_partitioning_option
 from .query_jobs import (
     DuckDBQueryAccessCoordinator,
     QUERY_EXECUTION_DUCKDB_READ,
@@ -129,6 +133,7 @@ from .shared_notebooks import (
     normalize_notebook_cell_language,
 )
 from .source_discovery import (
+    build_s3_query,
     DataSourceDiscoveryManager,
     S3DataSourceDiscoverer,
     parse_s3_path,
@@ -1137,6 +1142,7 @@ class WorkbenchService:
                     for source_id in (str(value).strip() for value in cell.get("dataSources", []) or [])
                     if source_id
                 ],
+                query_options=normalize_query_options(cell.get("queryOptions")),
             )
             for cell in cells
             if isinstance(cell, dict)
@@ -1165,6 +1171,7 @@ class WorkbenchService:
                             for source_id in (str(value).strip() for value in cell.get("dataSources", []) or [])
                             if source_id
                         ],
+                        query_options=normalize_query_options(cell.get("queryOptions")),
                     ).payload
                     for cell in version.get("cells", []) or []
                     if isinstance(cell, dict)
@@ -1403,9 +1410,11 @@ class WorkbenchService:
         data_sources: list[str] | None = None,
         local_relation_map: dict[str, str] | None = None,
         display_sql: str = "",
+        query_options: dict[str, object] | None = None,
         client_pre_submit_ms: float | None = None,
     ) -> dict[str, object]:
         backend_prepare_started = time.perf_counter()
+        normalized_query_options = normalize_query_options(query_options)
         user_sql = str(display_sql or sql or "")
         relation_index = self._query_source_relation_index(local_relation_map=local_relation_map)
         source_validation = self.validate_query_sources(
@@ -1424,6 +1433,7 @@ class WorkbenchService:
         source_summaries = self._query_source_summaries(
             query_analysis.touched_relations,
             local_relation_map=local_relation_map,
+            query_options=normalized_query_options,
         )
         backend_prepare_ms = (time.perf_counter() - backend_prepare_started) * 1000
         snapshot = self._query_jobs.start_job(
@@ -1436,6 +1446,7 @@ class WorkbenchService:
             touched_relations=query_analysis.touched_relations,
             touched_buckets=query_analysis.touched_buckets,
             source_summaries=source_summaries,
+            query_options=normalized_query_options,
             client_pre_submit_ms=client_pre_submit_ms,
             backend_prepare_ms=backend_prepare_ms,
         )
@@ -1451,7 +1462,9 @@ class WorkbenchService:
         cell_id: str = "",
         data_sources: list[str] | None = None,
         local_relation_map: dict[str, str] | None = None,
+        query_options: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        normalized_query_options = normalize_query_options(query_options)
         user_sql = str(display_sql or sql or "")
         relation_index = self._query_source_relation_index(local_relation_map=local_relation_map)
         source_validation = self.validate_query_sources(
@@ -1471,6 +1484,11 @@ class WorkbenchService:
             raise ValueError("Explain is available for DuckDB-backed SQL cells only.")
 
         query_analysis = self._analyze_query(user_sql, relation_index=relation_index)
+        source_summaries = self._query_source_summaries(
+            query_analysis.touched_relations,
+            local_relation_map=local_relation_map,
+            query_options=normalized_query_options,
+        )
         acquired = self._duckdb_query_access.acquire(execution_mode, lambda: False)
         if not acquired:
             raise RuntimeError("DuckDB connection acquisition cancelled.")
@@ -1479,11 +1497,15 @@ class WorkbenchService:
         try:
             connection = create_duckdb_worker_connection(
                 self.settings,
+                database_path=":memory:" if source_summaries else None,
                 read_only=(
-                    execution_mode == QUERY_EXECUTION_DUCKDB_READ
+                    not source_summaries
+                    and execution_mode == QUERY_EXECUTION_DUCKDB_READ
                     and self.settings.duckdb_database.exists()
                 ),
             )
+            if execution_mode != QUERY_EXECUTION_POSTGRES_NATIVE and source_summaries:
+                self._bootstrap_duckdb_source_views(connection, source_summaries)
             return generate_duckdb_explain(
                 connection=connection,
                 execution_sql=execution_sql,
@@ -1499,6 +1521,114 @@ class WorkbenchService:
             if connection is not None:
                 connection.close()
             self._duckdb_query_access.release(execution_mode)
+
+    def query_cache_preview(
+        self,
+        *,
+        sql: str,
+        data_sources: list[str] | None = None,
+        local_relation_map: dict[str, str] | None = None,
+        query_options: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        normalized_query_options = normalize_query_options(query_options)
+        source_summaries = self._cache_source_summaries(
+            sql=sql,
+            data_sources=data_sources,
+            local_relation_map=local_relation_map,
+            query_options=normalized_query_options,
+        )
+        return cache_preview(
+            settings=self.settings,
+            sql=sql,
+            source_summaries=source_summaries,
+            query_options=normalized_query_options,
+        )
+
+    def rehydrate_query_cache(
+        self,
+        *,
+        sql: str,
+        data_sources: list[str] | None = None,
+        local_relation_map: dict[str, str] | None = None,
+        query_options: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        normalized_query_options = normalize_query_options(query_options)
+        source_summaries = self._cache_source_summaries(
+            sql=sql,
+            data_sources=data_sources,
+            local_relation_map=local_relation_map,
+            query_options=normalized_query_options,
+        )
+        connection = create_duckdb_worker_connection(
+            self.settings,
+            database_path=":memory:",
+            read_only=False,
+        )
+        try:
+            _updated_summaries, hydration_summary = hydrate_cache(
+                connection=connection,
+                sql=sql,
+                source_summaries=source_summaries,
+                query_options=normalized_query_options,
+                force=True,
+            )
+        finally:
+            connection.close()
+        preview = cache_preview(
+            settings=self.settings,
+            sql=sql,
+            source_summaries=source_summaries,
+            query_options=normalized_query_options,
+        )
+        preview["hydration"] = hydration_summary
+        return preview
+
+    def expire_query_cache(
+        self,
+        *,
+        sql: str,
+        data_sources: list[str] | None = None,
+        local_relation_map: dict[str, str] | None = None,
+        query_options: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        normalized_query_options = normalize_query_options(query_options)
+        source_summaries = self._cache_source_summaries(
+            sql=sql,
+            data_sources=data_sources,
+            local_relation_map=local_relation_map,
+            query_options=normalized_query_options,
+        )
+        return expire_cache(
+            sql=sql,
+            source_summaries=source_summaries,
+            query_options=normalized_query_options,
+        )
+
+    def _cache_source_summaries(
+        self,
+        *,
+        sql: str,
+        data_sources: list[str] | None,
+        local_relation_map: dict[str, str] | None,
+        query_options: dict[str, object],
+    ) -> list[dict[str, object]]:
+        relation_index = self._query_source_relation_index(local_relation_map=local_relation_map)
+        source_validation = self.validate_query_sources(
+            sql=sql,
+            data_sources=data_sources,
+            local_relation_map=local_relation_map,
+            relation_index=relation_index,
+        )
+        if source_validation.get("status") == QUERY_SOURCE_INVALID:
+            raise ValueError(
+                str(source_validation.get("message") or "Referenced source(s) were not found.")
+            )
+        query_analysis = self._analyze_query(sql, relation_index=relation_index)
+        return self._query_source_summaries(
+            query_analysis.touched_relations,
+            local_relation_map=local_relation_map,
+            query_options=query_options,
+        )
 
     def validate_query_sources(
         self,
@@ -1567,7 +1697,9 @@ class WorkbenchService:
         touched_relations: list[str] | None,
         *,
         local_relation_map: dict[str, str] | None = None,
+        query_options: dict[str, object] | None = None,
     ) -> list[dict[str, object]]:
+        normalized_query_options = normalize_query_options(query_options)
         touched_keys = {
             normalize_query_alias_key(relation)
             for relation in (touched_relations or [])
@@ -1590,6 +1722,12 @@ class WorkbenchService:
                     if not str(source_object.s3_bucket or "").strip():
                         continue
                     spec = specs.get(relation)
+                    query_sql = str(getattr(spec, "query_sql", "") or "").strip()
+                    if spec is not None:
+                        query_sql = self._s3_source_query_sql_for_options(
+                            spec=spec,
+                            query_options=normalized_query_options,
+                        )
                     summaries.append(
                         {
                             "relation": relation,
@@ -1598,7 +1736,18 @@ class WorkbenchService:
                             "key": str(source_object.s3_key or "").strip(),
                             "path": str(source_object.s3_path or "").strip(),
                             "format": str(source_object.s3_file_format or "").strip(),
-                            "query_sql": str(getattr(spec, "query_sql", "") or "").strip(),
+                            "size_bytes": int(
+                                getattr(spec, "size_bytes", 0) or source_object.size_bytes or 0
+                            ),
+                            "object_revision": str(
+                                getattr(spec, "object_revision", "") or ""
+                            ),
+                            "display_name": str(
+                                getattr(spec, "display_name", "")
+                                or source_object.display_name
+                                or source_object.name
+                            ),
+                            "query_sql": query_sql,
                         }
                     )
         summaries.extend(
@@ -1608,6 +1757,49 @@ class WorkbenchService:
             )
         )
         return summaries
+
+    @staticmethod
+    def _s3_source_query_sql_for_options(
+        *,
+        spec: object,
+        query_options: dict[str, object],
+    ) -> str:
+        query_sql = str(getattr(spec, "query_sql", "") or "").strip()
+        object_format = str(getattr(spec, "object_format", "") or "").strip().lower()
+        object_path = str(getattr(spec, "object_path", "") or "").strip()
+        if object_format != "parquet" or not object_path:
+            return query_sql
+
+        hive_option = parquet_hive_partitioning_option(query_options)
+        if hive_option == "on":
+            return build_s3_query("parquet", object_path, hive_partitioning=True)
+        if hive_option == "off":
+            return build_s3_query("parquet", object_path, hive_partitioning=False)
+        return query_sql
+
+    @staticmethod
+    def _bootstrap_duckdb_source_views(
+        connection,
+        source_summaries: list[dict[str, object]],
+    ) -> None:
+        for summary in source_summaries:
+            if not isinstance(summary, dict):
+                continue
+            relation_parts = [
+                part.strip().strip('"').strip("`").strip("[]")
+                for part in str(summary.get("relation") or "").split(".")
+                if part.strip()
+            ]
+            query_sql = str(summary.get("query_sql") or "").strip()
+            if not relation_parts or not query_sql:
+                continue
+            if len(relation_parts) > 1:
+                connection.execute(
+                    f"CREATE SCHEMA IF NOT EXISTS {qualified_name(*relation_parts[:-1])}"
+                )
+            connection.execute(
+                f"CREATE OR REPLACE VIEW {qualified_name(*relation_parts)} AS {query_sql}"
+            )
 
     def _local_workspace_source_summaries(
         self,
@@ -1901,6 +2093,7 @@ class WorkbenchService:
         has_header: bool = True,
         replace_existing: bool = True,
         storage_format: str = "csv",
+        parquet_optimization: Any = None,
     ) -> dict[str, object]:
         normalized_target_id = str(target_id or "").strip()
         payload = self._csv_ingestion.import_csv_files(
@@ -1914,6 +2107,7 @@ class WorkbenchService:
             has_header=has_header,
             replace_existing=replace_existing,
             storage_format=storage_format,
+            parquet_optimization=parquet_optimization,
         )
         return self._finalize_csv_import_payload(payload, normalized_target_id)
 
@@ -1964,7 +2158,13 @@ class WorkbenchService:
         has_header: bool = True,
         replace_existing: bool = True,
         storage_format: str = "csv",
+        parquet_optimization: Any = None,
     ) -> dict[str, object]:
+        optimization = normalize_parquet_optimization_settings(
+            parquet_optimization,
+            target_id=target_id,
+            storage_format=storage_format,
+        ).payload
         state = self._csv_upload_sessions.start_processing(session_id)
         should_start_worker = bool(state.pop("processingStarted", False))
         if should_start_worker:
@@ -1981,6 +2181,7 @@ class WorkbenchService:
                     "has_header": has_header,
                     "replace_existing": replace_existing,
                     "storage_format": storage_format,
+                    "parquet_optimization": optimization,
                 },
                 name=f"bdw-csv-upload-complete-{session_id[:8]}",
                 daemon=True,
@@ -2002,6 +2203,7 @@ class WorkbenchService:
         has_header: bool,
         replace_existing: bool,
         storage_format: str,
+        parquet_optimization: Any,
     ) -> None:
         normalized_target_id = str(target_id or "").strip()
 
@@ -2036,6 +2238,7 @@ class WorkbenchService:
                         "bucket": bucket,
                         "prefix": prefix,
                         "storageFormat": storage_format,
+                        "parquetOptimization": parquet_optimization,
                     },
                 }
             )
@@ -2051,6 +2254,7 @@ class WorkbenchService:
                         "bucket": bucket,
                         "prefix": prefix,
                         "storageFormat": storage_format,
+                        "parquetOptimization": parquet_optimization,
                     },
                 }
             )
@@ -2065,6 +2269,7 @@ class WorkbenchService:
                 has_header=has_header,
                 replace_existing=replace_existing,
                 storage_format=storage_format,
+                parquet_optimization=parquet_optimization,
                 progress_callback=update_processing,
             )
             update_processing(
@@ -2173,6 +2378,9 @@ class WorkbenchService:
     def cancel_file_upload_session(self, ingestor_id: str, session_id: str) -> dict[str, object]:
         return self._file_upload_session_manager(ingestor_id).cancel_session(session_id)
 
+    def preview_parquet_schema(self, *, file_name: str, input_file) -> dict[str, object]:
+        return preview_parquet_upload_schema(file_name=file_name, input_file=input_file)
+
     def complete_file_upload_session(
         self,
         *,
@@ -2184,12 +2392,18 @@ class WorkbenchService:
         schema_name: str = "public",
         table_prefix: str = "",
         replace_existing: bool = True,
+        parquet_optimization: Any = None,
     ) -> dict[str, object]:
-        manager = self._file_upload_session_manager(ingestor_id)
+        normalized_ingestor_id = self._normalize_file_ingestor_id(ingestor_id)
+        optimization = normalize_parquet_optimization_settings(
+            parquet_optimization,
+            target_id=target_id,
+            storage_format=FILE_INGESTOR_SPECS[normalized_ingestor_id].source_format,
+        ).payload
+        manager = self._file_upload_sessions[normalized_ingestor_id]
         state = manager.start_processing(session_id)
         should_start_worker = bool(state.pop("processingStarted", False))
         if should_start_worker:
-            normalized_ingestor_id = self._normalize_file_ingestor_id(ingestor_id)
             worker = Thread(
                 target=self._complete_file_upload_session_in_background,
                 kwargs={
@@ -2201,6 +2415,7 @@ class WorkbenchService:
                     "schema_name": schema_name,
                     "table_prefix": table_prefix,
                     "replace_existing": replace_existing,
+                    "parquet_optimization": optimization,
                 },
                 name=f"bdw-{normalized_ingestor_id}-upload-complete-{session_id[:8]}",
                 daemon=True,
@@ -2220,6 +2435,7 @@ class WorkbenchService:
         schema_name: str,
         table_prefix: str,
         replace_existing: bool,
+        parquet_optimization: Any,
     ) -> None:
         normalized_target_id = str(target_id or "").strip()
         manager = self._file_upload_session_manager(ingestor_id)
@@ -2233,6 +2449,7 @@ class WorkbenchService:
                 schema_name=schema_name,
                 table_prefix=table_prefix,
                 replace_existing=replace_existing,
+                parquet_optimization=parquet_optimization,
             )
             result = self._finalize_csv_import_payload(payload, normalized_target_id)
             manager.finish_processing_success(session_id, result)

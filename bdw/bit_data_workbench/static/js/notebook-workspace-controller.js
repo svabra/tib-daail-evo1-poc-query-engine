@@ -15,6 +15,9 @@ export function createNotebookWorkspaceController(helpers) {
     loadNotebookVersion,
     moveCell,
     notebookMetadata,
+    openCacheHydrationDialog,
+    queryOptionsForCellRoot,
+    refreshCellCacheHydrationStatus,
     renameNotebook,
     revealNotebookLink,
     saveNotebookVersion,
@@ -22,6 +25,7 @@ export function createNotebookWorkspaceController(helpers) {
     setActiveCell,
     setCellDataSources,
     setCellLanguage,
+    setCellQueryOptions,
     setCellSql,
     setNotebookSummary,
     setNotebookTags,
@@ -270,6 +274,16 @@ export function createNotebookWorkspaceController(helpers) {
       return true;
     }
 
+    const cacheHydrationDetailsButton = event.target.closest("[data-cache-hydration-details]");
+    if (cacheHydrationDetailsButton) {
+      event.preventDefault();
+      const cellRoot = cacheHydrationDetailsButton.closest("[data-query-cell]");
+      if (cellRoot) {
+        await openCacheHydrationDialog(cellRoot);
+      }
+      return true;
+    }
+
     const deleteNotebookButton = event.target.closest("[data-delete-notebook]");
     if (deleteNotebookButton) {
       event.preventDefault();
@@ -382,6 +396,21 @@ export function createNotebookWorkspaceController(helpers) {
   }
 
   function handleChange(event) {
+    const queryOption = event.target.closest("[data-cell-query-option]");
+    if (queryOption) {
+      const { notebookId, cellId } = notebookCellContext(queryOption);
+      const cellRoot = queryOption.closest("[data-query-cell]");
+      const metaRoot = queryOption.closest("[data-notebook-meta]");
+      if (!notebookId || !cellId || metaRoot?.dataset.canEdit === "false") {
+        return true;
+      }
+      setCellQueryOptions(notebookId, cellId, queryOptionsForCellRoot(cellRoot));
+      if (queryOption.dataset.cellQueryOption === "duckdb.cacheHydration.mode") {
+        refreshCellCacheHydrationStatus(cellRoot);
+      }
+      return true;
+    }
+
     const sourceOption = event.target.closest("[data-cell-source-option]");
     if (!sourceOption) {
       return false;

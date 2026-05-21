@@ -54,6 +54,51 @@ export function createNotebookWorkspaceMarkup(helpers) {
     `;
   }
 
+  function parquetHivePartitioningOption(cell) {
+    const value = String(cell?.queryOptions?.duckdb?.parquetHivePartitioning || "auto")
+      .trim()
+      .toLowerCase();
+    return ["auto", "on", "off"].includes(value) ? value : "auto";
+  }
+
+  function cacheHydrationEnabled(cell) {
+    const value = String(cell?.queryOptions?.duckdb?.cacheHydration?.mode || "off")
+      .trim()
+      .toLowerCase();
+    return value === "on";
+  }
+
+  function duckdbOptionsMarkup(cell, canEdit, cellLanguage) {
+    const selected = parquetHivePartitioningOption(cell);
+    const hydrateCache = cacheHydrationEnabled(cell);
+    const hidden = cellLanguage === "sql" ? "" : " hidden";
+    const disabled = canEdit && cellLanguage === "sql" ? "" : " disabled";
+    const hiveTitle =
+      "DuckDB Parquet Hive partitioning controls how read_parquet interprets partition folders for known S3 Parquet query sources. Auto uses source discovery defaults; On forces hive_partitioning=true; Off forces hive_partitioning=false.";
+    const cacheTitle =
+      "Copies the S3 Parquet data referenced by this cell into a temporary local DuckDB table before the query runs. DuckDB can then reuse the local table and optional ART indexes for repeated filters and lookups. This cache lives in temporary compute storage and can disappear after a pod restart.";
+    return `
+      <span class="cell-duckdb-options"${hidden} data-cell-duckdb-options>
+        <label class="cell-duckdb-option" title="${escapeHtml(hiveTitle)}">
+          <span>Hive partitions</span>
+          <select data-cell-query-option="duckdb.parquetHivePartitioning"${disabled}>
+            <option value="auto"${selected === "auto" ? " selected" : ""}>Auto</option>
+            <option value="on"${selected === "on" ? " selected" : ""}>On</option>
+            <option value="off"${selected === "off" ? " selected" : ""}>Off</option>
+          </select>
+        </label>
+        <span class="cell-cache-hydration-option" data-cache-hydration-state="unknown" title="${escapeHtml(cacheTitle)}" data-cell-cache-hydration>
+          <label class="cell-cache-hydration-toggle">
+            <input type="checkbox" data-cell-query-option="duckdb.cacheHydration.mode" ${hydrateCache ? "checked" : ""}${disabled}>
+            <span>Hydrate cache</span>
+          </label>
+          <span class="cell-cache-hydration-badge" data-cache-hydration-badge hidden>Unknown</span>
+          <button type="button" class="cell-cache-hydration-details" data-cache-hydration-details title="Open the Cache hydration plan. It explains what will be cached, source size, cache size, ART indexes, cache freshness, and what happens on the next run." ${cellLanguage === "sql" ? "" : "hidden"}>Details</button>
+        </span>
+      </span>
+    `;
+  }
+
   function queryRunsPanelMarkup(notebookId, cellId) {
     return `
       <details
@@ -149,6 +194,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
               <span class="workspace-access-badge workspace-access-badge-small workspace-access-badge-language" data-cell-language-badge>${escapeHtml(languageBadge)}</span>
               <span class="workspace-access-badge workspace-access-badge-small" data-cell-access-badge title="${escapeHtml(accessModeHintForDataSources(selectedSources))}">${escapeHtml(accessModeForDataSources(selectedSources))}</span>
               <span class="workspace-access-badge workspace-access-badge-small workspace-access-badge-static" title="${escapeHtml(sovereigntyHint)}">CHE Data Souvereignity</span>
+              ${duckdbOptionsMarkup(cell, canEdit, cellLanguage)}
               <details class="cell-source-picker" data-cell-source-picker>
                 <summary class="cell-source-picker-toggle" data-cell-source-summary>${cellSourceSummaryMarkup(selectedSources)}</summary>
                 <div class="cell-source-selection" data-cell-source-selection>
@@ -271,6 +317,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
           cellId: cell.cellId,
           language: normalizeCellLanguage(cell.language),
           dataSources: normalizeDataSources(cell.dataSources),
+          queryOptions: cell.queryOptions,
           sql: cell.sql,
         }))))}'
         data-default-versions='${escapeHtml(JSON.stringify((metadata.versions ?? []).map((version) => ({
@@ -283,6 +330,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
             cellId: cell.cellId,
             language: normalizeCellLanguage(cell.language),
             dataSources: normalizeDataSources(cell.dataSources),
+            queryOptions: cell.queryOptions,
             sql: cell.sql,
           })),
         }))))}'

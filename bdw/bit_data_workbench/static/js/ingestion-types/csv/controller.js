@@ -21,6 +21,15 @@ import {
   isZipFile,
   readCsvFilesFromZip,
 } from "./zip-reader.js";
+import {
+  columnBasisCopy,
+  filterAvailableColumns,
+  hivePartitioningCopy,
+  normalizeColumnOptions,
+  recommendedIndexColumns,
+  recommendedPartitionColumns,
+  recommendedSortColumns,
+} from "../parquet-optimization-columns.js";
 
 const DEFAULT_CSV_UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024;
 const CSV_UPLOAD_CHUNK_ATTEMPTS = 5;
@@ -98,6 +107,16 @@ export function createCsvIngestionController(helpers) {
   let previewState = emptyPreviewState();
   let previewRequestVersion = 0;
   let lastLoggedProcessingSignature = "";
+  let optimizationColumnSelection = {
+    partitionColumns: [],
+    sortColumns: [],
+    indexColumns: [],
+  };
+  let optimizationColumnTouched = {
+    partitionColumns: false,
+    sortColumns: false,
+    indexColumns: false,
+  };
 
   function workbenchRoot() {
     return document.querySelector("[data-ingestion-workbench-page]");
@@ -160,6 +179,179 @@ export function createCsvIngestionController(helpers) {
     );
   }
 
+  function resetOptimizationColumnSelection() {
+    optimizationColumnSelection = {
+      partitionColumns: [],
+      sortColumns: [],
+      indexColumns: [],
+    };
+    optimizationColumnTouched = {
+      partitionColumns: false,
+      sortColumns: false,
+      indexColumns: false,
+    };
+  }
+
+  function csvOptimizationColumnOptions() {
+    return normalizeColumnOptions(previewState.columns || []);
+  }
+
+  function csvOptimizationColumnBasis() {
+    if (!csvOptimizationColumnOptions().length) {
+      return { fileName: "", sourceKind: "" };
+    }
+    return {
+      fileName: previewState.columnBasisFileName || previewState.fileName || "",
+      sourceKind: previewState.columnBasisKind || "",
+    };
+  }
+
+  function syncCsvOptimizationColumnSelection() {
+    const columns = csvOptimizationColumnOptions();
+    const createDuckdbCache =
+      document.querySelector("[data-csv-create-duckdb-cache]")?.checked === true;
+    if (!optimizationColumnTouched.partitionColumns) {
+      optimizationColumnSelection.partitionColumns = recommendedPartitionColumns(columns);
+    } else {
+      optimizationColumnSelection.partitionColumns = filterAvailableColumns(
+        optimizationColumnSelection.partitionColumns,
+        columns
+      );
+    }
+    if (!optimizationColumnTouched.sortColumns) {
+      optimizationColumnSelection.sortColumns = recommendedSortColumns(columns);
+    } else {
+      optimizationColumnSelection.sortColumns = filterAvailableColumns(
+        optimizationColumnSelection.sortColumns,
+        columns
+      );
+    }
+    if (!optimizationColumnTouched.indexColumns) {
+      optimizationColumnSelection.indexColumns = recommendedIndexColumns(
+        columns,
+        createDuckdbCache
+      );
+    } else {
+      optimizationColumnSelection.indexColumns = filterAvailableColumns(
+        optimizationColumnSelection.indexColumns,
+        columns
+      );
+    }
+  }
+
+  function columnOptionMarkup({
+    columns,
+    selectedColumns,
+    field,
+    hook,
+    emptyCopy = "Column choices appear after a file preview is available.",
+  }) {
+    if (!columns.length) {
+      return `<p class="ingestion-parquet-column-empty">${escapeHtml(emptyCopy)}</p>`;
+    }
+    const selected = new Set((selectedColumns || []).map((column) => String(column).toLowerCase()));
+    return columns
+      .map((column) => {
+        const checked = selected.has(column.name.toLowerCase()) ? " checked" : "";
+        const meta = column.dataType
+          ? `<span class="ingestion-parquet-column-meta">${escapeHtml(column.dataType)}</span>`
+          : "";
+        return `
+          <label class="ingestion-parquet-column-option">
+            <input
+              type="checkbox"
+              value="${escapeHtml(column.name)}"
+              data-${hook}-optimization-column-option
+              data-column-field="${escapeHtml(field)}"
+              ${checked}
+            >
+            <span class="ingestion-parquet-column-label">
+              <span class="ingestion-parquet-column-name">${escapeHtml(column.name)}</span>
+              ${meta}
+            </span>
+          </label>
+        `;
+      })
+      .join("");
+  }
+
+  function selectedColumnOptions(root) {
+    if (!root) {
+      return [];
+    }
+    return Array.from(root.querySelectorAll("input[type='checkbox']:checked"))
+      .map((input) => String(input.value || "").trim())
+      .filter(Boolean);
+  }
+
+  function updateCsvOptimizationColumnSelection(field) {
+    const selectorByField = {
+      partitionColumns: "[data-csv-partition-column-options]",
+      sortColumns: "[data-csv-sort-column-options]",
+      indexColumns: "[data-csv-index-column-options]",
+    };
+    const selector = selectorByField[field];
+    if (!selector) {
+      return;
+    }
+    optimizationColumnTouched[field] = true;
+    optimizationColumnSelection[field] = selectedColumnOptions(document.querySelector(selector));
+  }
+
+  function defaultParquetOptimization() {
+    return {
+      mode: "off",
+      hivePartitioning: false,
+      partitionColumns: [],
+      sortColumns: [],
+      createDuckdbCache: false,
+      indexColumns: [],
+    };
+  }
+
+  function currentCsvParquetOptimization() {
+    const storageFormat = normalizeCsvS3StorageFormat(
+      document.querySelector("[data-csv-s3-storage-format]:checked")?.value || "csv"
+    );
+    if (selectedTargetId() !== "workspace.s3" || storageFormat !== "parquet") {
+      return defaultParquetOptimization();
+    }
+    const mode = String(
+      document.querySelector("[data-csv-parquet-optimization-mode]:checked")?.value || "off"
+    )
+      .trim()
+      .toLowerCase();
+    if (mode !== "recommended" && mode !== "manual") {
+      return defaultParquetOptimization();
+    }
+    if (mode === "recommended") {
+      return {
+        ...defaultParquetOptimization(),
+        mode: "recommended",
+      };
+    }
+    return {
+      mode: "manual",
+      hivePartitioning: document.querySelector("[data-csv-hive-partitioning]")?.checked === true,
+      partitionColumns: Array.from(optimizationColumnSelection.partitionColumns),
+      sortColumns: Array.from(optimizationColumnSelection.sortColumns),
+      createDuckdbCache:
+        document.querySelector("[data-csv-create-duckdb-cache]")?.checked === true,
+      indexColumns: Array.from(optimizationColumnSelection.indexColumns),
+    };
+  }
+
+  function parquetOptimizationLabel(optimization) {
+    const mode = String(optimization?.mode || "off").trim().toLowerCase();
+    if (mode === "recommended") {
+      return "recommended optimization requested";
+    }
+    if (mode === "manual") {
+      return "manual optimization requested";
+    }
+    return "optimization off";
+  }
+
   function currentConfig() {
     const delimiterMode = String(
       document.querySelector("[data-csv-delimiter-mode]")?.value || "auto"
@@ -194,6 +386,7 @@ export function createCsvIngestionController(helpers) {
       delimiter: delimiterCharacterForMode(delimiterMode),
       hasHeader: document.querySelector("[data-csv-has-header]")?.checked !== false,
       replaceExisting: document.querySelector("[data-csv-replace-existing]")?.checked !== false,
+      parquetOptimization: currentCsvParquetOptimization(),
     };
   }
 
@@ -441,7 +634,11 @@ export function createCsvIngestionController(helpers) {
     if (targetId !== "workspace.s3") {
       return baseLabel;
     }
-    return `${baseLabel}, ${csvS3StorageFormatDefinition(config.s3StorageFormat).reviewLabel}`;
+    const storageLabel = csvS3StorageFormatDefinition(config.s3StorageFormat).reviewLabel;
+    if (config.s3StorageFormat !== "parquet") {
+      return `${baseLabel}, ${storageLabel}`;
+    }
+    return `${baseLabel}, ${storageLabel}, ${parquetOptimizationLabel(config.parquetOptimization)}`;
   }
 
   function fileListMarkup() {
@@ -560,6 +757,9 @@ export function createCsvIngestionController(helpers) {
           </div>
           <p class="ingestion-csv-preview-copy">
             ${escapeHtml(String(previewState.archiveEntryCount))} CSV file(s) will be extracted during import.
+            ${escapeHtml(previewState.columnBasisFileName
+              ? `Optimization recommendations are based on first ZIP member: ${previewState.columnBasisFileName}.`
+              : "")}
           </p>
         </article>
       `;
@@ -652,7 +852,7 @@ export function createCsvIngestionController(helpers) {
 
     try {
       const nextPreviewState = isZipFile(file)
-        ? await buildCsvZipPreviewState(file)
+        ? await buildCsvZipPreviewState(file, currentConfig())
         : await buildCsvPreviewState(file, currentConfig());
       if (requestVersion !== previewRequestVersion) {
         return;
@@ -895,6 +1095,72 @@ export function createCsvIngestionController(helpers) {
             : "Replace the target table if it already exists";
       }
     }
+    syncCsvParquetOptimizationPanel();
+  }
+
+  function syncCsvParquetOptimizationPanel() {
+    const panel = document.querySelector("[data-csv-parquet-optimization-panel]");
+    if (!panel) {
+      return;
+    }
+    const storageFormat = normalizeCsvS3StorageFormat(
+      document.querySelector("[data-csv-s3-storage-format]:checked")?.value || "csv"
+    );
+    const visible = selectedTargetId() === "workspace.s3" && storageFormat === "parquet";
+    panel.hidden = !visible;
+    const manualOptions = panel.querySelector("[data-csv-parquet-manual-options]");
+    const mode = String(
+      panel.querySelector("[data-csv-parquet-optimization-mode]:checked")?.value || "off"
+    )
+      .trim()
+      .toLowerCase();
+    if (manualOptions) {
+      manualOptions.hidden = !visible || mode !== "manual";
+    }
+    if (!visible) {
+      return;
+    }
+    syncCsvOptimizationColumnSelection();
+    const columns = csvOptimizationColumnOptions();
+    const basis = csvOptimizationColumnBasis();
+    const basisRoot = panel.querySelector("[data-csv-optimization-column-basis]");
+    if (basisRoot) {
+      basisRoot.textContent = columnBasisCopy(basis);
+    }
+    const hiveExplanation = panel.querySelector("[data-csv-hive-partitioning-explanation]");
+    if (hiveExplanation) {
+      hiveExplanation.textContent = hivePartitioningCopy({
+        ...basis,
+        selectedColumns: optimizationColumnSelection.partitionColumns,
+      });
+    }
+    const partitionRoot = panel.querySelector("[data-csv-partition-column-options]");
+    if (partitionRoot) {
+      partitionRoot.innerHTML = columnOptionMarkup({
+        columns,
+        selectedColumns: optimizationColumnSelection.partitionColumns,
+        field: "partitionColumns",
+        hook: "csv",
+      });
+    }
+    const sortRoot = panel.querySelector("[data-csv-sort-column-options]");
+    if (sortRoot) {
+      sortRoot.innerHTML = columnOptionMarkup({
+        columns,
+        selectedColumns: optimizationColumnSelection.sortColumns,
+        field: "sortColumns",
+        hook: "csv",
+      });
+    }
+    const indexRoot = panel.querySelector("[data-csv-index-column-options]");
+    if (indexRoot) {
+      indexRoot.innerHTML = columnOptionMarkup({
+        columns,
+        selectedColumns: optimizationColumnSelection.indexColumns,
+        field: "indexColumns",
+        hook: "csv",
+      });
+    }
   }
 
   function syncEntryPanels() {
@@ -1084,6 +1350,7 @@ export function createCsvIngestionController(helpers) {
     latestResults = [];
     latestImportPayload = null;
     uploadProgress = null;
+    resetOptimizationColumnSelection();
     renderCsvIngestionWorkbench();
     void refreshPreview();
   }
@@ -1476,6 +1743,7 @@ export function createCsvIngestionController(helpers) {
             hasHeader: config.hasHeader,
             replaceExisting: config.replaceExisting,
             storageFormat: config.s3StorageFormat,
+            parquetOptimization: config.parquetOptimization,
           }),
         }
       );
@@ -1590,8 +1858,15 @@ export function createCsvIngestionController(helpers) {
       return true;
     }
 
+    const columnOption = event.target.closest("[data-csv-optimization-column-option]");
+    if (columnOption) {
+      updateCsvOptimizationColumnSelection(columnOption.dataset.columnField);
+      renderCsvIngestionWorkbench();
+      return true;
+    }
+
     const previewOption = event.target.closest(
-      "[data-csv-delimiter-mode], [data-csv-has-header], [data-csv-replace-existing], [data-csv-s3-storage-format]"
+      "[data-csv-delimiter-mode], [data-csv-has-header], [data-csv-replace-existing], [data-csv-s3-storage-format], [data-csv-parquet-optimization-mode], [data-csv-hive-partitioning], [data-csv-create-duckdb-cache]"
     );
     if (previewOption) {
       renderCsvIngestionWorkbench();

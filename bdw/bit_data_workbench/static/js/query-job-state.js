@@ -136,7 +136,31 @@ export function queryJobElapsedMs(job) {
     }
   }
 
-  return Number.isFinite(Number(job.durationMs)) ? Math.max(0, Number(job.durationMs)) : 0;
+  const timings = job.timings && typeof job.timings === "object" ? job.timings : {};
+  const elapsedCandidates = [];
+  for (const key of ["clientObservedMs", "clientTotalMs", "backendTotalMs"]) {
+    const timing = Number(timings[key]);
+    if (Number.isFinite(timing) && timing >= 0) {
+      elapsedCandidates.push(timing);
+    }
+  }
+
+  if (Array.isArray(job.resourceSamples)) {
+    job.resourceSamples
+      .map((sample) => Number(sample?.elapsedMs))
+      .filter((value) => Number.isFinite(value) && value >= 0)
+      .forEach((value) => elapsedCandidates.push(value));
+  }
+
+  if (Number.isFinite(Number(job.durationMs))) {
+    elapsedCandidates.push(Math.max(0, Number(job.durationMs)));
+  }
+
+  if (elapsedCandidates.length) {
+    return Math.max(0, ...elapsedCandidates);
+  }
+
+  return 0;
 }
 
 export function formatQueryDuration(durationMs) {

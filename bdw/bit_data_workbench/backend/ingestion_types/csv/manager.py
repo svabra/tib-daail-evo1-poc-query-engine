@@ -20,6 +20,10 @@ from .dialect import normalize_csv_delimiter
 from .s3_formats import build_csv_s3_upload_artifact, normalize_csv_s3_storage_format
 from .validation import validate_csv_file
 from ...s3_hidden import reject_hidden_s3_location
+from ..parquet_optimization import (
+    ParquetOptimizationSettings,
+    normalize_parquet_optimization_settings,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -184,6 +188,7 @@ class CsvIngestionManager:
         has_header: bool = True,
         replace_existing: bool = True,
         storage_format: str = "csv",
+        parquet_optimization: Any = None,
         progress_callback: ProgressCallback | None = None,
     ) -> dict[str, Any]:
         with TemporaryDirectory() as temp_dir:
@@ -202,6 +207,7 @@ class CsvIngestionManager:
                 has_header=has_header,
                 replace_existing=replace_existing,
                 storage_format=storage_format,
+                parquet_optimization=parquet_optimization,
                 initial_imports=failures,
                 progress_callback=progress_callback,
             )
@@ -219,6 +225,7 @@ class CsvIngestionManager:
         has_header: bool = True,
         replace_existing: bool = True,
         storage_format: str = "csv",
+        parquet_optimization: Any = None,
         initial_imports: list[dict[str, Any]] | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> dict[str, Any]:
@@ -227,6 +234,11 @@ class CsvIngestionManager:
             raise ValueError(f"Unsupported CSV ingestion target: {target_id}")
         if not sources and not initial_imports:
             raise ValueError("Choose at least one CSV or ZIP file before importing.")
+        optimization = normalize_parquet_optimization_settings(
+            parquet_optimization,
+            target_id=normalized_target_id,
+            storage_format=storage_format,
+        )
 
         imports: list[dict[str, Any]] = list(initial_imports or [])
         with TemporaryDirectory() as extract_temp_dir:
@@ -311,6 +323,7 @@ class CsvIngestionManager:
                             delimiter=resolved_delimiter,
                             has_header=has_header,
                             storage_format=storage_format,
+                            parquet_optimization=optimization,
                             progress_callback=progress_callback,
                         )
                     else:
@@ -363,6 +376,7 @@ class CsvIngestionManager:
             "targetId": normalized_target_id,
             "importedCount": imported_count,
             "failedCount": len(imports) - imported_count,
+            "parquetOptimization": optimization.payload,
             "imports": imports,
         }
 
@@ -452,6 +466,7 @@ class CsvIngestionManager:
         delimiter: str = "",
         has_header: bool = True,
         storage_format: str = "csv",
+        parquet_optimization: ParquetOptimizationSettings | None = None,
         progress_callback: ProgressCallback | None = None,
     ) -> dict[str, Any]:
         normalized_bucket = str(bucket or "").strip() or str(self._settings.s3_bucket or "").strip()
@@ -459,6 +474,7 @@ class CsvIngestionManager:
             raise ValueError("Provide a bucket or configure S3_BUCKET before importing CSV files.")
 
         normalized_storage_format = normalize_csv_s3_storage_format(storage_format)
+        optimization = parquet_optimization or ParquetOptimizationSettings()
         source_size = _file_size(local_path)
         logger.info(
             "CSV S3 import prepare: file=%r source_size_bytes=%s bucket=%r prefix=%r storage_format=%s endpoint=%r use_ssl=%s verify_ssl=%s url_style=%r",
@@ -514,6 +530,7 @@ class CsvIngestionManager:
                 storage_format=normalized_storage_format,
                 delimiter=delimiter,
                 has_header=has_header,
+                parquet_optimization=optimization,
             )
         except Exception as exc:
             logger.exception(
@@ -526,7 +543,7 @@ class CsvIngestionManager:
                 f"Failed to prepare '{file_name}' as {normalized_storage_format.upper()} before S3 upload: {exc}"
             ) from exc
 
-        artifact_size = _file_size(upload_artifact.local_path)
+        artifact_size = upload_artifact.size_bytes
         if normalized_storage_format != "csv":
             _emit_progress(
                 progress_callback,
@@ -587,27 +604,30 @@ class CsvIngestionManager:
         _emit_progress(
             progress_callback,
             phase="s3_upload_start",
-            message=f"Uploading {upload_artifact.file_name} to S3.",
+            message=(
+                f"Uploading {upload_artifact.part_count} Parquet part file(s) to S3."
+                if upload_artifact.partitioned
+                else f"Uploading {upload_artifact.file_name} to S3."
+            ),
             detail="Step 2 of 2: invoking the S3 PutObject/multipart upload.",
             fileName=file_name,
             storedFileName=upload_artifact.file_name,
             bucket=normalized_bucket,
             key=key,
             artifactSizeBytes=artifact_size,
+            partitioned=upload_artifact.partitioned,
+            partCount=upload_artifact.part_count,
         )
         upload_started = time.perf_counter()
+        uploaded_keys: list[str] = []
         try:
-            upload_s3_file(
+            uploaded_keys = self._upload_s3_artifact(
                 client,
                 local_path=upload_artifact.local_path,
                 bucket=normalized_bucket,
                 key=key,
                 metadata=upload_artifact.metadata,
-                transfer_config=TransferConfig(
-                    multipart_threshold=64 * 1024 * 1024,
-                    multipart_chunksize=64 * 1024 * 1024,
-                    max_concurrency=4,
-                ),
+                partitioned=upload_artifact.partitioned,
             )
         except Exception as exc:
             logger.exception(
@@ -625,13 +645,14 @@ class CsvIngestionManager:
 
         verification: dict[str, object] = {}
         try:
-            response = client.head_object(Bucket=normalized_bucket, Key=key)
+            response = client.head_object(Bucket=normalized_bucket, Key=(uploaded_keys[0] if upload_artifact.partitioned and uploaded_keys else key))
             metadata = response.get("ResponseMetadata") or {}
             verification = {
-                "contentLength": response.get("ContentLength"),
+                "contentLength": artifact_size if upload_artifact.partitioned else response.get("ContentLength"),
                 "etag": str(response.get("ETag") or "").strip('"'),
                 "httpStatusCode": metadata.get("HTTPStatusCode"),
                 "requestId": metadata.get("RequestId"),
+                "partCount": upload_artifact.part_count if upload_artifact.partitioned else None,
             }
             logger.info(
                 "CSV S3 import upload confirmed: file=%r bucket=%r key=%r size_bytes=%s verification=%s elapsed_ms=%s",
@@ -653,6 +674,8 @@ class CsvIngestionManager:
                 key=key,
                 artifactSizeBytes=artifact_size,
                 elapsedMs=round((time.perf_counter() - upload_started) * 1000),
+                partitioned=upload_artifact.partitioned,
+                partCount=upload_artifact.part_count,
                 verification=verification,
             )
         except Exception as exc:
@@ -678,18 +701,87 @@ class CsvIngestionManager:
                 key=key,
                 artifactSizeBytes=artifact_size,
                 elapsedMs=round((time.perf_counter() - upload_started) * 1000),
+                partitioned=upload_artifact.partitioned,
+                partCount=upload_artifact.part_count,
             )
-        return {
+        object_path = (
+            f"s3://{normalized_bucket}/{key}/**/*.parquet"
+            if upload_artifact.partitioned
+            else f"s3://{normalized_bucket}/{key}"
+        )
+        result: dict[str, Any] = {
             "destination": "s3",
             "bucket": normalized_bucket,
             "objectKey": key,
             "objectKeyPrefix": normalized_prefix,
             "storedFileName": upload_artifact.file_name,
-            "path": f"s3://{normalized_bucket}/{key}",
+            "path": object_path,
             "storageFormat": upload_artifact.storage_format,
             "uploadedBytes": artifact_size,
             "s3Verification": verification,
         }
+        if upload_artifact.partitioned:
+            result.update(
+                {
+                    "partitioned": True,
+                    "partCount": upload_artifact.part_count,
+                    "uploadedKeys": uploaded_keys,
+                }
+            )
+        if upload_artifact.warning:
+            result["warnings"] = [upload_artifact.warning]
+        if normalized_storage_format == "parquet" or not optimization.is_default:
+            result["parquetOptimization"] = optimization.payload
+        return result
+
+    def _upload_s3_artifact(
+        self,
+        client,
+        *,
+        local_path: Path,
+        bucket: str,
+        key: str,
+        metadata: dict[str, str],
+        partitioned: bool,
+    ) -> list[str]:
+        transfer_config = TransferConfig(
+            multipart_threshold=64 * 1024 * 1024,
+            multipart_chunksize=64 * 1024 * 1024,
+            max_concurrency=4,
+        )
+        if not partitioned:
+            upload_s3_file(
+                client,
+                local_path=local_path,
+                bucket=bucket,
+                key=key,
+                metadata=metadata,
+                transfer_config=transfer_config,
+            )
+            return [key]
+
+        uploaded_keys: list[str] = []
+        for part_path in sorted(path for path in local_path.rglob("*.parquet") if path.is_file()):
+            relative_key = part_path.relative_to(local_path).as_posix()
+            part_key = f"{key.rstrip('/')}/{relative_key}"
+            reject_hidden_s3_location(
+                bucket,
+                part_key,
+                self._settings,
+                data_exchange_prefix=self._settings.data_exchange_prefix,
+            )
+            upload_s3_file(
+                client,
+                local_path=part_path,
+                bucket=bucket,
+                key=part_key,
+                metadata=metadata,
+                transfer_config=transfer_config,
+            )
+            uploaded_keys.append(part_key)
+        if not uploaded_keys:
+            raise ValueError("DuckDB did not produce any Parquet part files for the selected partition columns.")
+        return uploaded_keys
 
     def _import_csv_to_postgres(
         self,

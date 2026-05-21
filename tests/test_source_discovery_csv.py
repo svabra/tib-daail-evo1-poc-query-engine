@@ -7,6 +7,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import TestCase
 
+import duckdb
 from openpyxl import Workbook
 
 
@@ -18,6 +19,8 @@ if str(BDW_ROOT) not in sys.path:
 
 from bit_data_workbench.backend.service import WorkbenchService  # noqa: E402
 from bit_data_workbench.backend.source_discovery import S3DataSourceDiscoverer  # noqa: E402
+from bit_data_workbench.backend.source_discovery import build_s3_query  # noqa: E402
+from bit_data_workbench.backend.source_discovery import drop_discovered_relation_object  # noqa: E402
 from bit_data_workbench.config import Settings  # noqa: E402
 from bit_data_workbench.version_info import current_repo_version  # noqa: E402
 
@@ -175,7 +178,77 @@ class GeneratedMwaLoaderS3Client:
         }
 
 
+class PartitionedParquetS3Client:
+    keys = (
+        "incoming/april/vat_smoke/tax_year=2025/data_0.parquet",
+        "incoming/april/vat_smoke/tax_year=2026/data_0.parquet",
+    )
+
+    def list_objects_v2(self, **kwargs):
+        bucket = kwargs["Bucket"]
+        prefix = str(kwargs.get("Prefix") or "")
+        if bucket != "vat-smoke-test":
+            return {"Contents": [], "IsTruncated": False}
+        return {
+            "Contents": [
+                {"Key": key}
+                for key in self.keys
+                if key.startswith(prefix)
+            ],
+            "IsTruncated": False,
+        }
+
+    def head_object(self, **kwargs):
+        key = kwargs["Key"]
+        if key not in self.keys:
+            raise AssertionError(f"Unexpected partitioned parquet head_object request: {key}")
+        return {
+            "ETag": f'"{Path(key).parent.name}-etag"',
+            "ContentLength": 256,
+            "Metadata": {},
+        }
+
+
 class CsvS3DiscoveryTests(TestCase):
+    def test_drop_discovered_relation_object_handles_stale_table(self) -> None:
+        connection = duckdb.connect(":memory:")
+        try:
+            connection.execute("CREATE SCHEMA stale")
+            connection.execute("CREATE TABLE stale.cached_relation AS SELECT 1 AS value")
+
+            drop_discovered_relation_object(
+                connection,
+                schema_name="stale",
+                relation_name="cached_relation",
+            )
+
+            exists = connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM information_schema.tables
+                WHERE table_schema = 'stale'
+                  AND table_name = 'cached_relation'
+                """
+            ).fetchone()[0]
+            self.assertEqual(exists, 0)
+        finally:
+            connection.close()
+
+    def test_s3_existing_specs_ignore_loader_cache_tables(self) -> None:
+        connection = duckdb.connect(":memory:")
+        try:
+            connection.execute("CREATE SCHEMA generated")
+            connection.execute("CREATE VIEW generated.s3_relation AS SELECT 1 AS value")
+            connection.execute("CREATE TABLE generated.s3_relation_duckdb_cache AS SELECT 1 AS value")
+
+            discoverer = S3DataSourceDiscoverer(make_settings())
+            specs = discoverer._load_existing_specs(connection)
+
+            self.assertIn("generated.s3_relation", specs)
+            self.assertNotIn("generated.s3_relation_duckdb_cache", specs)
+        finally:
+            connection.close()
+
     def test_discovered_csv_spec_uses_uploaded_csv_metadata_for_query_sql(self) -> None:
         discoverer = S3DataSourceDiscoverer(make_settings())
 
@@ -199,6 +272,41 @@ class CsvS3DiscoveryTests(TestCase):
         spec = next(iter(specs.values()))
         self.assertEqual(spec.display_name, "visible.csv")
         self.assertNotIn("data-exchange", spec.object_path)
+
+    def test_partitioned_parquet_upload_is_discovered_as_one_relation(self) -> None:
+        discoverer = S3DataSourceDiscoverer(make_settings())
+
+        specs = discoverer._build_desired_specs(PartitionedParquetS3Client(), {"vat-smoke-test"})
+
+        self.assertEqual(len(specs), 1)
+        spec = next(iter(specs.values()))
+        self.assertEqual(spec.relation_name, "vat_smoke")
+        self.assertEqual(spec.object_path, "s3://vat-smoke-test/incoming/april/vat_smoke/**/*.parquet")
+        self.assertIn("read_parquet(", spec.query_sql)
+        self.assertIn("hive_partitioning=true", spec.query_sql)
+        self.assertEqual(spec.display_name, "vat_smoke.parquet")
+        self.assertEqual(spec.download_kind, "partitioned_parts")
+        self.assertEqual(spec.part_prefix, "incoming/april/vat_smoke/")
+        self.assertEqual(spec.part_count, 2)
+        self.assertTrue(spec.zip_downloadable)
+
+    def test_build_s3_parquet_query_accepts_runtime_hive_option(self) -> None:
+        self.assertEqual(
+            build_s3_query(
+                "parquet",
+                "s3://vat-smoke-test/incoming/april/vat_smoke/**/*.parquet",
+                hive_partitioning=True,
+            ),
+            "SELECT * FROM read_parquet('s3://vat-smoke-test/incoming/april/vat_smoke/**/*.parquet', hive_partitioning=true)",
+        )
+        self.assertIn(
+            "hive_partitioning=false",
+            build_s3_query(
+                "parquet",
+                "s3://vat-smoke-test/incoming/april/vat_smoke/**/*.parquet",
+                hive_partitioning=False,
+            ),
+        )
 
     def test_discovered_xml_and_xlsx_specs_materialize_to_queryable_csv_views(self) -> None:
         workbook = Workbook()

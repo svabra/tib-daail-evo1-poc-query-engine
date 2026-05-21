@@ -1,0 +1,270 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import duckdb
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+BDW_ROOT = REPO_ROOT / "bdw"
+if str(BDW_ROOT) not in sys.path:
+    sys.path.insert(0, str(BDW_ROOT))
+
+
+from bit_data_workbench.api.router import (  # noqa: E402
+    QueryCachePayload,
+    expire_query_cache as expire_query_cache_route,
+    query_cache_preview as query_cache_preview_route,
+    rehydrate_query_cache as rehydrate_query_cache_route,
+)
+from bit_data_workbench.backend.query_cache import (  # noqa: E402
+    cache_preview,
+    expire_cache,
+    hydrate_cache,
+    infer_predicate_index_columns,
+)
+
+
+def _write_federal_tax_parquet(path: Path, *, rows: int = 1000) -> None:
+    connection = duckdb.connect(":memory:")
+    try:
+        connection.execute(
+            """
+            CREATE TABLE federal_tax AS
+            SELECT
+              printf('TAX-%06d', i) AS taxpayer_id,
+              2024 + (i % 2) AS tax_year,
+              (i * 17) % 100000 AS federal_tax_due,
+              DATE '2026-04-15' AS filing_date
+            FROM range(?) AS generated(i)
+            """,
+            [rows],
+        )
+        connection.execute(f"COPY federal_tax TO '{path.as_posix()}' (FORMAT PARQUET)")
+    finally:
+        connection.close()
+
+
+def _write_unindexed_parquet(path: Path) -> None:
+    connection = duckdb.connect(":memory:")
+    try:
+        connection.execute(
+            """
+            CREATE TABLE unindexed_tax AS
+            SELECT
+              2026 AS tax_year,
+              1200 + i AS federal_tax_due,
+              DATE '2026-04-15' AS filing_date
+            FROM range(100) AS generated(i)
+            """
+        )
+        connection.execute(f"COPY unindexed_tax TO '{path.as_posix()}' (FORMAT PARQUET)")
+    finally:
+        connection.close()
+
+
+def _summary_for(path: Path, *, revision: str = "etag-one") -> dict[str, object]:
+    return {
+        "relation": "s3.poc.federal_tax.parquet",
+        "path": "s3://poc/federal_tax.parquet",
+        "format": "parquet",
+        "query_sql": f"SELECT * FROM read_parquet('{path.as_posix()}')",
+        "size_bytes": path.stat().st_size,
+        "object_revision": revision,
+    }
+
+
+def _cache_options() -> dict[str, object]:
+    return {
+        "duckdb": {
+            "parquetHivePartitioning": "auto",
+            "cacheHydration": {
+                "mode": "on",
+                "scope": "referencedS3Parquet",
+                "indexPolicy": "autoPredicates",
+            },
+        }
+    }
+
+
+class QueryCacheTests(unittest.TestCase):
+    def test_infers_predicate_columns_from_where_in_and_join(self) -> None:
+        columns = infer_predicate_index_columns(
+            """
+            SELECT *
+            FROM s3.poc.federal_tax.parquet AS tax
+            JOIN lookup USING (taxpayer_id)
+            WHERE tax.tax_year = 2026
+              AND "filing status" IN ('single')
+            """
+        )
+
+        self.assertIn("tax_year", columns)
+        self.assertIn("filing status", columns)
+        self.assertIn("taxpayer_id", columns)
+
+    def test_hydrates_reuses_stales_and_expires_known_s3_parquet_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            parquet_path = root / "federal_tax.parquet"
+            cache_root = root / "cache"
+            _write_federal_tax_parquet(parquet_path, rows=5000)
+            source_summary = _summary_for(parquet_path)
+            sql = (
+                "SELECT taxpayer_id, federal_tax_due "
+                "FROM s3.poc.federal_tax.parquet "
+                "WHERE taxpayer_id = 'TAX-000123'"
+            )
+
+            with patch.dict(os.environ, {"BDW_QUERY_CACHE_DIR": str(cache_root)}):
+                initial_preview = cache_preview(
+                    settings=None,  # type: ignore[arg-type]
+                    sql=sql,
+                    source_summaries=[source_summary],
+                    query_options=_cache_options(),
+                )
+                self.assertEqual(initial_preview["sources"][0]["status"], "miss")
+
+                connection = duckdb.connect(":memory:")
+                try:
+                    updated_summaries, hydration = hydrate_cache(
+                        connection=connection,
+                        sql=sql,
+                        source_summaries=[source_summary],
+                        query_options=_cache_options(),
+                    )
+
+                    self.assertTrue(hydration["enabled"])
+                    self.assertEqual(hydration["sources"][0]["status"], "hit")
+                    self.assertEqual(
+                        hydration["sources"][0]["indexColumns"],
+                        ["taxpayer_id"],
+                    )
+                    self.assertIn("cache_", updated_summaries[0]["query_sql"])
+
+                    connection.execute(
+                        f"CREATE VIEW hydrated_tax AS {updated_summaries[0]['query_sql']}"
+                    )
+                    value = connection.execute(
+                        """
+                        SELECT federal_tax_due
+                        FROM hydrated_tax
+                        WHERE taxpayer_id = 'TAX-000123'
+                        """
+                    ).fetchone()[0]
+                    self.assertEqual(value, (123 * 17) % 100000)
+                finally:
+                    connection.close()
+
+                hit_preview = cache_preview(
+                    settings=None,  # type: ignore[arg-type]
+                    sql=sql,
+                    source_summaries=[source_summary],
+                    query_options=_cache_options(),
+                )
+                self.assertEqual(hit_preview["sources"][0]["status"], "hit")
+                self.assertGreater(hit_preview["sources"][0]["cacheSizeBytes"], 0)
+
+                stale_preview = cache_preview(
+                    settings=None,  # type: ignore[arg-type]
+                    sql=sql,
+                    source_summaries=[_summary_for(parquet_path, revision="etag-two")],
+                    query_options=_cache_options(),
+                )
+                self.assertEqual(stale_preview["sources"][0]["status"], "stale")
+                self.assertIn("source data changed", stale_preview["sources"][0]["statusReason"])
+
+                expired_preview = expire_cache(
+                    sql=sql,
+                    source_summaries=[source_summary],
+                    query_options=_cache_options(),
+                )
+                self.assertEqual(expired_preview["sources"][0]["status"], "expired")
+                self.assertIn("manually marked", expired_preview["sources"][0]["statusReason"])
+
+                database_path = Path(str(expired_preview["sources"][0]["cacheDatabasePath"]))
+                if database_path.exists():
+                    database_path.unlink()
+                missing_preview = cache_preview(
+                    settings=None,  # type: ignore[arg-type]
+                    sql=sql,
+                    source_summaries=[source_summary],
+                    query_options=_cache_options(),
+                )
+                self.assertEqual(missing_preview["sources"][0]["status"], "expired")
+                self.assertFalse(missing_preview["sources"][0]["physicalCacheExists"])
+
+    def test_hydrates_without_art_index_when_no_useful_column_exists(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            parquet_path = root / "federal_tax.parquet"
+            _write_unindexed_parquet(parquet_path)
+            source_summary = _summary_for(parquet_path)
+
+            with patch.dict(os.environ, {"BDW_QUERY_CACHE_DIR": str(root / "cache")}):
+                connection = duckdb.connect(":memory:")
+                try:
+                    _updated_summaries, hydration = hydrate_cache(
+                        connection=connection,
+                        sql="SELECT count(*) FROM s3.poc.federal_tax.parquet WHERE federal_tax_due > 50",
+                        source_summaries=[source_summary],
+                        query_options=_cache_options(),
+                    )
+                finally:
+                    connection.close()
+
+            self.assertEqual(hydration["sources"][0]["indexColumns"], [])
+            self.assertIn("without ART indexes", hydration["sources"][0]["indexReason"])
+
+
+class QueryCacheRouteTests(unittest.TestCase):
+    def test_routes_forward_payload_to_service(self) -> None:
+        calls: list[tuple[str, dict[str, object]]] = []
+
+        class FakeService:
+            def query_cache_preview(self, **kwargs):
+                calls.append(("preview", kwargs))
+                return {"status": "ready", "sources": []}
+
+            def rehydrate_query_cache(self, **kwargs):
+                calls.append(("rehydrate", kwargs))
+                return {"status": "ready", "hydration": {"enabled": True}}
+
+            def expire_query_cache(self, **kwargs):
+                calls.append(("expire", kwargs))
+                return {"status": "ready", "sources": []}
+
+        payload = QueryCachePayload(
+            sql="select * from s3.poc.federal_tax.parquet",
+            dataSources=["workspace.s3"],
+            localRelations={"local.source": "workspace.schema.table"},
+            queryOptions=_cache_options(),
+        )
+
+        preview = query_cache_preview_route(payload, service=FakeService())
+        rehydrated = rehydrate_query_cache_route(payload, service=FakeService())
+        expired = expire_query_cache_route(payload, service=FakeService())
+
+        self.assertEqual(preview.status_code, 200)
+        self.assertEqual(rehydrated.status_code, 200)
+        self.assertEqual(expired.status_code, 200)
+        self.assertEqual([name for name, _kwargs in calls], ["preview", "rehydrate", "expire"])
+        self.assertEqual(calls[0][1]["sql"], payload.sql)
+        self.assertEqual(calls[0][1]["data_sources"], ["workspace.s3"])
+        self.assertEqual(
+            calls[0][1]["local_relation_map"],
+            {"local.source": "workspace.schema.table"},
+        )
+        self.assertEqual(
+            calls[0][1]["query_options"]["duckdb"]["cacheHydration"]["mode"],
+            "on",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()

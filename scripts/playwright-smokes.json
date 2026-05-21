@@ -11,6 +11,11 @@
       "enabledByDefault": true
     },
     {
+      "id": "query-timing-monotonic",
+      "script": "playwright_query_timing_monotonic_smoke.py",
+      "enabledByDefault": true
+    },
+    {
       "id": "home-navigation",
       "script": "playwright_home_navigation_smoke.py",
       "enabledByDefault": true
@@ -113,6 +118,11 @@
     {
       "id": "csv-to-parquet-real-backend",
       "script": "playwright_csv_to_parquet_ingestion_real_backend_smoke.py",
+      "enabledByDefault": false
+    },
+    {
+      "id": "parquet-optimization-performance-options",
+      "script": "playwright_parquet_optimization_performance_options_regression.py",
       "enabledByDefault": false
     },
     {

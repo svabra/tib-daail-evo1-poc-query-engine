@@ -30,6 +30,10 @@ from bit_data_workbench.backend.query_source_validation import (  # noqa: E402
     extract_select_source_references,
     validate_query_sources,
 )
+from bit_data_workbench.backend.source_discovery import (  # noqa: E402
+    DiscoveredRelationSpec,
+    build_s3_query,
+)
 from bit_data_workbench.backend.service import WorkbenchService  # noqa: E402
 from bit_data_workbench.models import SourceCatalog, SourceObject, SourceSchema  # noqa: E402
 
@@ -276,9 +280,78 @@ class QuerySourceValidationTests(unittest.TestCase):
                     "path": "",
                     "format": "",
                     "query_sql": "",
+                    "size_bytes": 0,
+                    "object_revision": "",
+                    "display_name": "federal_tax_data_10gb",
                 }
             ],
         )
+
+    def test_start_query_job_applies_parquet_hive_option_to_s3_source_summary(
+        self,
+    ) -> None:
+        relation = "test.tax_federal"
+        object_path = "s3://tax-bucket/federal/manual_hive/**/*.parquet"
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = [
+            SourceCatalog(
+                name="workspace",
+                connection_source_id="workspace.s3",
+                schemas=[
+                    SourceSchema(
+                        name="test",
+                        objects=[
+                            SourceObject(
+                                name="tax_federal",
+                                kind="view",
+                                relation=relation,
+                                query_alias="s3.tax_bucket.federal.manual_hive.parquet",
+                                s3_bucket="tax-bucket",
+                                s3_key="federal/manual_hive/**/*.parquet",
+                                s3_path=object_path,
+                                s3_file_format="parquet",
+                            )
+                        ],
+                    )
+                ],
+            )
+        ]
+        service._data_source_discovery = SimpleNamespace(
+            s3_relation_specs=lambda: {
+                relation: DiscoveredRelationSpec(
+                    schema_name="test",
+                    relation_name="tax_federal",
+                    query_sql=build_s3_query("parquet", object_path, hive_partitioning=True),
+                    object_path=object_path,
+                    object_format="parquet",
+                )
+            }
+        )
+        service._analyze_query = lambda _sql, **_kwargs: SimpleNamespace(
+            touched_relations=[relation],
+            touched_buckets=["tax-bucket"],
+        )
+        captured: dict[str, object] = {}
+
+        def record_start(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(payload={"jobId": "query-s3-hive-off"})
+
+        service._query_jobs = SimpleNamespace(start_job=record_start)
+
+        service.start_query_job(
+            sql="select * from s3.tax_bucket.federal.manual_hive.parquet",
+            notebook_id="notebook",
+            notebook_title="Notebook",
+            cell_id="cell-1",
+            data_sources=["workspace.s3"],
+            query_options={"duckdb": {"parquetHivePartitioning": "off"}},
+        )
+
+        summaries = captured["source_summaries"]
+        self.assertEqual(captured["query_options"]["duckdb"]["parquetHivePartitioning"], "off")
+        self.assertIn("hive_partitioning=false", summaries[0]["query_sql"])
 
 
 class QuerySourceValidationApiTests(unittest.TestCase):

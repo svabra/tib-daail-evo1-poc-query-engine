@@ -25,6 +25,8 @@ except Exception:  # pragma: no cover
 
 from ..config import Settings
 from ..models import QueryJobDefinition, QueryJobMetricPoint, QueryResourceSample, QueryResult
+from .query_cache import hydrate_cache
+from .query_options import cache_hydration_enabled
 from .runtime_connections import create_duckdb_worker_connection, open_postgres_native_connection
 from .sql_utils import qualified_name
 
@@ -855,6 +857,7 @@ def _query_worker_entry(
     max_result_rows: int,
     database_path: str | None = None,
     source_summaries: list[dict[str, object]] | None = None,
+    query_options: dict[str, object] | None = None,
 ) -> None:
     started = time.perf_counter()
     connection: Any = None
@@ -864,6 +867,7 @@ def _query_worker_entry(
     result_fetch_ms: float = 0.0
     execution_error: Exception | None = None
     duckdb_profile_path: Path | None = None
+    cache_hydration_summary: dict[str, object] = {}
 
     try:
         if cancel_event.is_set():
@@ -900,7 +904,17 @@ def _query_worker_entry(
             },
         )
 
-        if execution_mode != QUERY_EXECUTION_POSTGRES_NATIVE and source_summaries:
+        worker_source_summaries = source_summaries or []
+        if execution_mode != QUERY_EXECUTION_POSTGRES_NATIVE and worker_source_summaries:
+            worker_source_summaries, cache_hydration_summary = hydrate_cache(
+                connection=connection,
+                sql=sql,
+                source_summaries=worker_source_summaries,
+                query_options=query_options,
+                progress_callback=lambda event: _put_worker_event(event_queue, event),
+            )
+
+        if execution_mode != QUERY_EXECUTION_POSTGRES_NATIVE and worker_source_summaries:
             _put_worker_event(
                 event_queue,
                 {
@@ -911,7 +925,7 @@ def _query_worker_entry(
                 },
             )
             bootstrap_started = time.perf_counter()
-            _bootstrap_duckdb_source_views(connection, source_summaries)
+            _bootstrap_duckdb_source_views(connection, worker_source_summaries)
             _put_worker_event(
                 event_queue,
                 {
@@ -922,6 +936,7 @@ def _query_worker_entry(
                     "timings": {
                         "sourceBootstrapMs": (time.perf_counter() - bootstrap_started) * 1000,
                     },
+                    "cacheHydration": cache_hydration_summary,
                 },
             )
 
@@ -1103,10 +1118,24 @@ def _query_worker_entry(
                     "engineQueryMs": engine_query_ms,
                     "resultFetchMs": result_fetch_ms,
                 },
+                "cacheHydration": cache_hydration_summary,
             },
             duckdb_profile_summary,
         )
     except Exception as exc:
+        if (
+            not cache_hydration_summary
+            and execution_mode != QUERY_EXECUTION_POSTGRES_NATIVE
+            and source_summaries
+            and cache_hydration_enabled(query_options)
+        ):
+            cache_hydration_summary = {
+                "enabled": True,
+                "status": "error",
+                "sources": [],
+                "statusLabel": "Error",
+                "statusReason": str(exc),
+            }
         _put_final_worker_event(
             event_queue,
             {
@@ -1117,6 +1146,7 @@ def _query_worker_entry(
                 "error": None if cancel_event.is_set() else str(exc),
                 "progressLabel": "Cancelled" if cancel_event.is_set() else "Failed",
                 "cancellationPhase": "cancelled" if cancel_event.is_set() else None,
+                "cacheHydration": cache_hydration_summary,
             },
             _read_duckdb_profile_summary(duckdb_profile_path),
         )
@@ -1312,6 +1342,7 @@ class QueryJobManager:
         touched_relations: list[str] | None = None,
         touched_buckets: list[str] | None = None,
         source_summaries: list[dict[str, object]] | None = None,
+        query_options: dict[str, object] | None = None,
         client_pre_submit_ms: float | None = None,
         backend_prepare_ms: float | None = None,
     ) -> QueryJobDefinition:
@@ -1373,6 +1404,7 @@ class QueryJobManager:
             progress_label="Queued...",
             message="Waiting to start.",
             data_sources=source_ids,
+            query_options=dict(query_options or {}),
             source_types=source_types,
             touched_relations=normalized_touched_relations,
             touched_buckets=normalized_touched_buckets,
@@ -2059,6 +2091,7 @@ class QueryJobManager:
                     "max_result_rows": self._max_result_rows,
                     "database_path": record.worker_database_path,
                     "source_summaries": worker_source_summaries,
+                    "query_options": record.snapshot.query_options,
                 },
                 daemon=True,
                 name=f"bdw-query-worker-{job_id[:8]}",
@@ -2253,6 +2286,7 @@ class QueryJobManager:
             "cancellationPhase": "cancellation_phase",
             "workerExitCode": "worker_exit_code",
             "timings": "timings",
+            "cacheHydration": "cache_hydration",
         }
         changes: dict[str, Any] = {}
         for source_key, target_key in mapping.items():

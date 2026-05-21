@@ -224,6 +224,9 @@ class QueryExplainApiTests(unittest.TestCase):
                     "cellId": "cell-1",
                     "dataSources": ["workspace.s3"],
                     "localRelations": {"alias": "physical"},
+                    "queryOptions": {
+                        "duckdb": {"parquetHivePartitioning": "on"},
+                    },
                 }
             ),
             service=FakeWorkbenchService(),
@@ -232,6 +235,10 @@ class QueryExplainApiTests(unittest.TestCase):
         self.assertEqual(json.loads(response.body.decode("utf-8"))["status"], "completed")
         self.assertEqual(captured["notebook_id"], "notebook")
         self.assertEqual(captured["local_relation_map"], {"alias": "physical"})
+        self.assertEqual(
+            captured["query_options"]["duckdb"]["parquetHivePartitioning"],
+            "on",
+        )
 
 
 if __name__ == "__main__":

@@ -44,6 +44,7 @@ export function createRealtimeController(helpers) {
     setDataGenerationState,
     setQueryState,
     sidebarQueryCounts,
+    syncCellCacheHydrationJobState = null,
     writeDismissedNotificationKeys,
     workspaceNotebookId,
   } = helpers;
@@ -378,6 +379,7 @@ export function createRealtimeController(helpers) {
     }
 
     querySourceValidationController?.syncQueryJobState?.(cellRoot, job);
+    syncCellCacheHydrationJobState?.(cellRoot, job);
   }
 
   function syncVisibleQueryCells() {

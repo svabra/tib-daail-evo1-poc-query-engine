@@ -3,11 +3,18 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 from pathlib import Path
+import shutil
 import time
 
 import duckdb
 
 from ...sql_utils import sql_literal
+from ..parquet_optimization import (
+    ParquetOptimizationSettings,
+    copy_query_to_optimized_parquet,
+    manual_parquet_layout_requested,
+    parquet_art_cache_warning,
+)
 from .dialect import csv_s3_metadata, normalize_csv_delimiter
 
 
@@ -21,6 +28,24 @@ class CsvS3UploadArtifact:
     file_name: str
     storage_format: str
     metadata: dict[str, str]
+    partitioned: bool = False
+    partition_columns: tuple[str, ...] = ()
+    sort_columns: tuple[str, ...] = ()
+    warning: str = ""
+
+    @property
+    def part_count(self) -> int:
+        if not self.partitioned:
+            return 1 if self.local_path.exists() else 0
+        return sum(1 for path in self.local_path.rglob("*.parquet") if path.is_file())
+
+    @property
+    def size_bytes(self) -> int:
+        if self.local_path.is_file():
+            return self.local_path.stat().st_size
+        if self.local_path.is_dir():
+            return sum(path.stat().st_size for path in self.local_path.rglob("*") if path.is_file())
+        return 0
 
 
 def normalize_csv_s3_storage_format(value: str) -> str:
@@ -51,9 +76,11 @@ def build_csv_s3_upload_artifact(
     storage_format: str,
     delimiter: str = "",
     has_header: bool = True,
+    parquet_optimization: ParquetOptimizationSettings | None = None,
 ) -> CsvS3UploadArtifact:
     normalized_storage_format = normalize_csv_s3_storage_format(storage_format)
     resolved_file_name = resolve_csv_s3_file_name(file_name, normalized_storage_format)
+    optimization = parquet_optimization or ParquetOptimizationSettings()
 
     if normalized_storage_format == "csv":
         return CsvS3UploadArtifact(
@@ -66,19 +93,33 @@ def build_csv_s3_upload_artifact(
             ),
         )
 
-    converted_path = local_path.with_name(resolved_file_name)
+    partitioned = (
+        normalized_storage_format == "parquet"
+        and optimization.mode == "manual"
+        and bool(optimization.partition_columns)
+    )
+    converted_path = (
+        local_path.with_name(Path(resolved_file_name).stem)
+        if partitioned
+        else local_path.with_name(resolved_file_name)
+    )
     _convert_csv_file_for_s3_storage(
         source_path=local_path,
         target_path=converted_path,
         storage_format=normalized_storage_format,
         delimiter=delimiter,
         has_header=has_header,
+        parquet_optimization=optimization,
     )
     return CsvS3UploadArtifact(
         local_path=converted_path,
-        file_name=resolved_file_name,
+        file_name=Path(resolved_file_name).stem if partitioned else resolved_file_name,
         storage_format=normalized_storage_format,
         metadata={},
+        partitioned=partitioned,
+        partition_columns=tuple(optimization.partition_columns if partitioned else ()),
+        sort_columns=tuple(optimization.sort_columns if manual_parquet_layout_requested(optimization) else ()),
+        warning=parquet_art_cache_warning(optimization),
     )
 
 
@@ -89,6 +130,7 @@ def _convert_csv_file_for_s3_storage(
     storage_format: str,
     delimiter: str = "",
     has_header: bool = True,
+    parquet_optimization: ParquetOptimizationSettings | None = None,
 ) -> None:
     normalized_storage_format = normalize_csv_s3_storage_format(storage_format)
     if normalized_storage_format == "csv":
@@ -113,13 +155,14 @@ def _convert_csv_file_for_s3_storage(
                 delimiter=delimiter,
                 has_header=has_header,
                 all_varchar=False,
+                parquet_optimization=parquet_optimization,
             )
             logger.info(
                 "CSV S3 transform completed: source=%r target=%r storage_format=%s target_size_bytes=%s elapsed_ms=%s",
                 source_path.as_posix(),
                 target_path.as_posix(),
                 normalized_storage_format,
-                target_path.stat().st_size if target_path.exists() else 0,
+                _path_size(target_path),
                 round((time.perf_counter() - started) * 1000),
             )
         except duckdb.Error as exc:
@@ -138,7 +181,10 @@ def _convert_csv_file_for_s3_storage(
                 normalized_storage_format,
                 exc,
             )
-            target_path.unlink(missing_ok=True)
+            if target_path.is_dir():
+                shutil.rmtree(target_path)
+            else:
+                target_path.unlink(missing_ok=True)
             retry_started = time.perf_counter()
             _copy_csv_to_storage_format(
                 connection=connection,
@@ -148,13 +194,14 @@ def _convert_csv_file_for_s3_storage(
                 delimiter=delimiter,
                 has_header=has_header,
                 all_varchar=True,
+                parquet_optimization=parquet_optimization,
             )
             logger.info(
                 "CSV S3 transform retry completed: source=%r target=%r storage_format=%s target_size_bytes=%s elapsed_ms=%s",
                 source_path.as_posix(),
                 target_path.as_posix(),
                 normalized_storage_format,
-                target_path.stat().st_size if target_path.exists() else 0,
+                _path_size(target_path),
                 round((time.perf_counter() - retry_started) * 1000),
             )
     finally:
@@ -170,7 +217,9 @@ def _copy_csv_to_storage_format(
     delimiter: str,
     has_header: bool,
     all_varchar: bool,
+    parquet_optimization: ParquetOptimizationSettings | None = None,
 ) -> None:
+    optimization = parquet_optimization or ParquetOptimizationSettings()
     read_options = ", ".join(
         _csv_reader_options(
             delimiter=delimiter,
@@ -183,12 +232,28 @@ def _copy_csv_to_storage_format(
         f"{read_options})"
     )
     if storage_format == "parquet":
+        if manual_parquet_layout_requested(optimization):
+            copy_query_to_optimized_parquet(
+                connection=connection,
+                source_query_sql=source_sql,
+                target_path=target_path,
+                optimization=optimization,
+            )
+            return
         copy_options = "FORMAT PARQUET, COMPRESSION ZSTD"
     else:
         copy_options = "FORMAT JSON"
     connection.execute(
         f"COPY ({source_sql}) TO {sql_literal(target_path.as_posix())} ({copy_options})"
     )
+
+
+def _path_size(path: Path) -> int:
+    if path.is_file():
+        return path.stat().st_size
+    if path.is_dir():
+        return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+    return 0
 
 
 def _csv_reader_options(*, delimiter: str, has_header: bool, all_varchar: bool) -> list[str]:

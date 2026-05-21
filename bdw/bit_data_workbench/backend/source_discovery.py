@@ -49,9 +49,15 @@ def build_s3_query(
     *,
     csv_delimiter: str = "",
     csv_has_header: bool | None = None,
+    hive_partitioning: bool | None = None,
 ) -> str:
     normalized_format = str(data_format or "").strip().lower()
     if normalized_format == "parquet":
+        if hive_partitioning is not None:
+            return (
+                f"SELECT * FROM read_parquet({sql_literal(path)}, "
+                f"hive_partitioning={'true' if hive_partitioning else 'false'})"
+            )
         return f"SELECT * FROM read_parquet({sql_literal(path)})"
     if normalized_format == "csv":
         options: list[str] = []
@@ -143,6 +149,22 @@ def choose_unique_relation_name(
     fallback = sanitize_relation_name(f"{normalized_preferred}_{suffix}")
     used_names.add(fallback)
     return fallback
+
+
+def drop_discovered_relation_object(
+    connection: duckdb.DuckDBPyConnection,
+    *,
+    schema_name: str,
+    relation_name: str,
+) -> None:
+    relation_sql = qualified_name(schema_name, relation_name)
+    try:
+        connection.execute(f"DROP VIEW IF EXISTS {relation_sql}")
+    except duckdb.Error as exc:
+        message = str(exc).lower()
+        if "type table" not in message and "drop type view" not in message:
+            raise
+        connection.execute(f"DROP TABLE IF EXISTS {relation_sql}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -607,12 +629,14 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
             if current_spec is None:
                 continue
             try:
-                connection.execute(
-                    f"DROP VIEW IF EXISTS {qualified_name(current_spec.schema_name, current_spec.relation_name)}"
+                drop_discovered_relation_object(
+                    connection,
+                    schema_name=current_spec.schema_name,
+                    relation_name=current_spec.relation_name,
                 )
             except duckdb.Error as exc:
                 logger.warning(
-                    "Failed to drop stale discovered S3 view '%s.%s': %s",
+                    "Failed to drop stale discovered S3 relation '%s.%s': %s",
                     current_spec.schema_name,
                     current_spec.relation_name,
                     exc,
@@ -628,6 +652,12 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
         for spec_key in added_names + updated_names:
             spec = desired_specs[spec_key]
             try:
+                if spec_key not in self._current_specs:
+                    drop_discovered_relation_object(
+                        connection,
+                        schema_name=spec.schema_name,
+                        relation_name=spec.relation_name,
+                    )
                 connection.execute(
                     "CREATE OR REPLACE VIEW "
                     f"{qualified_name(spec.schema_name, spec.relation_name)} "
@@ -794,6 +824,7 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
             SELECT table_schema, table_name
             FROM information_schema.tables
             WHERE table_catalog NOT IN ('pg_oltp', 'pg_olap')
+              AND table_type = 'VIEW'
             ORDER BY table_schema, table_name
             """
         ).fetchall()
@@ -987,6 +1018,70 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                     display_name=dataset_name,
                 )
 
+            partitioned_parquet_groups: dict[str, list[str]] = {}
+            for key in key_set:
+                if key.startswith("generated/") or infer_key_format(key) != "parquet":
+                    continue
+                parts = key.split("/")
+                partition_index = next(
+                    (
+                        index
+                        for index, segment in enumerate(parts)
+                        if index > 0 and "=" in segment and segment.split("=", 1)[0].strip()
+                    ),
+                    -1,
+                )
+                if partition_index <= 0:
+                    continue
+                dataset_prefix = "/".join(parts[:partition_index])
+                if dataset_prefix:
+                    partitioned_parquet_groups.setdefault(dataset_prefix, []).append(key)
+
+            partitioned_part_keys: set[str] = set()
+            for dataset_prefix, group_keys in sorted(partitioned_parquet_groups.items()):
+                sorted_group_keys = sorted(group_keys)
+                partitioned_part_keys.update(sorted_group_keys)
+                dataset_name = PurePosixPath(dataset_prefix).name
+                relation_name = choose_unique_relation_name(
+                    dataset_name,
+                    source_hint=dataset_prefix,
+                    used_names=used_names,
+                )
+                part_head_responses = [
+                    (part_key, self._head_object(client, bucket=bucket, key=part_key))
+                    for part_key in sorted_group_keys
+                ]
+                object_size_bytes = sum(
+                    int(head_response.get("ContentLength") or 0)
+                    for _part_key, head_response in part_head_responses
+                )
+                object_revision = "|".join(
+                    f"{part_key}:{self._object_revision_from_head(head_response)}"
+                    for part_key, head_response in part_head_responses
+                ) or "|".join(sorted_group_keys)
+                object_path = f"s3://{bucket}/{dataset_prefix}/**/*.parquet"
+                desired_specs[f"{schema_name}.{relation_name}"] = DiscoveredRelationSpec(
+                    schema_name=schema_name,
+                    relation_name=relation_name,
+                    query_sql=build_s3_query(
+                        "parquet",
+                        object_path,
+                        hive_partitioning=True,
+                    ),
+                    object_path=object_path,
+                    object_format="parquet",
+                    display_name=f"{dataset_name}.parquet",
+                    size_bytes=object_size_bytes,
+                    object_revision=object_revision,
+                    download_kind="partitioned_parts",
+                    part_prefix=f"{dataset_prefix}/",
+                    part_file_format="parquet",
+                    part_count=len(sorted_group_keys),
+                    download_filename=f"{dataset_name}.parquet",
+                    merge_downloadable=False,
+                    zip_downloadable=True,
+                )
+
             startup_paths = {
                 parse_s3_path(path)[1]
                 for _view_name, _data_format, path in self._startup_views
@@ -996,6 +1091,8 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                 if key in startup_paths:
                     continue
                 if key.startswith("generated/"):
+                    continue
+                if key in partitioned_part_keys:
                     continue
 
                 reader_format = infer_key_format(key)

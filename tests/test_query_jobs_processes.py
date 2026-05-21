@@ -134,6 +134,7 @@ class QueryJobPayloadTests(TestCase):
             started_at="2026-05-13T00:00:00+00:00",
             updated_at="2026-05-13T00:00:01+00:00",
             execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+            query_options={"duckdb": {"parquetHivePartitioning": "on"}},
             process_id=1234,
             cpu_percent=12.5,
             average_cpu_percent=8.5,
@@ -189,6 +190,11 @@ class QueryJobPayloadTests(TestCase):
         self.assertEqual(payload["workerExitCode"], -15)
         self.assertEqual(payload["timings"]["backendPrepareMs"], 4.5)
         self.assertEqual(payload["timings"]["workerStartupMs"], 12.0)
+        self.assertEqual(
+            payload["queryOptions"]["duckdb"]["parquetHivePartitioning"],
+            "on",
+        )
+        self.assertEqual(payload["cacheHydration"], {})
 
 
 class DuckDBQueryAccessCoordinatorTests(TestCase):

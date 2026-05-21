@@ -20,6 +20,11 @@ class DataGeneratorRegistry:
             generator = getattr(module, "GENERATOR", None)
             if isinstance(generator, DataGenerator):
                 generators.append(generator)
+            module_generators = getattr(module, "GENERATORS", ())
+            if isinstance(module_generators, (list, tuple)):
+                generators.extend(
+                    item for item in module_generators if isinstance(item, DataGenerator)
+                )
         return sorted(generators, key=lambda item: item.title.lower())
 
     def definitions(self) -> list[dict[str, object]]:

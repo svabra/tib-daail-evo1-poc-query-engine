@@ -28,6 +28,7 @@ from bit_data_workbench.data_generator.mwa_abrechnung import (  # noqa: E402
 )
 from bit_data_workbench.data_generator.registry import DataGeneratorRegistry  # noqa: E402
 from bit_data_workbench.backend.notebook_presets import (  # noqa: E402
+    _build_mwa_art_index_demo_sql,
     _build_mwa_abrechnung_performance_sql,
 )
 
@@ -165,6 +166,21 @@ class MwaAbrechnungLoaderTests(unittest.TestCase):
 
             self.assertIn("abrechnung_count", columns)
             self.assertIn("steuer_total", columns)
+        finally:
+            connection.close()
+
+    def test_mwa_art_index_demo_sql_uses_index_scan(self) -> None:
+        connection = duckdb.connect(":memory:")
+        try:
+            connection.execute(
+                f"CREATE TEMP TABLE ab AS {mwa_abrechnung_entities_select(0, 10_000)}"
+            )
+
+            sql = _build_mwa_art_index_demo_sql(abrechnung_relation="ab")
+            plan_rows = connection.execute(sql).fetchall()
+            plan_text = "\n".join(str(value) for row in plan_rows for value in row)
+
+            self.assertIn("Type: Index Scan", plan_text)
         finally:
             connection.close()
 

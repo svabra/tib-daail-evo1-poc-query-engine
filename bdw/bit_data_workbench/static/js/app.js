@@ -1034,6 +1034,7 @@ const {
   activeWorkspaceMetaRoot,
   createInitialNotebookVersion,
   normalizeCellEntry,
+  normalizeCellQueryOptions,
   normalizeCellLanguage,
   normalizeNotebookCells,
   normalizeNotebookSummaryValue,
@@ -1090,6 +1091,9 @@ const {
   loadNotebookVersion,
   moveCell,
   notebookMetadata,
+  openCacheHydrationDialog,
+  queryOptionsForCellRoot,
+  refreshCellCacheHydrationStatus,
   renameNotebook,
   restartPythonKernel,
   revealNotebookLink,
@@ -1097,6 +1101,7 @@ const {
   setActiveCell,
   setCellDataSources,
   setCellLanguage,
+  setCellQueryOptions,
   setCellSql,
   setNotebookSummary,
   setNotebookTags,
@@ -1457,6 +1462,50 @@ function currentPythonState() {
   };
 }
 
+function clientObservedQueryElapsedMs(job) {
+  const jobId = String(job?.jobId || "").trim();
+  if (!jobId || !queryJobTerminalStatuses.has(String(job?.status || "").trim())) {
+    return null;
+  }
+
+  const timingStart = queryClientTimingStarts.get(jobId);
+  if (!timingStart || !Number.isFinite(Number(timingStart.startedPerf))) {
+    return null;
+  }
+
+  const existingObservedMs = Number(timingStart.observedMs);
+  if (Number.isFinite(existingObservedMs) && existingObservedMs >= 0) {
+    return existingObservedMs;
+  }
+
+  const observedMs = Math.max(0, performance.now() - Number(timingStart.startedPerf));
+  queryClientTimingStarts.set(jobId, {
+    ...timingStart,
+    observedMs,
+  });
+  return observedMs;
+}
+
+function normalizeQueryJobForDisplay(job) {
+  const normalizedJob = normalizeQueryJob(job);
+  if (!normalizedJob) {
+    return null;
+  }
+
+  const observedMs = clientObservedQueryElapsedMs(normalizedJob);
+  if (!Number.isFinite(Number(observedMs)) || Number(observedMs) < 0) {
+    return normalizedJob;
+  }
+
+  return {
+    ...normalizedJob,
+    timings: {
+      ...(normalizedJob.timings || {}),
+      clientObservedMs: Number(observedMs),
+    },
+  };
+}
+
 const {
   applyDataGenerationJobsState,
   applyQueryJobsState,
@@ -1492,7 +1541,7 @@ const {
   getDismissedNotificationKeys: () => dismissedNotificationKeys,
   getQueryState: currentQueryState,
   normalizeDataGenerationJob,
-  normalizeQueryJob,
+  normalizeQueryJob: normalizeQueryJobForDisplay,
   notificationClearButton,
   notificationItemKey,
   queryJobElapsedMs,
@@ -1530,6 +1579,7 @@ const {
     queryPerformanceState = nextState.performance;
   },
   sidebarQueryCounts,
+  syncCellCacheHydrationJobState,
   writeDismissedNotificationKeys,
   workspaceNotebookId,
 });
@@ -2339,6 +2389,281 @@ function selectedDataSourcesForCell(cellRoot) {
   return normalizeDataSources((cellRoot.dataset.defaultCellSources || "").split("||"));
 }
 
+function queryOptionsForCellRoot(cellRoot) {
+  if (!(cellRoot instanceof Element)) {
+    return normalizeCellQueryOptions({});
+  }
+  const select = cellRoot.querySelector('[data-cell-query-option="duckdb.parquetHivePartitioning"]');
+  const cacheToggle = cellRoot.querySelector('[data-cell-query-option="duckdb.cacheHydration.mode"]');
+  return normalizeCellQueryOptions({
+    duckdb: {
+      parquetHivePartitioning: select?.value || "auto",
+      cacheHydration: {
+        mode: cacheToggle?.checked ? "on" : "off",
+        scope: "referencedS3Parquet",
+        indexPolicy: "autoPredicates",
+      },
+    },
+  });
+}
+
+function setCellCacheHydrationVisualState(cellRoot, status) {
+  const root = cellRoot?.querySelector?.("[data-cell-cache-hydration]");
+  const badge = cellRoot?.querySelector?.("[data-cache-hydration-badge]");
+  if (!root) {
+    return;
+  }
+  const state = String(status?.status || "unknown").trim().toLowerCase() || "unknown";
+  const label = String(status?.statusLabel || status?.label || (state === "off" ? "Off" : "Unknown"));
+  const reason = String(status?.statusReason || "");
+  root.dataset.cacheHydrationState = state;
+  root.title = reason || root.title;
+  if (badge) {
+    badge.hidden = state === "off";
+    const shortReason = reason.length > 90 ? `${reason.slice(0, 87)}...` : reason;
+    badge.textContent = state === "error" && shortReason ? `Error: ${shortReason}` : label;
+    badge.title = reason || label;
+  }
+}
+
+function cacheHydrationPayloadForCellRoot(cellRoot) {
+  const sql = cellRoot?.querySelector?.("[data-editor-source]")?.value || "";
+  return {
+    sql,
+    dataSources: selectedDataSourcesForCell(cellRoot),
+    localRelations: {},
+    queryOptions: queryOptionsForCellRoot(cellRoot),
+  };
+}
+
+async function fetchCacheHydrationStatus(cellRoot, endpoint = "/api/query-cache/preview") {
+  const response = await window.fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(cacheHydrationPayloadForCellRoot(cellRoot)),
+  });
+  if (!response.ok) {
+    let message = "The cache hydration status could not be checked.";
+    try {
+      const payload = await response.json();
+      message = payload?.detail || message;
+    } catch (_error) {
+      // Ignore invalid JSON bodies.
+    }
+    throw new Error(message);
+  }
+  return response.json();
+}
+
+function primaryCacheHydrationStatus(payload) {
+  const sources = Array.isArray(payload?.sources) ? payload.sources : [];
+  if (!sources.length) {
+    return {
+      status: payload?.enabled ? "unsupported" : "off",
+      statusLabel: payload?.enabled ? "No cacheable source" : "Off",
+      statusReason: payload?.enabled
+        ? "Hydrate cache applies to known S3 Parquet sources selected in the notebook. Direct read_parquet('s3://...') calls are not rewritten in this version."
+        : "Hydrate cache is off for this SQL cell.",
+    };
+  }
+  const priority = ["error", "expired", "stale", "miss", "unknown", "hit"];
+  return (
+    [...sources].sort(
+      (left, right) =>
+        priority.indexOf(String(left.status || "unknown")) -
+        priority.indexOf(String(right.status || "unknown"))
+    )[0] || sources[0]
+  );
+}
+
+async function refreshCellCacheHydrationStatus(cellRoot) {
+  const enabled =
+    cellRoot?.querySelector?.('[data-cell-query-option="duckdb.cacheHydration.mode"]')?.checked === true;
+  if (!enabled) {
+    setCellCacheHydrationVisualState(cellRoot, {
+      status: "off",
+      statusLabel: "Off",
+      statusReason: "Hydrate cache is off for this SQL cell.",
+    });
+    return null;
+  }
+  setCellCacheHydrationVisualState(cellRoot, {
+    status: "unknown",
+    statusLabel: "Checking",
+    statusReason: "Checking whether the temporary DuckDB cache exists and still matches the S3 source revision.",
+  });
+  try {
+    const payload = await fetchCacheHydrationStatus(cellRoot);
+    setCellCacheHydrationVisualState(cellRoot, primaryCacheHydrationStatus(payload));
+    return payload;
+  } catch (error) {
+    setCellCacheHydrationVisualState(cellRoot, {
+      status: "error",
+      statusLabel: "Error",
+      statusReason: error instanceof Error ? error.message : "The cache hydration status could not be checked.",
+    });
+    return null;
+  }
+}
+
+function refreshVisibleCacheHydrationStatuses(root = document) {
+  root.querySelectorAll?.("[data-query-cell]").forEach((cellRoot) => {
+    if (cellRoot.querySelector('[data-cell-query-option="duckdb.cacheHydration.mode"]')?.checked) {
+      refreshCellCacheHydrationStatus(cellRoot);
+    }
+  });
+}
+
+function syncCellCacheHydrationJobState(cellRoot, job) {
+  if (!cellRoot?.querySelector?.('[data-cell-query-option="duckdb.cacheHydration.mode"]')?.checked) {
+    return;
+  }
+  const hydration = job?.cacheHydration;
+  if (!hydration || typeof hydration !== "object") {
+    return;
+  }
+  if (String(hydration.status || "").toLowerCase() === "rehydrating") {
+    setCellCacheHydrationVisualState(cellRoot, {
+      status: "rehydrating",
+      statusLabel: "Rehydrating",
+      statusReason: "Rebuilds the local DuckDB table from S3 and recreates the selected ART indexes.",
+    });
+    return;
+  }
+  if (String(hydration.status || "").toLowerCase() === "error") {
+    setCellCacheHydrationVisualState(cellRoot, {
+      status: "error",
+      statusLabel: "Error",
+      statusReason: hydration.statusReason || hydration.error || "Cache hydration failed before the query could run.",
+    });
+    return;
+  }
+  if (Array.isArray(hydration.sources) && hydration.sources.length) {
+    setCellCacheHydrationVisualState(
+      cellRoot,
+      primaryCacheHydrationStatus({ enabled: hydration.enabled !== false, sources: hydration.sources })
+    );
+  }
+}
+
+function ensureCacheHydrationDialog() {
+  let dialog = document.querySelector("[data-cache-hydration-dialog]");
+  if (dialog) {
+    return dialog;
+  }
+  document.body.insertAdjacentHTML(
+    "beforeend",
+    `
+      <dialog class="modal-dialog modal-dialog-wide" data-cache-hydration-dialog>
+        <form method="dialog" class="modal-card modal-card-wide">
+          <h2 class="modal-title">Cache hydration plan</h2>
+          <p class="modal-copy">
+            This dialog explains what the Hydrate cache option does before a SQL cell runs.
+          </p>
+          <div class="cache-hydration-dialog-body" data-cache-hydration-dialog-body></div>
+          <menu class="modal-actions">
+            <button class="modal-button modal-button-secondary" type="button" data-cache-hydration-refresh>Refresh status</button>
+            <button class="modal-button" type="button" data-cache-hydration-rehydrate>Rehydrate now</button>
+            <button class="modal-button modal-button-secondary" type="button" data-cache-hydration-expire>Expire cache</button>
+            <button class="modal-button modal-button-secondary" type="submit" value="confirm">Close</button>
+          </menu>
+        </form>
+      </dialog>
+    `
+  );
+  return document.querySelector("[data-cache-hydration-dialog]");
+}
+
+function renderCacheHydrationDialogBody(dialog, payload) {
+  const body = dialog?.querySelector("[data-cache-hydration-dialog-body]");
+  if (!body) {
+    return;
+  }
+  const sources = Array.isArray(payload?.sources) ? payload.sources : [];
+  const unsupported = Array.isArray(payload?.unsupportedSources) ? payload.unsupportedSources : [];
+  const sourceMarkup = sources.length
+    ? sources
+        .map(
+          (source) => `
+            <article class="query-explain-card">
+              <h3>${escapeHtml(source.statusLabel || "Cache source")}</h3>
+              <dl class="query-explain-meta-list">
+                <div><dt>What will be cached</dt><dd>${escapeHtml(source.relation || "")}</dd></div>
+                <div><dt>S3 path</dt><dd>${escapeHtml(source.path || "")}</dd></div>
+                <div><dt>Source size</dt><dd>${escapeHtml(formatByteCount(source.sourceSizeBytes || 0))}</dd></div>
+                <div><dt>Cache table</dt><dd>${escapeHtml(source.cacheTable || "")}</dd></div>
+                <div><dt>Cache size</dt><dd>${escapeHtml(formatByteCount(source.cacheSizeBytes || 0))}</dd></div>
+                <div><dt>ART index columns</dt><dd>${escapeHtml((source.indexColumns || []).join(", ") || "No ART index columns selected yet.")}</dd></div>
+                <div><dt>Last checked</dt><dd>${escapeHtml(source.lastCheckedAt || "")}</dd></div>
+                <div><dt>Last hydrated</dt><dd>${escapeHtml(source.lastHydratedAt || "Not hydrated yet")}</dd></div>
+                <div><dt>Expected behavior on next run</dt><dd>${escapeHtml(source.expectedBehavior || "The cell checks this cache before it runs and rebuilds it if it is missing, stale, or expired.")}</dd></div>
+              </dl>
+              <p class="modal-copy">${escapeHtml(source.statusReason || "")}</p>
+              <p class="modal-copy">ART indexes speed up equality lookups such as WHERE taxpayer_id = ...; they do not make every query faster.</p>
+            </article>
+          `
+        )
+        .join("")
+    : '<p class="modal-copy">No known S3 Parquet source relation is referenced by this cell. Hydrate cache does not rewrite direct read_parquet(\'s3://...\') calls in this version.</p>';
+  const unsupportedMarkup = unsupported.length
+    ? `<p class="modal-copy">${escapeHtml(unsupported.map((item) => item.statusReason).filter(Boolean)[0] || "")}</p>`
+    : "";
+  body.innerHTML = `
+    <p class="modal-copy">${escapeHtml(payload?.copy || "Copies referenced S3 Parquet data into temporary DuckDB cache tables before the query runs.")}</p>
+    <p class="modal-copy">${escapeHtml(payload?.ephemeralWarning || "This cache lives in temporary compute storage and can disappear after a pod restart.")}</p>
+    <p class="modal-copy">Stale cache means the source data changed since this cache was built; the next run rebuilds it before querying. Expired cache means you manually marked it expired, so it will not be reused until it is rebuilt.</p>
+    ${sourceMarkup}
+    ${unsupportedMarkup}
+  `;
+}
+
+async function openCacheHydrationDialog(cellRoot) {
+  const dialog = ensureCacheHydrationDialog();
+  if (!dialog) {
+    return;
+  }
+  dialog.dataset.cellId = cellRoot?.dataset.cellId || "";
+  const refreshButton = dialog.querySelector("[data-cache-hydration-refresh]");
+  const rehydrateButton = dialog.querySelector("[data-cache-hydration-rehydrate]");
+  const expireButton = dialog.querySelector("[data-cache-hydration-expire]");
+  const runAction = async (endpoint) => {
+    setCellCacheHydrationVisualState(cellRoot, {
+      status: endpoint.includes("rehydrate") ? "rehydrating" : "unknown",
+      statusLabel: endpoint.includes("rehydrate") ? "Rehydrating" : "Checking",
+      statusReason: endpoint.includes("rehydrate")
+        ? "Rebuilds the local DuckDB table from S3 and recreates the selected ART indexes."
+        : "Checking whether the cache exists and matches the S3 source revision.",
+    });
+    const payload = await fetchCacheHydrationStatus(cellRoot, endpoint);
+    renderCacheHydrationDialogBody(dialog, payload);
+    setCellCacheHydrationVisualState(cellRoot, primaryCacheHydrationStatus(payload));
+  };
+  refreshButton.onclick = () => runAction("/api/query-cache/preview");
+  rehydrateButton.onclick = () => runAction("/api/query-cache/rehydrate");
+  expireButton.onclick = () => runAction("/api/query-cache/expire");
+  try {
+    const payload = await fetchCacheHydrationStatus(cellRoot);
+    renderCacheHydrationDialogBody(dialog, payload);
+    setCellCacheHydrationVisualState(cellRoot, primaryCacheHydrationStatus(payload));
+  } catch (error) {
+    renderCacheHydrationDialogBody(dialog, {
+      copy: error instanceof Error ? error.message : "The cache hydration plan could not be loaded.",
+      sources: [],
+    });
+    setCellCacheHydrationVisualState(cellRoot, {
+      status: "error",
+      statusLabel: "Error",
+      statusReason: error instanceof Error ? error.message : "The cache hydration plan could not be loaded.",
+    });
+  }
+  if (typeof dialog.showModal === "function" && !dialog.open) {
+    dialog.showModal();
+  }
+}
+
 function formatQueryTimestamp(value) {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
@@ -3045,6 +3370,7 @@ function createNotebookLinkElement(notebookId, metadata) {
       cellId: cell.cellId,
       language: normalizeCellLanguage(cell.language),
       dataSources: normalizeDataSources(cell.dataSources),
+      queryOptions: normalizeCellQueryOptions(cell.queryOptions),
       sql: cell.sql,
     }))
   );
@@ -3262,6 +3588,7 @@ function createNotebookVersionSnapshot(metadata) {
       cellId: cell.cellId,
       language: normalizeCellLanguage(cell.language),
       dataSources: normalizeDataSources(cell.dataSources),
+      queryOptions: normalizeCellQueryOptions(cell.queryOptions),
       sql: cell.sql,
     })),
   };
@@ -3288,6 +3615,7 @@ function sharedNotebookPayload(notebookId) {
       language: normalizeCellLanguage(cell.language),
       sql: cell.sql,
       dataSources: normalizeDataSources(cell.dataSources),
+      queryOptions: normalizeCellQueryOptions(cell.queryOptions),
     })),
     versions: (metadata.versions ?? []).map((version) => ({
       versionId: version.versionId,
@@ -3300,6 +3628,7 @@ function sharedNotebookPayload(notebookId) {
         language: normalizeCellLanguage(cell.language),
         sql: cell.sql,
         dataSources: normalizeDataSources(cell.dataSources),
+        queryOptions: normalizeCellQueryOptions(cell.queryOptions),
       })),
     })),
   };
@@ -3346,6 +3675,7 @@ function writeNotebookDefaultsToMetaRoot(metaRoot, metadata) {
       cellId: cell.cellId,
       language: normalizeCellLanguage(cell.language),
       dataSources: normalizeDataSources(cell.dataSources),
+      queryOptions: normalizeCellQueryOptions(cell.queryOptions),
       sql: cell.sql,
     }))
   );
@@ -3761,6 +4091,7 @@ function updateSidebarNotebookLink(link, metadata) {
       cellId: cell.cellId,
       language: normalizeCellLanguage(cell.language),
       dataSources: normalizeDataSources(cell.dataSources),
+      queryOptions: normalizeCellQueryOptions(cell.queryOptions),
       sql: cell.sql,
     }))
   );
@@ -3843,12 +4174,14 @@ function createEmptyCellState(initial = {}) {
       cellId: initial.cellId ?? createCellId(),
       language: normalizeCellLanguage(initial.language),
       dataSources: initial.dataSources ?? [],
+      queryOptions: initial.queryOptions ?? {},
       sql: initial.sql ?? "",
     },
     {
       cellId: initial.cellId ?? createCellId(),
       language: normalizeCellLanguage(initial.language),
       dataSources: initial.dataSources ?? [],
+      queryOptions: initial.queryOptions ?? {},
       sql: initial.sql ?? "",
     }
   );
@@ -3946,6 +4279,30 @@ function setCellDataSources(notebookId, cellId, dataSources) {
     `[data-workspace-notebook][data-notebook-id="${CSS.escape(notebookId)}"] [data-query-cell][data-cell-id="${CSS.escape(cellId)}"]`
   );
   querySourceValidationController.refreshCell(cellRoot);
+}
+
+function setCellQueryOptions(notebookId, cellId, queryOptions) {
+  const normalizedQueryOptions = normalizeCellQueryOptions(queryOptions);
+  updateStoredNotebookState(notebookId, (currentState) => {
+    const baseCells = normalizeNotebookCells(currentState.cells ?? notebookMetadata(notebookId).cells);
+    return {
+      ...currentState,
+      cells: baseCells.map((cell) =>
+        cell.cellId === cellId
+          ? {
+              ...cell,
+              queryOptions: normalizedQueryOptions,
+            }
+          : cell
+      ),
+    };
+  });
+
+  const metadata = notebookMetadata(notebookId);
+  notebookLinks(notebookId).forEach((link) => updateSidebarNotebookLink(link, metadata));
+  applyNotebookMetadata();
+  recordNotebookActivity(notebookId, "edited");
+  scheduleSharedNotebookSync(notebookId);
 }
 
 function setCellSql(notebookId, cellId, sqlText) {
@@ -4054,6 +4411,7 @@ function duplicateCell(notebookId, cellId) {
   const duplicate = createEmptyCellState({
     language: nextCells[index].language,
     dataSources: [...nextCells[index].dataSources],
+    queryOptions: normalizeCellQueryOptions(nextCells[index].queryOptions),
     sql: nextCells[index].sql,
   });
   nextCells.splice(index + 1, 0, duplicate);
@@ -4443,6 +4801,7 @@ function renderLocalNotebookWorkspace(notebookId, options = {}) {
   syncVisibleQueryCells();
   syncVisiblePythonCells();
   querySourceValidationController.refreshAll(panel);
+  refreshVisibleCacheHydrationStatuses(panel);
   renderQueryNotificationMenu();
   if (scrollToTop) {
     scrollWorkspaceNotebookIntoView();
@@ -4854,6 +5213,33 @@ function applyWorkspaceCellState(workspaceRoot, cell, index, editable, totalCell
     explainButton.disabled = cellLanguage !== "sql";
   }
 
+  const duckdbOptionsRoot = cellRoot.querySelector("[data-cell-duckdb-options]");
+  const parquetHiveSelect = cellRoot.querySelector(
+    '[data-cell-query-option="duckdb.parquetHivePartitioning"]'
+  );
+  const cacheHydrationToggle = cellRoot.querySelector(
+    '[data-cell-query-option="duckdb.cacheHydration.mode"]'
+  );
+  if (duckdbOptionsRoot) {
+    duckdbOptionsRoot.hidden = cellLanguage !== "sql";
+  }
+  if (parquetHiveSelect) {
+    parquetHiveSelect.disabled = !editable || cellLanguage !== "sql";
+    parquetHiveSelect.value = normalizeCellQueryOptions(cell.queryOptions).duckdb.parquetHivePartitioning;
+  }
+  if (cacheHydrationToggle) {
+    cacheHydrationToggle.disabled = !editable || cellLanguage !== "sql";
+    cacheHydrationToggle.checked =
+      normalizeCellQueryOptions(cell.queryOptions).duckdb.cacheHydration.mode === "on";
+    if (!cacheHydrationToggle.checked) {
+      setCellCacheHydrationVisualState(cellRoot, {
+        status: "off",
+        statusLabel: "Off",
+        statusReason: "Hydrate cache is off for this SQL cell.",
+      });
+    }
+  }
+
   const sourceSummary = cellRoot.querySelector("[data-cell-source-summary]");
   if (sourceSummary) {
     sourceSummary.innerHTML = cellSourceSummaryMarkup(cell.dataSources);
@@ -4925,6 +5311,7 @@ function applyWorkspaceMetadata(metaRoot, metadata) {
       cellId: cell.cellId,
       language: normalizeCellLanguage(cell.language),
       dataSources: normalizeDataSources(cell.dataSources),
+      queryOptions: normalizeCellQueryOptions(cell.queryOptions),
       sql: cell.sql,
     }))
   );
@@ -5130,6 +5517,7 @@ function copyNotebook(notebookId) {
     cells: sourceMetadata.cells.map((cell) =>
       createEmptyCellState({
         dataSources: [...normalizeDataSources(cell.dataSources)],
+        queryOptions: normalizeCellQueryOptions(cell.queryOptions),
         sql: cell.sql,
       })
     ),
@@ -6391,8 +6779,16 @@ async function startQueryJobForForm(form) {
   formData.set("notebook_title", currentWorkspaceNotebookTitle(workspaceRoot));
   formData.set("data_sources", selectedDataSourcesForCell(cellRoot).join("||"));
   formData.set("localRelations", JSON.stringify(localRelationMap));
+  formData.set("queryOptions", JSON.stringify(queryOptionsForCellRoot(cellRoot)));
   formData.set("clientRunStartedAt", String(clientRunStartedAt));
   formData.set("clientPreSubmitMs", String(Math.max(0, performance.now() - clientRunStartedPerf)));
+  if (cellRoot.querySelector('[data-cell-query-option="duckdb.cacheHydration.mode"]')?.checked) {
+    setCellCacheHydrationVisualState(cellRoot, {
+      status: "rehydrating",
+      statusLabel: "Rehydrating",
+      statusReason: "The query worker will verify the local DuckDB cache and rebuild it from S3 if it is missing, stale, expired, or physically gone.",
+    });
+  }
 
   const response = await window.fetch("/api/query-jobs", {
     method: "POST",
@@ -6431,9 +6827,10 @@ async function startQueryJobForForm(form) {
       startedPerf: clientRunStartedPerf,
     });
   }
+  const displaySnapshot = normalizeQueryJobForDisplay(snapshot) || snapshot;
   recordNotebookActivity(notebookId, "run");
   applyOptimisticQueryJobSnapshot({
-    snapshot,
+    snapshot: displaySnapshot,
     applyQueryJobsState,
     getQueryState: currentQueryState,
     incrementRunningCount: true,
@@ -6523,6 +6920,7 @@ async function startQueryExplainForForm(form) {
         cellId,
         dataSources: selectedSources,
         localRelations: localRelationMap,
+        queryOptions: queryOptionsForCellRoot(cellRoot),
       }),
     });
 
@@ -6693,7 +7091,7 @@ async function cancelQueryJob(jobId) {
   try {
     await loadQueryJobsState();
   } catch (_error) {
-    const snapshot = normalizeQueryJob(await response.json());
+    const snapshot = normalizeQueryJobForDisplay(await response.json());
     if (!snapshot) {
       return;
     }
@@ -6720,7 +7118,11 @@ async function acknowledgeQueryClientTiming(job) {
   }
 
   acknowledgedQueryClientTimings.add(jobId);
-  const clientTotalMs = Math.max(0, performance.now() - Number(timingStart.startedPerf));
+  const observedMs = Number(timingStart.observedMs);
+  const clientTotalMs =
+    Number.isFinite(observedMs) && observedMs >= 0
+      ? observedMs
+      : Math.max(0, performance.now() - Number(timingStart.startedPerf));
   try {
     const response = await window.fetch(`/api/query-jobs/${encodeURIComponent(jobId)}/client-timing`, {
       method: "POST",
@@ -6733,7 +7135,7 @@ async function acknowledgeQueryClientTiming(job) {
     if (!response.ok) {
       return;
     }
-    const snapshot = normalizeQueryJob(await response.json());
+    const snapshot = normalizeQueryJobForDisplay(await response.json());
     if (!snapshot) {
       return;
     }
@@ -8322,6 +8724,7 @@ async function loadNotebookWorkspace(notebookId, options = {}) {
   syncVisibleQueryCells();
   syncVisiblePythonCells();
   querySourceValidationController.refreshAll(panel);
+  refreshVisibleCacheHydrationStatuses(panel);
   renderQueryNotificationMenu();
   if (scrollToTop) {
     scrollWorkspaceNotebookIntoView();
@@ -9093,6 +9496,7 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
   syncVisibleQueryCells();
   syncVisiblePythonCells();
   querySourceValidationController.refreshAll(event.target);
+  refreshVisibleCacheHydrationStatuses(event.target);
   queryRunsController.initializeCurrentPage(event.target).catch((error) => {
     console.error("Failed to initialize query-run history after a partial swap.", error);
   });
@@ -9256,6 +9660,13 @@ window.addEventListener("popstate", async () => {
       }
     }
   }
+});
+
+window.addEventListener("focus", () => {
+  if (document.visibilityState === "hidden") {
+    return;
+  }
+  refreshVisibleCacheHydrationStatuses(document.getElementById("workspace-panel") || document);
 });
 
 initializeEditors();

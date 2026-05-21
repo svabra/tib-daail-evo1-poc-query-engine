@@ -153,6 +153,13 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         "kbhp_2019",
         "dim_kalender",
     )
+    parquet_performance_option_object_names = (
+        "federal_tax_parquet_off",
+        "federal_tax_parquet_recommended",
+        "federal_tax_parquet_manual_partition",
+        "federal_tax_parquet_manual_hive",
+        "federal_tax_parquet_manual_cache",
+    )
     preferred_s3_relation = _find_generated_s3_relation_by_object_name(
         catalogs,
         object_names=("vat_smoke",),
@@ -210,6 +217,12 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         catalog_name="workspace",
         schema_name=None,
         object_names=("pg_union_tax_reference_s3",),
+    )
+    parquet_performance_option_relations = _find_relations_by_object_names(
+        catalogs,
+        catalog_name="workspace",
+        schema_name=None,
+        object_names=parquet_performance_option_object_names,
     )
     mwa_postgres_relations = _find_relations_by_object_names(
         catalogs,
@@ -307,6 +320,7 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         union_olap_relation=union_olap_relation,
         union_oltp_s3_relation=union_oltp_s3_relation,
         union_s3_relation=union_s3_relation,
+        parquet_performance_option_relations=parquet_performance_option_relations,
     )
     for notebook in notebooks:
         if not notebook.can_edit:

@@ -36,6 +36,9 @@ from bit_data_workbench.backend.ingestion_types.csv.validation import (  # noqa:
     detect_csv_delimiter,
     validate_csv_file,
 )
+from bit_data_workbench.backend.ingestion_types.parquet_optimization import (  # noqa: E402
+    normalize_parquet_optimization_settings,
+)
 from bit_data_workbench.config import Settings  # noqa: E402
 from bit_data_workbench.backend.s3_hidden import shared_notebooks_bucket_name  # noqa: E402
 from bit_data_workbench.version_info import current_repo_version  # noqa: E402
@@ -64,6 +67,35 @@ class FakeS3Client:
         Config: object | None = None,
     ) -> None:
         self.uploads.append((filename, bucket, key, ExtraArgs, Path(filename).read_bytes()))
+
+
+def read_partitioned_upload_rows(
+    fake_client: FakeS3Client,
+    *,
+    key_prefix: str,
+    hive_partitioning: bool,
+) -> list[tuple[object, ...]]:
+    with TemporaryDirectory() as temp_dir:
+        root = Path(temp_dir)
+        for _filename, _bucket, key, _extra_args, payload_bytes in fake_client.uploads:
+            relative = key.removeprefix(f"{key_prefix.rstrip('/')}/")
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(payload_bytes)
+        connection = duckdb.connect(":memory:")
+        try:
+            return connection.execute(
+                f"""
+                SELECT tax_year, id, name
+                FROM read_parquet(
+                    '{root.as_posix()}/**/*.parquet',
+                    hive_partitioning={'true' if hive_partitioning else 'false'}
+                )
+                ORDER BY tax_year, id
+                """
+            ).fetchall()
+        finally:
+            connection.close()
 
 
 class FakeCopy:
@@ -261,6 +293,34 @@ class CsvIngestionHelperTests(TestCase):
 
 
 class CsvIngestionManagerTests(TestCase):
+    def test_parquet_optimization_validation_accepts_manual_source_column_names(self) -> None:
+        settings = normalize_parquet_optimization_settings(
+            {
+                "mode": "manual",
+                "partitionColumns": ["Tax Year", "Customer ID"],
+                "sortColumns": ["Invoice Datum"],
+                "indexColumns": ["id_"],
+            },
+            target_id="workspace.s3",
+            storage_format="parquet",
+        )
+
+        self.assertEqual(settings.mode, "manual")
+        self.assertEqual(settings.partition_columns, ["Tax Year", "Customer ID"])
+        self.assertEqual(settings.sort_columns, ["Invoice Datum"])
+        self.assertEqual(settings.index_columns, ["id_"])
+
+    def test_parquet_optimization_validation_rejects_control_characters(self) -> None:
+        with self.assertRaisesRegex(ValueError, "control characters"):
+            normalize_parquet_optimization_settings(
+                {
+                    "mode": "manual",
+                    "partitionColumns": ["Tax\nYear"],
+                },
+                target_id="workspace.s3",
+                storage_format="parquet",
+            )
+
     def test_import_csv_files_to_s3_uploads_files(self) -> None:
         fake_client = FakeS3Client()
         manager = CsvIngestionManager(
@@ -624,6 +684,186 @@ class CsvIngestionManagerTests(TestCase):
             [(row[0], row[1]) for row in rows],
             [("id", "BIGINT"), ("name", "VARCHAR")],
         )
+
+    def test_import_csv_files_to_s3_parquet_echoes_recommended_optimization(self) -> None:
+        fake_client = FakeS3Client()
+        manager = CsvIngestionManager(
+            settings=make_settings(),
+            postgres_connection_factory=lambda target: None,
+            s3_client_factory=lambda settings: fake_client,
+        )
+
+        with patch(
+            "bit_data_workbench.backend.ingestion_types.csv.manager.ensure_s3_bucket"
+        ):
+            payload = manager.import_csv_files(
+                files=[FakeUpload("vat_smoke.csv", b"id,name\n1,alpha\n")],
+                target_id="workspace.s3",
+                bucket="csv-imports",
+                delimiter=",",
+                has_header=True,
+                storage_format="parquet",
+                parquet_optimization={"mode": "recommended"},
+            )
+
+        self.assertEqual(payload["parquetOptimization"]["mode"], "recommended")
+        self.assertEqual(payload["imports"][0]["parquetOptimization"]["mode"], "recommended")
+
+    def test_import_csv_files_to_s3_parquet_applies_manual_hive_partitioning(self) -> None:
+        fake_client = FakeS3Client()
+        manager = CsvIngestionManager(
+            settings=make_settings(),
+            postgres_connection_factory=lambda target: None,
+            s3_client_factory=lambda settings: fake_client,
+        )
+        upload = FakeUpload(
+            "vat_smoke.csv",
+            (
+                b"tax_year,id,name\n"
+                b"2026,2,beta\n"
+                b"2026,1,alpha\n"
+                b"2025,3,gamma\n"
+            ),
+        )
+
+        with patch(
+            "bit_data_workbench.backend.ingestion_types.csv.manager.ensure_s3_bucket"
+        ):
+            payload = manager.import_csv_files(
+                files=[upload],
+                target_id="workspace.s3",
+                bucket="csv-imports",
+                prefix="incoming/april",
+                delimiter=",",
+                has_header=True,
+                storage_format="parquet",
+                parquet_optimization={
+                    "mode": "manual",
+                    "hivePartitioning": True,
+                    "partitionColumns": ["tax_year"],
+                    "sortColumns": ["id"],
+                    "createDuckdbCache": True,
+                    "indexColumns": ["id"],
+                },
+            )
+
+        self.assertEqual(payload["importedCount"], 1)
+        imported = payload["imports"][0]
+        self.assertTrue(imported["partitioned"])
+        self.assertEqual(imported["objectKey"], "incoming/april/vat_smoke")
+        self.assertEqual(
+            imported["path"],
+            "s3://csv-imports/incoming/april/vat_smoke/**/*.parquet",
+        )
+        self.assertEqual(imported["parquetOptimization"]["mode"], "manual")
+        self.assertIn("ART index selections were recorded", imported["warnings"][0])
+        uploaded_keys = [upload_record[2] for upload_record in fake_client.uploads]
+        self.assertEqual(len(uploaded_keys), 2)
+        self.assertTrue(any("tax_year=2025/" in key for key in uploaded_keys))
+        self.assertTrue(any("tax_year=2026/" in key for key in uploaded_keys))
+
+        rows = read_partitioned_upload_rows(
+            fake_client,
+            key_prefix="incoming/april/vat_smoke",
+            hive_partitioning=True,
+        )
+        self.assertEqual(
+            rows,
+            [(2025, 3, "gamma"), (2026, 1, "alpha"), (2026, 2, "beta")],
+        )
+
+    def test_import_csv_files_to_s3_parquet_hive_off_keeps_partition_columns_in_files(
+        self,
+    ) -> None:
+        fake_client = FakeS3Client()
+        manager = CsvIngestionManager(
+            settings=make_settings(),
+            postgres_connection_factory=lambda target: None,
+            s3_client_factory=lambda settings: fake_client,
+        )
+        upload = FakeUpload(
+            "vat_smoke.csv",
+            (
+                b"tax_year,id,name\n"
+                b"2026,2,beta\n"
+                b"2026,1,alpha\n"
+                b"2025,3,gamma\n"
+            ),
+        )
+
+        with patch(
+            "bit_data_workbench.backend.ingestion_types.csv.manager.ensure_s3_bucket"
+        ):
+            payload = manager.import_csv_files(
+                files=[upload],
+                target_id="workspace.s3",
+                bucket="csv-imports",
+                prefix="incoming/no-hive",
+                delimiter=",",
+                has_header=True,
+                storage_format="parquet",
+                parquet_optimization={
+                    "mode": "manual",
+                    "hivePartitioning": False,
+                    "partitionColumns": ["tax_year"],
+                    "sortColumns": ["id"],
+                },
+            )
+
+        imported = payload["imports"][0]
+        self.assertTrue(imported["partitioned"])
+        self.assertEqual(imported["parquetOptimization"]["hivePartitioning"], False)
+        self.assertTrue(
+            any("tax_year=2025/" in upload_record[2] for upload_record in fake_client.uploads)
+        )
+
+        rows = read_partitioned_upload_rows(
+            fake_client,
+            key_prefix="incoming/no-hive/vat_smoke",
+            hive_partitioning=False,
+        )
+        self.assertEqual(
+            rows,
+            [(2025, 3, "gamma"), (2026, 1, "alpha"), (2026, 2, "beta")],
+        )
+
+    def test_import_csv_files_to_s3_parquet_manual_cache_only_succeeds(self) -> None:
+        fake_client = FakeS3Client()
+        manager = CsvIngestionManager(
+            settings=make_settings(),
+            postgres_connection_factory=lambda target: None,
+            s3_client_factory=lambda settings: fake_client,
+        )
+
+        with patch(
+            "bit_data_workbench.backend.ingestion_types.csv.manager.ensure_s3_bucket"
+        ):
+            payload = manager.import_csv_files(
+                files=[
+                    FakeUpload(
+                        "federal_tax.csv",
+                        b"taxpayer_id,tax_year,tax_due_chf\n1001,2025,4210.75\n",
+                    )
+                ],
+                target_id="workspace.s3",
+                bucket="csv-imports",
+                prefix="incoming/cache-only",
+                delimiter=",",
+                has_header=True,
+                storage_format="parquet",
+                parquet_optimization={
+                    "mode": "manual",
+                    "createDuckdbCache": True,
+                    "indexColumns": ["taxpayer_id"],
+                },
+            )
+
+        imported = payload["imports"][0]
+        self.assertNotIn("partitioned", imported)
+        self.assertEqual(imported["objectKey"], "incoming/cache-only/federal_tax.parquet")
+        self.assertEqual(imported["parquetOptimization"]["mode"], "manual")
+        self.assertIn("ART index selections were recorded", imported["warnings"][0])
+        self.assertEqual(len(fake_client.uploads), 1)
 
     def test_import_csv_files_to_s3_reports_step_two_progress(self) -> None:
         fake_client = FakeS3Client()

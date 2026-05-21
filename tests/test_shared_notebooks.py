@@ -149,6 +149,9 @@ class SharedNotebookServiceTests(unittest.TestCase):
                         "",
                         "workspace.s3.vat_smoke",
                     ],
+                    "queryOptions": {
+                        "duckdb": {"parquetHivePartitioning": "on"},
+                    },
                 },
                 "ignored",
             ],
@@ -161,6 +164,9 @@ class SharedNotebookServiceTests(unittest.TestCase):
                         {
                             "sql": "select 2",
                             "dataSources": [" workspace.s3.vat_smoke ", ""],
+                            "queryOptions": {
+                                "duckdb": {"parquetHivePartitioning": "off"},
+                            },
                         }
                     ],
                 }
@@ -182,6 +188,14 @@ class SharedNotebookServiceTests(unittest.TestCase):
             notebook["cells"][0]["dataSources"],
             ["pg_oltp.public.tax_assessment", "workspace.s3.vat_smoke"],
         )
+        self.assertEqual(
+            notebook["cells"][0]["queryOptions"]["duckdb"]["parquetHivePartitioning"],
+            "on",
+        )
+        self.assertEqual(
+            notebook["cells"][0]["queryOptions"]["duckdb"]["cacheHydration"]["mode"],
+            "off",
+        )
         self.assertEqual(notebook["cells"][0]["language"], "sql")
         self.assertTrue(
             notebook["cells"][0]["cellId"].startswith("shared-cell-")
@@ -195,6 +209,18 @@ class SharedNotebookServiceTests(unittest.TestCase):
         self.assertEqual(
             notebook["versions"][0]["cells"][0]["dataSources"],
             ["workspace.s3.vat_smoke"],
+        )
+        self.assertEqual(
+            notebook["versions"][0]["cells"][0]["queryOptions"]["duckdb"][
+                "parquetHivePartitioning"
+            ],
+            "off",
+        )
+        self.assertEqual(
+            notebook["versions"][0]["cells"][0]["queryOptions"]["duckdb"][
+                "cacheHydration"
+            ]["mode"],
+            "off",
         )
         self.assertEqual(notebook["versions"][0]["cells"][0]["language"], "sql")
         self.assertTrue(

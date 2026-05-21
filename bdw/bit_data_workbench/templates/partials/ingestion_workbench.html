@@ -310,6 +310,118 @@
                   </label>
                 </div>
               </div>
+              <div class="ingestion-parquet-optimization-panel" data-csv-parquet-optimization-panel hidden>
+                <div class="result-export-field-label ingestion-csv-storage-format-label">
+                  <span>Optimization</span>
+                  <span
+                    class="info-badge"
+                    title="These settings affect how S3 Parquet objects are written. ART indexes are local DuckDB cache indexes, not native S3 indexes."
+                    aria-label="Parquet optimization guidance"
+                  >
+                    ?
+                  </span>
+                </div>
+                <div class="ingestion-parquet-optimization-mode-grid">
+                  <label class="ingestion-parquet-optimization-card">
+                    <input type="radio" name="csv_parquet_optimization_mode" value="off" data-csv-parquet-optimization-mode checked>
+                    <span class="ingestion-csv-storage-format-header">
+                      <span class="ingestion-csv-storage-format-title">Off</span>
+                      <span
+                        class="info-badge"
+                        title="Current single-object behavior: the import writes one Parquet object per CSV upload and does not request partitioning, sorting, or cache indexes."
+                        aria-label="Off optimization guidance"
+                      >
+                        ?
+                      </span>
+                    </span>
+                    <span class="ingestion-csv-target-copy">Keep the current S3 write path.</span>
+                  </label>
+                  <label class="ingestion-parquet-optimization-card">
+                    <input type="radio" name="csv_parquet_optimization_mode" value="recommended" data-csv-parquet-optimization-mode>
+                    <span class="ingestion-csv-storage-format-header">
+                      <span class="ingestion-csv-storage-format-title">Recommended</span>
+                      <span
+                        class="info-badge"
+                        title="The system records a request for conservative Parquet layout choices while keeping the current single-object write path."
+                        aria-label="Recommended optimization guidance"
+                      >
+                        ?
+                      </span>
+                    </span>
+                    <span class="ingestion-csv-target-copy">Let the system choose conservative defaults.</span>
+                  </label>
+                  <label class="ingestion-parquet-optimization-card">
+                    <input type="radio" name="csv_parquet_optimization_mode" value="manual" data-csv-parquet-optimization-mode>
+                    <span class="ingestion-csv-storage-format-header">
+                      <span class="ingestion-csv-storage-format-title">Manual</span>
+                      <span
+                        class="info-badge"
+                        title="Manual mode lets users choose partition, sort, and ART cache index columns. Partition columns create Parquet part folders during upload."
+                        aria-label="Manual optimization guidance"
+                      >
+                        ?
+                      </span>
+                    </span>
+                    <span class="ingestion-csv-target-copy">Choose partition and sort columns for this upload.</span>
+                  </label>
+                </div>
+                <div class="ingestion-parquet-optimization-fields" data-csv-parquet-manual-options hidden>
+                  <label class="ingestion-csv-toggle">
+                    <input type="checkbox" data-csv-hive-partitioning>
+                    <span>
+                      Hive partitioning
+                      <span
+                        class="info-badge"
+                        title="Hive partitioning uses folder names like year=2026/month=05. It helps only when queries filter by those partition columns."
+                        aria-label="Hive partitioning guidance"
+                      >
+                        ?
+                      </span>
+                    </span>
+                  </label>
+                  <p class="ingestion-parquet-column-basis" data-csv-optimization-column-basis>
+                    Column choices appear after a file preview is available.
+                  </p>
+                  <p class="ingestion-parquet-hive-explanation" data-csv-hive-partitioning-explanation>
+                    No partition columns selected; Hive partitioning will not be requested.
+                  </p>
+                  <div class="result-export-field">
+                    <span class="result-export-field-label ingestion-csv-storage-format-label">
+                      <span>Partition columns</span>
+                      <span
+                        class="info-badge"
+                        title="Choosing too many partitions creates many small files and can slow queries. Use only low-cardinality columns that appear in common filters."
+                        aria-label="Partition column warning"
+                      >
+                        ?
+                      </span>
+                    </span>
+                    <div class="ingestion-parquet-column-options" data-csv-partition-column-options></div>
+                  </div>
+                  <div class="result-export-field">
+                    <span class="result-export-field-label">Sort columns</span>
+                    <div class="ingestion-parquet-column-options" data-csv-sort-column-options></div>
+                  </div>
+                  <label class="ingestion-csv-toggle">
+                    <input type="checkbox" data-csv-create-duckdb-cache>
+                    <span>
+                      Create DuckDB cache
+                      <span
+                        class="info-badge"
+                        title="ART indexes are local DuckDB cache indexes after data is materialized into a DuckDB table. They are not native indexes inside S3 or Parquet."
+                        aria-label="ART index guidance"
+                      >
+                        ?
+                      </span>
+                    </span>
+                  </label>
+                  <div class="result-export-field">
+                    <span class="result-export-field-label">ART index columns</span>
+                    <div class="ingestion-parquet-column-options" data-csv-index-column-options></div>
+                  </div>
+                  <p class="ingestion-parquet-warning">Manual partitioning writes multiple Parquet files. ART index selections are recorded for local DuckDB cache workflows.</p>
+                </div>
+              </div>
             </div>
             <div class="ingestion-csv-config-panel" data-csv-config-panel="pg_oltp" hidden>
               <label class="result-export-field">
@@ -567,6 +679,118 @@
                 </span>
                 <input class="modal-input" type="text" data-file-s3-prefix placeholder="incoming/2026-04">
               </label>
+              <div class="ingestion-parquet-optimization-panel" data-file-parquet-optimization-panel hidden>
+                <div class="result-export-field-label ingestion-csv-storage-format-label">
+                  <span>Optimization</span>
+                  <span
+                    class="info-badge"
+                    title="Shown only for Shared Workspace S3 Parquet imports. ART indexes are local DuckDB cache indexes, not native S3 indexes."
+                    aria-label="Parquet optimization guidance"
+                  >
+                    ?
+                  </span>
+                </div>
+                <div class="ingestion-parquet-optimization-mode-grid">
+                  <label class="ingestion-parquet-optimization-card">
+                    <input type="radio" name="{{ ingestor.id }}_parquet_optimization_mode" value="off" data-file-parquet-optimization-mode checked>
+                    <span class="ingestion-csv-storage-format-header">
+                      <span class="ingestion-csv-storage-format-title">Off</span>
+                      <span
+                        class="info-badge"
+                        title="Current single-object behavior: the import writes each Parquet file as one S3 object without partitioning, sorting, or cache indexes."
+                        aria-label="Off optimization guidance"
+                      >
+                        ?
+                      </span>
+                    </span>
+                    <span class="ingestion-csv-target-copy">Keep the current S3 write path.</span>
+                  </label>
+                  <label class="ingestion-parquet-optimization-card">
+                    <input type="radio" name="{{ ingestor.id }}_parquet_optimization_mode" value="recommended" data-file-parquet-optimization-mode>
+                    <span class="ingestion-csv-storage-format-header">
+                      <span class="ingestion-csv-storage-format-title">Recommended</span>
+                      <span
+                        class="info-badge"
+                        title="The system records a request for conservative Parquet layout choices while keeping the current single-object write path."
+                        aria-label="Recommended optimization guidance"
+                      >
+                        ?
+                      </span>
+                    </span>
+                    <span class="ingestion-csv-target-copy">Let the system choose conservative defaults.</span>
+                  </label>
+                  <label class="ingestion-parquet-optimization-card">
+                    <input type="radio" name="{{ ingestor.id }}_parquet_optimization_mode" value="manual" data-file-parquet-optimization-mode>
+                    <span class="ingestion-csv-storage-format-header">
+                      <span class="ingestion-csv-storage-format-title">Manual</span>
+                      <span
+                        class="info-badge"
+                        title="Manual mode lets users choose partition, sort, and ART cache index columns. Partition columns create Parquet part folders during upload."
+                        aria-label="Manual optimization guidance"
+                      >
+                        ?
+                      </span>
+                    </span>
+                    <span class="ingestion-csv-target-copy">Choose partition and sort columns for this upload.</span>
+                  </label>
+                </div>
+                <div class="ingestion-parquet-optimization-fields" data-file-parquet-manual-options hidden>
+                  <label class="ingestion-csv-toggle">
+                    <input type="checkbox" data-file-hive-partitioning>
+                    <span>
+                      Hive partitioning
+                      <span
+                        class="info-badge"
+                        title="Hive partitioning uses folder names like year=2026/month=05. It helps only when queries filter by those partition columns."
+                        aria-label="Hive partitioning guidance"
+                      >
+                        ?
+                      </span>
+                    </span>
+                  </label>
+                  <p class="ingestion-parquet-column-basis" data-file-optimization-column-basis>
+                    Column choices appear after a file preview is available.
+                  </p>
+                  <p class="ingestion-parquet-hive-explanation" data-file-hive-partitioning-explanation>
+                    No partition columns selected; Hive partitioning will not be requested.
+                  </p>
+                  <div class="result-export-field">
+                    <span class="result-export-field-label ingestion-csv-storage-format-label">
+                      <span>Partition columns</span>
+                      <span
+                        class="info-badge"
+                        title="Choosing too many partitions creates many small files and can slow queries. Use only low-cardinality columns that appear in common filters."
+                        aria-label="Partition column warning"
+                      >
+                        ?
+                      </span>
+                    </span>
+                    <div class="ingestion-parquet-column-options" data-file-partition-column-options></div>
+                  </div>
+                  <div class="result-export-field">
+                    <span class="result-export-field-label">Sort columns</span>
+                    <div class="ingestion-parquet-column-options" data-file-sort-column-options></div>
+                  </div>
+                  <label class="ingestion-csv-toggle">
+                    <input type="checkbox" data-file-create-duckdb-cache>
+                    <span>
+                      Create DuckDB cache
+                      <span
+                        class="info-badge"
+                        title="ART indexes are local DuckDB cache indexes after data is materialized into a DuckDB table. They are not native indexes inside S3 or Parquet."
+                        aria-label="ART index guidance"
+                      >
+                        ?
+                      </span>
+                    </span>
+                  </label>
+                  <div class="result-export-field">
+                    <span class="result-export-field-label">ART index columns</span>
+                    <div class="ingestion-parquet-column-options" data-file-index-column-options></div>
+                  </div>
+                  <p class="ingestion-parquet-warning">Manual partitioning writes multiple Parquet files. ART index selections are recorded for local DuckDB cache workflows.</p>
+                </div>
+              </div>
             </div>
             <div class="ingestion-csv-config-panel" data-file-config-panel="pg_oltp" hidden>
               <label class="result-export-field">

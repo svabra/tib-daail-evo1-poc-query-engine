@@ -541,6 +541,19 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             "FROM workspace.mwa.mwa_abrechnung_entities_parquet",
             notebooks["mwa-abrechnung-s3-parquet"].cells[0].sql,
         )
+        self.assertEqual(len(notebooks["mwa-abrechnung-s3-parquet"].cells), 2)
+        self.assertIn(
+            "CREATE INDEX mwa_abrechnung_art_id_idx",
+            notebooks["mwa-abrechnung-s3-parquet"].cells[1].sql,
+        )
+        self.assertIn(
+            "EXPLAIN ANALYZE",
+            notebooks["mwa-abrechnung-s3-parquet"].cells[1].sql,
+        )
+        self.assertIn(
+            "FROM workspace.mwa.mwa_abrechnung_entities_parquet",
+            notebooks["mwa-abrechnung-s3-parquet"].cells[1].sql,
+        )
         self.assertIn(
             "FROM workspace.mwa.mwa_abrechnung_entities_csv",
             notebooks["mwa-abrechnung-s3-csv"].cells[0].sql,
@@ -559,6 +572,116 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             },
             {"mwa_abrechnung_multi_format_loader"},
         )
+
+    def test_build_notebooks_includes_parquet_performance_options_presets(
+        self,
+    ) -> None:
+        (
+            build_generator_notebook_links,
+            _,
+            build_notebooks,
+            _,
+            _,
+            source_catalog_type,
+            source_object_type,
+            source_schema_type,
+        ) = import_notebook_helpers()
+
+        object_names = (
+            "federal_tax_parquet_off",
+            "federal_tax_parquet_recommended",
+            "federal_tax_parquet_manual_partition",
+            "federal_tax_parquet_manual_hive",
+            "federal_tax_parquet_manual_cache",
+        )
+        catalogs = [
+            source_catalog_type(
+                name="workspace",
+                schemas=[
+                    source_schema_type(
+                        name="poc_tests_performance_options",
+                        objects=[
+                            source_object_type(
+                                name=object_name,
+                                kind="view",
+                                relation=f"poc_tests_performance_options.{object_name}",
+                            )
+                            for object_name in object_names
+                        ],
+                    )
+                ],
+            )
+        ]
+
+        notebooks = {
+            notebook.notebook_id: notebook
+            for notebook in build_notebooks(catalogs)
+        }
+
+        expected = {
+            "federal-tax-parquet-optimization-off": (
+                "federal_tax_parquet_off",
+                "parquet_performance_options_off_loader",
+                "auto",
+            ),
+            "federal-tax-parquet-optimization-recommended": (
+                "federal_tax_parquet_recommended",
+                "parquet_performance_options_recommended_loader",
+                "auto",
+            ),
+            "federal-tax-parquet-optimization-manual-no-hive": (
+                "federal_tax_parquet_manual_partition",
+                "parquet_performance_options_manual_partition_no_hive_loader",
+                "off",
+            ),
+            "federal-tax-parquet-optimization-manual-hive": (
+                "federal_tax_parquet_manual_hive",
+                "parquet_performance_options_manual_partition_hive_loader",
+                "on",
+            ),
+            "federal-tax-parquet-optimization-manual-cache": (
+                "federal_tax_parquet_manual_cache",
+                "parquet_performance_options_manual_cache_only_loader",
+                "auto",
+            ),
+        }
+
+        for notebook_id, (object_name, generator_id, hive_option) in expected.items():
+            notebook = notebooks[notebook_id]
+            self.assertEqual(notebook.tree_path, ("PoC Tests", "Performance Options"))
+            self.assertFalse(notebook.can_edit)
+            self.assertFalse(notebook.can_delete)
+            self.assertTrue(notebook.shared)
+            self.assertEqual(notebook.linked_generator_id, generator_id)
+            self.assertIn(
+                f"FROM poc_tests_performance_options.{object_name}",
+                notebook.cells[0].sql,
+            )
+            self.assertIn("WHERE tax_year = 2025", notebook.cells[0].sql)
+            self.assertEqual(
+                notebook.cells[0].query_options["duckdb"]["parquetHivePartitioning"],
+                hive_option,
+            )
+
+        cache_notebook = notebooks["federal-tax-parquet-optimization-manual-cache"]
+        self.assertEqual(len(cache_notebook.cells), 2)
+        self.assertIn(
+            "FROM poc_tests_performance_options.federal_tax_parquet_manual_cache_duckdb_cache",
+            cache_notebook.cells[0].sql,
+        )
+        self.assertIn(
+            "FROM poc_tests_performance_options.federal_tax_parquet_manual_cache_duckdb_cache",
+            cache_notebook.cells[1].sql,
+        )
+        self.assertIn("WHERE taxpayer_id = 'TX-100001'", cache_notebook.cells[1].sql)
+        self.assertIn("Loader-created DuckDB ART cache lookup", cache_notebook.cells[1].sql)
+
+        linked = build_generator_notebook_links(notebooks.values())
+        for notebook_id, (_object_name, generator_id, _hive_option) in expected.items():
+            self.assertEqual(
+                [reference.notebook_id for reference in linked[generator_id]],
+                [notebook_id],
+            )
 
     def test_build_notebooks_includes_kostenbelege_3_1_presets(
         self,

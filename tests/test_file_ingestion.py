@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import asyncio
 import io
+import json
 import sys
 import zipfile
 from unittest import TestCase
@@ -10,6 +12,7 @@ from unittest.mock import patch
 
 import duckdb
 from openpyxl import Workbook
+from starlette.datastructures import Headers, UploadFile
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BDW_ROOT = REPO_ROOT / "bdw"
@@ -29,8 +32,16 @@ from bit_data_workbench.backend.ingestion_types.tabular import (  # noqa: E402
     FileIngestionManager,
     FileUploadFileRequest,
     FileUploadSessionManager,
+    preview_parquet_upload_schema,
 )
-from test_csv_ingestion import FakeConnection, FakeS3Client, THIRTY_GIB, make_settings  # noqa: E402
+from bit_data_workbench.api.router import preview_parquet_schema  # noqa: E402
+from test_csv_ingestion import (  # noqa: E402
+    FakeConnection,
+    FakeS3Client,
+    THIRTY_GIB,
+    make_settings,
+    read_partitioned_upload_rows,
+)
 
 
 def zip_payload(entries: dict[str, bytes]) -> bytes:
@@ -176,6 +187,39 @@ class FileUploadSessionManagerTests(TestCase):
 
 
 class FileIngestionManagerTests(TestCase):
+    def test_preview_parquet_upload_schema_returns_columns(self) -> None:
+        payload = preview_parquet_upload_schema(
+            file_name="tax facts.parquet",
+            input_file=io.BytesIO(parquet_payload()),
+        )
+
+        self.assertEqual(payload["fileName"], "tax facts.parquet")
+        self.assertEqual(payload["columnCount"], 2)
+        self.assertEqual(
+            [(column["name"], column["dataType"]) for column in payload["columns"]],
+            [("id", "INTEGER"), ("name", "VARCHAR")],
+        )
+
+    def test_parquet_schema_preview_route_reads_uploaded_file(self) -> None:
+        class FakeSchemaPreviewService:
+            def preview_parquet_schema(self, *, file_name, input_file):
+                return preview_parquet_upload_schema(file_name=file_name, input_file=input_file)
+
+        upload = UploadFile(
+            file=io.BytesIO(parquet_payload()),
+            filename="alpha.parquet",
+            headers=Headers({"content-type": "application/vnd.apache.parquet"}),
+        )
+
+        response = asyncio.run(
+            preview_parquet_schema(file=upload, service=FakeSchemaPreviewService())
+        )
+        payload = json.loads(response.body.decode("utf-8"))
+
+        self.assertEqual(payload["fileName"], "alpha.parquet")
+        self.assertEqual(payload["columnCount"], 2)
+        self.assertEqual(payload["columns"][0]["name"], "id")
+
     def test_json_direct_and_zip_import_to_s3_create_one_object_per_file(self) -> None:
         with TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -250,6 +294,148 @@ class FileIngestionManagerTests(TestCase):
             self.assertEqual(payload["imports"][0]["fileName"], "alpha.jsonl")
             self.assertIn("shared notebook storage bucket is reserved", payload["imports"][0]["error"])
             self.assertEqual(fake_s3.uploads, [])
+
+    def test_parquet_import_to_s3_echoes_recommended_optimization(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "alpha.parquet"
+            source.write_bytes(parquet_payload())
+            fake_s3 = FakeS3Client()
+            manager = FileIngestionManager(
+                settings=make_settings(),
+                spec=FILE_INGESTOR_SPECS["parquet"],
+                postgres_connection_factory=lambda target: None,
+                s3_client_factory=lambda app_settings: fake_s3,
+            )
+
+            with patch(
+                "bit_data_workbench.backend.ingestion_types.tabular.manager.ensure_s3_bucket"
+            ):
+                payload = manager.import_sources(
+                    sources=[IngestionLocalSource(file_name="alpha.parquet", local_path=source)],
+                    target_id="workspace.s3",
+                    bucket="imports",
+                    prefix="stage/parquet",
+                    parquet_optimization={"mode": "recommended"},
+                )
+
+        self.assertEqual(payload["parquetOptimization"]["mode"], "recommended")
+        self.assertEqual(payload["imports"][0]["parquetOptimization"]["mode"], "recommended")
+
+    def test_parquet_import_to_s3_applies_manual_hive_partitioning(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "orders.parquet"
+            connection = duckdb.connect(":memory:")
+            try:
+                connection.execute(
+                    f"""
+                    COPY (
+                        SELECT 2026 AS tax_year, 2 AS id, 'beta' AS name
+                        UNION ALL
+                        SELECT 2026 AS tax_year, 1 AS id, 'alpha' AS name
+                        UNION ALL
+                        SELECT 2025 AS tax_year, 3 AS id, 'gamma' AS name
+                    ) TO '{source.as_posix()}' (FORMAT PARQUET)
+                    """
+                )
+            finally:
+                connection.close()
+            fake_s3 = FakeS3Client()
+            manager = FileIngestionManager(
+                settings=make_settings(),
+                spec=FILE_INGESTOR_SPECS["parquet"],
+                postgres_connection_factory=lambda target: None,
+                s3_client_factory=lambda app_settings: fake_s3,
+            )
+
+            with patch(
+                "bit_data_workbench.backend.ingestion_types.tabular.manager.ensure_s3_bucket"
+            ):
+                payload = manager.import_sources(
+                    sources=[IngestionLocalSource(file_name="orders.parquet", local_path=source)],
+                    target_id="workspace.s3",
+                    bucket="imports",
+                    prefix="stage/parquet",
+                    parquet_optimization={
+                        "mode": "manual",
+                        "hivePartitioning": True,
+                        "partitionColumns": ["tax_year"],
+                        "sortColumns": ["id"],
+                    },
+                )
+
+        self.assertEqual(payload["importedCount"], 1)
+        imported = payload["imports"][0]
+        self.assertTrue(imported["partitioned"])
+        self.assertEqual(imported["objectKey"], "stage/parquet/orders")
+        self.assertEqual(imported["path"], "s3://imports/stage/parquet/orders/**/*.parquet")
+        self.assertEqual(len(fake_s3.uploads), 2)
+        self.assertTrue(any("tax_year=2025/" in upload[2] for upload in fake_s3.uploads))
+        self.assertTrue(any("tax_year=2026/" in upload[2] for upload in fake_s3.uploads))
+
+        rows = read_partitioned_upload_rows(
+            fake_s3,
+            key_prefix="stage/parquet/orders",
+            hive_partitioning=True,
+        )
+        self.assertEqual(
+            rows,
+            [(2025, 3, "gamma"), (2026, 1, "alpha"), (2026, 2, "beta")],
+        )
+
+    def test_parquet_import_to_s3_hive_off_keeps_partition_columns_in_files(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            source = Path(temp_dir) / "orders.parquet"
+            connection = duckdb.connect(":memory:")
+            try:
+                connection.execute(
+                    f"""
+                    COPY (
+                        SELECT 2026 AS tax_year, 2 AS id, 'beta' AS name
+                        UNION ALL
+                        SELECT 2026 AS tax_year, 1 AS id, 'alpha' AS name
+                        UNION ALL
+                        SELECT 2025 AS tax_year, 3 AS id, 'gamma' AS name
+                    ) TO '{source.as_posix()}' (FORMAT PARQUET)
+                    """
+                )
+            finally:
+                connection.close()
+            fake_s3 = FakeS3Client()
+            manager = FileIngestionManager(
+                settings=make_settings(),
+                spec=FILE_INGESTOR_SPECS["parquet"],
+                postgres_connection_factory=lambda target: None,
+                s3_client_factory=lambda app_settings: fake_s3,
+            )
+
+            with patch(
+                "bit_data_workbench.backend.ingestion_types.tabular.manager.ensure_s3_bucket"
+            ):
+                payload = manager.import_sources(
+                    sources=[IngestionLocalSource(file_name="orders.parquet", local_path=source)],
+                    target_id="workspace.s3",
+                    bucket="imports",
+                    prefix="stage/no-hive",
+                    parquet_optimization={
+                        "mode": "manual",
+                        "hivePartitioning": False,
+                        "partitionColumns": ["tax_year"],
+                        "sortColumns": ["id"],
+                    },
+                )
+
+        imported = payload["imports"][0]
+        self.assertTrue(imported["partitioned"])
+        self.assertEqual(imported["parquetOptimization"]["hivePartitioning"], False)
+        rows = read_partitioned_upload_rows(
+            fake_s3,
+            key_prefix="stage/no-hive/orders",
+            hive_partitioning=False,
+        )
+        self.assertEqual(
+            rows,
+            [(2025, 3, "gamma"), (2026, 1, "alpha"), (2026, 2, "beta")],
+        )
 
     def test_mixed_format_zip_imports_valid_members_and_reports_invalid_member(self) -> None:
         with TemporaryDirectory() as temp_dir:

@@ -14,6 +14,13 @@ from ...queryable_files import materialize_queryable_file
 from ...s3_storage import ensure_s3_bucket, s3_client, upload_s3_file
 from ...sql_utils import sql_identifier, sql_literal
 from ...s3_hidden import reject_hidden_s3_location
+from ..parquet_optimization import (
+    ParquetOptimizationSettings,
+    copy_query_to_optimized_parquet,
+    manual_parquet_layout_requested,
+    normalize_parquet_optimization_settings,
+    parquet_art_cache_warning,
+)
 from ..common import (
     ArchivePolicy,
     IngestionLocalSource,
@@ -32,6 +39,14 @@ from ..csv.manager import (
 class FileUpload(Protocol):
     filename: str | None
     file: BinaryIO
+
+
+def _path_size(path: Path) -> int:
+    if path.is_file():
+        return path.stat().st_size
+    if path.is_dir():
+        return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+    return 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,6 +173,7 @@ class FileIngestionManager:
         schema_name: str = "public",
         table_prefix: str = "",
         replace_existing: bool = True,
+        parquet_optimization: Any = None,
     ) -> dict[str, Any]:
         with TemporaryDirectory() as temp_dir:
             sources, failures = self._materialize_uploads(
@@ -172,6 +188,7 @@ class FileIngestionManager:
                 schema_name=schema_name,
                 table_prefix=table_prefix,
                 replace_existing=replace_existing,
+                parquet_optimization=parquet_optimization,
                 initial_imports=failures,
             )
 
@@ -185,6 +202,7 @@ class FileIngestionManager:
         schema_name: str = "public",
         table_prefix: str = "",
         replace_existing: bool = True,
+        parquet_optimization: Any = None,
         initial_imports: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         normalized_target_id = str(target_id or "").strip()
@@ -194,6 +212,11 @@ class FileIngestionManager:
             raise ValueError(
                 f"Choose at least one {self._spec.format_label} or ZIP file before importing."
             )
+        optimization = normalize_parquet_optimization_settings(
+            parquet_optimization,
+            target_id=normalized_target_id,
+            storage_format=self._spec.source_format,
+        )
 
         imports: list[dict[str, Any]] = list(initial_imports or [])
         with TemporaryDirectory() as extract_temp_dir:
@@ -271,6 +294,7 @@ class FileIngestionManager:
                             file_name=file_name,
                             bucket=bucket,
                             prefix=prefix,
+                            parquet_optimization=optimization,
                         )
                     else:
                         result = self._import_to_postgres(
@@ -304,6 +328,7 @@ class FileIngestionManager:
             "targetId": normalized_target_id,
             "importedCount": imported_count,
             "failedCount": len(imports) - imported_count,
+            "parquetOptimization": optimization.payload,
             "imports": imports,
         }
 
@@ -390,6 +415,7 @@ class FileIngestionManager:
         file_name: str,
         bucket: str,
         prefix: str = "",
+        parquet_optimization: ParquetOptimizationSettings | None = None,
     ) -> dict[str, Any]:
         normalized_bucket = str(bucket or "").strip() or str(self._settings.s3_bucket or "").strip()
         if not normalized_bucket:
@@ -400,36 +426,146 @@ class FileIngestionManager:
         normalized_prefix = "/".join(
             segment for segment in str(prefix or "").split("/") if str(segment).strip()
         )
-        key = f"{normalized_prefix}/{file_name}" if normalized_prefix else file_name
+        optimization = parquet_optimization or ParquetOptimizationSettings()
+        if self._spec.source_format == "parquet" and manual_parquet_layout_requested(optimization):
+            with TemporaryDirectory() as temp_dir:
+                partitioned = bool(optimization.partition_columns)
+                stored_file_name = Path(file_name).stem if partitioned else file_name
+                prepared_path = Path(temp_dir) / stored_file_name
+                duckdb_connection = duckdb.connect(":memory:")
+                try:
+                    copy_query_to_optimized_parquet(
+                        connection=duckdb_connection,
+                        source_query_sql=(
+                            f"SELECT * FROM read_parquet({sql_literal(local_path.as_posix())})"
+                        ),
+                        target_path=prepared_path,
+                        optimization=optimization,
+                    )
+                finally:
+                    duckdb_connection.close()
+                return self._upload_prepared_s3_artifact(
+                    local_path=prepared_path,
+                    file_name=stored_file_name,
+                    bucket=normalized_bucket,
+                    prefix=normalized_prefix,
+                    metadata={"bdw-ingestion-format": self._spec.source_format},
+                    partitioned=partitioned,
+                    optimization=optimization,
+                )
+
+        return self._upload_prepared_s3_artifact(
+            local_path=local_path,
+            file_name=file_name,
+            bucket=normalized_bucket,
+            prefix=normalized_prefix,
+            metadata={"bdw-ingestion-format": self._spec.source_format},
+            partitioned=False,
+            optimization=optimization,
+        )
+
+    def _upload_prepared_s3_artifact(
+        self,
+        *,
+        local_path: Path,
+        file_name: str,
+        bucket: str,
+        prefix: str,
+        metadata: dict[str, str],
+        partitioned: bool,
+        optimization: ParquetOptimizationSettings,
+    ) -> dict[str, Any]:
+        key = f"{prefix}/{file_name}" if prefix else file_name
         reject_hidden_s3_location(
-            normalized_bucket,
+            bucket,
             key,
             self._settings,
             data_exchange_prefix=self._settings.data_exchange_prefix,
         )
-        ensure_s3_bucket(self._settings, normalized_bucket)
+        ensure_s3_bucket(self._settings, bucket)
         client = self._s3_client_factory(self._settings)
-        upload_s3_file(
+        uploaded_keys = self._upload_s3_artifact(
             client,
             local_path=local_path,
-            bucket=normalized_bucket,
+            bucket=bucket,
             key=key,
-            metadata={"bdw-ingestion-format": self._spec.source_format},
-            transfer_config=TransferConfig(
-                multipart_threshold=64 * 1024 * 1024,
-                multipart_chunksize=64 * 1024 * 1024,
-                max_concurrency=4,
-            ),
+            metadata=metadata,
+            partitioned=partitioned,
         )
-        return {
+        object_path = f"s3://{bucket}/{key}/**/*.parquet" if partitioned else f"s3://{bucket}/{key}"
+        result: dict[str, Any] = {
             "destination": "s3",
-            "bucket": normalized_bucket,
+            "bucket": bucket,
             "objectKey": key,
-            "objectKeyPrefix": normalized_prefix,
+            "objectKeyPrefix": prefix,
             "storedFileName": file_name,
-            "path": f"s3://{normalized_bucket}/{key}",
+            "path": object_path,
             "storageFormat": self._spec.source_format,
+            "uploadedBytes": _path_size(local_path),
         }
+        if partitioned:
+            result.update(
+                {
+                    "partitioned": True,
+                    "partCount": len(uploaded_keys),
+                    "uploadedKeys": uploaded_keys,
+                }
+            )
+        warning = parquet_art_cache_warning(optimization)
+        if warning:
+            result["warnings"] = [warning]
+        if self._spec.source_format == "parquet" or not optimization.is_default:
+            result["parquetOptimization"] = optimization.payload
+        return result
+
+    def _upload_s3_artifact(
+        self,
+        client,
+        *,
+        local_path: Path,
+        bucket: str,
+        key: str,
+        metadata: dict[str, str],
+        partitioned: bool,
+    ) -> list[str]:
+        transfer_config = TransferConfig(
+            multipart_threshold=64 * 1024 * 1024,
+            multipart_chunksize=64 * 1024 * 1024,
+            max_concurrency=4,
+        )
+        if not partitioned:
+            upload_s3_file(
+                client,
+                local_path=local_path,
+                bucket=bucket,
+                key=key,
+                metadata=metadata,
+                transfer_config=transfer_config,
+            )
+            return [key]
+
+        uploaded_keys: list[str] = []
+        for part_path in sorted(path for path in local_path.rglob("*.parquet") if path.is_file()):
+            relative_key = part_path.relative_to(local_path).as_posix()
+            part_key = f"{key.rstrip('/')}/{relative_key}"
+            reject_hidden_s3_location(
+                bucket,
+                part_key,
+                self._settings,
+                data_exchange_prefix=self._settings.data_exchange_prefix,
+            )
+            upload_s3_file(
+                client,
+                local_path=part_path,
+                bucket=bucket,
+                key=part_key,
+                metadata=metadata,
+                transfer_config=transfer_config,
+            )
+            uploaded_keys.append(part_key)
+        if not uploaded_keys:
+            raise ValueError("DuckDB did not produce any Parquet part files for the selected partition columns.")
+        return uploaded_keys
 
     def _import_to_postgres(
         self,

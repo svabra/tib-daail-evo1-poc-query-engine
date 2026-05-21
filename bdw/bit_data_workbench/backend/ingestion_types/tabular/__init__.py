@@ -7,6 +7,7 @@ from .manager import (
     FileUploadFileRequest,
     FileUploadSessionManager,
 )
+from .schema_preview import preview_parquet_upload_schema
 
 __all__ = [
     "FILE_INGESTOR_SPECS",
@@ -14,4 +15,5 @@ __all__ = [
     "FileIngestorSpec",
     "FileUploadFileRequest",
     "FileUploadSessionManager",
+    "preview_parquet_upload_schema",
 ]

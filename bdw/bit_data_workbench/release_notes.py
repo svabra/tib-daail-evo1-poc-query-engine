@@ -1,9 +1,51 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.18. Keep entries concise and
+# Derived from git history through version 0.9.19. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.19",
+        "releasedAt": "2026-05-21T17:39:42+02:00",
+        "features": [
+            (
+                "Shared Workspace S3 Parquet uploads now expose clear "
+                "optimization controls for Off, Recommended, and Manual modes, "
+                "including Hive partitioning guidance, partition/sort/ART index "
+                "column selectors, schema preview for Parquet files, CSV and ZIP "
+                "column recommendations, and safe backend handling for manual "
+                "partitioned writes."
+            ),
+            (
+                "SQL cells now include DuckDB runtime options for S3 Parquet "
+                "Hive partition interpretation and Hydrate cache, with persisted "
+                "settings, cache status checks, visible stale/missing/expired "
+                "states, a detailed cache hydration plan modal, and automatic "
+                "local DuckDB table plus ART index hydration for known referenced "
+                "S3 Parquet sources."
+            ),
+            (
+                "The PoC Tests / Performance Options folder now includes linked "
+                "federal tax Parquet optimization notebooks and loaders for Off, "
+                "Recommended, Manual partitioning with and without Hive folders, "
+                "and DuckDB cache mode; those loaders default to 1 GB for "
+                "repeatable performance comparison runs."
+            ),
+            (
+                "Query result timing now shows an intuitive Total elapsed value "
+                "that cannot move backward when a run completes, explains the "
+                "number directly on hover, and keeps backend phase timings, "
+                "CPU/RAM sample charts, and comparison badges as secondary "
+                "diagnostics."
+            ),
+            (
+                "MWA Abrechnung S3 Parquet notebooks now include an ART index "
+                "demonstration cell that materializes Parquet data into DuckDB, "
+                "creates an index, and uses EXPLAIN ANALYZE to show index-scan "
+                "behavior for equality lookups."
+            ),
+        ],
+    },
     {
         "version": "0.9.18",
         "releasedAt": "2026-05-19T20:25:32+02:00",

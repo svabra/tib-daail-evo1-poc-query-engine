@@ -2,8 +2,18 @@ import {
   FILE_ZIP_READER_LIMITS,
   buildZipPreviewState,
   isZipFile,
+  readFirstFileFromZip,
   readFilesFromZip,
 } from "../csv/zip-reader.js";
+import {
+  columnBasisCopy,
+  filterAvailableColumns,
+  hivePartitioningCopy,
+  normalizeColumnOptions,
+  recommendedIndexColumns,
+  recommendedPartitionColumns,
+  recommendedSortColumns,
+} from "../parquet-optimization-columns.js";
 
 const DEFAULT_UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024;
 const UPLOAD_COMPLETION_POLL_INTERVAL_MS = 2000;
@@ -85,6 +95,58 @@ function normalizePrefix(value) {
     .join("/");
 }
 
+function defaultParquetOptimization() {
+  return {
+    mode: "off",
+    hivePartitioning: false,
+    partitionColumns: [],
+    sortColumns: [],
+    createDuckdbCache: false,
+    indexColumns: [],
+  };
+}
+
+function currentParquetOptimization(form) {
+  const state = form ? form.__bdwFileIngestionState : null;
+  if (stateKey(form) !== "parquet" || selectedTargetId(form) !== "workspace.s3") {
+    return defaultParquetOptimization();
+  }
+  const mode = String(
+    form?.querySelector("[data-file-parquet-optimization-mode]:checked")?.value || "off"
+  )
+    .trim()
+    .toLowerCase();
+  if (mode !== "recommended" && mode !== "manual") {
+    return defaultParquetOptimization();
+  }
+  if (mode === "recommended") {
+    return {
+      ...defaultParquetOptimization(),
+      mode: "recommended",
+    };
+  }
+  return {
+    mode: "manual",
+    hivePartitioning: form?.querySelector("[data-file-hive-partitioning]")?.checked === true,
+    partitionColumns: Array.from(state?.optimizationColumnSelection?.partitionColumns || []),
+    sortColumns: Array.from(state?.optimizationColumnSelection?.sortColumns || []),
+    createDuckdbCache:
+      form?.querySelector("[data-file-create-duckdb-cache]")?.checked === true,
+    indexColumns: Array.from(state?.optimizationColumnSelection?.indexColumns || []),
+  };
+}
+
+function parquetOptimizationLabel(optimization) {
+  const mode = String(optimization?.mode || "off").trim().toLowerCase();
+  if (mode === "recommended") {
+    return "recommended optimization requested";
+  }
+  if (mode === "manual") {
+    return "manual optimization requested";
+  }
+  return "optimization off";
+}
+
 function isSupportedFile(file, spec) {
   const fileName = String(file?.name || "").trim().toLowerCase();
   return isZipFile(file) || spec.extensions.some((extension) => fileName.endsWith(extension));
@@ -133,9 +195,21 @@ export function createFileIngestionController(helpers) {
         uploadProgress: null,
         previewState: { status: "empty" },
         previewRequestVersion: 0,
+        optimizationColumnSelection: {
+          partitionColumns: [],
+          sortColumns: [],
+          indexColumns: [],
+        },
+        optimizationColumnTouched: {
+          partitionColumns: false,
+          sortColumns: false,
+          indexColumns: false,
+        },
       });
     }
-    return states.get(ingestorId);
+    const state = states.get(ingestorId);
+    form.__bdwFileIngestionState = state;
+    return state;
   }
 
   function specFor(form) {
@@ -144,6 +218,7 @@ export function createFileIngestionController(helpers) {
   }
 
   function currentConfig(form) {
+    formState(form);
     const targetId = selectedTargetId(form);
     const panel = form.querySelector(
       `[data-file-config-panel="${CSS.escape(targetId)}"]`
@@ -161,6 +236,7 @@ export function createFileIngestionController(helpers) {
       ),
       tablePrefix: String(panel?.querySelector("[data-file-table-prefix]")?.value || "").trim(),
       replaceExisting: true,
+      parquetOptimization: currentParquetOptimization(form),
     };
   }
 
@@ -173,6 +249,190 @@ export function createFileIngestionController(helpers) {
       const input = card.querySelector("[data-file-target-option]");
       card.classList.toggle("is-selected", Boolean(input?.checked));
     });
+    syncParquetOptimizationPanel(form);
+  }
+
+  function syncParquetOptimizationPanel(form) {
+    const state = formState(form);
+    const panel = form.querySelector("[data-file-parquet-optimization-panel]");
+    if (!panel) {
+      return;
+    }
+    const visible = stateKey(form) === "parquet" && selectedTargetId(form) === "workspace.s3";
+    panel.hidden = !visible;
+    const manualOptions = panel.querySelector("[data-file-parquet-manual-options]");
+    const mode = String(
+      panel.querySelector("[data-file-parquet-optimization-mode]:checked")?.value || "off"
+    )
+      .trim()
+      .toLowerCase();
+    if (manualOptions) {
+      manualOptions.hidden = !visible || mode !== "manual";
+    }
+    if (!visible) {
+      return;
+    }
+    syncFileOptimizationColumnSelection(form, state);
+    const columns = fileOptimizationColumnOptions(state);
+    const basis = fileOptimizationColumnBasis(state);
+    const basisRoot = panel.querySelector("[data-file-optimization-column-basis]");
+    if (basisRoot) {
+      basisRoot.textContent = columnBasisCopy(basis);
+    }
+    const hiveExplanation = panel.querySelector("[data-file-hive-partitioning-explanation]");
+    if (hiveExplanation) {
+      hiveExplanation.textContent = hivePartitioningCopy({
+        ...basis,
+        selectedColumns: state.optimizationColumnSelection.partitionColumns,
+      });
+    }
+    const partitionRoot = panel.querySelector("[data-file-partition-column-options]");
+    if (partitionRoot) {
+      partitionRoot.innerHTML = columnOptionMarkup({
+        columns,
+        selectedColumns: state.optimizationColumnSelection.partitionColumns,
+        field: "partitionColumns",
+        hook: "file",
+      });
+    }
+    const sortRoot = panel.querySelector("[data-file-sort-column-options]");
+    if (sortRoot) {
+      sortRoot.innerHTML = columnOptionMarkup({
+        columns,
+        selectedColumns: state.optimizationColumnSelection.sortColumns,
+        field: "sortColumns",
+        hook: "file",
+      });
+    }
+    const indexRoot = panel.querySelector("[data-file-index-column-options]");
+    if (indexRoot) {
+      indexRoot.innerHTML = columnOptionMarkup({
+        columns,
+        selectedColumns: state.optimizationColumnSelection.indexColumns,
+        field: "indexColumns",
+        hook: "file",
+      });
+    }
+  }
+
+  function resetFileOptimizationColumnSelection(state) {
+    state.optimizationColumnSelection = {
+      partitionColumns: [],
+      sortColumns: [],
+      indexColumns: [],
+    };
+    state.optimizationColumnTouched = {
+      partitionColumns: false,
+      sortColumns: false,
+      indexColumns: false,
+    };
+  }
+
+  function fileOptimizationColumnOptions(state) {
+    return normalizeColumnOptions(state.previewState?.columns || []);
+  }
+
+  function fileOptimizationColumnBasis(state) {
+    if (!fileOptimizationColumnOptions(state).length) {
+      return { fileName: "", sourceKind: "" };
+    }
+    return {
+      fileName: state.previewState?.columnBasisFileName || state.previewState?.fileName || "",
+      sourceKind: state.previewState?.columnBasisKind || "",
+    };
+  }
+
+  function syncFileOptimizationColumnSelection(form, state) {
+    const columns = fileOptimizationColumnOptions(state);
+    const createDuckdbCache =
+      form.querySelector("[data-file-create-duckdb-cache]")?.checked === true;
+    if (!state.optimizationColumnTouched.partitionColumns) {
+      state.optimizationColumnSelection.partitionColumns = recommendedPartitionColumns(columns);
+    } else {
+      state.optimizationColumnSelection.partitionColumns = filterAvailableColumns(
+        state.optimizationColumnSelection.partitionColumns,
+        columns
+      );
+    }
+    if (!state.optimizationColumnTouched.sortColumns) {
+      state.optimizationColumnSelection.sortColumns = recommendedSortColumns(columns);
+    } else {
+      state.optimizationColumnSelection.sortColumns = filterAvailableColumns(
+        state.optimizationColumnSelection.sortColumns,
+        columns
+      );
+    }
+    if (!state.optimizationColumnTouched.indexColumns) {
+      state.optimizationColumnSelection.indexColumns = recommendedIndexColumns(
+        columns,
+        createDuckdbCache
+      );
+    } else {
+      state.optimizationColumnSelection.indexColumns = filterAvailableColumns(
+        state.optimizationColumnSelection.indexColumns,
+        columns
+      );
+    }
+  }
+
+  function columnOptionMarkup({
+    columns,
+    selectedColumns,
+    field,
+    hook,
+    emptyCopy = "Column choices appear after a file preview is available.",
+  }) {
+    if (!columns.length) {
+      return `<p class="ingestion-parquet-column-empty">${escapeHtml(emptyCopy)}</p>`;
+    }
+    const selected = new Set((selectedColumns || []).map((column) => String(column).toLowerCase()));
+    return columns
+      .map((column) => {
+        const checked = selected.has(column.name.toLowerCase()) ? " checked" : "";
+        const meta = column.dataType
+          ? `<span class="ingestion-parquet-column-meta">${escapeHtml(column.dataType)}</span>`
+          : "";
+        return `
+          <label class="ingestion-parquet-column-option">
+            <input
+              type="checkbox"
+              value="${escapeHtml(column.name)}"
+              data-${hook}-optimization-column-option
+              data-column-field="${escapeHtml(field)}"
+              ${checked}
+            >
+            <span class="ingestion-parquet-column-label">
+              <span class="ingestion-parquet-column-name">${escapeHtml(column.name)}</span>
+              ${meta}
+            </span>
+          </label>
+        `;
+      })
+      .join("");
+  }
+
+  function selectedColumnOptions(root) {
+    if (!root) {
+      return [];
+    }
+    return Array.from(root.querySelectorAll("input[type='checkbox']:checked"))
+      .map((input) => String(input.value || "").trim())
+      .filter(Boolean);
+  }
+
+  function updateFileOptimizationColumnSelection(form, field) {
+    const state = formState(form);
+    const selectorByField = {
+      partitionColumns: "[data-file-partition-column-options]",
+      sortColumns: "[data-file-sort-column-options]",
+      indexColumns: "[data-file-index-column-options]",
+    };
+    const selector = selectorByField[field];
+    if (!selector) {
+      return;
+    }
+    state.optimizationColumnTouched[field] = true;
+    state.optimizationColumnSelection[field] = selectedColumnOptions(form.querySelector(selector));
   }
 
   function fileListMarkup(form, state) {
@@ -217,6 +477,13 @@ export function createFileIngestionController(helpers) {
             <span class="ingestion-csv-review-copy">
               ZIP archives are expanded server-side for Shared Workspace and PostgreSQL targets.
             </span>
+            ${
+              config.targetId === "workspace.s3" && stateKey(form) === "parquet"
+                ? `<span class="ingestion-csv-review-copy">${escapeHtml(
+                    parquetOptimizationLabel(config.parquetOptimization)
+                  )}</span>`
+                : ""
+            }
             <code class="ingestion-csv-review-path">${escapeHtml(targetCopy)}</code>
           </article>
         `;
@@ -239,6 +506,12 @@ export function createFileIngestionController(helpers) {
       `;
     }
     if (Number.isFinite(Number(preview.archiveEntryCount))) {
+      const basisCopy = preview.columnBasisFileName
+        ? ` Recommendations are based on first ZIP member: ${preview.columnBasisFileName}.`
+        : "";
+      const columnsCopy = Array.isArray(preview.columns) && preview.columns.length
+        ? ` Detected ${preview.columns.length} column(s).`
+        : "";
       return `
         <article class="ingestion-csv-preview-card">
           <div class="ingestion-csv-preview-header">
@@ -247,7 +520,39 @@ export function createFileIngestionController(helpers) {
           </div>
           <p class="ingestion-csv-preview-copy">
             ${escapeHtml(String(preview.archiveEntryCount))} ${escapeHtml(spec?.label || "file")} file(s) will be extracted during import.
+            ${escapeHtml(basisCopy)}
+            ${escapeHtml(columnsCopy)}
           </p>
+          ${
+            Array.isArray(preview.columns) && preview.columns.length
+              ? `<div class="ingestion-csv-preview-columns">
+                  ${preview.columns
+                    .map((column) => `<span class="ingestion-csv-preview-column">${escapeHtml(column.name || column)}</span>`)
+                    .join("")}
+                </div>`
+              : ""
+          }
+        </article>
+      `;
+    }
+    if (stateKey(form) === "parquet" && Array.isArray(preview.columns) && preview.columns.length) {
+      return `
+        <article class="ingestion-csv-preview-card">
+          <div class="ingestion-csv-preview-header">
+            <strong>${escapeHtml(preview.fileName || spec?.label || "File")}</strong>
+            <span class="ingestion-csv-review-target">${escapeHtml(String(preview.columns.length))} column(s)</span>
+          </div>
+          <p class="ingestion-csv-preview-copy">
+            ${escapeHtml(columnBasisCopy({
+              fileName: preview.columnBasisFileName || preview.fileName || "",
+              sourceKind: preview.columnBasisKind || "",
+            }))}
+          </p>
+          <div class="ingestion-csv-preview-columns">
+            ${preview.columns
+              .map((column) => `<span class="ingestion-csv-preview-column">${escapeHtml(column.name || column)}</span>`)
+              .join("")}
+          </div>
         </article>
       `;
     }
@@ -418,6 +723,14 @@ export function createFileIngestionController(helpers) {
             maxEntryBytes: spec.maxEntryBytes,
           })
         : { status: "ready", fileName: file.name };
+      if (stateKey(form) === "parquet") {
+        const schemaPreview = isZipFile(file)
+          ? await parquetSchemaPreviewForFirstZipMember(file, spec)
+          : await fetchParquetSchemaPreview(file, file.name);
+        nextPreview.columns = schemaPreview.columns;
+        nextPreview.columnBasisFileName = schemaPreview.fileName;
+        nextPreview.columnBasisKind = isZipFile(file) ? "zip-first-member" : "file";
+      }
       if (requestVersion !== state.previewRequestVersion) {
         return;
       }
@@ -435,6 +748,40 @@ export function createFileIngestionController(helpers) {
     renderForm(form);
   }
 
+  async function fetchParquetSchemaPreview(blob, fileName) {
+    const formData = new FormData();
+    formData.append("file", blob, fileName || "preview.parquet");
+    const response = await window.fetch("/api/ingestion/parquet/schema-preview", {
+      method: "POST",
+      headers: { Accept: "application/json" },
+      body: formData,
+    });
+    let payload = {};
+    try {
+      payload = await response.json();
+    } catch (_error) {
+      payload = {};
+    }
+    if (!response.ok) {
+      throw new Error(payload?.detail || "The Parquet schema preview could not be generated.");
+    }
+    return {
+      fileName: payload.fileName || fileName || "preview.parquet",
+      columns: normalizeColumnOptions(payload.columns || []),
+      columnCount: Number(payload.columnCount || 0),
+    };
+  }
+
+  async function parquetSchemaPreviewForFirstZipMember(file, spec) {
+    const firstFile = await readFirstFileFromZip(file, {
+      allowedExtensions: spec.extensions,
+      formatLabel: spec.label,
+      mimeType: spec.mimeType,
+      maxEntryBytes: spec.maxEntryBytes,
+    });
+    return fetchParquetSchemaPreview(firstFile.blob, firstFile.fileName);
+  }
+
   function setSelectedFiles(form, files) {
     const state = formState(form);
     const spec = specFor(form);
@@ -444,6 +791,7 @@ export function createFileIngestionController(helpers) {
     state.latestResults = [];
     state.latestImportPayload = null;
     state.uploadProgress = null;
+    resetFileOptimizationColumnSelection(state);
     renderForm(form);
     void refreshPreview(form);
   }
@@ -702,6 +1050,7 @@ export function createFileIngestionController(helpers) {
           schemaName: config.schemaName,
           tablePrefix: config.tablePrefix,
           replaceExisting: config.replaceExisting,
+          parquetOptimization: config.parquetOptimization,
         }),
       }
     );
@@ -795,6 +1144,21 @@ export function createFileIngestionController(helpers) {
     const form = targetOption?.closest("[data-file-ingestion-form]");
     if (form) {
       renderForm(form);
+      return true;
+    }
+    const columnOption = event.target.closest("[data-file-optimization-column-option]");
+    const columnOptionForm = columnOption?.closest("[data-file-ingestion-form]");
+    if (columnOptionForm) {
+      updateFileOptimizationColumnSelection(columnOptionForm, columnOption.dataset.columnField);
+      renderForm(columnOptionForm);
+      return true;
+    }
+    const optimizationOption = event.target.closest(
+      "[data-file-parquet-optimization-mode], [data-file-hive-partitioning], [data-file-create-duckdb-cache]"
+    );
+    const optimizationForm = optimizationOption?.closest("[data-file-ingestion-form]");
+    if (optimizationForm) {
+      renderForm(optimizationForm);
       return true;
     }
     return false;

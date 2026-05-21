@@ -200,6 +200,7 @@ class NotebookCellDefinition:
     sql: str
     language: str = "sql"
     data_sources: list[str] = field(default_factory=list)
+    query_options: dict[str, Any] = field(default_factory=dict)
 
     @property
     def access_mode(self) -> str:
@@ -218,6 +219,7 @@ class NotebookCellDefinition:
             "sql": self.sql,
             "language": self.language,
             "dataSources": list(self.data_sources),
+            "queryOptions": dict(self.query_options),
         }
 
 
@@ -599,6 +601,7 @@ class QueryJobDefinition:
     fetch_ms: float | None = None
     timings: dict[str, float] = field(default_factory=dict)
     data_sources: list[str] = field(default_factory=list)
+    query_options: dict[str, Any] = field(default_factory=dict)
     source_types: list[str] = field(default_factory=list)
     touched_relations: list[str] = field(default_factory=list)
     touched_buckets: list[str] = field(default_factory=list)
@@ -621,6 +624,7 @@ class QueryJobDefinition:
     average_memory_rss_bytes: int | None = None
     peak_memory_rss_bytes: int | None = None
     resource_samples: list[QueryResourceSample] = field(default_factory=list)
+    cache_hydration: dict[str, Any] = field(default_factory=dict)
     cancellation_phase: str | None = None
     cancellation_requested_at: str | None = None
     worker_exit_code: int | None = None
@@ -657,6 +661,7 @@ class QueryJobDefinition:
                 if isinstance(value, (int, float))
             },
             "dataSources": list(self.data_sources),
+            "queryOptions": dict(self.query_options),
             "sourceTypes": list(self.source_types),
             "touchedRelations": list(self.touched_relations),
             "touchedBuckets": list(self.touched_buckets),
@@ -679,6 +684,7 @@ class QueryJobDefinition:
             "averageMemoryRssBytes": self.average_memory_rss_bytes,
             "peakMemoryRssBytes": self.peak_memory_rss_bytes,
             "resourceSamples": [sample.payload for sample in self.resource_samples],
+            "cacheHydration": dict(self.cache_hydration),
             "cancellationPhase": self.cancellation_phase,
             "cancellationRequestedAt": self.cancellation_requested_at,
             "workerExitCode": self.worker_exit_code,

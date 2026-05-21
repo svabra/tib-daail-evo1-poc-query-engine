@@ -1,3 +1,5 @@
+import { buildCsvPreviewState } from "./preview.js";
+
 const ZIP_EOCD_SIGNATURE = 0x06054b50;
 const ZIP64_EOCD_SIGNATURE = 0x06064b50;
 const ZIP64_LOCATOR_SIGNATURE = 0x07064b50;
@@ -321,6 +323,21 @@ export async function buildZipPreviewState(file, options = {}) {
   };
 }
 
+export async function readFirstFileFromZip(file, options = {}) {
+  const readerOptions = normalizeZipReaderOptions(options);
+  const entries = await readZipEntries(file, readerOptions);
+  const entry = entries[0];
+  if (!entry) {
+    throw new Error(`The ZIP archive does not contain any ${readerOptions.formatLabel} files.`);
+  }
+  const blob = await extractZipEntry(file, entry, readerOptions);
+  return {
+    fileName: entry.fileName,
+    blob,
+    sizeBytes: blob.size,
+  };
+}
+
 export async function readFilesFromZip(file, options = {}) {
   const readerOptions = normalizeZipReaderOptions(options);
   const entries = await readZipEntries(file, readerOptions);
@@ -342,17 +359,23 @@ export async function readFilesFromZip(file, options = {}) {
   return results;
 }
 
-export async function buildCsvZipPreviewState(file) {
+export async function buildCsvZipPreviewState(file, config = {}) {
+  const firstCsv = await readFirstFileFromZip(file, {
+    formatLabel: "CSV",
+    allowedExtensions: [".csv"],
+    mimeType: "text/csv",
+  });
+  const previewFile = new File([firstCsv.blob], firstCsv.fileName, { type: "text/csv" });
+  const firstPreview = await buildCsvPreviewState(previewFile, config);
   const entries = await readZipEntries(file, { formatLabel: "CSV", allowedExtensions: [".csv"] });
   return {
-    status: "ready",
+    ...firstPreview,
+    status: firstPreview.status,
     fileName: file.name,
-    delimiter: "",
-    hasHeader: true,
-    columns: [],
-    rows: [],
-    error: "",
     archiveEntryCount: entries.length,
+    archiveFormatLabel: "CSV",
+    columnBasisFileName: firstCsv.fileName,
+    columnBasisKind: "zip-first-member",
   };
 }
 

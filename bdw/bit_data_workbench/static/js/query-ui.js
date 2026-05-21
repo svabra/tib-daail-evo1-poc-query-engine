@@ -19,7 +19,7 @@ export function createQueryUi(helpers) {
           <div class="result-header-copy">
             <h3>Result</h3>
             <div class="result-meta-row">
-              <p class="result-meta">0 ms</p>
+              ${resultDurationMarkup(null)}
             </div>
           </div>
           <div class="result-header-actions">
@@ -31,6 +31,37 @@ export function createQueryUi(helpers) {
           <p>Run this cell to inspect the selected data sources.</p>
         </div>
       </section>
+    `;
+  }
+
+  function resultDurationMarkup(job) {
+    const running = Boolean(job && queryJobIsRunning(job));
+    const duration = job ? formatQueryDuration(queryJobElapsedMs(job)) : "0 ms";
+    const label = running ? "Running elapsed" : "Total elapsed";
+    const tooltip = running
+      ? (
+          "Running elapsed is the wall-clock time since this cell was submitted. "
+          + "It keeps increasing while the backend prepares sources, waits for a DuckDB file lock if needed, starts the worker, runs DuckDB, and fetches rows for the UI."
+        )
+      : (
+          "Total elapsed is the main runtime for this cell run: from the Run Cell click until the completed, failed, or cancelled job update reaches this browser. "
+          + "Use this number when comparing runs. It includes backend preparation, any DuckDB file-lock wait, worker startup, source setup such as S3 Parquet view creation or cache hydration, DuckDB execution, result fetching, and delivery back to the browser. "
+          + "When the cell finishes, this number will not move backward; if backend timing or the resource chart observed a longer elapsed time, the result keeps that longer elapsed time. "
+          + "The timing pill next to it shows backend phase measurements. Those sub-times are diagnostics and can differ slightly because they are measured on different clocks and rounded."
+        );
+    const jobId = job?.jobId || "";
+    return `
+      <span class="result-duration-group">
+        <span class="result-duration-label">${escapeHtml(label)}</span>
+        <strong
+          class="result-meta"
+          data-query-duration
+          data-job-id="${escapeHtml(jobId)}"
+          title="${escapeHtml(tooltip)}"
+          aria-label="${escapeHtml(`${label}: ${duration}. ${tooltip}`)}"
+        >${escapeHtml(duration)}</strong>
+        <span class="result-duration-help" title="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}">?</span>
+      </span>
     `;
   }
 
@@ -262,10 +293,18 @@ export function createQueryUi(helpers) {
       maxFiniteSeriesValue(averageValues) || 0
     );
     const currentDatasetLabel = running ? "Current" : "Peak sample";
+    const helpTooltip = (
+      `${label} samples are collected periodically while the query worker is running. `
+      + "The x-axis follows the same elapsed clock as Total elapsed, but it only labels the moments when CPU or RAM was sampled. "
+      + "The last tick can differ slightly from Total elapsed because the query can finish between two samples and the labels are rounded."
+    );
     return `
       <article class="query-resource-sparkline-card">
         <div class="query-resource-sparkline-header">
-          <strong>${escapeHtml(label)}</strong>
+          <span class="query-resource-sparkline-title">
+            <strong>${escapeHtml(label)}</strong>
+            <span class="query-resource-sparkline-help" title="${escapeHtml(helpTooltip)}" aria-label="${escapeHtml(helpTooltip)}">?</span>
+          </span>
         </div>
         <div class="query-resource-sparkline-plot">
           <span class="query-resource-sparkline-axis" aria-hidden="true">${escapeHtml(axisLabel || unitLabel)}</span>
@@ -613,7 +652,7 @@ export function createQueryUi(helpers) {
           <div class="result-header-copy">
             <h3>Result</h3>
             <div class="result-meta-row">
-              <p class="result-meta" data-query-duration data-job-id="${escapeHtml(job.jobId || "")}">${escapeHtml(formatQueryDuration(queryJobElapsedMs(job)))}</p>
+              ${resultDurationMarkup(job)}
               ${resultMetricStripMarkup(job)}
             </div>
           </div>

@@ -31,6 +31,39 @@ export function createQueryInsights({
     return (normalizedValues[midpoint - 1] + normalizedValues[midpoint]) / 2;
   }
 
+  function maxResourceSampleElapsedMs(job) {
+    if (!Array.isArray(job?.resourceSamples)) {
+      return null;
+    }
+    const values = job.resourceSamples
+      .map((sample) => Number(sample?.elapsedMs))
+      .filter((value) => Number.isFinite(value) && value >= 0);
+    return values.length ? Math.max(...values) : null;
+  }
+
+  function queryJobBestElapsedMs(job) {
+    const timings = job?.timings && typeof job.timings === "object" ? job.timings : {};
+    const elapsedCandidates = [];
+    for (const key of ["clientObservedMs", "clientTotalMs", "backendTotalMs"]) {
+      const timing = Number(timings[key]);
+      if (Number.isFinite(timing) && timing >= 0) {
+        elapsedCandidates.push(timing);
+      }
+    }
+
+    const sampledElapsedMs = maxResourceSampleElapsedMs(job);
+    if (sampledElapsedMs !== null && sampledElapsedMs >= 0) {
+      elapsedCandidates.push(sampledElapsedMs);
+    }
+
+    const durationMs = Number(job?.durationMs);
+    if (Number.isFinite(durationMs) && durationMs >= 0) {
+      elapsedCandidates.push(durationMs);
+    }
+
+    return elapsedCandidates.length ? Math.max(0, ...elapsedCandidates) : null;
+  }
+
   function queryJobComparisonKey(job) {
     const sourceKey = normalizeDataSources(job?.dataSources ?? [])
       .slice()
@@ -74,26 +107,27 @@ export function createQueryInsights({
   }
 
   function buildQueryJobComparisonMetrics(job, history) {
-    const durationMs = Number(job?.durationMs);
+    const durationMs = Number(queryJobBestElapsedMs(job));
     if (!Number.isFinite(durationMs) || durationMs <= 0) {
       return null;
     }
 
     const previousJob = history.length ? history[history.length - 1] : null;
+    const previousDurationMs = queryJobBestElapsedMs(previousJob);
     const previous =
-      previousJob && Number.isFinite(Number(previousJob.durationMs))
+      previousJob && Number.isFinite(Number(previousDurationMs))
         ? buildQueryComparisonInsight(
             "vs previous",
-            Number(previousJob.durationMs),
-            durationMs - Number(previousJob.durationMs),
+            Number(previousDurationMs),
+            durationMs - Number(previousDurationMs),
             (() => {
-              const deltaMs = durationMs - Number(previousJob.durationMs);
+              const deltaMs = durationMs - Number(previousDurationMs);
               const tone = queryComparisonTone(deltaMs);
               if (tone === "neutral") {
-                return `Essentially unchanged versus the previous comparable run (${formatQueryDuration(previousJob.durationMs)}).`;
+                return `Essentially unchanged versus the previous comparable run (${formatQueryDuration(previousDurationMs)}).`;
               }
               return `${formatQueryDuration(Math.abs(deltaMs))} ${tone} than the previous comparable run (${formatQueryDuration(
-                previousJob.durationMs
+                previousDurationMs
               )}). Comparable means the same notebook cell, backend, and selected source set.`;
             })()
           )
@@ -101,7 +135,7 @@ export function createQueryInsights({
 
     const medianWindow = history
       .slice(-5)
-      .map((entry) => Number(entry.durationMs))
+      .map((entry) => Number(queryJobBestElapsedMs(entry)))
       .filter((value) => Number.isFinite(value) && value > 0);
     const rollingMedianMs = medianWindow.length >= 2 ? medianDuration(medianWindow) : null;
     const median =
@@ -200,17 +234,13 @@ export function createQueryInsights({
       return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
     };
     const backendTotalMs = timingValue("backendTotalMs");
-    const clientTotalMs = timingValue("clientTotalMs");
-    const totalMs =
-      clientTotalMs ??
-      backendTotalMs ??
-      (Number.isFinite(Number(job?.durationMs)) && Number(job.durationMs) >= 0 ? Number(job.durationMs) : null);
+    const totalMs = queryJobBestElapsedMs(job);
     const deliveryMs =
-      clientTotalMs !== null && backendTotalMs !== null
-        ? Math.max(0, clientTotalMs - backendTotalMs)
+      totalMs !== null && backendTotalMs !== null
+        ? Math.max(0, Number(totalMs) - backendTotalMs)
         : null;
-    const parts = [
-      ["total", totalMs],
+    const measuredParts = [
+      backendTotalMs !== null ? ["backend reported", backendTotalMs] : ["total", totalMs],
       ["prepare", timingValue("backendPrepareMs")],
       ["file lock", timingValue("engineAccessWaitMs")],
       ["startup", timingValue("workerStartupMs")],
@@ -219,6 +249,16 @@ export function createQueryInsights({
       ["fetch", timingValue("resultFetchMs") ?? (Number.isFinite(Number(job?.fetchMs)) ? Number(job.fetchMs) : null)],
       ["delivery", deliveryMs],
     ].filter(([, value]) => value !== null && Number.isFinite(value));
+    const parts = measuredParts.slice();
+    if (totalMs !== null && Number.isFinite(totalMs)) {
+      const visiblePartTotalMs = measuredParts
+        .filter(([label]) => !["total", "backend reported"].includes(label))
+        .reduce((sum, [, value]) => sum + Number(value || 0), 0);
+      const overheadMs = totalMs - visiblePartTotalMs;
+      if (overheadMs > 1) {
+        parts.push(["overhead", overheadMs]);
+      }
+    }
 
     if (parts.length) {
       return {
@@ -226,7 +266,7 @@ export function createQueryInsights({
         value: parts.map(([label, value]) => `${label} ${formatQueryDuration(value)}`).join(" | "),
         tone: "neutral",
         title:
-          "Breaks the run into browser delivery, backend preparation, shared DuckDB file lock wait, worker startup, isolated source setup, query execution, and row fetching.",
+          "Timing details explain the headline Total elapsed value shown under Result. Total elapsed is measured from the Run Cell click until the terminal job update reaches this browser, when this browser started the run. Backend reported is measured inside the server and can differ slightly because it uses a different clock and includes server-side bookkeeping. Prepare validates and rewrites the cell before execution. File lock is time waiting for shared DuckDB access. Startup creates the isolated worker. Source setup creates temporary views and may hydrate cache tables. Query is DuckDB execution time only; it is not the full runtime. Fetch returns result rows to the UI. Delivery is browser/network time when measured. Overhead is remaining measured time such as scheduling, worker monitoring, profiling, finalization, and metrics collection that is not assigned to one named slice. Rounded sub-times may not add up exactly to Total elapsed.",
       };
     }
 

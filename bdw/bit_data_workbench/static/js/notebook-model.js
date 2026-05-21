@@ -15,6 +15,50 @@ export function createNotebookModel(helpers) {
     return fallback === "python" ? "python" : "sql";
   }
 
+  function normalizeParquetHivePartitioningOption(value) {
+    const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+    return ["auto", "on", "off"].includes(normalized) ? normalized : "auto";
+  }
+
+  function normalizeCacheHydrationOptions(value, fallback = {}) {
+    const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const fallbackSource =
+      fallback && typeof fallback === "object" && !Array.isArray(fallback) ? fallback : {};
+    const mode = String(source.mode ?? fallbackSource.mode ?? "off").trim().toLowerCase();
+    return {
+      mode: mode === "on" ? "on" : "off",
+      scope: "referencedS3Parquet",
+      indexPolicy: "autoPredicates",
+    };
+  }
+
+  function normalizeCellQueryOptions(value, fallback = {}) {
+    const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const fallbackSource =
+      fallback && typeof fallback === "object" && !Array.isArray(fallback) ? fallback : {};
+    const duckdb =
+      source.duckdb && typeof source.duckdb === "object" && !Array.isArray(source.duckdb)
+        ? source.duckdb
+        : {};
+    const fallbackDuckdb =
+      fallbackSource.duckdb &&
+      typeof fallbackSource.duckdb === "object" &&
+      !Array.isArray(fallbackSource.duckdb)
+        ? fallbackSource.duckdb
+        : {};
+    return {
+      duckdb: {
+        parquetHivePartitioning: normalizeParquetHivePartitioningOption(
+          duckdb.parquetHivePartitioning ?? fallbackDuckdb.parquetHivePartitioning
+        ),
+        cacheHydration: normalizeCacheHydrationOptions(
+          duckdb.cacheHydration,
+          fallbackDuckdb.cacheHydration
+        ),
+      },
+    };
+  }
+
   function parseDefaultTags(value) {
     if (!value) {
       return [];
@@ -76,6 +120,10 @@ export function createNotebookModel(helpers) {
         : Array.isArray(cell.data_sources)
           ? normalizeDataSources(cell.data_sources)
           : normalizeDataSources(fallback.dataSources ?? []),
+      queryOptions: normalizeCellQueryOptions(
+        cell.queryOptions ?? cell.query_options,
+        fallback.queryOptions ?? fallback.query_options
+      ),
       sql:
         typeof cell.sql === "string"
           ? cell.sql
@@ -106,6 +154,7 @@ export function createNotebookModel(helpers) {
           cellId: createCellId(),
           language: normalizeCellLanguage(fallback.language ?? "sql"),
           dataSources: fallback.dataSources ?? [],
+          queryOptions: fallback.queryOptions ?? {},
           sql: fallback.sql ?? "",
         }
       ),
@@ -201,6 +250,7 @@ export function createNotebookModel(helpers) {
         cellId: cell.cellId,
         language: normalizeCellLanguage(cell.language, "sql"),
         dataSources: normalizeDataSources(cell.dataSources),
+        queryOptions: normalizeCellQueryOptions(cell.queryOptions),
         sql: cell.sql,
       })),
     };
@@ -328,6 +378,7 @@ export function createNotebookModel(helpers) {
     createInitialNotebookVersion,
     normalizeCellLanguage,
     normalizeCellEntry,
+    normalizeCellQueryOptions,
     normalizeNotebookCells,
     normalizeNotebookSummaryValue,
     normalizeNotebookTitleValue,

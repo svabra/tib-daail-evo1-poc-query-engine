@@ -14,10 +14,54 @@ if str(BDW_ROOT) not in sys.path:
 
 
 from bit_data_workbench.backend.service import WorkbenchService  # noqa: E402
+from bit_data_workbench.api.router import (  # noqa: E402
+    CsvUploadSessionCompletePayload,
+    FileUploadSessionCompletePayload,
+)
 from bit_data_workbench.models import SourceCatalog, SourceObject, SourceSchema  # noqa: E402
 
 
 class CsvIngestionServiceTests(TestCase):
+    def test_upload_complete_payloads_default_parquet_optimization_off(self) -> None:
+        expected = {
+            "mode": "off",
+            "hivePartitioning": False,
+            "partitionColumns": [],
+            "sortColumns": [],
+            "createDuckdbCache": False,
+            "indexColumns": [],
+        }
+
+        self.assertEqual(
+            CsvUploadSessionCompletePayload().parquet_optimization.model_dump(by_alias=True),
+            expected,
+        )
+        self.assertEqual(
+            FileUploadSessionCompletePayload().parquet_optimization.model_dump(by_alias=True),
+            expected,
+        )
+
+    def test_upload_complete_payload_accepts_recommended_parquet_optimization(self) -> None:
+        payload = CsvUploadSessionCompletePayload.model_validate(
+            {
+                "targetId": "workspace.s3",
+                "storageFormat": "parquet",
+                "parquetOptimization": {"mode": "recommended"},
+            }
+        )
+
+        self.assertEqual(
+            payload.parquet_optimization.model_dump(by_alias=True),
+            {
+                "mode": "recommended",
+                "hivePartitioning": False,
+                "partitionColumns": [],
+                "sortColumns": [],
+                "createDuckdbCache": False,
+                "indexColumns": [],
+            },
+        )
+
     def test_import_csv_files_passes_storage_format_to_ingestion_manager(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)
         captured_kwargs: dict[str, object] = {}
