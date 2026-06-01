@@ -556,6 +556,9 @@ export function createQueryUi(helpers) {
     if (job.timingInsights) {
       metricPills.push(queryInsightPillMarkup(job.timingInsights));
     }
+    if (job.cacheInsights) {
+      metricPills.push(queryInsightPillMarkup(job.cacheInsights));
+    }
     if (job.footprintInsights) {
       metricPills.push(queryInsightPillMarkup(job.footprintInsights));
     }

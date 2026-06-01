@@ -1,9 +1,34 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.19. Keep entries concise and
+# Derived from git history through version 0.9.20. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.20",
+        "releasedAt": "2026-06-01T17:11:42+02:00",
+        "features": [
+            (
+                "SQL cells now use an accessible Hydrate cache switch that "
+                "hydrates runtime DuckDB cache tables immediately, shows "
+                "building/deleting feedback in the cell, and deletes the "
+                "matching runtime cache files when turned off."
+            ),
+            (
+                "The cache hydration details dialog now clearly separates the "
+                "temporary source view/relation from the runtime cache table, "
+                "labels cache tables as Runtime table, and surfaces source "
+                "revision, row count, cache size, indexes, and last hydrated "
+                "metadata."
+            ),
+            (
+                "Query results now indicate when a runtime cache was used, "
+                "while per-cell cache tables remain hidden from the normal Data "
+                "Source Explorer so temporary execution artifacts do not appear "
+                "beside durable business data."
+            ),
+        ],
+    },
     {
         "version": "0.9.19",
         "releasedAt": "2026-05-21T17:39:42+02:00",

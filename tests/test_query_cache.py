@@ -18,12 +18,14 @@ if str(BDW_ROOT) not in sys.path:
 
 from bit_data_workbench.api.router import (  # noqa: E402
     QueryCachePayload,
+    delete_query_cache as delete_query_cache_route,
     expire_query_cache as expire_query_cache_route,
     query_cache_preview as query_cache_preview_route,
     rehydrate_query_cache as rehydrate_query_cache_route,
 )
 from bit_data_workbench.backend.query_cache import (  # noqa: E402
     cache_preview,
+    delete_cache,
     expire_cache,
     hydrate_cache,
     infer_predicate_index_columns,
@@ -129,6 +131,15 @@ class QueryCacheTests(unittest.TestCase):
                     query_options=_cache_options(),
                 )
                 self.assertEqual(initial_preview["sources"][0]["status"], "miss")
+                self.assertEqual(
+                    initial_preview["sources"][0]["sourceViewRelation"],
+                    "s3.poc.federal_tax.parquet",
+                )
+                self.assertTrue(initial_preview["sources"][0]["runtimeTable"])
+                self.assertTrue(initial_preview["sources"][0]["temporary"])
+                self.assertEqual(initial_preview["sources"][0]["sourceRevision"], "etag-one")
+                self.assertIn("cache_", initial_preview["sources"][0]["cacheTable"])
+                self.assertEqual(initial_preview["sources"][0]["rowCount"], 0)
 
                 connection = duckdb.connect(":memory:")
                 try:
@@ -144,6 +155,13 @@ class QueryCacheTests(unittest.TestCase):
                     self.assertEqual(
                         hydration["sources"][0]["indexColumns"],
                         ["taxpayer_id"],
+                    )
+                    self.assertEqual(hydration["sources"][0]["rowCount"], 5000)
+                    self.assertTrue(hydration["sources"][0]["runtimeTable"])
+                    self.assertTrue(hydration["sources"][0]["temporary"])
+                    self.assertIn(
+                        "temporary compute storage",
+                        hydration["sources"][0]["temporaryWarning"],
                     )
                     self.assertIn("cache_", updated_summaries[0]["query_sql"])
 
@@ -199,6 +217,45 @@ class QueryCacheTests(unittest.TestCase):
                 self.assertEqual(missing_preview["sources"][0]["status"], "expired")
                 self.assertFalse(missing_preview["sources"][0]["physicalCacheExists"])
 
+    def test_delete_cache_removes_matching_runtime_cache_files(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            parquet_path = root / "federal_tax.parquet"
+            cache_root = root / "cache"
+            _write_federal_tax_parquet(parquet_path, rows=100)
+            source_summary = _summary_for(parquet_path)
+            sql = "SELECT * FROM s3.poc.federal_tax.parquet WHERE taxpayer_id = 'TAX-000001'"
+
+            with patch.dict(os.environ, {"BDW_QUERY_CACHE_DIR": str(cache_root)}):
+                connection = duckdb.connect(":memory:")
+                try:
+                    _updated_summaries, hydration = hydrate_cache(
+                        connection=connection,
+                        sql=sql,
+                        source_summaries=[source_summary],
+                        query_options=_cache_options(),
+                    )
+                finally:
+                    connection.close()
+
+                database_path = Path(str(hydration["sources"][0]["cacheDatabasePath"]))
+                metadata_path = Path(str(hydration["sources"][0]["metadataPath"]))
+                self.assertTrue(database_path.exists())
+                self.assertTrue(metadata_path.exists())
+
+                deleted = delete_cache(
+                    sql=sql,
+                    source_summaries=[source_summary],
+                    query_options=_cache_options(),
+                )
+
+                self.assertTrue(deleted["deleted"])
+                self.assertTrue(deleted["sources"][0]["deleted"])
+                self.assertFalse(database_path.exists())
+                self.assertFalse(metadata_path.exists())
+                self.assertEqual(deleted["sources"][0]["status"], "miss")
+                self.assertIn("deleted", deleted["sources"][0]["statusReason"])
+
     def test_hydrates_without_art_index_when_no_useful_column_exists(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
             root = Path(raw_tmp)
@@ -239,6 +296,10 @@ class QueryCacheRouteTests(unittest.TestCase):
                 calls.append(("expire", kwargs))
                 return {"status": "ready", "sources": []}
 
+            def delete_query_cache(self, **kwargs):
+                calls.append(("delete", kwargs))
+                return {"status": "ready", "sources": [], "deleted": False}
+
         payload = QueryCachePayload(
             sql="select * from s3.poc.federal_tax.parquet",
             dataSources=["workspace.s3"],
@@ -249,11 +310,16 @@ class QueryCacheRouteTests(unittest.TestCase):
         preview = query_cache_preview_route(payload, service=FakeService())
         rehydrated = rehydrate_query_cache_route(payload, service=FakeService())
         expired = expire_query_cache_route(payload, service=FakeService())
+        deleted = delete_query_cache_route(payload, service=FakeService())
 
         self.assertEqual(preview.status_code, 200)
         self.assertEqual(rehydrated.status_code, 200)
         self.assertEqual(expired.status_code, 200)
-        self.assertEqual([name for name, _kwargs in calls], ["preview", "rehydrate", "expire"])
+        self.assertEqual(deleted.status_code, 200)
+        self.assertEqual(
+            [name for name, _kwargs in calls],
+            ["preview", "rehydrate", "expire", "delete"],
+        )
         self.assertEqual(calls[0][1]["sql"], payload.sql)
         self.assertEqual(calls[0][1]["data_sources"], ["workspace.s3"])
         self.assertEqual(

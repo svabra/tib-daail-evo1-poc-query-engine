@@ -287,22 +287,61 @@
               {% if hive_option not in ['auto', 'on', 'off'] %}
                 {% set hive_option = 'auto' %}
               {% endif %}
-              <label
-                class="cell-duckdb-option"
-                title="DuckDB Parquet Hive partitioning controls how read_parquet interprets partition folders for known S3 Parquet query sources. Auto uses source discovery defaults; On forces hive_partitioning=true; Off forces hive_partitioning=false."
+              {% set cache_hydration = cell.query_options.get('duckdb', {}).get('cacheHydration', {}) if cell.query_options else {} %}
+              {% set cache_hydration_mode = cache_hydration.get('mode', 'off') if cache_hydration else 'off' %}
+              <span
+                class="cell-duckdb-options"
                 data-cell-duckdb-options
                 {% if cell_language != 'sql' %}hidden{% endif %}
               >
-                <span>Hive partitions</span>
-                <select
-                  data-cell-query-option="duckdb.parquetHivePartitioning"
-                  {% if not active_notebook.can_edit or cell_language != 'sql' %}disabled{% endif %}
+                <label
+                  class="cell-duckdb-option"
+                  title="DuckDB Parquet Hive partitioning controls how read_parquet interprets partition folders for known S3 Parquet query sources. Auto uses source discovery defaults; On forces hive_partitioning=true; Off forces hive_partitioning=false."
                 >
-                  <option value="auto" {% if hive_option == 'auto' %}selected{% endif %}>Auto</option>
-                  <option value="on" {% if hive_option == 'on' %}selected{% endif %}>On</option>
-                  <option value="off" {% if hive_option == 'off' %}selected{% endif %}>Off</option>
-                </select>
-              </label>
+                  <span>Hive partitions</span>
+                  <select
+                    data-cell-query-option="duckdb.parquetHivePartitioning"
+                    {% if not active_notebook.can_edit or cell_language != 'sql' %}disabled{% endif %}
+                  >
+                    <option value="auto" {% if hive_option == 'auto' %}selected{% endif %}>Auto</option>
+                    <option value="on" {% if hive_option == 'on' %}selected{% endif %}>On</option>
+                    <option value="off" {% if hive_option == 'off' %}selected{% endif %}>Off</option>
+                  </select>
+                </label>
+                <span
+                  class="cell-cache-hydration-option"
+                  data-cache-hydration-state="unknown"
+                  title="Copies the S3 Parquet data referenced by this cell into a temporary local DuckDB table before the query runs. DuckDB can then reuse the local table and optional ART indexes for repeated filters and lookups. This cache lives in temporary compute storage and can disappear after a pod restart."
+                  data-cell-cache-hydration
+                >
+                  <button
+                    type="button"
+                    class="cell-cache-hydration-switch"
+                    role="switch"
+                    aria-checked="{{ 'true' if cache_hydration_mode == 'on' else 'false' }}"
+                    data-cell-query-option="duckdb.cacheHydration.mode"
+                    data-cache-hydration-switch
+                    title="Copies the S3 Parquet data referenced by this cell into a temporary local DuckDB table before the query runs."
+                    {% if not active_notebook.can_edit or cell_language != 'sql' %}disabled{% endif %}
+                  >
+                    <span class="cell-cache-hydration-switch-track" aria-hidden="true">
+                      <span class="cell-cache-hydration-switch-thumb"></span>
+                    </span>
+                    <span class="cell-cache-hydration-switch-copy">
+                      <span>Hydrate cache</span>
+                      <strong data-cache-hydration-state-label>{{ 'Unknown' if cache_hydration_mode == 'on' else 'Off' }}</strong>
+                    </span>
+                  </button>
+                  <span class="cell-cache-hydration-badge" data-cache-hydration-badge hidden>Unknown</span>
+                  <button
+                    type="button"
+                    class="cell-cache-hydration-details"
+                    data-cache-hydration-details
+                    title="Open the Cache hydration plan. It explains what will be cached, source size, cache size, ART indexes, cache freshness, and what happens on the next run."
+                    {% if cell_language != 'sql' %}hidden{% endif %}
+                  >Details</button>
+                </span>
+              </span>
               <details class="cell-source-picker" data-cell-source-picker>
                 {% set computation_mode_tooltip = "MPP = Massive Parallel Processing. Distributed query execution across multiple workers and partitions for larger-scale data processing.&#10;VMTP = Vectorized Multi-Threaded Processing. Single-node vectorized execution across multiple CPU threads for fast local analytical queries." %}
                 {% set source_summary = namespace(label="Select sources", classification="NA", computation_mode="NA", storage_tooltip="") %}

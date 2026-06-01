@@ -1092,6 +1092,7 @@ const {
   moveCell,
   notebookMetadata,
   openCacheHydrationDialog,
+  applyCellCacheHydrationToggle,
   queryOptionsForCellRoot,
   refreshCellCacheHydrationStatus,
   renameNotebook,
@@ -2395,11 +2396,13 @@ function queryOptionsForCellRoot(cellRoot) {
   }
   const select = cellRoot.querySelector('[data-cell-query-option="duckdb.parquetHivePartitioning"]');
   const cacheToggle = cellRoot.querySelector('[data-cell-query-option="duckdb.cacheHydration.mode"]');
+  const cacheEnabled =
+    cacheToggle?.checked === true || cacheToggle?.getAttribute?.("aria-checked") === "true";
   return normalizeCellQueryOptions({
     duckdb: {
       parquetHivePartitioning: select?.value || "auto",
       cacheHydration: {
-        mode: cacheToggle?.checked ? "on" : "off",
+        mode: cacheEnabled ? "on" : "off",
         scope: "referencedS3Parquet",
         indexPolicy: "autoPredicates",
       },
@@ -2407,21 +2410,72 @@ function queryOptionsForCellRoot(cellRoot) {
   });
 }
 
+const cacheHydrationToggleRequests = new WeakMap();
+
+function cellCacheHydrationEnabled(cellRoot) {
+  const toggle = cellRoot?.querySelector?.('[data-cell-query-option="duckdb.cacheHydration.mode"]');
+  return toggle?.checked === true || toggle?.getAttribute?.("aria-checked") === "true";
+}
+
+function cacheHydrationStateLabel(status) {
+  const state = String(status?.status || "unknown").trim().toLowerCase() || "unknown";
+  if (state === "rehydrating") {
+    return "Building";
+  }
+  if (state === "deleting") {
+    return "Deleting";
+  }
+  if (state === "unsupported") {
+    return "No source";
+  }
+  if (state === "off") {
+    return "Off";
+  }
+  const cleaned = String(status?.statusLabel || state).replace(/\bcache\b/gi, "").trim();
+  return cleaned ? `${cleaned.slice(0, 1).toUpperCase()}${cleaned.slice(1)}` : "Unknown";
+}
+
 function setCellCacheHydrationVisualState(cellRoot, status) {
   const root = cellRoot?.querySelector?.("[data-cell-cache-hydration]");
   const badge = cellRoot?.querySelector?.("[data-cache-hydration-badge]");
+  const toggle = cellRoot?.querySelector?.("[data-cache-hydration-switch]");
+  const stateLabel = cellRoot?.querySelector?.("[data-cache-hydration-state-label]");
   if (!root) {
     return;
   }
   const state = String(status?.status || "unknown").trim().toLowerCase() || "unknown";
   const label = String(status?.statusLabel || status?.label || (state === "off" ? "Off" : "Unknown"));
   const reason = String(status?.statusReason || "");
+  const busy = ["checking", "unknown", "rehydrating", "deleting"].includes(state);
   root.dataset.cacheHydrationState = state;
   root.title = reason || root.title;
+  if (toggle) {
+    const wasBusy = toggle.dataset.cacheHydrationBusy === "true";
+    if (busy && !wasBusy) {
+      toggle.dataset.cacheHydrationWasDisabled = toggle.disabled ? "true" : "false";
+    }
+    toggle.classList.toggle("is-loading", busy);
+    if (busy) {
+      toggle.setAttribute("aria-busy", "true");
+      toggle.disabled = true;
+      toggle.dataset.cacheHydrationBusy = "true";
+    } else {
+      toggle.removeAttribute("aria-busy");
+      if (wasBusy && toggle.dataset.cacheHydrationWasDisabled !== "true") {
+        toggle.disabled = false;
+      }
+      delete toggle.dataset.cacheHydrationBusy;
+      delete toggle.dataset.cacheHydrationWasDisabled;
+    }
+  }
+  if (stateLabel) {
+    stateLabel.textContent = cacheHydrationStateLabel(status);
+  }
   if (badge) {
     badge.hidden = state === "off";
     const shortReason = reason.length > 90 ? `${reason.slice(0, 87)}...` : reason;
-    badge.textContent = state === "error" && shortReason ? `Error: ${shortReason}` : label;
+    badge.textContent =
+      state === "error" && shortReason ? `Runtime cache: Error` : `Runtime cache: ${label}`;
     badge.title = reason || label;
   }
 }
@@ -2480,8 +2534,7 @@ function primaryCacheHydrationStatus(payload) {
 }
 
 async function refreshCellCacheHydrationStatus(cellRoot) {
-  const enabled =
-    cellRoot?.querySelector?.('[data-cell-query-option="duckdb.cacheHydration.mode"]')?.checked === true;
+  const enabled = cellCacheHydrationEnabled(cellRoot);
   if (!enabled) {
     setCellCacheHydrationVisualState(cellRoot, {
       status: "off",
@@ -2491,7 +2544,7 @@ async function refreshCellCacheHydrationStatus(cellRoot) {
     return null;
   }
   setCellCacheHydrationVisualState(cellRoot, {
-    status: "unknown",
+    status: "checking",
     statusLabel: "Checking",
     statusReason: "Checking whether the temporary DuckDB cache exists and still matches the S3 source revision.",
   });
@@ -2511,14 +2564,14 @@ async function refreshCellCacheHydrationStatus(cellRoot) {
 
 function refreshVisibleCacheHydrationStatuses(root = document) {
   root.querySelectorAll?.("[data-query-cell]").forEach((cellRoot) => {
-    if (cellRoot.querySelector('[data-cell-query-option="duckdb.cacheHydration.mode"]')?.checked) {
+    if (cellCacheHydrationEnabled(cellRoot)) {
       refreshCellCacheHydrationStatus(cellRoot);
     }
   });
 }
 
 function syncCellCacheHydrationJobState(cellRoot, job) {
-  if (!cellRoot?.querySelector?.('[data-cell-query-option="duckdb.cacheHydration.mode"]')?.checked) {
+  if (!cellCacheHydrationEnabled(cellRoot)) {
     return;
   }
   const hydration = job?.cacheHydration;
@@ -2549,6 +2602,60 @@ function syncCellCacheHydrationJobState(cellRoot, job) {
   }
 }
 
+async function applyCellCacheHydrationToggle(cellRoot, enabled) {
+  if (!(cellRoot instanceof Element)) {
+    return null;
+  }
+  const existing = cacheHydrationToggleRequests.get(cellRoot);
+  if (existing) {
+    return existing;
+  }
+
+  const endpoint = enabled ? "/api/query-cache/rehydrate" : "/api/query-cache/delete";
+  setCellCacheHydrationVisualState(cellRoot, {
+    status: enabled ? "rehydrating" : "deleting",
+    statusLabel: enabled ? "Building runtime cache" : "Deleting runtime cache",
+    statusReason: enabled
+      ? "Building the runtime DuckDB cache table for the current SQL cell."
+      : "Deleting the runtime DuckDB cache table and metadata for the current SQL cell.",
+  });
+  const request = fetchCacheHydrationStatus(cellRoot, endpoint)
+    .then((payload) => {
+      if (enabled) {
+        setCellCacheHydrationVisualState(cellRoot, primaryCacheHydrationStatus(payload));
+        return payload;
+      }
+      const failedSource = (Array.isArray(payload?.sources) ? payload.sources : []).find(
+        (source) => String(source?.status || "").toLowerCase() === "error"
+      );
+      if (failedSource) {
+        setCellCacheHydrationVisualState(cellRoot, failedSource);
+        return payload;
+      }
+      setCellCacheHydrationVisualState(cellRoot, {
+        status: "off",
+        statusLabel: "Off",
+        statusReason: payload?.deleted
+          ? "The runtime cache for this cell was deleted."
+          : "Hydrate cache is off for this SQL cell.",
+      });
+      return payload;
+    })
+    .catch((error) => {
+      setCellCacheHydrationVisualState(cellRoot, {
+        status: "error",
+        statusLabel: "Error",
+        statusReason: error instanceof Error ? error.message : "The cache action could not be completed.",
+      });
+      return null;
+    })
+    .finally(() => {
+      cacheHydrationToggleRequests.delete(cellRoot);
+    });
+  cacheHydrationToggleRequests.set(cellRoot, request);
+  return request;
+}
+
 function ensureCacheHydrationDialog() {
   let dialog = document.querySelector("[data-cache-hydration-dialog]");
   if (dialog) {
@@ -2564,10 +2671,11 @@ function ensureCacheHydrationDialog() {
             This dialog explains what the Hydrate cache option does before a SQL cell runs.
           </p>
           <div class="cache-hydration-dialog-body" data-cache-hydration-dialog-body></div>
+          <p class="cache-hydration-dialog-status" data-cache-hydration-dialog-status role="status" hidden></p>
           <menu class="modal-actions">
-            <button class="modal-button modal-button-secondary" type="button" data-cache-hydration-refresh>Refresh status</button>
-            <button class="modal-button" type="button" data-cache-hydration-rehydrate>Rehydrate now</button>
-            <button class="modal-button modal-button-secondary" type="button" data-cache-hydration-expire>Expire cache</button>
+            <button class="modal-button modal-button-secondary" type="button" data-cache-hydration-refresh data-cache-hydration-action>Refresh status</button>
+            <button class="modal-button" type="button" data-cache-hydration-rehydrate data-cache-hydration-action>Rehydrate now</button>
+            <button class="modal-button modal-button-secondary" type="button" data-cache-hydration-expire data-cache-hydration-action>Expire cache</button>
             <button class="modal-button modal-button-secondary" type="submit" value="confirm">Close</button>
           </menu>
         </form>
@@ -2591,16 +2699,19 @@ function renderCacheHydrationDialogBody(dialog, payload) {
             <article class="query-explain-card">
               <h3>${escapeHtml(source.statusLabel || "Cache source")}</h3>
               <dl class="query-explain-meta-list">
-                <div><dt>What will be cached</dt><dd>${escapeHtml(source.relation || "")}</dd></div>
+                <div><dt>Source view/relation</dt><dd>${escapeHtml(source.sourceViewRelation || source.relation || "")}</dd></div>
                 <div><dt>S3 path</dt><dd>${escapeHtml(source.path || "")}</dd></div>
+                <div><dt>Source revision</dt><dd>${escapeHtml(source.sourceRevision || "Unknown")}</dd></div>
                 <div><dt>Source size</dt><dd>${escapeHtml(formatByteCount(source.sourceSizeBytes || 0))}</dd></div>
-                <div><dt>Cache table</dt><dd>${escapeHtml(source.cacheTable || "")}</dd></div>
+                <div><dt>Cache table</dt><dd>${escapeHtml(source.cacheTable || "")} <span class="runtime-cache-pill">Runtime table</span></dd></div>
+                <div><dt>Rows cached</dt><dd>${escapeHtml(String(source.rowCount ?? 0))}</dd></div>
                 <div><dt>Cache size</dt><dd>${escapeHtml(formatByteCount(source.cacheSizeBytes || 0))}</dd></div>
                 <div><dt>ART index columns</dt><dd>${escapeHtml((source.indexColumns || []).join(", ") || "No ART index columns selected yet.")}</dd></div>
                 <div><dt>Last checked</dt><dd>${escapeHtml(source.lastCheckedAt || "")}</dd></div>
                 <div><dt>Last hydrated</dt><dd>${escapeHtml(source.lastHydratedAt || "Not hydrated yet")}</dd></div>
                 <div><dt>Expected behavior on next run</dt><dd>${escapeHtml(source.expectedBehavior || "The cell checks this cache before it runs and rebuilds it if it is missing, stale, or expired.")}</dd></div>
               </dl>
+              <p class="cache-hydration-runtime-warning"><strong>Temporary storage</strong>: ${escapeHtml(source.temporaryWarning || payload?.ephemeralWarning || "This runtime cache table lives in temporary compute storage.")}</p>
               <p class="modal-copy">${escapeHtml(source.statusReason || "")}</p>
               <p class="modal-copy">ART indexes speed up equality lookups such as WHERE taxpayer_id = ...; they do not make every query faster.</p>
             </article>
@@ -2613,11 +2724,51 @@ function renderCacheHydrationDialogBody(dialog, payload) {
     : "";
   body.innerHTML = `
     <p class="modal-copy">${escapeHtml(payload?.copy || "Copies referenced S3 Parquet data into temporary DuckDB cache tables before the query runs.")}</p>
-    <p class="modal-copy">${escapeHtml(payload?.ephemeralWarning || "This cache lives in temporary compute storage and can disappear after a pod restart.")}</p>
+    <p class="modal-copy">${escapeHtml(payload?.ephemeralWarning || "This runtime cache table lives in temporary compute storage and can disappear after a pod restart.")}</p>
     <p class="modal-copy">Stale cache means the source data changed since this cache was built; the next run rebuilds it before querying. Expired cache means you manually marked it expired, so it will not be reused until it is rebuilt.</p>
     ${sourceMarkup}
     ${unsupportedMarkup}
   `;
+}
+
+function setCacheHydrationDialogStatus(dialog, message, tone = "info") {
+  const status = dialog?.querySelector?.("[data-cache-hydration-dialog-status]");
+  if (!status) {
+    return;
+  }
+  const text = String(message || "").trim();
+  status.hidden = !text;
+  status.textContent = text;
+  status.dataset.tone = tone;
+}
+
+function setCacheHydrationDialogActionsBusy(dialog, activeButton, busy, busyLabel = "") {
+  const actionButtons = Array.from(dialog?.querySelectorAll?.("[data-cache-hydration-action]") || []);
+  actionButtons.forEach((button) => {
+    if (!button.dataset.defaultText) {
+      button.dataset.defaultText = button.textContent || "";
+    }
+    button.disabled = Boolean(busy);
+    button.classList.toggle("is-loading", busy && button === activeButton);
+    if (busy && button === activeButton) {
+      button.innerHTML = `<span class="query-button-spinner" aria-hidden="true"></span><span>${escapeHtml(busyLabel || button.dataset.defaultText || "")}</span>`;
+    } else if (!busy) {
+      button.textContent = button.dataset.defaultText || button.textContent || "";
+    }
+  });
+}
+
+function markCacheHydrationDialogActionDone(button, label) {
+  if (!button) {
+    return;
+  }
+  const defaultText = button.dataset.defaultText || button.textContent || "";
+  button.textContent = label;
+  window.setTimeout(() => {
+    if (!button.disabled) {
+      button.textContent = defaultText;
+    }
+  }, 1200);
 }
 
 async function openCacheHydrationDialog(cellRoot) {
@@ -2629,7 +2780,9 @@ async function openCacheHydrationDialog(cellRoot) {
   const refreshButton = dialog.querySelector("[data-cache-hydration-refresh]");
   const rehydrateButton = dialog.querySelector("[data-cache-hydration-rehydrate]");
   const expireButton = dialog.querySelector("[data-cache-hydration-expire]");
-  const runAction = async (endpoint) => {
+  const runAction = async (endpoint, button, labels) => {
+    setCacheHydrationDialogActionsBusy(dialog, button, true, labels.busy);
+    setCacheHydrationDialogStatus(dialog, labels.busy, "info");
     setCellCacheHydrationVisualState(cellRoot, {
       status: endpoint.includes("rehydrate") ? "rehydrating" : "unknown",
       statusLabel: endpoint.includes("rehydrate") ? "Rehydrating" : "Checking",
@@ -2637,22 +2790,54 @@ async function openCacheHydrationDialog(cellRoot) {
         ? "Rebuilds the local DuckDB table from S3 and recreates the selected ART indexes."
         : "Checking whether the cache exists and matches the S3 source revision.",
     });
-    const payload = await fetchCacheHydrationStatus(cellRoot, endpoint);
-    renderCacheHydrationDialogBody(dialog, payload);
-    setCellCacheHydrationVisualState(cellRoot, primaryCacheHydrationStatus(payload));
+    try {
+      const payload = await fetchCacheHydrationStatus(cellRoot, endpoint);
+      renderCacheHydrationDialogBody(dialog, payload);
+      setCellCacheHydrationVisualState(cellRoot, primaryCacheHydrationStatus(payload));
+      setCacheHydrationDialogStatus(dialog, labels.done, "success");
+      setCacheHydrationDialogActionsBusy(dialog, button, false);
+      markCacheHydrationDialogActionDone(button, labels.done);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "The cache action could not be completed.";
+      setCacheHydrationDialogStatus(dialog, message, "error");
+      setCacheHydrationDialogActionsBusy(dialog, button, false);
+      setCellCacheHydrationVisualState(cellRoot, {
+        status: "error",
+        statusLabel: "Error",
+        statusReason: message,
+      });
+    }
   };
-  refreshButton.onclick = () => runAction("/api/query-cache/preview");
-  rehydrateButton.onclick = () => runAction("/api/query-cache/rehydrate");
-  expireButton.onclick = () => runAction("/api/query-cache/expire");
+  refreshButton.onclick = () =>
+    runAction("/api/query-cache/preview", refreshButton, {
+      busy: "Refreshing...",
+      done: "Refreshed",
+    });
+  rehydrateButton.onclick = () =>
+    runAction("/api/query-cache/rehydrate", rehydrateButton, {
+      busy: "Rehydrating...",
+      done: "Rehydrated",
+    });
+  expireButton.onclick = () =>
+    runAction("/api/query-cache/expire", expireButton, {
+      busy: "Expiring...",
+      done: "Expired",
+    });
   try {
     const payload = await fetchCacheHydrationStatus(cellRoot);
     renderCacheHydrationDialogBody(dialog, payload);
     setCellCacheHydrationVisualState(cellRoot, primaryCacheHydrationStatus(payload));
+    setCacheHydrationDialogStatus(dialog, "", "info");
   } catch (error) {
     renderCacheHydrationDialogBody(dialog, {
       copy: error instanceof Error ? error.message : "The cache hydration plan could not be loaded.",
       sources: [],
     });
+    setCacheHydrationDialogStatus(
+      dialog,
+      error instanceof Error ? error.message : "The cache hydration plan could not be loaded.",
+      "error"
+    );
     setCellCacheHydrationVisualState(cellRoot, {
       status: "error",
       statusLabel: "Error",
@@ -5229,9 +5414,14 @@ function applyWorkspaceCellState(workspaceRoot, cell, index, editable, totalCell
   }
   if (cacheHydrationToggle) {
     cacheHydrationToggle.disabled = !editable || cellLanguage !== "sql";
-    cacheHydrationToggle.checked =
+    const cacheEnabled =
       normalizeCellQueryOptions(cell.queryOptions).duckdb.cacheHydration.mode === "on";
-    if (!cacheHydrationToggle.checked) {
+    if (cacheHydrationToggle instanceof HTMLButtonElement) {
+      cacheHydrationToggle.setAttribute("aria-checked", cacheEnabled ? "true" : "false");
+    } else {
+      cacheHydrationToggle.checked = cacheEnabled;
+    }
+    if (!cacheEnabled) {
       setCellCacheHydrationVisualState(cellRoot, {
         status: "off",
         statusLabel: "Off",
@@ -6782,7 +6972,7 @@ async function startQueryJobForForm(form) {
   formData.set("queryOptions", JSON.stringify(queryOptionsForCellRoot(cellRoot)));
   formData.set("clientRunStartedAt", String(clientRunStartedAt));
   formData.set("clientPreSubmitMs", String(Math.max(0, performance.now() - clientRunStartedPerf)));
-  if (cellRoot.querySelector('[data-cell-query-option="duckdb.cacheHydration.mode"]')?.checked) {
+  if (cellCacheHydrationEnabled(cellRoot)) {
     setCellCacheHydrationVisualState(cellRoot, {
       status: "rehydrating",
       statusLabel: "Rehydrating",

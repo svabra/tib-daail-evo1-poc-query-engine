@@ -10,6 +10,7 @@ export function createNotebookWorkspaceController(helpers) {
     deleteCell,
     deleteNotebook,
     duplicateCell,
+    applyCellCacheHydrationToggle,
     focusNotebookMetadata,
     formatCellSql,
     loadNotebookVersion,
@@ -281,6 +282,28 @@ export function createNotebookWorkspaceController(helpers) {
       if (cellRoot) {
         await openCacheHydrationDialog(cellRoot);
       }
+      return true;
+    }
+
+    const cacheHydrationSwitch = event.target.closest("[data-cache-hydration-switch]");
+    if (cacheHydrationSwitch) {
+      event.preventDefault();
+      if (
+        cacheHydrationSwitch.getAttribute("aria-busy") === "true" ||
+        cacheHydrationSwitch.disabled
+      ) {
+        return true;
+      }
+      const { notebookId, cellId } = notebookCellContext(cacheHydrationSwitch);
+      const cellRoot = cacheHydrationSwitch.closest("[data-query-cell]");
+      const metaRoot = cacheHydrationSwitch.closest("[data-notebook-meta]");
+      if (!notebookId || !cellId || !cellRoot || metaRoot?.dataset.canEdit === "false") {
+        return true;
+      }
+      const enabled = cacheHydrationSwitch.getAttribute("aria-checked") !== "true";
+      cacheHydrationSwitch.setAttribute("aria-checked", enabled ? "true" : "false");
+      setCellQueryOptions(notebookId, cellId, queryOptionsForCellRoot(cellRoot));
+      await applyCellCacheHydrationToggle(cellRoot, enabled);
       return true;
     }
 

@@ -1419,6 +1419,27 @@ def expire_query_cache(
     return JSONResponse(jsonable_encoder(result))
 
 
+@router.post("/api/query-cache/delete")
+def delete_query_cache(
+    payload: QueryCachePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        result = service.delete_query_cache(
+            sql=payload.sql,
+            data_sources=payload.data_sources,
+            local_relation_map={
+                str(key): str(value)
+                for key, value in payload.local_relations.items()
+                if str(key).strip() and str(value).strip()
+            },
+            query_options=payload.query_options,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder(result))
+
+
 @router.post("/api/query-jobs")
 def start_query_job(
     sql: str = Form(""),

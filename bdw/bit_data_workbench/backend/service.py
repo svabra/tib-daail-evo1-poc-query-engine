@@ -91,7 +91,7 @@ from .query_aliases import (
     unique_query_aliases,
 )
 from .query_source_validation import QUERY_SOURCE_INVALID, validate_query_sources
-from .query_cache import cache_preview, expire_cache, hydrate_cache
+from .query_cache import cache_preview, delete_cache, expire_cache, hydrate_cache
 from .query_options import normalize_query_options, parquet_hive_partitioning_option
 from .query_jobs import (
     DuckDBQueryAccessCoordinator,
@@ -1599,6 +1599,27 @@ class WorkbenchService:
             query_options=normalized_query_options,
         )
         return expire_cache(
+            sql=sql,
+            source_summaries=source_summaries,
+            query_options=normalized_query_options,
+        )
+
+    def delete_query_cache(
+        self,
+        *,
+        sql: str,
+        data_sources: list[str] | None = None,
+        local_relation_map: dict[str, str] | None = None,
+        query_options: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        normalized_query_options = normalize_query_options(query_options)
+        source_summaries = self._cache_source_summaries(
+            sql=sql,
+            data_sources=data_sources,
+            local_relation_map=local_relation_map,
+            query_options=normalized_query_options,
+        )
+        return delete_cache(
             sql=sql,
             source_summaries=source_summaries,
             query_options=normalized_query_options,

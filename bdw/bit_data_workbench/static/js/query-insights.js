@@ -290,6 +290,44 @@ export function createQueryInsights({
     };
   }
 
+  function buildQueryJobCacheInsight(job) {
+    const hydration = job?.cacheHydration && typeof job.cacheHydration === "object" ? job.cacheHydration : {};
+    const sources = Array.isArray(hydration.sources)
+      ? hydration.sources.filter((source) => String(source?.cacheTable || "").trim())
+      : [];
+    if (!sources.length) {
+      return null;
+    }
+
+    const usedSources = sources.filter((source) => {
+      const status = String(source?.status || "").trim().toLowerCase();
+      return status === "hit" || source?.physicalCacheExists === true;
+    });
+    const visibleSources = usedSources.length ? usedSources : sources;
+    const mappings = visibleSources
+      .map((source) => {
+        const relation = String(source?.sourceViewRelation || source?.relation || "").trim();
+        const cacheTable = String(source?.cacheTable || "").trim();
+        return relation && cacheTable ? `${relation} -> ${cacheTable}` : cacheTable;
+      })
+      .filter(Boolean);
+    if (!mappings.length) {
+      return null;
+    }
+
+    const tableCount = visibleSources.length;
+    return {
+      label: "Runtime cache",
+      value: `used ${tableCount} table${tableCount === 1 ? "" : "s"}`,
+      tone: "neutral",
+      title: [
+        "Runtime cache used for this query.",
+        ...mappings,
+        "These are temporary DuckDB tables, not normal data-source objects.",
+      ].join("\n"),
+    };
+  }
+
   function decorateQueryJobsWithInsights(jobs) {
     const historyByKey = new Map();
     const comparisonById = new Map();
@@ -314,6 +352,7 @@ export function createQueryInsights({
       comparisonInsights: comparisonById.get(job.jobId) ?? null,
       footprintInsights: buildQueryJobFootprint(job),
       timingInsights: buildQueryJobTimingInsight(job),
+      cacheInsights: buildQueryJobCacheInsight(job),
     }));
   }
 

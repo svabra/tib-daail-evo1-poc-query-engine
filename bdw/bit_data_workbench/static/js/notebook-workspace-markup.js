@@ -88,10 +88,24 @@ export function createNotebookWorkspaceMarkup(helpers) {
           </select>
         </label>
         <span class="cell-cache-hydration-option" data-cache-hydration-state="unknown" title="${escapeHtml(cacheTitle)}" data-cell-cache-hydration>
-          <label class="cell-cache-hydration-toggle">
-            <input type="checkbox" data-cell-query-option="duckdb.cacheHydration.mode" ${hydrateCache ? "checked" : ""}${disabled}>
-            <span>Hydrate cache</span>
-          </label>
+          <button
+            type="button"
+            class="cell-cache-hydration-switch"
+            role="switch"
+            aria-checked="${hydrateCache ? "true" : "false"}"
+            data-cell-query-option="duckdb.cacheHydration.mode"
+            data-cache-hydration-switch
+            title="${escapeHtml(cacheTitle)}"
+            ${disabled}
+          >
+            <span class="cell-cache-hydration-switch-track" aria-hidden="true">
+              <span class="cell-cache-hydration-switch-thumb"></span>
+            </span>
+            <span class="cell-cache-hydration-switch-copy">
+              <span>Hydrate cache</span>
+              <strong data-cache-hydration-state-label>${hydrateCache ? "Unknown" : "Off"}</strong>
+            </span>
+          </button>
           <span class="cell-cache-hydration-badge" data-cache-hydration-badge hidden>Unknown</span>
           <button type="button" class="cell-cache-hydration-details" data-cache-hydration-details title="Open the Cache hydration plan. It explains what will be cached, source size, cache size, ART indexes, cache freshness, and what happens on the next run." ${cellLanguage === "sql" ? "" : "hidden"}>Details</button>
         </span>

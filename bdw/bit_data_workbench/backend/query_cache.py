@@ -23,6 +23,13 @@ CACHE_STATUS_STALE = "stale"
 CACHE_STATUS_EXPIRED = "expired"
 CACHE_STATUS_UNSUPPORTED = "unsupported"
 CACHE_STATUS_ERROR = "error"
+RUNTIME_CACHE_EXPECTED_BEHAVIOR = (
+    "When Hydrate cache is enabled, the next query run uses this runtime DuckDB table "
+    "through a temporary source view if the cache is current."
+)
+RUNTIME_CACHE_TEMPORARY_WARNING = (
+    "This runtime cache table lives in temporary compute storage and can disappear after a pod restart."
+)
 
 PREDICATE_COLUMN_PATTERN = re.compile(
     r"(?:where|and|or|on)\s+(?:[a-zA-Z_][\w$]*\.)?"
@@ -151,6 +158,7 @@ def _cache_plan(
     return {
         "cacheKey": cache_key,
         "relation": relation,
+        "sourceViewRelation": relation,
         "path": path,
         "format": "parquet",
         "querySql": str(summary.get("query_sql") or "").strip(),
@@ -162,8 +170,12 @@ def _cache_plan(
         "cacheDatabasePath": (root / f"{cache_key}.duckdb").as_posix(),
         "metadataPath": (root / f"{cache_key}.json").as_posix(),
         "cacheAlias": cache_alias,
-        "cacheTable": f"{cache_alias}.{CACHE_TABLE_NAME}",
+        "cacheTable": f"{cache_alias}.main.{CACHE_TABLE_NAME}",
         "cacheTableName": CACHE_TABLE_NAME,
+        "runtimeTable": True,
+        "temporary": True,
+        "temporaryWarning": RUNTIME_CACHE_TEMPORARY_WARNING,
+        "expectedBehavior": RUNTIME_CACHE_EXPECTED_BEHAVIOR,
     }
 
 
@@ -199,6 +211,26 @@ def _cache_file_size(plan: dict[str, object]) -> int:
     if wal_path.exists():
         total += wal_path.stat().st_size
     return total
+
+
+def _cache_database_wal_path(plan: dict[str, object]) -> Path:
+    database_path = _database_path(plan)
+    return database_path.with_name(f"{database_path.name}.wal")
+
+
+def _delete_cache_files(plan: dict[str, object]) -> tuple[bool, list[str], list[str]]:
+    paths = [_database_path(plan), _cache_database_wal_path(plan), _metadata_path(plan)]
+    deleted_paths: list[str] = []
+    errors: list[str] = []
+    for path in paths:
+        if not path.exists():
+            continue
+        try:
+            path.unlink()
+            deleted_paths.append(path.as_posix())
+        except OSError as exc:
+            errors.append(f"{path.as_posix()}: {exc}")
+    return bool(deleted_paths) and not errors, deleted_paths, errors
 
 
 def _physical_cache_state(plan: dict[str, object]) -> tuple[bool, list[str]]:
@@ -247,6 +279,8 @@ def cache_status_for_plan(plan: dict[str, object]) -> dict[str, object]:
         "cacheSizeBytes": _cache_file_size(plan),
         "cacheSizeMb": _format_mb(_cache_file_size(plan)),
         "statusReason": "",
+        "rowCount": 0,
+        "lastHydratedAt": "",
     }
     if metadata is None:
         return {
@@ -307,7 +341,7 @@ def cache_status_for_plan(plan: dict[str, object]) -> dict[str, object]:
 
 def cache_preview(
     *,
-    settings: Settings,
+    settings: Settings | None = None,
     sql: str,
     source_summaries: list[dict[str, object]],
     query_options: dict[str, object] | None,
@@ -341,9 +375,7 @@ def cache_preview(
             "Copies the S3 Parquet data referenced by this cell into a temporary local DuckDB table before the query runs. "
             "DuckDB can then reuse the local table and optional ART indexes for repeated filters and lookups."
         ),
-        "ephemeralWarning": (
-            "This cache lives in temporary compute storage. It can disappear after a pod restart and will be rebuilt when needed."
-        ),
+        "ephemeralWarning": RUNTIME_CACHE_TEMPORARY_WARNING,
         "rawSqlLimitation": (
             "Hydrate cache applies to known S3 Parquet sources selected in the notebook. Direct read_parquet('s3://...') calls are not rewritten in this version."
         ),
@@ -377,6 +409,49 @@ def expire_cache(
         source_summaries=source_summaries,
         query_options=query_options,
     )
+
+
+def delete_cache(
+    *,
+    sql: str,
+    source_summaries: list[dict[str, object]],
+    query_options: dict[str, object] | None,
+) -> dict[str, object]:
+    deletion_by_key: dict[str, dict[str, object]] = {}
+    for summary in source_summaries:
+        if not _eligible_summary(summary):
+            continue
+        plan = _cache_plan(summary, sql=sql, query_options=query_options)
+        deleted, deleted_paths, errors = _delete_cache_files(plan)
+        deletion_by_key[str(plan["cacheKey"])] = {
+            "deleted": deleted,
+            "deletedPaths": deleted_paths,
+            "deleteErrors": errors,
+        }
+
+    preview = cache_preview(
+        settings=None,
+        sql=sql,
+        source_summaries=source_summaries,
+        query_options=query_options,
+    )
+    preview["deleted"] = any(
+        bool(item.get("deleted")) for item in deletion_by_key.values()
+    )
+    for source in preview.get("sources", []):
+        if not isinstance(source, dict):
+            continue
+        deletion = deletion_by_key.get(str(source.get("cacheKey") or ""))
+        if deletion is None:
+            continue
+        source.update(deletion)
+        if deletion.get("deleteErrors"):
+            source["status"] = CACHE_STATUS_ERROR
+            source["statusLabel"] = "Delete failed"
+            source["statusReason"] = "; ".join(str(error) for error in deletion["deleteErrors"])
+        elif deletion.get("deleted"):
+            source["statusReason"] = "The runtime cache table and metadata were deleted for this cache plan."
+    return preview
 
 
 def _attach_cache_database(connection: duckdb.DuckDBPyConnection, plan: dict[str, object]) -> str:
@@ -491,6 +566,10 @@ def hydrate_cache(
                 "cacheSizeMb": _format_mb(cache_size_bytes),
                 "lastHydratedAt": utc_now_iso(),
                 "expired": False,
+                "runtimeTable": True,
+                "temporary": True,
+                "temporaryWarning": RUNTIME_CACHE_TEMPORARY_WARNING,
+                "expectedBehavior": RUNTIME_CACHE_EXPECTED_BEHAVIOR,
             }
             _write_metadata(plan, metadata)
             timings[f"{relation}.cacheHydrationMs"] = (time.perf_counter() - hydrate_started) * 1000
@@ -520,9 +599,10 @@ def hydrate_cache(
                 **status,
                 "relation": relation,
                 "indexColumns": selected_index_columns,
-                "expectedBehavior": (
-                    "The next query run uses this local DuckDB table through a view with the same relation name."
-                ),
+                "expectedBehavior": RUNTIME_CACHE_EXPECTED_BEHAVIOR,
+                "runtimeTable": True,
+                "temporary": True,
+                "temporaryWarning": RUNTIME_CACHE_TEMPORARY_WARNING,
             }
         )
 
