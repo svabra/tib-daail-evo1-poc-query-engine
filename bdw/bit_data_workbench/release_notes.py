@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.21. Keep entries concise and
+# Derived from git history through version 0.9.22. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
     {
-        "version": "0.9.21",
-        "releasedAt": "2026-06-02T14:39:25+02:00",
+        "version": "0.9.22",
+        "releasedAt": "2026-06-02T15:25:38+02:00",
         "features": [
             (
                 "Settings now includes Runtime Storage, showing temporary "
@@ -19,7 +19,29 @@ RELEASE_NOTES: list[dict[str, object]] = [
                 "settings for memory limit, threads, temp directory, temp "
                 "directory quota, and insertion-order preservation; the RHOS "
                 "deployment uses a conservative 20 GiB memory limit, four "
-                "threads, and a 28 GiB spill quota inside the 50 GiB emptyDir."
+                "threads, and a 28 GiB spill quota inside the 60 GiB emptyDir."
+            ),
+            (
+                "The RHOS deployment now provides a 60 GiB workspace emptyDir, "
+                "leaving more temporary SSD headroom for hydrated runtime query "
+                "caches while keeping the DuckDB spill quota conservative."
+            ),
+            (
+                "Hydrate cache preview, rehydrate, expire, and delete actions "
+                "now resolve Local Workspace aliases before calling the backend, "
+                "so runnable cells no longer send an empty local relation map "
+                "to cache validation."
+            ),
+            (
+                "Query cache endpoints now return structured JSON errors for "
+                "DuckDB or runtime hydration failures instead of surfacing an "
+                "uncaught ASGI exception, and the notebook marks the cache state "
+                "as Error without crashing the page."
+            ),
+            (
+                "Query-job log lines now place the local date and time immediately "
+                "after the log level and before [bdw-query], making long-running "
+                "query progress logs easier to scan chronologically."
             ),
             (
                 "The notebook menu now says Restart Python session and explains "

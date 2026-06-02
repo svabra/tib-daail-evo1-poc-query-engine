@@ -435,6 +435,12 @@ class ProcessQueryJobManagerTests(TestCase):
             output,
             r'query_job_time="\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (?:CET|CEST|UTC)"',
         )
+        self.assertRegex(
+            output,
+            r"INFO:bit_data_workbench\.backend\.query_jobs:"
+            r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (?:CET|CEST|UTC) "
+            r"\[bdw-query\] query_job_time=",
+        )
         self.assertIn('notebook_id="notebook-y"', output)
         self.assertIn('notebook_title="Notebook Y"', output)
         self.assertIn('cell_id="cell-x"', output)
@@ -507,6 +513,11 @@ class ProcessQueryJobManagerTests(TestCase):
             self.manager._log_query_heartbeat_if_due(snapshot.job_id)
             self.assertEqual(log_info.call_count, 1)
             heartbeat_line = str(log_info.call_args.args[1])
+            self.assertRegex(
+                heartbeat_line,
+                r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} (?:CET|CEST|UTC) "
+                r"\[bdw-query\] ",
+            )
             self.assertIn('query_job_event="progress"', heartbeat_line)
             self.assertIn('progress_kind="heartbeat"', heartbeat_line)
             self.assertIn("duckdb_progress_percent=42.0", heartbeat_line)

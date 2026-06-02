@@ -2481,28 +2481,44 @@ function setCellCacheHydrationVisualState(cellRoot, status) {
   }
 }
 
-function cacheHydrationPayloadForCellRoot(cellRoot) {
+async function cacheHydrationPayloadForCellRoot(cellRoot) {
   const sql = cellRoot?.querySelector?.("[data-editor-source]")?.value || "";
   const workspaceRoot = cellRoot?.closest?.("[data-workspace-notebook]");
+  const localValidation = await validateLocalWorkspaceAliases(sql);
+  const missingAliases = Array.isArray(localValidation?.missingAliases)
+    ? localValidation.missingAliases.map((alias) => String(alias || "").trim()).filter(Boolean)
+    : [];
+  if (missingAliases.length) {
+    throw new Error(`Referenced source(s) were not found: ${missingAliases.join(", ")}.`);
+  }
+  const localRelations =
+    localValidation?.localRelations && typeof localValidation.localRelations === "object"
+      ? Object.fromEntries(
+          Object.entries(localValidation.localRelations)
+            .map(([key, value]) => [String(key || "").trim(), String(value || "").trim()])
+            .filter(([key, value]) => key && value)
+        )
+      : {};
   return {
     sql,
     notebookId: workspaceNotebookId(workspaceRoot),
     notebookTitle: currentWorkspaceNotebookTitle(workspaceRoot),
     cellId: cellRoot?.dataset?.cellId || "",
     dataSources: selectedDataSourcesForCell(cellRoot),
-    localRelations: {},
+    localRelations,
     queryOptions: queryOptionsForCellRoot(cellRoot),
   };
 }
 
 async function fetchCacheHydrationStatus(cellRoot, endpoint = "/api/query-cache/preview") {
+  const payload = await cacheHydrationPayloadForCellRoot(cellRoot);
   const response = await window.fetch(endpoint, {
     method: "POST",
     headers: {
       Accept: "application/json",
       "Content-Type": "application/json",
     },
-    body: JSON.stringify(cacheHydrationPayloadForCellRoot(cellRoot)),
+    body: JSON.stringify(payload),
   });
   if (!response.ok) {
     let message = "The cache hydration status could not be checked.";

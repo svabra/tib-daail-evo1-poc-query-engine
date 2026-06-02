@@ -148,6 +148,12 @@ def _format_query_log_fields(fields: dict[str, object]) -> str:
     )
 
 
+def _format_query_log_line(fields: dict[str, object]) -> str:
+    timestamp = str(fields.get("query_job_time") or "").strip()
+    prefix = f"{timestamp} [bdw-query]" if timestamp else "[bdw-query]"
+    return f"{prefix} {_format_query_log_fields(fields)}"
+
+
 def _safe_timing_ms(value: object) -> float | None:
     try:
         numeric = float(value)
@@ -1614,7 +1620,7 @@ class QueryJobManager:
             self._append_progress_event_locked(record, event=event, fields=fields)
             self._touch_locked()
         if should_log and fields is not None:
-            logger.log(level, "[bdw-query] %s", _format_query_log_fields(fields))
+            logger.log(level, "%s", _format_query_log_line(fields))
 
     def _log_query_heartbeat_if_due(self, job_id: str) -> None:
         if not bool(getattr(self._settings, "query_job_logging_enabled", True)):
@@ -1649,7 +1655,7 @@ class QueryJobManager:
             self._append_progress_event_locked(record, event="progress", fields=fields)
             self._touch_locked()
         if should_log and fields is not None:
-            logger.info("[bdw-query] %s", _format_query_log_fields(fields))
+            logger.info("%s", _format_query_log_line(fields))
 
     def _append_progress_event_locked(
         self,

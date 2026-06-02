@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 import duckdb
+from fastapi import HTTPException
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -429,6 +430,34 @@ class QueryCacheRouteTests(unittest.TestCase):
             "on",
         )
         self.assertEqual(calls[-1][1]["cache_key"], "a" * 40)
+
+    def test_rehydrate_route_converts_runtime_failure_to_structured_http_error(self) -> None:
+        class FakeService:
+            def rehydrate_query_cache(self, **_kwargs):
+                raise RuntimeError("DuckDB cache hydrate failed")
+
+        payload = QueryCachePayload(
+            sql="select * from s3.poc.federal_tax.parquet",
+            notebookId="notebook-cache",
+            cellId="cell-cache",
+            dataSources=["workspace.s3"],
+            queryOptions=_cache_options(),
+        )
+
+        with self.assertLogs("bit_data_workbench.api.router", level="ERROR") as captured:
+            with self.assertRaises(HTTPException) as context:
+                rehydrate_query_cache_route(payload, service=FakeService())
+
+        self.assertEqual(context.exception.status_code, 500)
+        self.assertEqual(
+            context.exception.detail,
+            "Query cache hydration failed: DuckDB cache hydrate failed",
+        )
+        output = "\n".join(captured.output)
+        self.assertIn("Query cache hydration failed", output)
+        self.assertIn("notebook-cache", output)
+        self.assertIn("cell-cache", output)
+        self.assertNotIn(payload.sql, output)
 
 
 if __name__ == "__main__":

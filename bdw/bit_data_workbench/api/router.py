@@ -20,6 +20,29 @@ from ..dependencies import get_workbench_service
 
 
 router = APIRouter(tags=["api"])
+logger = logging.getLogger(__name__)
+
+
+def _query_cache_runtime_detail(action: str, exc: Exception) -> str:
+    message = str(exc).replace("\r", " ").replace("\n", " ").strip()
+    if not message:
+        message = exc.__class__.__name__
+    return f"Query cache {action} failed: {message}"
+
+
+def _raise_query_cache_runtime_failure(
+    *,
+    action: str,
+    payload: "QueryCachePayload",
+    exc: Exception,
+) -> None:
+    logger.exception(
+        "Query cache %s failed for notebook_id=%r cell_id=%r.",
+        action,
+        payload.notebook_id,
+        payload.cell_id,
+    )
+    raise HTTPException(status_code=500, detail=_query_cache_runtime_detail(action, exc)) from exc
 
 
 class NotebookCellPayload(BaseModel):
@@ -915,6 +938,8 @@ def _complete_file_upload_session(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _raise_query_cache_runtime_failure(action="preview", payload=payload, exc=exc)
     return JSONResponse(jsonable_encoder(result))
 
 
@@ -1396,6 +1421,8 @@ def query_cache_preview(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _raise_query_cache_runtime_failure(action="preview", payload=payload, exc=exc)
     return JSONResponse(jsonable_encoder(result))
 
 
@@ -1420,6 +1447,8 @@ def rehydrate_query_cache(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _raise_query_cache_runtime_failure(action="hydration", payload=payload, exc=exc)
     return JSONResponse(jsonable_encoder(result))
 
 
@@ -1441,6 +1470,8 @@ def expire_query_cache(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _raise_query_cache_runtime_failure(action="expiration", payload=payload, exc=exc)
     return JSONResponse(jsonable_encoder(result))
 
 
@@ -1462,6 +1493,8 @@ def delete_query_cache(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        _raise_query_cache_runtime_failure(action="deletion", payload=payload, exc=exc)
     return JSONResponse(jsonable_encoder(result))
 
 
