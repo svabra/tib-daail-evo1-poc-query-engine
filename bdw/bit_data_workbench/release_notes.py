@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.20. Keep entries concise and
+# Derived from git history through version 0.9.21. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
     {
-        "version": "0.9.20",
-        "releasedAt": "2026-06-01T17:11:42+02:00",
+        "version": "0.9.21",
+        "releasedAt": "2026-06-02T14:39:25+02:00",
         "features": [
             (
                 "Settings now includes Runtime Storage, showing temporary "
