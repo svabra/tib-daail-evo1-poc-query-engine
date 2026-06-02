@@ -76,7 +76,7 @@ class FakePythonJobService:
         return {
             "ok": True,
             "notebookId": notebook_id,
-            "message": "Python kernel restarted.",
+            "message": "Python session restarted.",
         }
 
 
@@ -156,7 +156,7 @@ class ApiPythonJobRouteTests(unittest.TestCase):
             {
                 "ok": True,
                 "notebookId": "notebook-777",
-                "message": "Python kernel restarted.",
+                "message": "Python session restarted.",
             },
         )
         self.assertEqual(

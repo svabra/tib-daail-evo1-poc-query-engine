@@ -860,6 +860,7 @@ const {
   openQueryWorkbenchDataSources,
   openQueryWorkbenchNavigation,
   openQueryRunsPage,
+  openRuntimeStorageDialog,
   promptClearLocalWorkspace,
   selectIngestionRunbook,
   showAboutDialog,
@@ -2482,8 +2483,12 @@ function setCellCacheHydrationVisualState(cellRoot, status) {
 
 function cacheHydrationPayloadForCellRoot(cellRoot) {
   const sql = cellRoot?.querySelector?.("[data-editor-source]")?.value || "";
+  const workspaceRoot = cellRoot?.closest?.("[data-workspace-notebook]");
   return {
     sql,
+    notebookId: workspaceNotebookId(workspaceRoot),
+    notebookTitle: currentWorkspaceNotebookTitle(workspaceRoot),
+    cellId: cellRoot?.dataset?.cellId || "",
     dataSources: selectedDataSourcesForCell(cellRoot),
     localRelations: {},
     queryOptions: queryOptionsForCellRoot(cellRoot),
@@ -2847,6 +2852,291 @@ async function openCacheHydrationDialog(cellRoot) {
   if (typeof dialog.showModal === "function" && !dialog.open) {
     dialog.showModal();
   }
+}
+
+function ensureRuntimeStorageDialog() {
+  let dialog = document.querySelector("[data-runtime-storage-dialog]");
+  if (dialog) {
+    return dialog;
+  }
+  document.body.insertAdjacentHTML(
+    "beforeend",
+    `
+      <dialog class="modal-dialog modal-dialog-wide" data-runtime-storage-dialog>
+        <form method="dialog" class="modal-card modal-card-wide">
+          <h2 class="modal-title">Runtime Storage</h2>
+          <p class="modal-copy">
+            Temporary DuckDB storage used by query workers and hydrated cache datasets.
+          </p>
+          <div class="runtime-storage-dialog-body" data-runtime-storage-body></div>
+          <p class="cache-hydration-dialog-status" data-runtime-storage-status role="status" hidden></p>
+          <menu class="modal-actions">
+            <button class="modal-button modal-button-secondary" type="button" data-runtime-storage-refresh>Refresh</button>
+            <button class="modal-button modal-button-secondary" type="submit" value="confirm">Close</button>
+          </menu>
+        </form>
+      </dialog>
+    `
+  );
+  dialog = document.querySelector("[data-runtime-storage-dialog]");
+  if (dialog && dialog.dataset.runtimeStorageWired !== "true") {
+    dialog.dataset.runtimeStorageWired = "true";
+    dialog.addEventListener("click", async (event) => {
+      const refreshButton = event.target.closest("[data-runtime-storage-refresh]");
+      if (refreshButton) {
+        event.preventDefault();
+        await refreshRuntimeStorageDialog(dialog, refreshButton);
+        return;
+      }
+      const deleteButton = event.target.closest("[data-runtime-cache-delete]");
+      if (deleteButton) {
+        event.preventDefault();
+        await deleteRuntimeStorageCache(dialog, deleteButton);
+      }
+    });
+  }
+  return dialog;
+}
+
+async function fetchRuntimeStorageState() {
+  const response = await window.fetch("/api/runtime-storage", {
+    method: "GET",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    let message = "Runtime storage could not be loaded.";
+    try {
+      const payload = await response.json();
+      message = payload?.detail || message;
+    } catch (_error) {
+      // Ignore invalid JSON bodies.
+    }
+    throw new Error(message);
+  }
+  return response.json();
+}
+
+function runtimeStorageHydratedCells() {
+  const notebookIds = Array.from(document.querySelectorAll(".notebook-link[data-notebook-id]"))
+    .map((link) => String(link.dataset.notebookId || "").trim())
+    .filter(Boolean);
+  const seen = new Set();
+  const cells = [];
+  notebookIds.forEach((notebookId) => {
+    if (seen.has(notebookId)) {
+      return;
+    }
+    seen.add(notebookId);
+    const metadata = notebookMetadata(notebookId);
+    normalizeNotebookCells(metadata.cells || []).forEach((cell) => {
+      const mode = String(cell?.queryOptions?.duckdb?.cacheHydration?.mode || "")
+        .trim()
+        .toLowerCase();
+      if (normalizeCellLanguage(cell?.language) !== "sql" || mode !== "on") {
+        return;
+      }
+      cells.push({
+        notebookId,
+        notebookTitle: metadata.title || "Notebook",
+        cellId: cell.cellId || "",
+        sqlPreview: String(cell.sql || "").replace(/\s+/g, " ").trim().slice(0, 180),
+      });
+    });
+  });
+  return cells;
+}
+
+function runtimeStorageCellRefsMarkup(refs) {
+  const normalizedRefs = Array.isArray(refs) ? refs.filter((ref) => ref && typeof ref === "object") : [];
+  if (!normalizedRefs.length) {
+    return "No linked cell recorded yet.";
+  }
+  return normalizedRefs
+    .map((ref) => {
+      const title = ref.notebookTitle || ref.notebookId || "Notebook";
+      const cell = ref.cellId ? ` / ${ref.cellId}` : "";
+      return `${escapeHtml(title)}${escapeHtml(cell)}`;
+    })
+    .join("<br>");
+}
+
+function runtimeStorageDatasetMarkup(dataset) {
+  const cacheKey = String(dataset?.cacheKey || "");
+  return `
+    <article class="query-explain-card runtime-storage-cache-card">
+      <h3>${escapeHtml(dataset?.relation || dataset?.sourceViewRelation || "Cached dataset")}</h3>
+      <dl class="query-explain-meta-list">
+        <div><dt>S3 path</dt><dd>${escapeHtml(dataset?.path || "")}</dd></div>
+        <div><dt>Rows cached</dt><dd>${escapeHtml(String(dataset?.rowCount ?? 0))}</dd></div>
+        <div><dt>Cache size</dt><dd>${escapeHtml(formatByteCount(dataset?.cacheSizeBytes || 0))}</dd></div>
+        <div><dt>Last hydrated</dt><dd>${escapeHtml(dataset?.lastHydratedAt || "Unknown")}</dd></div>
+        <div><dt>Last used</dt><dd>${escapeHtml(dataset?.lastUsedAt || "Unknown")}</dd></div>
+        <div><dt>Source revision</dt><dd>${escapeHtml(dataset?.sourceRevision || "Unknown")}</dd></div>
+        <div><dt>Linked cells</dt><dd>${runtimeStorageCellRefsMarkup(dataset?.cellRefs)}</dd></div>
+      </dl>
+      <div class="runtime-storage-card-actions">
+        <button class="modal-button modal-button-secondary" type="button" data-runtime-cache-delete data-cache-key="${escapeHtml(cacheKey)}">
+          Delete cached dataset
+        </button>
+      </div>
+    </article>
+  `;
+}
+
+function renderRuntimeStorageDialog(dialog, payload) {
+  const body = dialog?.querySelector("[data-runtime-storage-body]");
+  if (!body) {
+    return;
+  }
+  const datasets = Array.isArray(payload?.queryCache?.datasets) ? payload.queryCache.datasets : [];
+  const hydratedCells = runtimeStorageHydratedCells();
+  const datasetMarkup = datasets.length
+    ? datasets.map(runtimeStorageDatasetMarkup).join("")
+    : '<p class="modal-copy">No hydrated cache datasets are currently stored.</p>';
+  const cellMarkup = hydratedCells.length
+    ? hydratedCells
+        .map(
+          (cell) => `
+            <article class="query-explain-card runtime-storage-cell-card">
+              <h3>${escapeHtml(cell.notebookTitle || "Notebook")}</h3>
+              <dl class="query-explain-meta-list">
+                <div><dt>Notebook ID</dt><dd>${escapeHtml(cell.notebookId || "")}</dd></div>
+                <div><dt>Cell ID</dt><dd>${escapeHtml(cell.cellId || "")}</dd></div>
+                <div><dt>SQL preview</dt><dd>${escapeHtml(cell.sqlPreview || "")}</dd></div>
+              </dl>
+            </article>
+          `
+        )
+        .join("")
+    : '<p class="modal-copy">No currently known notebook cell has Hydrate cache enabled.</p>';
+
+  body.innerHTML = `
+    <section class="runtime-storage-section">
+      <h3>Storage usage</h3>
+      <dl class="query-explain-meta-list">
+        <div><dt>Runtime storage root</dt><dd>${escapeHtml(payload?.storageRoot?.path || "")}</dd></div>
+        <div><dt>Root free</dt><dd>${escapeHtml(formatByteCount(payload?.storageRoot?.freeBytes || 0))}</dd></div>
+        <div><dt>Root used</dt><dd>${escapeHtml(formatByteCount(payload?.storageRoot?.usedBytes || 0))}</dd></div>
+        <div><dt>Query cache</dt><dd>${escapeHtml(formatByteCount(payload?.queryCache?.sizeBytes || 0))} at ${escapeHtml(payload?.queryCache?.path || "")}</dd></div>
+        <div><dt>DuckDB spill</dt><dd>${escapeHtml(formatByteCount(payload?.duckdbSpill?.sizeBytes || 0))} at ${escapeHtml(payload?.duckdbSpill?.path || "Not configured")}</dd></div>
+      </dl>
+      <p class="cache-hydration-runtime-warning"><strong>DuckDB spill is read-only here</strong>: ${escapeHtml(payload?.duckdbSpill?.warning || "")}</p>
+    </section>
+    <section class="runtime-storage-section">
+      <h3>DuckDB settings</h3>
+      <dl class="query-explain-meta-list">
+        <div><dt>Memory limit</dt><dd>${escapeHtml(payload?.duckdbSettings?.memoryLimit || "DuckDB default")}</dd></div>
+        <div><dt>Threads</dt><dd>${escapeHtml(String(payload?.duckdbSettings?.threads ?? "DuckDB default"))}</dd></div>
+        <div><dt>Temp limit</dt><dd>${escapeHtml(payload?.duckdbSettings?.maxTempDirectorySize || "DuckDB default")}</dd></div>
+        <div><dt>Preserve insertion order</dt><dd>${payload?.duckdbSettings?.preserveInsertionOrder === false ? "Disabled" : "Default/enabled"}</dd></div>
+      </dl>
+    </section>
+    <section class="runtime-storage-section">
+      <h3>Cached datasets</h3>
+      ${datasetMarkup}
+    </section>
+    <section class="runtime-storage-section">
+      <h3>Cells using Hydrate cache</h3>
+      ${cellMarkup}
+    </section>
+  `;
+}
+
+function setRuntimeStorageStatus(dialog, message, tone = "info") {
+  const status = dialog?.querySelector("[data-runtime-storage-status]");
+  if (!status) {
+    return;
+  }
+  status.hidden = !message;
+  status.textContent = message || "";
+  status.dataset.tone = tone;
+}
+
+async function refreshRuntimeStorageDialog(dialog, activeButton = null) {
+  if (activeButton) {
+    activeButton.disabled = true;
+  }
+  setRuntimeStorageStatus(dialog, "Refreshing runtime storage...", "info");
+  try {
+    const payload = await fetchRuntimeStorageState();
+    renderRuntimeStorageDialog(dialog, payload);
+    setRuntimeStorageStatus(dialog, "Runtime storage refreshed.", "success");
+  } catch (error) {
+    setRuntimeStorageStatus(
+      dialog,
+      error instanceof Error ? error.message : "Runtime storage could not be loaded.",
+      "error"
+    );
+  } finally {
+    if (activeButton) {
+      activeButton.disabled = false;
+    }
+  }
+}
+
+async function deleteRuntimeStorageCache(dialog, button) {
+  const cacheKey = String(button?.dataset?.cacheKey || "").trim();
+  if (!cacheKey) {
+    return;
+  }
+  const { confirmed } = await showConfirmDialog({
+    title: "Delete cached dataset",
+    copy: "This deletes one hydrated DuckDB cache dataset from temporary compute storage. It does not delete the source data in S3.",
+    confirmLabel: "Delete cached dataset",
+  });
+  if (!confirmed) {
+    return;
+  }
+  button.disabled = true;
+  setRuntimeStorageStatus(dialog, "Deleting cached dataset...", "info");
+  try {
+    const response = await window.fetch(`/api/runtime-storage/query-cache/${encodeURIComponent(cacheKey)}`, {
+      method: "DELETE",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      let message = "The cached dataset could not be deleted.";
+      try {
+        const payload = await response.json();
+        message = payload?.detail || message;
+      } catch (_error) {
+        // Ignore invalid JSON bodies.
+      }
+      throw new Error(message);
+    }
+    const payload = await response.json();
+    renderRuntimeStorageDialog(dialog, payload?.storage || {});
+    setRuntimeStorageStatus(
+      dialog,
+      payload?.deleted ? "Cached dataset deleted." : "No cache files existed for that dataset.",
+      "success"
+    );
+  } catch (error) {
+    setRuntimeStorageStatus(
+      dialog,
+      error instanceof Error ? error.message : "The cached dataset could not be deleted.",
+      "error"
+    );
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function openRuntimeStorageDialog() {
+  const dialog = ensureRuntimeStorageDialog();
+  if (!dialog) {
+    return;
+  }
+  renderRuntimeStorageDialog(dialog, {
+    queryCache: { datasets: [] },
+    duckdbSpill: {},
+    storageRoot: {},
+    duckdbSettings: {},
+  });
+  if (typeof dialog.showModal === "function" && !dialog.open) {
+    dialog.showModal();
+  }
+  await refreshRuntimeStorageDialog(dialog);
 }
 
 function formatQueryTimestamp(value) {
@@ -7389,7 +7679,7 @@ async function restartPythonKernel(notebookId) {
   );
 
   if (!response.ok) {
-    let message = "The Python kernel could not be restarted.";
+    let message = "The Python session could not be restarted.";
     try {
       const payload = await response.json();
       message = payload?.detail || message;
@@ -7397,7 +7687,7 @@ async function restartPythonKernel(notebookId) {
       // Ignore invalid JSON bodies.
     }
     await showMessageDialog({
-      title: "Kernel restart failed",
+      title: "Python session restart failed",
       copy: message,
     });
     return;
@@ -7405,8 +7695,8 @@ async function restartPythonKernel(notebookId) {
 
   const payload = await response.json();
   await showMessageDialog({
-    title: "Python kernel restarted",
-    copy: String(payload?.message || "Python kernel restarted."),
+    title: "Python session restarted",
+    copy: String(payload?.message || "Python session restarted."),
   });
 }
 

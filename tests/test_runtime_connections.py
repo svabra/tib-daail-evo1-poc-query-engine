@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
 
@@ -14,6 +17,7 @@ if str(BDW_ROOT) not in sys.path:
     sys.path.insert(0, str(BDW_ROOT))
 
 from bit_data_workbench.backend import runtime_connections
+from bit_data_workbench.config import Settings
 
 
 class DuckDBWorkerConnectionRetryTests(TestCase):
@@ -41,3 +45,59 @@ class DuckDBWorkerConnectionRetryTests(TestCase):
 
         self.assertIs(result, connection)
         self.assertEqual(calls["count"], 3)
+
+    def test_settings_parse_duckdb_runtime_resource_environment(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "BDW_DUCKDB_MEMORY_LIMIT": "20GiB",
+                "BDW_DUCKDB_THREADS": "4",
+                "BDW_DUCKDB_TEMP_DIRECTORY": "/workspace/tmp/duckdb-spill",
+                "BDW_DUCKDB_MAX_TEMP_DIRECTORY_SIZE": "28GiB",
+                "BDW_DUCKDB_PRESERVE_INSERTION_ORDER": "false",
+                "BDW_QUERY_CACHE_DIR": "/workspace/query-cache",
+            },
+            clear=False,
+        ):
+            settings = Settings.from_env()
+
+        self.assertEqual(settings.duckdb_memory_limit, "20GiB")
+        self.assertEqual(settings.duckdb_threads, 4)
+        self.assertEqual(settings.duckdb_temp_directory, Path("/workspace/tmp/duckdb-spill"))
+        self.assertEqual(settings.duckdb_max_temp_directory_size, "28GiB")
+        self.assertFalse(settings.duckdb_preserve_insertion_order)
+        self.assertEqual(settings.query_cache_dir, Path("/workspace/query-cache"))
+
+    def test_apply_duckdb_runtime_settings_executes_expected_set_statements(self) -> None:
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.commands: list[str] = []
+
+            def execute(self, command: str):
+                self.commands.append(command)
+                return self
+
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            spill_dir = Path(raw_tmp) / "duckdb-spill"
+            settings = SimpleNamespace(
+                duckdb_memory_limit="20GiB",
+                duckdb_threads=4,
+                duckdb_temp_directory=spill_dir,
+                duckdb_max_temp_directory_size="28GiB",
+                duckdb_preserve_insertion_order=False,
+            )
+            connection = FakeConnection()
+
+            applied = runtime_connections.apply_duckdb_runtime_settings(connection, settings)  # type: ignore[arg-type]
+
+            self.assertEqual(applied["memoryLimit"], "20GiB")
+            self.assertEqual(applied["threads"], 4)
+            self.assertEqual(applied["tempDirectory"], spill_dir.as_posix())
+            self.assertEqual(applied["maxTempDirectorySize"], "28GiB")
+            self.assertFalse(applied["preserveInsertionOrder"])
+            self.assertIn("SET memory_limit = '20GiB'", connection.commands)
+            self.assertIn("SET threads = 4", connection.commands)
+            self.assertIn("SET preserve_insertion_order = false", connection.commands)
+            self.assertIn(f"SET temp_directory = '{spill_dir.as_posix()}'", connection.commands)
+            self.assertIn("SET max_temp_directory_size = '28GiB'", connection.commands)
+            self.assertTrue(spill_dir.exists())

@@ -858,6 +858,10 @@ def _query_worker_entry(
     database_path: str | None = None,
     source_summaries: list[dict[str, object]] | None = None,
     query_options: dict[str, object] | None = None,
+    notebook_id: str = "",
+    notebook_title: str = "",
+    cell_id: str = "",
+    sql_preview: str = "",
 ) -> None:
     started = time.perf_counter()
     connection: Any = None
@@ -911,6 +915,13 @@ def _query_worker_entry(
                 sql=sql,
                 source_summaries=worker_source_summaries,
                 query_options=query_options,
+                settings=settings,
+                cache_context={
+                    "notebookId": notebook_id,
+                    "notebookTitle": notebook_title,
+                    "cellId": cell_id,
+                    "sqlPreview": sql_preview or sql,
+                },
                 progress_callback=lambda event: _put_worker_event(event_queue, event),
             )
 
@@ -2087,6 +2098,10 @@ class QueryJobManager:
                     "cancel_event": cancel_event,
                     "settings": self._settings,
                     "sql": record.execution_sql,
+                    "notebook_id": record.snapshot.notebook_id,
+                    "notebook_title": record.snapshot.notebook_title,
+                    "cell_id": record.snapshot.cell_id,
+                    "sql_preview": record.snapshot.sql,
                     "execution_mode": record.execution_mode,
                     "max_result_rows": self._max_result_rows,
                     "database_path": record.worker_database_path,
