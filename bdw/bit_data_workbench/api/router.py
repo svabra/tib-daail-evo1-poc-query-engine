@@ -158,6 +158,9 @@ class QueryExplainPayload(BaseModel):
 
 class QueryCachePayload(BaseModel):
     sql: str = ""
+    notebook_id: str = Field(default="", validation_alias="notebookId", serialization_alias="notebookId")
+    notebook_title: str = Field(default="", validation_alias="notebookTitle", serialization_alias="notebookTitle")
+    cell_id: str = Field(default="", validation_alias="cellId", serialization_alias="cellId")
     data_sources: list[str] = Field(
         default_factory=list,
         validation_alias="dataSources",
@@ -568,6 +571,25 @@ def service_consumption_state(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    return JSONResponse(jsonable_encoder(payload))
+
+
+@router.get("/api/runtime-storage")
+def runtime_storage_state(
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return JSONResponse(jsonable_encoder(service.runtime_storage()))
+
+
+@router.delete("/api/runtime-storage/query-cache/{cache_key}")
+def delete_runtime_storage_query_cache(
+    cache_key: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        payload = service.delete_runtime_query_cache(cache_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return JSONResponse(jsonable_encoder(payload))
 
 
@@ -1385,6 +1407,9 @@ def rehydrate_query_cache(
     try:
         result = service.rehydrate_query_cache(
             sql=payload.sql,
+            notebook_id=payload.notebook_id,
+            notebook_title=payload.notebook_title,
+            cell_id=payload.cell_id,
             data_sources=payload.data_sources,
             local_relation_map={
                 str(key): str(value)

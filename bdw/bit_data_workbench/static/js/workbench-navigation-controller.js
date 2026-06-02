@@ -17,6 +17,7 @@ export function createWorkbenchNavigationController(helpers) {
     openQueryWorkbenchDataSources,
     openQueryWorkbenchNavigation,
     openQueryRunsPage,
+    openRuntimeStorageDialog,
     promptClearLocalWorkspace,
     selectIngestionRunbook,
     showAboutDialog,
@@ -212,6 +213,15 @@ export function createWorkbenchNavigationController(helpers) {
       event.stopPropagation();
       closeSettingsMenus();
       await openServiceConsumptionPage();
+      return true;
+    }
+
+    const openRuntimeStorageButton = event.target.closest("[data-open-runtime-storage]");
+    if (openRuntimeStorageButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeSettingsMenus();
+      await openRuntimeStorageDialog();
       return true;
     }
 

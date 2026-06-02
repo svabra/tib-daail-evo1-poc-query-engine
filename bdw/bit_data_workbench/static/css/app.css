@@ -6458,6 +6458,36 @@ details:not([open]) > .tree-children {
   font-weight: 700;
 }
 
+.runtime-storage-dialog-body {
+  display: grid;
+  gap: 14px;
+  max-height: min(68vh, 760px);
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.runtime-storage-section {
+  display: grid;
+  gap: 10px;
+}
+
+.runtime-storage-section h3 {
+  margin: 0;
+  color: var(--text);
+  font-size: 0.96rem;
+}
+
+.runtime-storage-cache-card,
+.runtime-storage-cell-card {
+  margin: 0;
+}
+
+.runtime-storage-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 12px;
+}
+
 .download-job-dialog-card {
   gap: 18px;
 }

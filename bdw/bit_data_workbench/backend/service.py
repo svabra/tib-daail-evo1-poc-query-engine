@@ -106,10 +106,12 @@ from .query_run_history import QueryRunHistoryStore
 from .query_result_exports import QueryResultExportManager
 from .realtime_facade import WorkbenchRealtimeFacade
 from .runtime_connections import (
+    apply_duckdb_runtime_settings,
     create_duckdb_worker_connection,
     normalize_postgres_host,
     open_postgres_native_connection,
 )
+from .runtime_storage import delete_runtime_query_cache, runtime_storage_snapshot
 from .notebooks import (
     build_completion_schema,
     build_generator_notebook_links,
@@ -1548,6 +1550,9 @@ class WorkbenchService:
         self,
         *,
         sql: str,
+        notebook_id: str = "",
+        notebook_title: str = "",
+        cell_id: str = "",
         data_sources: list[str] | None = None,
         local_relation_map: dict[str, str] | None = None,
         query_options: dict[str, object] | None = None,
@@ -1570,6 +1575,12 @@ class WorkbenchService:
                 sql=sql,
                 source_summaries=source_summaries,
                 query_options=normalized_query_options,
+                settings=self.settings,
+                cache_context={
+                    "notebookId": notebook_id,
+                    "notebookTitle": notebook_title,
+                    "cellId": cell_id,
+                },
                 force=True,
             )
         finally:
@@ -1602,6 +1613,7 @@ class WorkbenchService:
             sql=sql,
             source_summaries=source_summaries,
             query_options=normalized_query_options,
+            settings=self.settings,
         )
 
     def delete_query_cache(
@@ -1623,7 +1635,14 @@ class WorkbenchService:
             sql=sql,
             source_summaries=source_summaries,
             query_options=normalized_query_options,
+            settings=self.settings,
         )
+
+    def runtime_storage(self) -> dict[str, object]:
+        return runtime_storage_snapshot(self.settings)
+
+    def delete_runtime_query_cache(self, cache_key: str) -> dict[str, object]:
+        return delete_runtime_query_cache(self.settings, cache_key)
 
     def _cache_source_summaries(
         self,
@@ -3300,6 +3319,7 @@ class WorkbenchService:
             purpose="primary workbench startup" if startup_context else "worker connection",
             startup_context=startup_context,
         )
+        apply_duckdb_runtime_settings(conn, self.settings)
         conn.execute(
             f"SET extension_directory = {sql_literal(self.settings.duckdb_extension_directory.as_posix())}"
         )
@@ -3921,6 +3941,7 @@ class WorkbenchService:
             purpose="background S3 diagnostics",
             startup_context=False,
         )
+        apply_duckdb_runtime_settings(conn, self.settings)
         conn.execute(
             f"SET extension_directory = {sql_literal(self.settings.duckdb_extension_directory.as_posix())}"
         )

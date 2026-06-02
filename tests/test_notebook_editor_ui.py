@@ -112,6 +112,26 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn(".cell-cache-hydration-switch", css_source)
         self.assertIn(".runtime-cache-pill", css_source)
 
+    def test_runtime_storage_settings_dialog_has_menu_api_and_delete_wiring(self) -> None:
+        app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
+        navigation_source = (
+            STATIC_ROOT / "js" / "workbench-navigation-controller.js"
+        ).read_text(encoding="utf-8")
+        css_source = (STATIC_ROOT / "css" / "app.css").read_text(encoding="utf-8")
+        index_template = (
+            REPO_ROOT / "bdw" / "bit_data_workbench" / "templates" / "index.html"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("Runtime Storage", index_template)
+        self.assertIn("data-open-runtime-storage", index_template)
+        self.assertIn("openRuntimeStorageDialog", navigation_source)
+        self.assertIn("openRuntimeStorageDialog", app_source)
+        self.assertIn("/api/runtime-storage", app_source)
+        self.assertIn("/api/runtime-storage/query-cache", app_source)
+        self.assertIn("data-runtime-cache-delete", app_source)
+        self.assertIn("Cells using Hydrate cache", app_source)
+        self.assertIn(".runtime-storage-dialog-body", css_source)
+
     def test_query_result_duration_has_visible_label_and_help_tooltip(self) -> None:
         query_ui_source = (STATIC_ROOT / "js" / "query-ui.js").read_text(
             encoding="utf-8"

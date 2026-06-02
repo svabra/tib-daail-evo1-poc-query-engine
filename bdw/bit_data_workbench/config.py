@@ -23,6 +23,12 @@ WORKBENCH_ENVIRONMENT_VARIABLES = (
     "PORT",
     "DUCKDB_DATABASE",
     "DUCKDB_EXTENSION_DIRECTORY",
+    "BDW_DUCKDB_MEMORY_LIMIT",
+    "BDW_DUCKDB_THREADS",
+    "BDW_DUCKDB_TEMP_DIRECTORY",
+    "BDW_DUCKDB_MAX_TEMP_DIRECTORY_SIZE",
+    "BDW_DUCKDB_PRESERVE_INSERTION_ORDER",
+    "BDW_QUERY_CACHE_DIR",
     "BDW_SERVICE_CONSUMPTION_DATA_DIR",
     "BDW_SERVICE_CONSUMPTION_CPU_MEMORY_INTERVAL_SECONDS",
     "BDW_SERVICE_CONSUMPTION_S3_INTERVAL_SECONDS",
@@ -174,6 +180,18 @@ def env_bool(name: str, default: bool) -> bool:
     raise ValueError(f"Unsupported boolean value for {name}: {raw}")
 
 
+def env_bool_optional(name: str) -> bool | None:
+    raw = env_optional(name)
+    if raw is None:
+        return None
+    normalized = raw.lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"Unsupported boolean value for {name}: {raw}")
+
+
 def env_float_optional(name: str) -> float | None:
     raw = env_optional(name)
     if raw is None:
@@ -192,6 +210,23 @@ def env_int(name: str, default: int) -> int:
         return int(raw)
     except ValueError as exc:
         raise ValueError(f"Unsupported integer value for {name}: {raw}") from exc
+
+
+def env_int_optional(name: str) -> int | None:
+    raw = env_optional(name)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ValueError(f"Unsupported integer value for {name}: {raw}") from exc
+
+
+def env_int_min_optional(name: str, minimum: int) -> int | None:
+    value = env_int_optional(name)
+    if value is None:
+        return None
+    return max(minimum, value)
 
 
 def env_float(name: str, default: float) -> float:
@@ -570,6 +605,14 @@ class Settings:
     query_job_log_heartbeat_seconds: int = 10
     query_job_log_timezone: str = "Europe/Zurich"
     query_job_duckdb_profiling_enabled: bool = True
+    duckdb_memory_limit: str | None = None
+    duckdb_threads: int | None = None
+    duckdb_temp_directory: Path | None = None
+    duckdb_max_temp_directory_size: str | None = None
+    duckdb_preserve_insertion_order: bool | None = None
+    query_cache_dir: Path = field(
+        default_factory=lambda: Path(tempfile.gettempdir()) / "bdw-query-cache"
+    )
     s3_delete_job_logging_enabled: bool = True
     s3_delete_job_log_heartbeat_seconds: int = 10
     s3_delete_job_log_timezone: str = "Europe/Zurich"
@@ -684,6 +727,19 @@ class Settings:
             query_job_duckdb_profiling_enabled=env_bool(
                 "BDW_QUERY_JOB_DUCKDB_PROFILING_ENABLED",
                 True,
+            ),
+            duckdb_memory_limit=env_optional("BDW_DUCKDB_MEMORY_LIMIT"),
+            duckdb_threads=env_int_min_optional("BDW_DUCKDB_THREADS", 1),
+            duckdb_temp_directory=env_path_optional("BDW_DUCKDB_TEMP_DIRECTORY"),
+            duckdb_max_temp_directory_size=env_optional("BDW_DUCKDB_MAX_TEMP_DIRECTORY_SIZE"),
+            duckdb_preserve_insertion_order=env_bool_optional(
+                "BDW_DUCKDB_PRESERVE_INSERTION_ORDER"
+            ),
+            query_cache_dir=Path(
+                env(
+                    "BDW_QUERY_CACHE_DIR",
+                    str(Path(tempfile.gettempdir()) / "bdw-query-cache"),
+                )
             ),
             s3_delete_job_logging_enabled=env_bool(
                 "BDW_S3_DELETE_JOB_LOGGING_ENABLED",
@@ -836,6 +892,15 @@ class Settings:
             "pod_ip": self.pod_ip or "unknown",
             "node_name": self.node_name or "unknown",
             "duckdb_database": self.duckdb_database.as_posix(),
+            "duckdb_memory_limit": self.duckdb_memory_limit or "",
+            "duckdb_threads": str(self.duckdb_threads or ""),
+            "duckdb_temp_directory": (
+                self.duckdb_temp_directory.as_posix()
+                if self.duckdb_temp_directory is not None
+                else ""
+            ),
+            "duckdb_max_temp_directory_size": self.duckdb_max_temp_directory_size or "",
+            "query_cache_dir": self.query_cache_dir.as_posix(),
             "timestamp_utc": datetime.now(UTC).isoformat(),
         }
 
@@ -956,6 +1021,7 @@ class Settings:
         return lines
 
     def apply_runtime_environment(self) -> None:
+        os.environ["BDW_QUERY_CACHE_DIR"] = self.query_cache_dir.as_posix()
         effective_ca_bundle = self.effective_s3_ca_cert_file()
         if not effective_ca_bundle:
             return

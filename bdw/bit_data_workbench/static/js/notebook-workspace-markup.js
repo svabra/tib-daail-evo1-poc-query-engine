@@ -395,7 +395,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
               <div class="workspace-action-menu-panel">
                 <button type="button" class="workspace-action-menu-item" data-rename-notebook title="Rename notebook">Rename</button>
                 <button type="button" class="workspace-action-menu-item" data-edit-notebook title="Edit notebook metadata">Edit</button>
-                <button type="button" class="workspace-action-menu-item" data-restart-python-kernel title="Restart this notebook's Python kernel">Restart Python Kernel</button>
+                <button type="button" class="workspace-action-menu-item" data-restart-python-kernel title="Clear variables, imports, and stuck Python state for this notebook without changing any cells">Restart Python session</button>
                 <button type="button" class="workspace-action-menu-item" data-copy-notebook title="Create a copy of this notebook">Copy notebook</button>
                 <button type="button" class="workspace-action-menu-item workspace-action-menu-item-danger" data-delete-notebook title="Delete notebook">Delete notebook</button>
               </div>

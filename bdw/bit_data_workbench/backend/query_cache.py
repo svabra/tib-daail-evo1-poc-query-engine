@@ -38,13 +38,17 @@ PREDICATE_COLUMN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 USING_COLUMN_PATTERN = re.compile(r"\busing\s*\(([^)]+)\)", re.IGNORECASE)
+CACHE_KEY_PATTERN = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
 
 
 def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
-def query_cache_root() -> Path:
+def query_cache_root(settings: Settings | None = None) -> Path:
+    configured_setting = getattr(settings, "query_cache_dir", None)
+    if configured_setting:
+        return Path(configured_setting)
     configured = os.environ.get("BDW_QUERY_CACHE_DIR")
     if configured:
         return Path(configured)
@@ -86,6 +90,33 @@ def _source_size_bytes(summary: dict[str, object]) -> int:
 
 def _format_mb(size_bytes: int) -> float:
     return round(max(0, int(size_bytes)) / (1024 * 1024), 2)
+
+
+def _format_sql_preview(sql: str, *, max_chars: int = 180) -> str:
+    text = re.sub(r"\s+", " ", str(sql or "")).strip()
+    if len(text) <= max_chars:
+        return text
+    return f"{text[: max(0, max_chars - 3)]}..."
+
+
+def _normalize_cache_key(cache_key: str) -> str:
+    normalized = str(cache_key or "").strip().lower()
+    if not CACHE_KEY_PATTERN.match(normalized):
+        raise ValueError("Invalid query cache key.")
+    return normalized
+
+
+def _cache_file_paths_for_key(
+    cache_key: str,
+    *,
+    settings: Settings | None = None,
+) -> tuple[Path, Path, Path]:
+    normalized = _normalize_cache_key(cache_key)
+    root = query_cache_root(settings)
+    database_path = root / f"{normalized}.duckdb"
+    wal_path = root / f"{normalized}.duckdb.wal"
+    metadata_path = root / f"{normalized}.json"
+    return database_path, wal_path, metadata_path
 
 
 def infer_predicate_index_columns(sql: str) -> list[str]:
@@ -135,6 +166,7 @@ def _cache_plan(
     *,
     sql: str,
     query_options: dict[str, object] | None,
+    settings: Settings | None = None,
 ) -> dict[str, object]:
     relation = str(summary.get("relation") or "").strip()
     path = str(summary.get("path") or "").strip()
@@ -153,7 +185,7 @@ def _cache_plan(
         separators=(",", ":"),
     )
     cache_key = _sha1(key_material)
-    root = query_cache_root()
+    root = query_cache_root(settings)
     cache_alias = f"cache_{cache_key[:16]}"
     return {
         "cacheKey": cache_key,
@@ -204,6 +236,74 @@ def _write_metadata(plan: dict[str, object], metadata: dict[str, object]) -> Non
     path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def _cache_context_entry(
+    *,
+    sql: str,
+    cache_context: dict[str, object] | None,
+) -> dict[str, object] | None:
+    if not isinstance(cache_context, dict):
+        cache_context = {}
+    notebook_id = str(cache_context.get("notebookId") or cache_context.get("notebook_id") or "").strip()
+    notebook_title = str(
+        cache_context.get("notebookTitle") or cache_context.get("notebook_title") or ""
+    ).strip()
+    cell_id = str(cache_context.get("cellId") or cache_context.get("cell_id") or "").strip()
+    sql_preview = _format_sql_preview(
+        str(cache_context.get("sqlPreview") or cache_context.get("sql_preview") or sql or "")
+    )
+    if not any((notebook_id, notebook_title, cell_id, sql_preview)):
+        return None
+    entry: dict[str, object] = {
+        "notebookId": notebook_id,
+        "notebookTitle": notebook_title,
+        "cellId": cell_id,
+        "sqlPreview": sql_preview,
+        "lastUsedAt": utc_now_iso(),
+    }
+    return {key: value for key, value in entry.items() if value not in ("", None)}
+
+
+def _merge_cache_context(
+    metadata: dict[str, object],
+    *,
+    sql: str,
+    cache_context: dict[str, object] | None,
+    used_at: str,
+) -> dict[str, object]:
+    updated = dict(metadata)
+    updated["lastUsedAt"] = used_at
+    entry = _cache_context_entry(sql=sql, cache_context=cache_context)
+    if entry is None:
+        return updated
+    entry["lastUsedAt"] = used_at
+    for key in ("notebookId", "notebookTitle", "cellId", "sqlPreview"):
+        if entry.get(key):
+            updated[key] = entry[key]
+    refs = [
+        dict(item)
+        for item in updated.get("cellRefs", [])
+        if isinstance(item, dict)
+    ]
+    ref_key = (
+        str(entry.get("notebookId") or ""),
+        str(entry.get("cellId") or ""),
+    )
+    replaced = False
+    for index, existing in enumerate(refs):
+        existing_key = (
+            str(existing.get("notebookId") or ""),
+            str(existing.get("cellId") or ""),
+        )
+        if existing_key == ref_key and any(ref_key):
+            refs[index] = {**existing, **entry}
+            replaced = True
+            break
+    if not replaced:
+        refs.append(entry)
+    updated["cellRefs"] = refs[-20:]
+    return updated
+
+
 def _cache_file_size(plan: dict[str, object]) -> int:
     database_path = _database_path(plan)
     total = database_path.stat().st_size if database_path.exists() else 0
@@ -231,6 +331,81 @@ def _delete_cache_files(plan: dict[str, object]) -> tuple[bool, list[str], list[
         except OSError as exc:
             errors.append(f"{path.as_posix()}: {exc}")
     return bool(deleted_paths) and not errors, deleted_paths, errors
+
+
+def delete_cache_by_key(
+    cache_key: str,
+    *,
+    settings: Settings | None = None,
+) -> dict[str, object]:
+    normalized = _normalize_cache_key(cache_key)
+    database_path, wal_path, metadata_path = _cache_file_paths_for_key(
+        normalized,
+        settings=settings,
+    )
+    plan = {
+        "cacheKey": normalized,
+        "cacheDatabasePath": database_path.as_posix(),
+        "metadataPath": metadata_path.as_posix(),
+    }
+    deleted, deleted_paths, errors = _delete_cache_files(plan)
+    return {
+        "cacheKey": normalized,
+        "deleted": deleted,
+        "deletedPaths": deleted_paths,
+        "deleteErrors": errors,
+    }
+
+
+def list_query_cache_datasets(
+    *,
+    settings: Settings | None = None,
+) -> list[dict[str, object]]:
+    root = query_cache_root(settings)
+    if not root.exists() or not root.is_dir():
+        return []
+    datasets: list[dict[str, object]] = []
+    for metadata_path in sorted(root.glob("*.json"), key=lambda path: path.name.lower()):
+        cache_key = metadata_path.stem.lower()
+        if not CACHE_KEY_PATTERN.match(cache_key):
+            continue
+        database_path, wal_path, safe_metadata_path = _cache_file_paths_for_key(
+            cache_key,
+            settings=settings,
+        )
+        try:
+            metadata = json.loads(safe_metadata_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            metadata = {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        size_bytes = 0
+        for path in (database_path, wal_path, safe_metadata_path):
+            try:
+                if path.exists() and path.is_file():
+                    size_bytes += path.stat().st_size
+            except OSError:
+                continue
+        datasets.append(
+            {
+                **metadata,
+                "cacheKey": cache_key,
+                "cacheDatabasePath": database_path.as_posix(),
+                "metadataPath": safe_metadata_path.as_posix(),
+                "cacheSizeBytes": size_bytes,
+                "cacheSizeMb": _format_mb(size_bytes),
+                "physicalCacheExists": database_path.exists(),
+                "runtimeTable": True,
+                "temporary": True,
+                "temporaryWarning": RUNTIME_CACHE_TEMPORARY_WARNING,
+                "cellRefs": [
+                    dict(item)
+                    for item in metadata.get("cellRefs", [])
+                    if isinstance(item, dict)
+                ],
+            }
+        )
+    return datasets
 
 
 def _physical_cache_state(plan: dict[str, object]) -> tuple[bool, list[str]]:
@@ -353,7 +528,12 @@ def cache_preview(
         if not isinstance(summary, dict):
             continue
         if _eligible_summary(summary):
-            plan = _cache_plan(summary, sql=sql, query_options=query_options)
+            plan = _cache_plan(
+                summary,
+                sql=sql,
+                query_options=query_options,
+                settings=settings,
+            )
             sources.append(cache_status_for_plan(plan))
         elif str(summary.get("relation") or "").strip():
             unsupported.append(
@@ -370,7 +550,7 @@ def cache_preview(
         "enabled": enabled,
         "status": "ready" if enabled else "off",
         "freshnessWindowSeconds": 120,
-        "cacheRoot": query_cache_root().as_posix(),
+        "cacheRoot": query_cache_root(settings).as_posix(),
         "copy": (
             "Copies the S3 Parquet data referenced by this cell into a temporary local DuckDB table before the query runs. "
             "DuckDB can then reuse the local table and optional ART indexes for repeated filters and lookups."
@@ -390,11 +570,12 @@ def expire_cache(
     sql: str,
     source_summaries: list[dict[str, object]],
     query_options: dict[str, object] | None,
+    settings: Settings | None = None,
 ) -> dict[str, object]:
     for summary in source_summaries:
         if not _eligible_summary(summary):
             continue
-        plan = _cache_plan(summary, sql=sql, query_options=query_options)
+        plan = _cache_plan(summary, sql=sql, query_options=query_options, settings=settings)
         metadata = _read_metadata(plan) or {
             **plan,
             "rowCount": 0,
@@ -404,7 +585,7 @@ def expire_cache(
         metadata["expiredAt"] = utc_now_iso()
         _write_metadata(plan, metadata)
     return cache_preview(
-        settings=None,  # type: ignore[arg-type]
+        settings=settings,
         sql=sql,
         source_summaries=source_summaries,
         query_options=query_options,
@@ -416,12 +597,13 @@ def delete_cache(
     sql: str,
     source_summaries: list[dict[str, object]],
     query_options: dict[str, object] | None,
+    settings: Settings | None = None,
 ) -> dict[str, object]:
     deletion_by_key: dict[str, dict[str, object]] = {}
     for summary in source_summaries:
         if not _eligible_summary(summary):
             continue
-        plan = _cache_plan(summary, sql=sql, query_options=query_options)
+        plan = _cache_plan(summary, sql=sql, query_options=query_options, settings=settings)
         deleted, deleted_paths, errors = _delete_cache_files(plan)
         deletion_by_key[str(plan["cacheKey"])] = {
             "deleted": deleted,
@@ -430,7 +612,7 @@ def delete_cache(
         }
 
     preview = cache_preview(
-        settings=None,
+        settings=settings,
         sql=sql,
         source_summaries=source_summaries,
         query_options=query_options,
@@ -503,6 +685,8 @@ def hydrate_cache(
     sql: str,
     source_summaries: list[dict[str, object]],
     query_options: dict[str, object] | None,
+    settings: Settings | None = None,
+    cache_context: dict[str, object] | None = None,
     force: bool = False,
     progress_callback: Callable[[dict[str, object]], None] | None = None,
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
@@ -518,7 +702,7 @@ def hydrate_cache(
             updated_summaries.append(summary)
             continue
 
-        plan = _cache_plan(summary, sql=sql, query_options=query_options)
+        plan = _cache_plan(summary, sql=sql, query_options=query_options, settings=settings)
         status = cache_status_for_plan(plan)
         should_rehydrate = force or status.get("status") != CACHE_STATUS_HIT
         relation = str(plan["relation"])
@@ -557,20 +741,30 @@ def hydrate_cache(
                 )
             row_count = int(connection.execute(f"SELECT COUNT(*) FROM {table_ref}").fetchone()[0])
             cache_size_bytes = _cache_file_size(plan)
+            used_at = utc_now_iso()
+            previous_metadata = _read_metadata(plan) or {}
             metadata = {
+                **previous_metadata,
                 **plan,
                 "indexColumns": selected_index_columns,
                 "indexReason": index_reason,
                 "rowCount": row_count,
                 "cacheSizeBytes": cache_size_bytes,
                 "cacheSizeMb": _format_mb(cache_size_bytes),
-                "lastHydratedAt": utc_now_iso(),
+                "lastHydratedAt": used_at,
+                "lastUsedAt": used_at,
                 "expired": False,
                 "runtimeTable": True,
                 "temporary": True,
                 "temporaryWarning": RUNTIME_CACHE_TEMPORARY_WARNING,
                 "expectedBehavior": RUNTIME_CACHE_EXPECTED_BEHAVIOR,
             }
+            metadata = _merge_cache_context(
+                metadata,
+                sql=sql,
+                cache_context=cache_context,
+                used_at=used_at,
+            )
             _write_metadata(plan, metadata)
             timings[f"{relation}.cacheHydrationMs"] = (time.perf_counter() - hydrate_started) * 1000
             status = {
@@ -585,6 +779,17 @@ def hydrate_cache(
                 "cacheSizeMb": _format_mb(_cache_file_size(plan)),
             }
         else:
+            used_at = utc_now_iso()
+            metadata = _read_metadata(plan)
+            if metadata is not None:
+                metadata = _merge_cache_context(
+                    metadata,
+                    sql=sql,
+                    cache_context=cache_context,
+                    used_at=used_at,
+                )
+                _write_metadata(plan, metadata)
+                status = cache_status_for_plan(plan)
             selected_index_columns = [
                 str(column)
                 for column in (status.get("indexColumns") or [])

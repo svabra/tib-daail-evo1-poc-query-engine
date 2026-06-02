@@ -29,6 +29,48 @@ def normalize_postgres_host(value: str | None) -> str | None:
     return value
 
 
+def apply_duckdb_runtime_settings(
+    connection: duckdb.DuckDBPyConnection,
+    settings: Settings,
+) -> dict[str, object]:
+    applied: dict[str, object] = {}
+    memory_limit = str(getattr(settings, "duckdb_memory_limit", "") or "").strip()
+    if memory_limit:
+        connection.execute(f"SET memory_limit = {sql_literal(memory_limit)}")
+        applied["memoryLimit"] = memory_limit
+
+    threads = getattr(settings, "duckdb_threads", None)
+    if threads is not None:
+        normalized_threads = max(1, int(threads))
+        connection.execute(f"SET threads = {normalized_threads}")
+        applied["threads"] = normalized_threads
+
+    preserve_order = getattr(settings, "duckdb_preserve_insertion_order", None)
+    if preserve_order is not None:
+        connection.execute(
+            f"SET preserve_insertion_order = {'true' if bool(preserve_order) else 'false'}"
+        )
+        applied["preserveInsertionOrder"] = bool(preserve_order)
+
+    temp_directory = getattr(settings, "duckdb_temp_directory", None)
+    if temp_directory is not None:
+        temp_path = Path(temp_directory)
+        temp_path.mkdir(parents=True, exist_ok=True)
+        connection.execute(f"SET temp_directory = {sql_literal(temp_path.as_posix())}")
+        applied["tempDirectory"] = temp_path.as_posix()
+
+    max_temp_directory_size = str(
+        getattr(settings, "duckdb_max_temp_directory_size", "") or ""
+    ).strip()
+    if max_temp_directory_size:
+        connection.execute(
+            f"SET max_temp_directory_size = {sql_literal(max_temp_directory_size)}"
+        )
+        applied["maxTempDirectorySize"] = max_temp_directory_size
+
+    return applied
+
+
 def _is_duckdb_lock_conflict(exc: duckdb.IOException) -> bool:
     message = str(exc).lower()
     return "being used by another process" in message or "file is already open" in message
@@ -81,6 +123,7 @@ def create_duckdb_worker_connection(
     settings.duckdb_extension_directory.mkdir(parents=True, exist_ok=True)
 
     connection = _connect_duckdb_with_lock_retry(connection_target, read_only=read_only)
+    apply_duckdb_runtime_settings(connection, settings)
     connection.execute(
         f"SET extension_directory = {sql_literal(settings.duckdb_extension_directory.as_posix())}"
     )

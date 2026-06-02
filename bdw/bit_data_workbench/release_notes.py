@@ -9,6 +9,24 @@ RELEASE_NOTES: list[dict[str, object]] = [
         "releasedAt": "2026-06-01T17:11:42+02:00",
         "features": [
             (
+                "Settings now includes Runtime Storage, showing temporary "
+                "DuckDB spill usage, hydrated cache datasets, linked notebook "
+                "cells, cache sizes, source revisions, and per-dataset cache "
+                "deletion without deleting active spill files."
+            ),
+            (
+                "DuckDB query workers now support explicit runtime resource "
+                "settings for memory limit, threads, temp directory, temp "
+                "directory quota, and insertion-order preservation; the RHOS "
+                "deployment uses a conservative 20 GiB memory limit, four "
+                "threads, and a 28 GiB spill quota inside the 50 GiB emptyDir."
+            ),
+            (
+                "The notebook menu now says Restart Python session and explains "
+                "that it clears Python variables, imports, and in-memory state "
+                "for the current notebook while leaving saved cell code intact."
+            ),
+            (
                 "SQL cells now use an accessible Hydrate cache switch that "
                 "hydrates runtime DuckDB cache tables immediately, shows "
                 "building/deleting feedback in the cell, and deletes the "

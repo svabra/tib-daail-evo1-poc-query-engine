@@ -148,7 +148,7 @@ class PythonJobManager:
         return {
             "ok": True,
             "notebookId": str(notebook_id or "").strip(),
-            "message": "Python kernel restarted.",
+            "message": "Python session restarted.",
         }
 
     def state_payload(self) -> dict[str, Any]:
