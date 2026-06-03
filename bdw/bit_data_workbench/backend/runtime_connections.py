@@ -16,6 +16,27 @@ DUCKDB_LOCK_RETRY_ATTEMPTS = 20
 DUCKDB_LOCK_RETRY_DELAY_SECONDS = 0.5
 
 
+def duckdb_s3_bootstrap_configured(settings: Settings) -> bool:
+    return any(
+        (
+            settings.s3_endpoint,
+            settings.current_s3_access_key_id(),
+            settings.current_s3_secret_access_key(),
+        )
+    )
+
+
+def duckdb_postgres_bootstrap_configured(settings: Settings) -> bool:
+    return all(
+        (
+            settings.pg_host,
+            settings.pg_port,
+            settings.pg_user,
+            settings.pg_password,
+        )
+    ) and any((settings.pg_oltp_database, settings.pg_olap_database))
+
+
 def normalize_port(value: str, variable_name: str) -> str:
     if not value.isdigit():
         raise ValueError(f"{variable_name} must be numeric, got: {value}")
@@ -124,14 +145,16 @@ def create_duckdb_worker_connection(
 
     connection = _connect_duckdb_with_lock_retry(connection_target, read_only=read_only)
     apply_duckdb_runtime_settings(connection, settings)
+    _configure_s3_tls(connection, settings)
     connection.execute(
         f"SET extension_directory = {sql_literal(settings.duckdb_extension_directory.as_posix())}"
     )
-    _configure_s3_tls(connection, settings)
-    _ensure_extension(connection, "httpfs")
-    _ensure_extension(connection, "postgres")
-    _bootstrap_s3(connection, settings)
-    _bootstrap_postgres(connection, settings, read_only=read_only)
+    if duckdb_s3_bootstrap_configured(settings):
+        _ensure_extension(connection, "httpfs")
+        _bootstrap_s3(connection, settings)
+    if duckdb_postgres_bootstrap_configured(settings):
+        _ensure_extension(connection, "postgres")
+        _bootstrap_postgres(connection, settings, read_only=read_only)
     return connection
 
 

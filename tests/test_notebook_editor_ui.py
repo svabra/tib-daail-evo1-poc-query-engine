@@ -136,6 +136,35 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("Cells using Hydrate cache", app_source)
         self.assertIn(".runtime-storage-dialog-body", css_source)
 
+    def test_sql_completion_schema_refresh_rebuilds_existing_sql_editors(self) -> None:
+        app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
+        source_tree_source = (
+            STATIC_ROOT / "js" / "source-tree-controller.js"
+        ).read_text(encoding="utf-8")
+        api_source = (
+            REPO_ROOT / "bdw" / "bit_data_workbench" / "api" / "router.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('@router.get("/api/completion-schema")', api_source)
+        self.assertIn("currentSqlCompletionSchema", app_source)
+        self.assertIn('window.fetch("/api/completion-schema"', app_source)
+        self.assertIn("refreshSqlEditorsForCompletionSchema", app_source)
+        self.assertIn("destroyEditor(editorRoot)", app_source)
+        self.assertIn("createEditor(editorRoot)", app_source)
+        self.assertIn("scheduleSqlCompletionSchemaRefresh", app_source)
+        self.assertIn("onDataSourceSchemaMayHaveChanged", source_tree_source)
+        self.assertIn("notifyDataSourceSchemaMayHaveChanged", source_tree_source)
+
+    def test_s3_completion_suggests_bucket_and_path_segments_early(self) -> None:
+        app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function s3AliasSegmentCompletions", app_source)
+        self.assertIn("function s3AliasDeepCompletions", app_source)
+        self.assertIn("if (!typedBucket || typedParts.length <= 2)", app_source)
+        self.assertIn('prefixParts: ["s3"]', app_source)
+        self.assertIn('typed.endsWith(".") || typedParts.length > 3', app_source)
+        self.assertIn("s3AliasDeepCompletions", app_source)
+
     def test_query_result_duration_has_visible_label_and_help_tooltip(self) -> None:
         query_ui_source = (STATIC_ROOT / "js" / "query-ui.js").read_text(
             encoding="utf-8"

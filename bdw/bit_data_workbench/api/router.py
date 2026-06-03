@@ -582,6 +582,11 @@ def data_source_events_state(service: WorkbenchService = Depends(get_workbench_s
     return JSONResponse(jsonable_encoder(service.data_source_events_state()))
 
 
+@router.get("/api/completion-schema")
+def completion_schema(service: WorkbenchService = Depends(get_workbench_service)) -> JSONResponse:
+    return JSONResponse(jsonable_encoder(service.completion_schema()))
+
+
 @router.get("/api/service-consumption/state")
 def service_consumption_state(
     window: str = Query(default="24h"),

@@ -101,3 +101,54 @@ class DuckDBWorkerConnectionRetryTests(TestCase):
             self.assertIn(f"SET temp_directory = '{spill_dir.as_posix()}'", connection.commands)
             self.assertIn("SET max_temp_directory_size = '28GiB'", connection.commands)
             self.assertTrue(spill_dir.exists())
+
+    def test_worker_connection_configures_tls_before_extension_directory_and_skips_unused_extensions(self) -> None:
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.commands: list[str] = []
+
+            def execute(self, command: str):
+                self.commands.append(command)
+                return self
+
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            connection = FakeConnection()
+            settings = SimpleNamespace(
+                duckdb_database=root / "workspace.duckdb",
+                duckdb_extension_directory=root / "duckdb-ext",
+                s3_endpoint=None,
+                s3_verify_ssl=False,
+                current_s3_access_key_id=lambda: None,
+                current_s3_secret_access_key=lambda: None,
+                effective_s3_ca_cert_file=lambda: None,
+                pg_host=None,
+                pg_port=None,
+                pg_user=None,
+                pg_password=None,
+                pg_oltp_database=None,
+                pg_olap_database=None,
+            )
+
+            with (
+                patch.object(
+                    runtime_connections,
+                    "_connect_duckdb_with_lock_retry",
+                    return_value=connection,
+                ),
+                patch.object(
+                    runtime_connections,
+                    "_ensure_extension",
+                    side_effect=AssertionError("unused extensions should not be loaded"),
+                ),
+            ):
+                result = runtime_connections.create_duckdb_worker_connection(settings)  # type: ignore[arg-type]
+
+        self.assertIs(result, connection)
+        tls_index = connection.commands.index("SET enable_server_cert_verification = false")
+        extension_index = next(
+            index
+            for index, command in enumerate(connection.commands)
+            if command.startswith("SET extension_directory = ")
+        )
+        self.assertLess(tls_index, extension_index)

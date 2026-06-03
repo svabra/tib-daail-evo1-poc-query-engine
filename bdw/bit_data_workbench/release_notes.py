@@ -1,9 +1,35 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.22. Keep entries concise and
+# Derived from git history through version 0.9.23. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.9.23",
+        "releasedAt": "2026-06-03T13:20:00+02:00",
+        "features": [
+            (
+                "SQL autocomplete now updates existing editors after data-source "
+                "discovery completes, so newly discovered S3 tables and aliases "
+                "appear in already-open cells without reloading the page."
+            ),
+            (
+                "A new `/api/completion-schema` endpoint exposes the server-side "
+                "completion schema, and the UI refreshes editor schema state in "
+                "the background after source-tree refresh events."
+            ),
+            (
+                "Cache hydration now coordinates cache database lock handling to "
+                "avoid TransactionContext crashes from concurrent rehydrate/delete "
+                "paths and reports lock conflicts as safe retryable failures."
+            ),
+            (
+                "S3 completion now suggests bucket names and immediate path "
+                "segments earlier while typing, reducing autocomplete delay for "
+                "freshly discovered object trees."
+            ),
+        ],
+    },
     {
         "version": "0.9.22",
         "releasedAt": "2026-06-02T15:25:38+02:00",

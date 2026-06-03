@@ -108,6 +108,8 @@ from .realtime_facade import WorkbenchRealtimeFacade
 from .runtime_connections import (
     apply_duckdb_runtime_settings,
     create_duckdb_worker_connection,
+    duckdb_postgres_bootstrap_configured,
+    duckdb_s3_bootstrap_configured,
     normalize_postgres_host,
     open_postgres_native_connection,
 )
@@ -3320,13 +3322,15 @@ class WorkbenchService:
             startup_context=startup_context,
         )
         apply_duckdb_runtime_settings(conn, self.settings)
+        self._configure_s3_tls(conn)
         conn.execute(
             f"SET extension_directory = {sql_literal(self.settings.duckdb_extension_directory.as_posix())}"
         )
-        self._configure_s3_tls(conn)
 
-        self._ensure_extension(conn, "httpfs")
-        self._ensure_extension(conn, "postgres")
+        if duckdb_s3_bootstrap_configured(self.settings):
+            self._ensure_extension(conn, "httpfs")
+        if duckdb_postgres_bootstrap_configured(self.settings):
+            self._ensure_extension(conn, "postgres")
         self._bootstrap_integrations(
             conn,
             startup_context=startup_context,
@@ -3942,10 +3946,10 @@ class WorkbenchService:
             startup_context=False,
         )
         apply_duckdb_runtime_settings(conn, self.settings)
+        self._configure_s3_tls(conn)
         conn.execute(
             f"SET extension_directory = {sql_literal(self.settings.duckdb_extension_directory.as_posix())}"
         )
-        self._configure_s3_tls(conn)
         self._ensure_extension(conn, "httpfs")
         return conn
 
