@@ -94,6 +94,18 @@ function formatTickValue(value, kind) {
   if (!Number.isFinite(numeric)) {
     return "";
   }
+  if (kind === "spill" || kind === "bytes") {
+    if (numeric >= 1024 * 1024 * 1024) {
+      return `${(numeric / (1024 * 1024 * 1024)).toFixed(numeric >= 10 * 1024 * 1024 * 1024 ? 0 : 1).replace(/\.0$/, "")} GB`;
+    }
+    if (numeric >= 1024 * 1024) {
+      return `${(numeric / (1024 * 1024)).toFixed(numeric >= 100 * 1024 * 1024 ? 0 : 1).replace(/\.0$/, "")} MB`;
+    }
+    if (numeric >= 1024) {
+      return `${(numeric / 1024).toFixed(numeric >= 10 * 1024 ? 0 : 1).replace(/\.0$/, "")} KB`;
+    }
+    return `${numeric.toFixed(0)} B`;
+  }
   if (kind === "ram") {
     if (numeric >= 1000) {
       return `${(numeric / 1000).toFixed(numeric >= 10000 ? 0 : 1).replace(/\.0$/, "")} GB`;
@@ -103,11 +115,12 @@ function formatTickValue(value, kind) {
   return `${numeric.toFixed(numeric >= 10 ? 0 : 1).replace(/\.0$/, "")}%`;
 }
 
-function chartDataKey({ currentValues, averageValues, labels, maxValue, kind, axisLabel, currentLabel, averageLabel }) {
+function chartDataKey({ currentValues, averageValues, limitValues, labels, maxValue, kind, axisLabel, currentLabel, averageLabel }) {
   return JSON.stringify({
     renderVersion: QUERY_RESOURCE_CHART_RENDER_VERSION,
     currentValues,
     averageValues,
+    limitValues,
     labels,
     maxValue,
     kind,
@@ -117,41 +130,59 @@ function chartDataKey({ currentValues, averageValues, labels, maxValue, kind, ax
   });
 }
 
-function createChartConfig({ currentValues, averageValues, labels, maxValue, kind, axisLabel, currentLabel, averageLabel }) {
-  const labelCount = Math.max(currentValues.length, averageValues.length);
+function createChartConfig({ currentValues, averageValues, limitValues, labels, maxValue, kind, axisLabel, currentLabel, averageLabel }) {
+  const labelCount = Math.max(currentValues.length, averageValues.length, limitValues.length);
   const chartLabels = labels.length >= labelCount ? labels.slice(0, labelCount) : fallbackLabels(labelCount);
   const currentColor = "#0b4479";
   const averageColor = "#2f7d4a";
+  const datasets = [
+    {
+      label: currentLabel || "Current",
+      data: currentValues,
+      borderColor: currentColor,
+      backgroundColor: "transparent",
+      borderWidth: 2,
+      pointRadius: 0,
+      pointHitRadius: 0,
+      tension: 0.24,
+      spanGaps: true,
+      fill: false,
+    },
+  ];
+  if (averageValues.some((value) => value !== null)) {
+    datasets.push({
+      label: averageLabel || "Average",
+      data: averageValues,
+      borderColor: averageColor,
+      backgroundColor: "transparent",
+      borderWidth: 2,
+      pointRadius: 0,
+      pointHitRadius: 0,
+      tension: 0.24,
+      spanGaps: true,
+      fill: false,
+    });
+  }
+  if (Array.isArray(limitValues) && limitValues.some((value) => value !== null)) {
+    datasets.push({
+      label: "Quota",
+      data: limitValues,
+      borderColor: "#b96b00",
+      backgroundColor: "transparent",
+      borderWidth: 1.5,
+      borderDash: [6, 5],
+      pointRadius: 0,
+      pointHitRadius: 0,
+      tension: 0,
+      spanGaps: true,
+      fill: false,
+    });
+  }
   return {
     type: "line",
     data: {
       labels: chartLabels,
-      datasets: [
-        {
-          label: currentLabel || "Current",
-          data: currentValues,
-          borderColor: currentColor,
-          backgroundColor: "transparent",
-          borderWidth: 2,
-          pointRadius: 0,
-          pointHitRadius: 0,
-          tension: 0.24,
-          spanGaps: true,
-          fill: false,
-        },
-        {
-          label: averageLabel || "Average",
-          data: averageValues,
-          borderColor: averageColor,
-          backgroundColor: "transparent",
-          borderWidth: 2,
-          pointRadius: 0,
-          pointHitRadius: 0,
-          tension: 0.24,
-          spanGaps: true,
-          fill: false,
-        },
-      ],
+      datasets,
     },
     options: {
       animation: false,
@@ -218,7 +249,7 @@ function createChartConfig({ currentValues, averageValues, labels, maxValue, kin
           },
           title: {
             display: false,
-            text: axisLabel || (kind === "ram" ? "RAM (MB)" : "CPU %"),
+            text: axisLabel || (kind === "ram" ? "RAM (MB)" : kind === "spill" ? "Spill" : "CPU %"),
             color: "#52667a",
             font: {
               size: 10,
@@ -241,7 +272,8 @@ function syncChart(canvas, Chart) {
   }
   const currentValues = parseSeries(canvas, "data-query-resource-current");
   const averageValues = parseSeries(canvas, "data-query-resource-average");
-  if (!currentValues.length && !averageValues.length) {
+  const limitValues = parseSeries(canvas, "data-query-resource-limit");
+  if (!currentValues.length && !averageValues.length && !limitValues.length) {
     return;
   }
   const kind = String(canvas.dataset.queryResourceKind || "").trim().toLowerCase();
@@ -253,21 +285,29 @@ function syncChart(canvas, Chart) {
     1,
     Number(canvas.dataset.queryResourceMax || 0),
     ...currentValues.map((value) => Number(value || 0)),
-    ...averageValues.map((value) => Number(value || 0))
+    ...averageValues.map((value) => Number(value || 0)),
+    ...limitValues.map((value) => Number(value || 0))
   );
-  const key = chartDataKey({ currentValues, averageValues, labels, maxValue, kind, axisLabel, currentLabel, averageLabel });
+  const key = chartDataKey({ currentValues, averageValues, limitValues, labels, maxValue, kind, axisLabel, currentLabel, averageLabel });
   if (canvas._bdwQueryResourceChart && canvas._bdwQueryResourceChartKey === key) {
     return;
   }
 
   const existingChart = canvas._bdwQueryResourceChart;
   if (existingChart && existingChart.config?.type === "line") {
-    const labelCount = Math.max(currentValues.length, averageValues.length);
+    const labelCount = Math.max(currentValues.length, averageValues.length, limitValues.length);
     existingChart.data.labels = labels.length >= labelCount ? labels.slice(0, labelCount) : fallbackLabels(labelCount);
-    existingChart.data.datasets[0].label = currentLabel || "Current";
-    existingChart.data.datasets[0].data = currentValues;
-    existingChart.data.datasets[1].label = averageLabel || "Average";
-    existingChart.data.datasets[1].data = averageValues;
+    existingChart.data.datasets = createChartConfig({
+      currentValues,
+      averageValues,
+      limitValues,
+      labels,
+      maxValue,
+      kind,
+      axisLabel,
+      currentLabel,
+      averageLabel,
+    }).data.datasets;
     existingChart.options.parsing = true;
     existingChart.options.layout = {
       padding: {
@@ -311,7 +351,7 @@ function syncChart(canvas, Chart) {
     }
     canvas._bdwQueryResourceChart = new Chart(
       canvas,
-      createChartConfig({ currentValues, averageValues, labels, maxValue, kind, axisLabel, currentLabel, averageLabel })
+      createChartConfig({ currentValues, averageValues, limitValues, labels, maxValue, kind, axisLabel, currentLabel, averageLabel })
     );
   }
   canvas._bdwQueryResourceChartKey = key;

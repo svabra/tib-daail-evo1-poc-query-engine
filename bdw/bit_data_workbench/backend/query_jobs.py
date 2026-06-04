@@ -5,6 +5,7 @@ import logging
 import multiprocessing as mp
 import os
 import queue
+import shutil
 import tempfile
 import threading
 import time
@@ -28,6 +29,7 @@ from ..models import QueryJobDefinition, QueryJobMetricPoint, QueryResourceSampl
 from .query_cache import hydrate_cache
 from .query_options import cache_hydration_enabled
 from .runtime_connections import create_duckdb_worker_connection, open_postgres_native_connection
+from .runtime_storage import directory_size, parse_storage_size_bytes
 from .sql_utils import qualified_name
 
 
@@ -81,6 +83,16 @@ MUTATING_KEYWORDS = WRITE_START_KEYWORDS | {
     "force",
     "reset",
 }
+
+
+def _safe_query_spill_directory_name(job_id: str) -> str:
+    normalized = "".join(
+        char if char.isalnum() or char in {"-", "_"} else "-"
+        for char in str(job_id or "").strip()
+    ).strip("-_")
+    if not normalized.startswith("query-"):
+        normalized = f"query-{normalized or uuid.uuid4().hex}"
+    return normalized[:96]
 
 
 def utc_now_iso() -> str:
@@ -862,6 +874,7 @@ def _query_worker_entry(
     execution_mode: str,
     max_result_rows: int,
     database_path: str | None = None,
+    temp_directory: str | None = None,
     source_summaries: list[dict[str, object]] | None = None,
     query_options: dict[str, object] | None = None,
     notebook_id: str = "",
@@ -902,6 +915,7 @@ def _query_worker_entry(
                 settings,
                 database_path=worker_database_path,
                 read_only=execution_mode == QUERY_EXECUTION_DUCKDB_READ and worker_database_path != ":memory:",
+                temp_directory_override=temp_directory or None,
             )
             _enable_duckdb_progress(connection)
             duckdb_profile_path = _enable_duckdb_profiling(connection, settings)
@@ -1292,6 +1306,7 @@ class QueryJobRecord:
     execution_sql: str
     duckdb_execution_path: str = ""
     worker_database_path: str | None = None
+    spill_temp_directory: Path | None = None
     source_summaries: list[dict[str, object]] = field(default_factory=list)
     cancel_requested: bool = False
     cancellation_started_monotonic: float | None = None
@@ -1400,6 +1415,12 @@ class QueryJobManager:
         now = utc_now_iso()
         resolved_title = notebook_title.strip() or self._notebook_title_resolver(notebook_id) or "Notebook"
         backend_name = "PostgreSQL Native" if execution_mode == QUERY_EXECUTION_POSTGRES_NATIVE else "VMTP DUCKDB"
+        duckdb_thread_limit = (
+            max(1, int(self._settings.duckdb_threads))
+            if execution_mode != QUERY_EXECUTION_POSTGRES_NATIVE
+            and self._settings.duckdb_threads is not None
+            else None
+        )
         timings: dict[str, float] = {}
         for key, value in (
             ("clientPreSubmitMs", client_pre_submit_ms),
@@ -1429,6 +1450,7 @@ class QueryJobManager:
             execution_mode=execution_mode,
             duckdb_execution_path=duckdb_execution_path,
             cpu_capacity_cores=self._cpu_capacity_cores,
+            duckdb_thread_limit=duckdb_thread_limit,
             timings=timings,
             can_cancel=True,
         )
@@ -1690,6 +1712,8 @@ class QueryJobManager:
             "cpu_percent",
             "cpu_capacity_percent",
             "cpu_capacity_cores",
+            "process_thread_count",
+            "duckdb_thread_limit",
             "ram_mb",
             "row_count",
             "rows_shown",
@@ -1906,6 +1930,10 @@ class QueryJobManager:
             fields["cpu_capacity_percent"] = round(float(snapshot.cpu_capacity_percent), 2)
         if snapshot.cpu_capacity_cores is not None and event == "progress":
             fields["cpu_capacity_cores"] = round(float(snapshot.cpu_capacity_cores), 3)
+        if snapshot.process_thread_count is not None and event == "progress":
+            fields["process_thread_count"] = int(snapshot.process_thread_count)
+        if snapshot.duckdb_thread_limit is not None and event == "progress":
+            fields["duckdb_thread_limit"] = int(snapshot.duckdb_thread_limit)
         if snapshot.memory_rss_bytes is not None and event == "progress":
             fields["ram_mb"] = round(float(snapshot.memory_rss_bytes) / (1024 * 1024), 1)
         if event == "progress":
@@ -2097,6 +2125,15 @@ class QueryJobManager:
                 and record.duckdb_execution_path != DUCKDB_EXECUTION_PATH_ISOLATED_READ
             ):
                 worker_source_summaries = []
+            spill_temp_directory: Path | None = None
+            if (
+                record.execution_mode != QUERY_EXECUTION_POSTGRES_NATIVE
+                and self._settings.duckdb_temp_directory is not None
+            ):
+                spill_root = Path(self._settings.duckdb_temp_directory)
+                spill_temp_directory = spill_root / _safe_query_spill_directory_name(job_id)
+                with suppress(Exception):
+                    spill_temp_directory.mkdir(parents=True, exist_ok=True)
             process = self._mp_context.Process(
                 target=_query_worker_entry,
                 kwargs={
@@ -2111,6 +2148,9 @@ class QueryJobManager:
                     "execution_mode": record.execution_mode,
                     "max_result_rows": self._max_result_rows,
                     "database_path": record.worker_database_path,
+                    "temp_directory": spill_temp_directory.as_posix()
+                    if spill_temp_directory is not None
+                    else None,
                     "source_summaries": worker_source_summaries,
                     "query_options": record.snapshot.query_options,
                 },
@@ -2120,6 +2160,7 @@ class QueryJobManager:
             record.event_queue = event_queue
             record.cancel_event = cancel_event
             record.process = process
+            record.spill_temp_directory = spill_temp_directory
             record.snapshot.status = "running"
             record.snapshot.progress = None
             record.snapshot.progress_label = "Starting isolated query worker..."
@@ -2153,6 +2194,7 @@ class QueryJobManager:
             time.sleep(QUERY_PARENT_POLL_SECONDS)
 
         process.join(timeout=0.2)
+        self._sample_process_metrics(job_id, force=True)
         self._drain_worker_events(job_id)
         self._sample_process_metrics(job_id, force=True)
         self._finalize_after_process_exit(job_id, process.exitcode)
@@ -2160,10 +2202,33 @@ class QueryJobManager:
         with self._condition:
             record = self._jobs.get(job_id)
             if record is not None:
+                spill_temp_directory = record.spill_temp_directory
                 record.process = None
                 record.cancel_event = None
                 record.event_queue = None
-            record.process_metrics = None
+                record.process_metrics = None
+            else:
+                spill_temp_directory = None
+
+        self._cleanup_query_spill_directory(spill_temp_directory)
+
+    def _cleanup_query_spill_directory(self, spill_temp_directory: Path | None) -> None:
+        if spill_temp_directory is None or self._settings.duckdb_temp_directory is None:
+            return
+        try:
+            spill_root = Path(self._settings.duckdb_temp_directory).resolve()
+            target = Path(spill_temp_directory).resolve()
+            if target == spill_root or spill_root not in target.parents:
+                return
+            if not target.name.startswith("query-"):
+                return
+            shutil.rmtree(target, ignore_errors=True)
+        except Exception:
+            logger.debug(
+                "Failed to clean query spill directory %s",
+                spill_temp_directory,
+                exc_info=True,
+            )
 
     @staticmethod
     def _duckdb_execution_path(
@@ -2315,6 +2380,32 @@ class QueryJobManager:
                 changes[target_key] = payload[source_key]
         return changes
 
+    def _spill_metrics_for_record(self, record: QueryJobRecord) -> dict[str, int] | None:
+        spill_root = self._settings.duckdb_temp_directory
+        if spill_root is None:
+            return None
+        spill_root_path = Path(spill_root)
+        query_spill_bytes = (
+            directory_size(record.spill_temp_directory)
+            if record.spill_temp_directory is not None
+            else 0
+        )
+        total_spill_bytes = directory_size(spill_root_path)
+        other_spill_bytes = max(0, total_spill_bytes - query_spill_bytes)
+        limit_bytes = parse_storage_size_bytes(self._settings.duckdb_max_temp_directory_size)
+        try:
+            disk_usage = shutil.disk_usage(spill_root_path if spill_root_path.exists() else spill_root_path.parent)
+            disk_free_bytes = max(0, int(disk_usage.free))
+        except OSError:
+            disk_free_bytes = 0
+        return {
+            "query": max(0, int(query_spill_bytes)),
+            "total": max(0, int(total_spill_bytes)),
+            "other": max(0, int(other_spill_bytes)),
+            "limit": max(0, int(limit_bytes or 0)),
+            "free": disk_free_bytes,
+        }
+
     def _sample_process_metrics(self, job_id: str, *, force: bool = False) -> None:
         now_monotonic = time.monotonic()
         with self._condition:
@@ -2327,17 +2418,31 @@ class QueryJobManager:
                 or (not force and last_sample and now_monotonic - last_sample < QUERY_METRICS_SAMPLE_SECONDS)
             ):
                 return
-        if process_metrics is None or psutil is None:
-            return
 
+        cpu_percent: float | None = None
+        memory_rss: int | None = None
+        process_thread_count: int | None = None
         try:
-            cpu_percent = float(process_metrics.cpu_percent(interval=None))
-            memory_rss = int(process_metrics.memory_info().rss)
-            for child in process_metrics.children(recursive=True):
+            if process_metrics is not None and psutil is not None:
+                cpu_percent = float(process_metrics.cpu_percent(interval=None))
+                memory_rss = int(process_metrics.memory_info().rss)
                 with suppress(Exception):
-                    memory_rss += int(child.memory_info().rss)
-                    cpu_percent += float(child.cpu_percent(interval=None))
+                    process_thread_count = int(process_metrics.num_threads())
+                for child in process_metrics.children(recursive=True):
+                    with suppress(Exception):
+                        memory_rss += int(child.memory_info().rss)
+                        cpu_percent += float(child.cpu_percent(interval=None))
         except Exception:
+            cpu_percent = None
+            memory_rss = None
+
+        with self._condition:
+            record = self._jobs.get(job_id)
+            if record is None or record.snapshot.status in TERMINAL_QUERY_STATUSES:
+                return
+            spill_record = record
+        spill_metrics = self._spill_metrics_for_record(spill_record)
+        if cpu_percent is None and memory_rss is None and spill_metrics is None:
             return
 
         with self._condition:
@@ -2347,49 +2452,86 @@ class QueryJobManager:
             if not force and record.last_metric_sample_monotonic and now_monotonic - record.last_metric_sample_monotonic < QUERY_METRICS_SAMPLE_SECONDS:
                 return
 
-            normalized_cpu_percent = max(0.0, cpu_percent)
+            normalized_cpu_percent = max(0.0, cpu_percent) if cpu_percent is not None else None
             cpu_capacity_cores = max(
                 0.001,
                 float(record.snapshot.cpu_capacity_cores or self._cpu_capacity_cores or 1.0),
             )
-            normalized_cpu_capacity_percent = _cpu_capacity_percent(
-                normalized_cpu_percent,
-                cpu_capacity_cores,
+            normalized_cpu_capacity_percent = (
+                _cpu_capacity_percent(
+                    normalized_cpu_percent,
+                    cpu_capacity_cores,
+                )
+                if normalized_cpu_percent is not None
+                else None
             )
-            normalized_memory_rss = max(0, memory_rss)
+            normalized_memory_rss = max(0, memory_rss) if memory_rss is not None else None
+            normalized_process_thread_count = (
+                max(0, int(process_thread_count))
+                if process_thread_count is not None
+                else None
+            )
+            duckdb_thread_limit = (
+                max(1, int(self._settings.duckdb_threads))
+                if self._settings.duckdb_threads is not None
+                else None
+            )
             record.last_metric_sample_monotonic = now_monotonic
-            record.cpu_sample_total += normalized_cpu_percent
-            record.cpu_sample_count += 1
-            record.cpu_capacity_sample_total += normalized_cpu_capacity_percent
-            record.cpu_capacity_sample_count += 1
-            record.memory_sample_total += normalized_memory_rss
-            record.memory_sample_count += 1
-            average_cpu = record.cpu_sample_total / max(1, record.cpu_sample_count)
-            average_cpu_capacity = record.cpu_capacity_sample_total / max(
-                1,
-                record.cpu_capacity_sample_count,
-            )
-            average_memory = int(record.memory_sample_total / max(1, record.memory_sample_count))
-
-            record.snapshot.cpu_percent = normalized_cpu_percent
-            record.snapshot.average_cpu_percent = average_cpu
-            record.snapshot.peak_cpu_percent = max(
-                float(record.snapshot.peak_cpu_percent or 0.0),
-                normalized_cpu_percent,
-            )
-            record.snapshot.cpu_capacity_percent = normalized_cpu_capacity_percent
-            record.snapshot.average_cpu_capacity_percent = average_cpu_capacity
-            record.snapshot.peak_cpu_capacity_percent = max(
-                float(record.snapshot.peak_cpu_capacity_percent or 0.0),
-                normalized_cpu_capacity_percent,
-            )
-            record.snapshot.cpu_capacity_cores = cpu_capacity_cores
-            record.snapshot.memory_rss_bytes = normalized_memory_rss
-            record.snapshot.average_memory_rss_bytes = average_memory
-            record.snapshot.peak_memory_rss_bytes = max(
-                int(record.snapshot.peak_memory_rss_bytes or 0),
-                normalized_memory_rss,
-            )
+            average_cpu = record.snapshot.average_cpu_percent
+            average_cpu_capacity = record.snapshot.average_cpu_capacity_percent
+            average_memory = record.snapshot.average_memory_rss_bytes
+            if normalized_cpu_percent is not None:
+                record.cpu_sample_total += normalized_cpu_percent
+                record.cpu_sample_count += 1
+                average_cpu = record.cpu_sample_total / max(1, record.cpu_sample_count)
+                record.snapshot.cpu_percent = normalized_cpu_percent
+                record.snapshot.average_cpu_percent = average_cpu
+                record.snapshot.peak_cpu_percent = max(
+                    float(record.snapshot.peak_cpu_percent or 0.0),
+                    normalized_cpu_percent,
+                )
+            if normalized_cpu_capacity_percent is not None:
+                record.cpu_capacity_sample_total += normalized_cpu_capacity_percent
+                record.cpu_capacity_sample_count += 1
+                average_cpu_capacity = record.cpu_capacity_sample_total / max(
+                    1,
+                    record.cpu_capacity_sample_count,
+                )
+                record.snapshot.cpu_capacity_percent = normalized_cpu_capacity_percent
+                record.snapshot.average_cpu_capacity_percent = average_cpu_capacity
+                record.snapshot.peak_cpu_capacity_percent = max(
+                    float(record.snapshot.peak_cpu_capacity_percent or 0.0),
+                    normalized_cpu_capacity_percent,
+                )
+                record.snapshot.cpu_capacity_cores = cpu_capacity_cores
+            if normalized_memory_rss is not None:
+                record.memory_sample_total += normalized_memory_rss
+                record.memory_sample_count += 1
+                average_memory = int(record.memory_sample_total / max(1, record.memory_sample_count))
+                record.snapshot.memory_rss_bytes = normalized_memory_rss
+                record.snapshot.average_memory_rss_bytes = average_memory
+                record.snapshot.peak_memory_rss_bytes = max(
+                    int(record.snapshot.peak_memory_rss_bytes or 0),
+                    normalized_memory_rss,
+                )
+            if normalized_process_thread_count is not None:
+                record.snapshot.process_thread_count = normalized_process_thread_count
+                record.snapshot.peak_process_thread_count = max(
+                    int(record.snapshot.peak_process_thread_count or 0),
+                    normalized_process_thread_count,
+                )
+            record.snapshot.duckdb_thread_limit = duckdb_thread_limit
+            duckdb_spill_bytes = spill_metrics["query"] if spill_metrics else None
+            if spill_metrics is not None:
+                record.snapshot.duckdb_spill_bytes = spill_metrics["query"]
+                record.snapshot.duckdb_spill_peak_bytes = max(
+                    int(record.snapshot.duckdb_spill_peak_bytes or 0),
+                    spill_metrics["query"],
+                )
+                record.snapshot.duckdb_spill_total_bytes = spill_metrics["total"]
+                record.snapshot.duckdb_spill_other_bytes = spill_metrics["other"]
+                record.snapshot.duckdb_spill_limit_bytes = spill_metrics["limit"]
+                record.snapshot.duckdb_spill_disk_free_bytes = spill_metrics["free"]
             record.snapshot.resource_samples.append(
                 QueryResourceSample(
                     elapsed_ms=self._elapsed_duration_ms_locked(record),
@@ -2399,6 +2541,13 @@ class QueryJobManager:
                     average_cpu_capacity_percent=average_cpu_capacity,
                     memory_rss_bytes=normalized_memory_rss,
                     average_memory_rss_bytes=average_memory,
+                    process_thread_count=normalized_process_thread_count,
+                    duckdb_thread_limit=duckdb_thread_limit,
+                    duckdb_spill_bytes=duckdb_spill_bytes,
+                    duckdb_spill_total_bytes=spill_metrics["total"] if spill_metrics else None,
+                    duckdb_spill_other_bytes=spill_metrics["other"] if spill_metrics else None,
+                    duckdb_spill_limit_bytes=spill_metrics["limit"] if spill_metrics else None,
+                    duckdb_spill_disk_free_bytes=spill_metrics["free"] if spill_metrics else None,
                 )
             )
             if len(record.snapshot.resource_samples) > MAX_QUERY_RESOURCE_SAMPLES:
@@ -2603,6 +2752,12 @@ class QueryJobManager:
                 latest_cell_keys.add(cell_key)
             job_payloads.append(payload)
         running_jobs = [record.snapshot for record in jobs if record.snapshot.status in RUNNING_QUERY_STATUSES]
+        running_process_count = sum(
+            1
+            for record in jobs
+            if record.snapshot.status in RUNNING_QUERY_STATUSES
+            and record.snapshot.process_id is not None
+        )
         completed_jobs = sorted(
             (
                 record.snapshot
@@ -2629,6 +2784,7 @@ class QueryJobManager:
             "version": self._state_version,
             "summary": {
                 "runningCount": len(running_jobs),
+                "runningProcessCount": running_process_count,
                 "totalCount": len(jobs),
             },
             "jobs": job_payloads,

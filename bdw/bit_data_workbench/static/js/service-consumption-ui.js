@@ -13,6 +13,10 @@ const METRIC_COLORS = {
   memory: "#0b4479",
   s3: "#1c6a48",
   pv: "#8a5a17",
+  spill: "#0b4479",
+  spillOther: "#7a8c9e",
+  cache: "#8a5a17",
+  quota: "#b96b00",
   node: "#7a8c9e",
   actualPrevious: "#6b7f93",
   actual: "#1c6a48",
@@ -51,6 +55,16 @@ const LEGEND_TOOLTIPS = {
   persistentVolume: {
     "Monitoring state":
       "Best-effort monitoring state kept in memory and snapshotted to hidden S3. PVC storage is not measured.",
+  },
+  runtimeStorage: {
+    "Active query spill":
+      "DuckDB temporary spill bytes attributed to currently active query-worker spill directories.",
+    "Total DuckDB spill":
+      "All bytes currently under the configured DuckDB spill root, including active, stale, and other DuckDB temp files.",
+    "Query cache":
+      "Hydrated runtime query-cache files. They are not DuckDB spill, but they use the same workspace disk.",
+    "DuckDB spill quota":
+      "Configured DuckDB max_temp_directory_size. The underlying workspace disk is shared with cache files and other runtime data.",
   },
 };
 
@@ -373,6 +387,10 @@ function pageStatusPersistentVolume() {
   return document.querySelector("[data-service-consumption-pv-status]");
 }
 
+function pageStatusRuntimeStorage() {
+  return document.querySelector("[data-service-consumption-runtime-storage-status]");
+}
+
 function chartLimitCopy(metric) {
   return document.querySelector(`[data-service-consumption-chart-limit="${metric}"]`);
 }
@@ -465,6 +483,10 @@ function persistentVolumeChartCanvas() {
   return document.querySelector("[data-service-consumption-pv-chart]");
 }
 
+function duckdbSpillChartCanvas() {
+  return document.querySelector("[data-service-consumption-duckdb-spill-chart]");
+}
+
 function financialLegendContainer() {
   return document.querySelector("[data-service-consumption-financial-legend]");
 }
@@ -489,6 +511,10 @@ function s3LegendContainer() {
 
 function persistentVolumeLegendContainer() {
   return document.querySelector("[data-service-consumption-pv-legend]");
+}
+
+function duckdbSpillLegendContainer() {
+  return document.querySelector("[data-service-consumption-duckdb-spill-legend]");
 }
 
 function formatTimestampLabel(value, { short = false } = {}) {
@@ -1351,6 +1377,42 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
           : "Monitoring state is kept in memory and snapshotted to S3";
       })()
     );
+    const spillTotalBytes =
+      metricPath(latest, ["runtimeStorage", "duckdbSpill", "totalBytes"]) ??
+      metricPath(latest, ["runtimeStorage", "duckdbSpill", "sizeBytes"]);
+    const spillQuotaBytes = metricPath(latest, [
+      "runtimeStorage",
+      "duckdbSpill",
+      "maxTempDirectorySizeBytes",
+    ]);
+    setText(
+      technicalSummaryValue(root, "duckdb-spill"),
+      formatCurrentAndMax(
+        spillTotalBytes,
+        spillQuotaBytes,
+        (value) => formatBytesOrUnavailable(value, formatByteCount)
+      )
+    );
+    setText(
+      technicalSummaryMeta(root, "duckdb-spill"),
+      compactParts([
+        `Active query spill ${formatBytesOrUnavailable(
+          metricPath(latest, ["runtimeStorage", "duckdbSpill", "activeQueryBytes"]),
+          formatByteCount
+        )}`,
+        `Cache ${formatBytesOrUnavailable(
+          metricPath(latest, ["runtimeStorage", "queryCache", "sizeBytes"]),
+          formatByteCount
+        )}`,
+      ])
+    );
+    setText(
+      chartLimitCopy("spill"),
+      (() => {
+        const limit = formatBytesOrUnavailable(spillQuotaBytes, formatByteCount);
+        return limit === "Unavailable" ? "" : `Quota ${limit}`;
+      })()
+    );
 
     setText(
       pageStatusNode(),
@@ -1375,6 +1437,20 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
           ])
         : `Monitoring storage usage unavailable. ${
             status?.persistentVolumeMetrics?.detail || ""
+          }`.trim()
+    );
+    setText(
+      pageStatusRuntimeStorage(),
+      status?.runtimeStorageMetricsAvailable
+        ? compactParts([
+            "Runtime storage metrics available.",
+            status?.runtimeStorageSpillPath
+              ? `DuckDB spill ${status.runtimeStorageSpillPath}`
+              : "",
+            "The DuckDB temp quota is separate from the shared /workspace disk.",
+          ])
+        : `Runtime storage metrics unavailable. ${
+            status?.runtimeStorageMetrics?.detail || ""
           }`.trim()
     );
     setText(sampledAtNode(), formatSampledAt(latest?.timestampUtc));
@@ -1911,6 +1987,108 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
     }
   }
 
+  async function renderRuntimeStorageHistory(payload) {
+    await ensureChartJs();
+    const history = payload?.runtimeStorageHistory || {};
+    const timestamps = history.timestamps || [];
+    const labels = timestamps.map((timestamp, index) =>
+      formatCompactTimestampLabel(timestamp, index > 0 ? timestamps[index - 1] : null)
+    );
+    const activeSpill = normalizeNumericSeries(history.duckdbSpillActiveBytes || []);
+    const totalSpill = normalizeNumericSeries(history.duckdbSpillTotalBytes || []);
+    const queryCache = normalizeNumericSeries(history.queryCacheBytes || []);
+    const quotaValues = normalizeNumericSeries(history.spillQuotaBytes || []);
+    const datasets = [
+      {
+        label: "Active query spill",
+        data: activeSpill,
+        borderColor: METRIC_COLORS.spill,
+        backgroundColor: "transparent",
+        tension: 0.18,
+        pointRadius: COMPACT_USAGE_CHART_POINT_RADIUS,
+        pointHoverRadius: 3,
+        borderWidth: COMPACT_USAGE_CHART_LINE_WIDTH,
+        spanGaps: true,
+      },
+      {
+        label: "Total DuckDB spill",
+        data: totalSpill,
+        borderColor: METRIC_COLORS.spillOther,
+        backgroundColor: "transparent",
+        tension: 0.18,
+        pointRadius: COMPACT_USAGE_CHART_POINT_RADIUS,
+        pointHoverRadius: 3,
+        borderWidth: COMPACT_USAGE_CHART_LINE_WIDTH,
+        spanGaps: true,
+      },
+      {
+        label: "Query cache",
+        data: queryCache,
+        borderColor: METRIC_COLORS.cache,
+        backgroundColor: "transparent",
+        tension: 0.18,
+        pointRadius: COMPACT_USAGE_CHART_POINT_RADIUS,
+        pointHoverRadius: 3,
+        borderWidth: COMPACT_USAGE_CHART_LINE_WIDTH,
+        spanGaps: true,
+      },
+    ];
+    if (quotaValues.some((value) => value !== null)) {
+      datasets.push({
+        label: "DuckDB spill quota",
+        data: quotaValues,
+        borderColor: METRIC_COLORS.quota,
+        backgroundColor: "transparent",
+        tension: 0,
+        pointRadius: 0,
+        borderDash: [6, 5],
+        borderWidth: COMPACT_USAGE_CHART_LINE_WIDTH,
+        spanGaps: true,
+      });
+    }
+    const chart =
+      updateLineChart({
+        key: "runtimeStorage",
+        canvas: duckdbSpillChartCanvas(),
+        configFactory: () => ({
+          type: "line",
+          data: {
+            labels,
+            datasets,
+          },
+          options: {
+            animation: false,
+            maintainAspectRatio: false,
+            responsive: true,
+            interaction: { mode: "index", intersect: false },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                callbacks: {
+                  label: (context) => chartTooltipLabel(context, formatByteCount),
+                },
+              },
+            },
+            scales: {
+              x: compactTimeAxisOptions(3),
+              y: compactValueAxisOptions((value) => formatByteCount(Number(value)), true),
+            },
+          },
+        }),
+      }) || pageCharts.runtimeStorage;
+    if (chart) {
+      syncLineChartData(chart, {
+        labels,
+        datasets,
+      });
+      renderLegend(
+        duckdbSpillLegendContainer(),
+        chart.data.datasets,
+        LEGEND_TOOLTIPS.runtimeStorage
+      );
+    }
+  }
+
   async function renderState(payload) {
     latestState = payload || latestState;
     stateVersion = Number(payload?.version || stateVersion || 0);
@@ -1925,6 +2103,7 @@ export function createServiceConsumptionUi({ fetchJsonOrThrow, formatByteCount }
     await renderRecentCharts(payload);
     await renderS3History(payload);
     await renderPersistentVolumeHistory(payload);
+    await renderRuntimeStorageHistory(payload);
     lastHistoryRefreshAt = Date.now();
     return payload;
   }

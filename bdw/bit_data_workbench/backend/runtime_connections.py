@@ -32,6 +32,8 @@ def normalize_postgres_host(value: str | None) -> str | None:
 def apply_duckdb_runtime_settings(
     connection: duckdb.DuckDBPyConnection,
     settings: Settings,
+    *,
+    temp_directory_override: Path | str | None = None,
 ) -> dict[str, object]:
     applied: dict[str, object] = {}
     memory_limit = str(getattr(settings, "duckdb_memory_limit", "") or "").strip()
@@ -52,7 +54,11 @@ def apply_duckdb_runtime_settings(
         )
         applied["preserveInsertionOrder"] = bool(preserve_order)
 
-    temp_directory = getattr(settings, "duckdb_temp_directory", None)
+    temp_directory = (
+        temp_directory_override
+        if temp_directory_override is not None
+        else getattr(settings, "duckdb_temp_directory", None)
+    )
     if temp_directory is not None:
         temp_path = Path(temp_directory)
         temp_path.mkdir(parents=True, exist_ok=True)
@@ -104,6 +110,7 @@ def create_duckdb_worker_connection(
     *,
     database_path: Path | str | None = None,
     read_only: bool = False,
+    temp_directory_override: Path | str | None = None,
 ) -> duckdb.DuckDBPyConnection:
     target_database = database_path or settings.duckdb_database
     if isinstance(target_database, Path):
@@ -123,7 +130,11 @@ def create_duckdb_worker_connection(
     settings.duckdb_extension_directory.mkdir(parents=True, exist_ok=True)
 
     connection = _connect_duckdb_with_lock_retry(connection_target, read_only=read_only)
-    apply_duckdb_runtime_settings(connection, settings)
+    apply_duckdb_runtime_settings(
+        connection,
+        settings,
+        temp_directory_override=temp_directory_override,
+    )
     connection.execute(
         f"SET extension_directory = {sql_literal(settings.duckdb_extension_directory.as_posix())}"
     )

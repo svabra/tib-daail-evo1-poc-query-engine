@@ -140,6 +140,12 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         query_ui_source = (STATIC_ROOT / "js" / "query-ui.js").read_text(
             encoding="utf-8"
         )
+        query_state_source = (STATIC_ROOT / "js" / "query-job-state.js").read_text(
+            encoding="utf-8"
+        )
+        realtime_source = (STATIC_ROOT / "js" / "realtime-controller.js").read_text(
+            encoding="utf-8"
+        )
         insights_source = (STATIC_ROOT / "js" / "query-insights.js").read_text(
             encoding="utf-8"
         )
@@ -153,6 +159,18 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("from the Run Cell click until the completed, failed, or cancelled job update reaches this browser", query_ui_source)
         self.assertIn("the same elapsed clock as Total elapsed", query_ui_source)
         self.assertIn("query-resource-sparkline-help", query_ui_source)
+        self.assertIn("DuckDB spill", query_ui_source)
+        self.assertIn("duckdbSpillBytes", query_ui_source)
+        self.assertIn("duckdbSpillLimitBytes", query_ui_source)
+        self.assertIn("Threads", query_ui_source)
+        self.assertIn("Thread limit", query_ui_source)
+        self.assertIn("Active cores", query_ui_source)
+        self.assertIn("processThreadCount", query_state_source)
+        self.assertIn("duckdbThreadLimit", query_state_source)
+        self.assertIn("Running processes", realtime_source)
+        self.assertIn("runningProcessCount", realtime_source)
+        self.assertIn("data-query-resource-limit", query_ui_source)
+        self.assertIn('kind === "spill"', (STATIC_ROOT / "js" / "query-resource-charts.js").read_text(encoding="utf-8"))
         self.assertIn("Timing details explain the headline Total elapsed value shown under Result", insights_source)
         self.assertIn("clientObservedMs", insights_source)
         self.assertIn("Query is DuckDB execution time only", insights_source)

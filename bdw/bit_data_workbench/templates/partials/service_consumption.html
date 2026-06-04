@@ -181,12 +181,18 @@
         <strong data-summary-value>Awaiting sample</strong>
         <span class="service-consumption-summary-meta" data-summary-meta>Ephemeral runtime cache</span>
       </article>
+      <article class="service-consumption-summary-card" data-service-consumption-summary="duckdb-spill">
+        <span class="service-consumption-summary-label">DuckDB spill</span>
+        <strong data-summary-value>Awaiting sample</strong>
+        <span class="service-consumption-summary-meta" data-summary-meta>Temporary query storage</span>
+      </article>
     </div>
 
     <div class="service-consumption-status-strip">
       <p data-service-consumption-node-status>Node metrics have not been sampled yet.</p>
       <p data-service-consumption-s3-status>S3 usage has not been sampled yet.</p>
       <p data-service-consumption-pv-status>Monitoring storage usage is disabled.</p>
+      <p data-service-consumption-runtime-storage-status>Runtime storage usage has not been sampled yet.</p>
     </div>
 
     <div class="service-consumption-chart-grid">
@@ -267,6 +273,29 @@
           class="service-consumption-chart-legend"
           data-service-consumption-pv-legend
           aria-label="Monitoring state cache legend"
+        ></div>
+      </article>
+
+      <article class="service-consumption-panel service-consumption-panel-diagnostic">
+        <div class="service-consumption-panel-header">
+          <div>
+            <div class="service-consumption-panel-title-row">
+              <h3>DuckDB spill quota</h3>
+              <span
+                class="service-consumption-panel-limit-copy"
+                data-service-consumption-chart-limit="spill"
+              ></span>
+            </div>
+            <p>Shared DuckDB temporary spill, hydrated query cache, and configured temp quota.</p>
+          </div>
+        </div>
+        <div class="service-consumption-chart-shell service-consumption-chart-shell-compact">
+          <canvas data-service-consumption-duckdb-spill-chart aria-label="DuckDB spill quota chart"></canvas>
+        </div>
+        <div
+          class="service-consumption-chart-legend"
+          data-service-consumption-duckdb-spill-legend
+          aria-label="DuckDB spill quota legend"
         ></div>
       </article>
 

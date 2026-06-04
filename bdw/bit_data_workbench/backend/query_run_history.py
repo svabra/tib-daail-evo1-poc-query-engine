@@ -61,6 +61,15 @@ def _compact_query_job_payload(job: dict[str, Any]) -> dict[str, Any]:
         "memoryRssBytes": job.get("memoryRssBytes"),
         "averageMemoryRssBytes": job.get("averageMemoryRssBytes"),
         "peakMemoryRssBytes": job.get("peakMemoryRssBytes"),
+        "processThreadCount": job.get("processThreadCount"),
+        "peakProcessThreadCount": job.get("peakProcessThreadCount"),
+        "duckdbThreadLimit": job.get("duckdbThreadLimit"),
+        "duckdbSpillBytes": job.get("duckdbSpillBytes"),
+        "duckdbSpillPeakBytes": job.get("duckdbSpillPeakBytes"),
+        "duckdbSpillTotalBytes": job.get("duckdbSpillTotalBytes"),
+        "duckdbSpillOtherBytes": job.get("duckdbSpillOtherBytes"),
+        "duckdbSpillLimitBytes": job.get("duckdbSpillLimitBytes"),
+        "duckdbSpillDiskFreeBytes": job.get("duckdbSpillDiskFreeBytes"),
     }
     return {
         "schemaVersion": QUERY_RUN_HISTORY_SCHEMA_VERSION,

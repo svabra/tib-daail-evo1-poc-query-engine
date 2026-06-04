@@ -183,6 +183,17 @@ export function createQueryUi(helpers) {
     if (job.processId) {
       metrics.push(["PID", String(job.processId)]);
     }
+    if (showCurrent && typeof job.processThreadCount === "number") {
+      metrics.push(["Threads", String(job.processThreadCount)]);
+    } else if (!showCurrent && typeof job.peakProcessThreadCount === "number") {
+      metrics.push(["Threads peak", String(job.peakProcessThreadCount)]);
+    }
+    if (typeof job.duckdbThreadLimit === "number") {
+      metrics.push(["Thread limit", String(job.duckdbThreadLimit)]);
+    }
+    if (showCurrent && typeof job.cpuPercent === "number") {
+      metrics.push(["Active cores", formatQueryCoreCount(job.cpuPercent / 100)]);
+    }
     if (showCurrent && typeof job.cpuPercent === "number") {
       metrics.push(["CPU", formatQueryCpuPercent(job.cpuPercent)]);
     }
@@ -229,6 +240,13 @@ export function createQueryUi(helpers) {
     return `${value.toFixed(value >= 10 ? 0 : 1)}%`;
   }
 
+  function formatQueryCoreCount(value) {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      return "";
+    }
+    return value.toFixed(value >= 10 ? 0 : 1);
+  }
+
   function queryResourceSeries(samples, valueKey, valueMapper = (value) => value) {
     return samples.map((sample) => {
       const value = Number(sample?.[valueKey]);
@@ -262,24 +280,35 @@ export function createQueryUi(helpers) {
     samples,
     valueKey,
     averageKey,
+    limitKey = "",
     maxValue,
     formatter,
     running,
     valueMapper,
+    chartKind = "",
+    currentDatasetLabel = "",
+    averageDatasetLabel = "Average",
+    currentLegendLabel = "",
+    averageLegendLabel = "AVG",
+    extraLegendItems = [],
+    helpTooltip = "",
   }) {
     const currentValues = queryResourceSeries(samples, valueKey, valueMapper);
     const averageValues = queryResourceSeries(samples, averageKey, valueMapper);
+    const limitValues = limitKey ? queryResourceSeries(samples, limitKey, valueMapper) : [];
     const hasCurrent = currentValues.some((value) => value !== null);
     const hasAverage = averageValues.some((value) => value !== null);
-    if (!hasCurrent && !hasAverage) {
+    const hasLimit = limitValues.some((value) => value !== null);
+    if (!hasCurrent && !hasAverage && !hasLimit) {
       return "";
     }
-    const currentLegendLabel = running ? "Now" : "Peak";
+    const resolvedCurrentLegendLabel = currentLegendLabel || (running ? "Now" : "Peak");
     const currentCopy = formatter(running ? lastFiniteSeriesValue(currentValues) : maxFiniteSeriesValue(currentValues));
     const averageCopy = formatter(lastFiniteSeriesValue(averageValues));
-    const chartKind = label.toLowerCase();
+    const resolvedChartKind = chartKind || label.toLowerCase();
     const currentAttribute = escapeHtml(JSON.stringify(currentValues));
     const averageAttribute = escapeHtml(JSON.stringify(averageValues));
+    const limitAttribute = escapeHtml(JSON.stringify(limitValues));
     const labelAttribute = escapeHtml(JSON.stringify(
       samples.map((sample, index) => {
         const elapsedMs = Number(sample?.elapsedMs);
@@ -290,20 +319,29 @@ export function createQueryUi(helpers) {
       1,
       Number(maxValue || 0),
       maxFiniteSeriesValue(currentValues) || 0,
-      maxFiniteSeriesValue(averageValues) || 0
+      maxFiniteSeriesValue(averageValues) || 0,
+      maxFiniteSeriesValue(limitValues) || 0
     );
-    const currentDatasetLabel = running ? "Current" : "Peak sample";
-    const helpTooltip = (
+    const resolvedCurrentDatasetLabel = currentDatasetLabel || (running ? "Current" : "Peak sample");
+    const resolvedHelpTooltip = helpTooltip || (
       `${label} samples are collected periodically while the query worker is running. `
       + "The x-axis follows the same elapsed clock as Total elapsed, but it only labels the moments when CPU or RAM was sampled. "
       + "The last tick can differ slightly from Total elapsed because the query can finish between two samples and the labels are rounded."
     );
+    const extraMarkup = (Array.isArray(extraLegendItems) ? extraLegendItems : [])
+      .filter((item) => item && item.label && item.value)
+      .map((item) => `
+        <span>
+          <i class="${escapeHtml(item.className || "is-extra")}"></i>${escapeHtml(item.label)} ${escapeHtml(item.value)}
+        </span>
+      `)
+      .join("");
     return `
       <article class="query-resource-sparkline-card">
         <div class="query-resource-sparkline-header">
           <span class="query-resource-sparkline-title">
             <strong>${escapeHtml(label)}</strong>
-            <span class="query-resource-sparkline-help" title="${escapeHtml(helpTooltip)}" aria-label="${escapeHtml(helpTooltip)}">?</span>
+            <span class="query-resource-sparkline-help" title="${escapeHtml(resolvedHelpTooltip)}" aria-label="${escapeHtml(resolvedHelpTooltip)}">?</span>
           </span>
         </div>
         <div class="query-resource-sparkline-plot">
@@ -311,21 +349,23 @@ export function createQueryUi(helpers) {
           <div class="query-resource-sparkline-canvas">
             <canvas
               data-query-resource-chart
-              data-query-resource-kind="${escapeHtml(chartKind)}"
+              data-query-resource-kind="${escapeHtml(resolvedChartKind)}"
             data-query-resource-current="${currentAttribute}"
             data-query-resource-average="${averageAttribute}"
+            data-query-resource-limit="${limitAttribute}"
             data-query-resource-labels="${labelAttribute}"
             data-query-resource-max="${escapeHtml(String(chartMax))}"
               data-query-resource-axis-label="${escapeHtml(axisLabel)}"
-              data-query-resource-current-label="${escapeHtml(currentDatasetLabel)}"
-              data-query-resource-average-label="Average"
+              data-query-resource-current-label="${escapeHtml(resolvedCurrentDatasetLabel)}"
+              data-query-resource-average-label="${escapeHtml(averageDatasetLabel)}"
               aria-label="${escapeHtml(label)} query resource chart"
             ></canvas>
           </div>
         </div>
         <div class="query-resource-sparkline-legend">
-          <span><i class="is-current"></i>${escapeHtml(currentLegendLabel)} ${escapeHtml(currentCopy)}</span>
-          <span><i class="is-average"></i>AVG ${escapeHtml(averageCopy)}</span>
+          <span><i class="is-current"></i>${escapeHtml(resolvedCurrentLegendLabel)} ${escapeHtml(currentCopy)}</span>
+          ${hasAverage ? `<span><i class="is-average"></i>${escapeHtml(averageLegendLabel)} ${escapeHtml(averageCopy)}</span>` : ""}
+          ${extraMarkup}
         </div>
       </article>
     `;
@@ -352,6 +392,29 @@ export function createQueryUi(helpers) {
     );
     const compactClass = compact ? " query-resource-sparklines-compact" : "";
     const running = queryJobIsRunning(job);
+    const spillSamples = samples.filter((sample) =>
+      Number.isFinite(Number(sample.duckdbSpillBytes)) ||
+      Number.isFinite(Number(sample.duckdbSpillTotalBytes))
+    );
+    const latestSpillSample = spillSamples.length ? spillSamples[spillSamples.length - 1] : null;
+    const spillLimit = Math.max(
+      0,
+      ...spillSamples.map((sample) => Number(sample.duckdbSpillLimitBytes || 0))
+    );
+    const latestTotalSpill = Number(latestSpillSample?.duckdbSpillTotalBytes);
+    const latestOtherSpill = Number(latestSpillSample?.duckdbSpillOtherBytes);
+    const latestSpillFree = Number(latestSpillSample?.duckdbSpillDiskFreeBytes);
+    const spillExtraLegendItems = [
+      Number.isFinite(latestTotalSpill)
+        ? { label: "Shared", value: formatQueryByteCount(latestTotalSpill), className: "is-total" }
+        : null,
+      spillLimit > 0
+        ? { label: "Quota", value: formatQueryByteCount(spillLimit), className: "is-limit" }
+        : null,
+      Number.isFinite(latestSpillFree)
+        ? { label: "Disk free", value: formatQueryByteCount(latestSpillFree), className: "is-free" }
+        : null,
+    ].filter(Boolean);
     return `
       <div class="query-resource-sparklines${compactClass}" data-query-resource-sparklines>
         ${queryResourceSparklineChartMarkup({
@@ -376,6 +439,28 @@ export function createQueryUi(helpers) {
           formatter: formatQueryMegabytes,
           running,
           valueMapper: bytesToMegabytes,
+        })}
+        ${queryResourceSparklineChartMarkup({
+          label: "DuckDB spill",
+          unitLabel: "bytes",
+          axisLabel: "Spill",
+          samples,
+          valueKey: "duckdbSpillBytes",
+          averageKey: "duckdbSpillOtherBytes",
+          limitKey: "duckdbSpillLimitBytes",
+          maxValue: spillLimit || 1,
+          formatter: formatQueryByteCount,
+          running,
+          chartKind: "spill",
+          currentDatasetLabel: "This query",
+          averageDatasetLabel: "Other spill",
+          currentLegendLabel: running ? "This query" : "Peak query",
+          averageLegendLabel: "Other",
+          extraLegendItems: spillExtraLegendItems,
+          helpTooltip: (
+            "DuckDB spill samples show temporary disk used by this query worker, other DuckDB spill files in the shared temp root, "
+            + "and the configured DuckDB temp quota. Query cache files are separate, but they use the same workspace disk."
+          ),
         })}
       </div>
     `;

@@ -562,6 +562,13 @@ class QueryResourceSample:
     average_cpu_capacity_percent: float | None = None
     memory_rss_bytes: int | None = None
     average_memory_rss_bytes: int | None = None
+    process_thread_count: int | None = None
+    duckdb_thread_limit: int | None = None
+    duckdb_spill_bytes: int | None = None
+    duckdb_spill_total_bytes: int | None = None
+    duckdb_spill_other_bytes: int | None = None
+    duckdb_spill_limit_bytes: int | None = None
+    duckdb_spill_disk_free_bytes: int | None = None
 
     @property
     def payload(self) -> dict[str, Any]:
@@ -573,6 +580,13 @@ class QueryResourceSample:
             "averageCpuCapacityPercent": self.average_cpu_capacity_percent,
             "memoryRssBytes": self.memory_rss_bytes,
             "averageMemoryRssBytes": self.average_memory_rss_bytes,
+            "processThreadCount": self.process_thread_count,
+            "duckdbThreadLimit": self.duckdb_thread_limit,
+            "duckdbSpillBytes": self.duckdb_spill_bytes,
+            "duckdbSpillTotalBytes": self.duckdb_spill_total_bytes,
+            "duckdbSpillOtherBytes": self.duckdb_spill_other_bytes,
+            "duckdbSpillLimitBytes": self.duckdb_spill_limit_bytes,
+            "duckdbSpillDiskFreeBytes": self.duckdb_spill_disk_free_bytes,
         }
 
 
@@ -623,6 +637,15 @@ class QueryJobDefinition:
     memory_rss_bytes: int | None = None
     average_memory_rss_bytes: int | None = None
     peak_memory_rss_bytes: int | None = None
+    process_thread_count: int | None = None
+    peak_process_thread_count: int | None = None
+    duckdb_thread_limit: int | None = None
+    duckdb_spill_bytes: int | None = None
+    duckdb_spill_peak_bytes: int | None = None
+    duckdb_spill_total_bytes: int | None = None
+    duckdb_spill_other_bytes: int | None = None
+    duckdb_spill_limit_bytes: int | None = None
+    duckdb_spill_disk_free_bytes: int | None = None
     resource_samples: list[QueryResourceSample] = field(default_factory=list)
     cache_hydration: dict[str, Any] = field(default_factory=dict)
     cancellation_phase: str | None = None
@@ -683,6 +706,15 @@ class QueryJobDefinition:
             "memoryRssBytes": self.memory_rss_bytes,
             "averageMemoryRssBytes": self.average_memory_rss_bytes,
             "peakMemoryRssBytes": self.peak_memory_rss_bytes,
+            "processThreadCount": self.process_thread_count,
+            "peakProcessThreadCount": self.peak_process_thread_count,
+            "duckdbThreadLimit": self.duckdb_thread_limit,
+            "duckdbSpillBytes": self.duckdb_spill_bytes,
+            "duckdbSpillPeakBytes": self.duckdb_spill_peak_bytes,
+            "duckdbSpillTotalBytes": self.duckdb_spill_total_bytes,
+            "duckdbSpillOtherBytes": self.duckdb_spill_other_bytes,
+            "duckdbSpillLimitBytes": self.duckdb_spill_limit_bytes,
+            "duckdbSpillDiskFreeBytes": self.duckdb_spill_disk_free_bytes,
             "resourceSamples": [sample.payload for sample in self.resource_samples],
             "cacheHydration": dict(self.cache_hydration),
             "cancellationPhase": self.cancellation_phase,

@@ -1,13 +1,46 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.27. Keep entries concise and
+# Derived from git history through version 0.9.29. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
     {
-        "version": "0.9.27",
-        "releasedAt": "2026-06-04T14:42:59+02:00",
+        "version": "0.9.29",
+        "releasedAt": "2026-06-04T18:25:00+02:00",
         "features": [
+            (
+                "The RHOS deployment now gives each DuckDB query worker an "
+                "eight-thread execution limit, increasing parallel CPU headroom "
+                "for query plans that DuckDB can run concurrently."
+            ),
+            (
+                "Query monitoring now shows worker process thread count, "
+                "DuckDB thread limit, derived active core usage, and the number "
+                "of active query worker processes."
+            ),
+        ],
+    },
+    {
+        "version": "0.9.28",
+        "releasedAt": "2026-06-04T17:49:49+02:00",
+        "features": [
+            (
+                "Query monitoring now shows a DuckDB spill chart beside CPU "
+                "and RAM, including this-query spill, other shared spill, the "
+                "configured spill quota, and shared workspace disk headroom."
+            ),
+            (
+                "DuckDB query workers now use per-query spill subdirectories "
+                "under the configured temp root, allowing the app to attribute "
+                "temporary spill usage to the active query and clean up the "
+                "worker spill directory after the query exits."
+            ),
+            (
+                "Service Consumption now includes a DuckDB spill quota panel "
+                "that charts active query spill, total DuckDB spill, hydrated "
+                "query cache usage, and the configured DuckDB temp quota over "
+                "the retained monitoring window."
+            ),
             (
                 "Hydrate cache and source validation now also use current S3 "
                 "discovery specs when the rendered source catalog is stale, so "

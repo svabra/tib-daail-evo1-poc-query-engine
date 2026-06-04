@@ -15,7 +15,9 @@ if str(BDW_ROOT) not in sys.path:
 
 from bit_data_workbench.backend.runtime_storage import (  # noqa: E402
     delete_runtime_query_cache,
+    parse_storage_size_bytes,
     runtime_storage_snapshot,
+    runtime_storage_usage_metrics,
 )
 
 
@@ -38,7 +40,7 @@ class RuntimeStorageTests(unittest.TestCase):
                 query_cache_dir=cache_root,
                 duckdb_temp_directory=spill_root,
                 duckdb_memory_limit="20GiB",
-                duckdb_threads=4,
+                duckdb_threads=8,
                 duckdb_max_temp_directory_size="96GiB",
                 duckdb_preserve_insertion_order=False,
             )
@@ -50,7 +52,45 @@ class RuntimeStorageTests(unittest.TestCase):
         self.assertGreater(payload["duckdbSpill"]["sizeBytes"], 0)
         self.assertFalse(payload["duckdbSpill"]["deletable"])
         self.assertEqual(payload["duckdbSettings"]["memoryLimit"], "20GiB")
-        self.assertEqual(payload["duckdbSettings"]["threads"], 4)
+        self.assertEqual(payload["duckdbSettings"]["threads"], 8)
+        self.assertEqual(payload["duckdbSettings"]["maxTempDirectorySizeBytes"], 96 * 1024**3)
+
+    def test_parse_storage_size_bytes_supports_duckdb_size_strings(self) -> None:
+        self.assertEqual(parse_storage_size_bytes("96GiB"), 96 * 1024**3)
+        self.assertEqual(parse_storage_size_bytes("100Gi"), 100 * 1024**3)
+        self.assertEqual(parse_storage_size_bytes("1.5GB"), int(1.5 * 1000**3))
+        self.assertIsNone(parse_storage_size_bytes(""))
+        self.assertIsNone(parse_storage_size_bytes("not-a-size"))
+
+    def test_runtime_storage_usage_metrics_reports_active_spill_and_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            cache_root = root / "query-cache"
+            spill_root = root / "duckdb-spill"
+            active_spill = spill_root / "query-abc"
+            stale_spill = spill_root / "stale"
+            cache_root.mkdir()
+            active_spill.mkdir(parents=True)
+            stale_spill.mkdir()
+            (active_spill / "block.tmp").write_bytes(b"a" * 11)
+            (stale_spill / "block.tmp").write_bytes(b"b" * 7)
+            (cache_root / "cache.duckdb").write_bytes(b"c" * 5)
+            settings = SimpleNamespace(
+                query_cache_dir=cache_root,
+                duckdb_temp_directory=spill_root,
+                duckdb_memory_limit="20GiB",
+                duckdb_threads=8,
+                duckdb_max_temp_directory_size="96GiB",
+                duckdb_preserve_insertion_order=False,
+            )
+
+            payload = runtime_storage_usage_metrics(settings)  # type: ignore[arg-type]
+
+        self.assertEqual(payload["duckdbSpill"]["activeQueryBytes"], 11)
+        self.assertEqual(payload["duckdbSpill"]["totalBytes"], 18)
+        self.assertEqual(payload["duckdbSpill"]["otherBytes"], 7)
+        self.assertEqual(payload["duckdbSpill"]["maxTempDirectorySizeBytes"], 96 * 1024**3)
+        self.assertEqual(payload["queryCache"]["sizeBytes"], 5)
 
     def test_delete_runtime_query_cache_returns_refreshed_storage_snapshot(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -67,7 +107,7 @@ class RuntimeStorageTests(unittest.TestCase):
                 query_cache_dir=cache_root,
                 duckdb_temp_directory=spill_root,
                 duckdb_memory_limit="20GiB",
-                duckdb_threads=4,
+                duckdb_threads=8,
                 duckdb_max_temp_directory_size="96GiB",
                 duckdb_preserve_insertion_order=False,
             )

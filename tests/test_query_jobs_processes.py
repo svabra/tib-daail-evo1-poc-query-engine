@@ -146,6 +146,15 @@ class QueryJobPayloadTests(TestCase):
             memory_rss_bytes=1024,
             average_memory_rss_bytes=1536,
             peak_memory_rss_bytes=2048,
+            process_thread_count=12,
+            peak_process_thread_count=16,
+            duckdb_thread_limit=8,
+            duckdb_spill_bytes=4096,
+            duckdb_spill_peak_bytes=8192,
+            duckdb_spill_total_bytes=12288,
+            duckdb_spill_other_bytes=4096,
+            duckdb_spill_limit_bytes=96 * 1024**3,
+            duckdb_spill_disk_free_bytes=10 * 1024**3,
             resource_samples=[
                 QueryResourceSample(
                     elapsed_ms=2000,
@@ -155,6 +164,13 @@ class QueryJobPayloadTests(TestCase):
                     average_cpu_capacity_percent=4.25,
                     memory_rss_bytes=1024,
                     average_memory_rss_bytes=1536,
+                    process_thread_count=12,
+                    duckdb_thread_limit=8,
+                    duckdb_spill_bytes=4096,
+                    duckdb_spill_total_bytes=12288,
+                    duckdb_spill_other_bytes=4096,
+                    duckdb_spill_limit_bytes=96 * 1024**3,
+                    duckdb_spill_disk_free_bytes=10 * 1024**3,
                 )
             ],
             cancellation_phase="interrupting",
@@ -184,8 +200,22 @@ class QueryJobPayloadTests(TestCase):
         self.assertEqual(payload["memoryRssBytes"], 1024)
         self.assertEqual(payload["averageMemoryRssBytes"], 1536)
         self.assertEqual(payload["peakMemoryRssBytes"], 2048)
+        self.assertEqual(payload["processThreadCount"], 12)
+        self.assertEqual(payload["peakProcessThreadCount"], 16)
+        self.assertEqual(payload["duckdbThreadLimit"], 8)
+        self.assertEqual(payload["duckdbSpillBytes"], 4096)
+        self.assertEqual(payload["duckdbSpillPeakBytes"], 8192)
+        self.assertEqual(payload["duckdbSpillTotalBytes"], 12288)
+        self.assertEqual(payload["duckdbSpillOtherBytes"], 4096)
+        self.assertEqual(payload["duckdbSpillLimitBytes"], 96 * 1024**3)
+        self.assertEqual(payload["duckdbSpillDiskFreeBytes"], 10 * 1024**3)
         self.assertEqual(payload["resourceSamples"][0]["elapsedMs"], 2000)
         self.assertEqual(payload["resourceSamples"][0]["cpuCapacityPercent"], 6.25)
+        self.assertEqual(payload["resourceSamples"][0]["processThreadCount"], 12)
+        self.assertEqual(payload["resourceSamples"][0]["duckdbThreadLimit"], 8)
+        self.assertEqual(payload["resourceSamples"][0]["duckdbSpillBytes"], 4096)
+        self.assertEqual(payload["resourceSamples"][0]["duckdbSpillTotalBytes"], 12288)
+        self.assertEqual(payload["resourceSamples"][0]["duckdbSpillOtherBytes"], 4096)
         self.assertEqual(payload["cancellationPhase"], "interrupting")
         self.assertEqual(payload["workerExitCode"], -15)
         self.assertEqual(payload["timings"]["backendPrepareMs"], 4.5)
@@ -271,6 +301,7 @@ class ProcessQueryJobManagerTests(TestCase):
         self.temp_dir = tempfile.TemporaryDirectory(prefix="bdw-query-jobs-")
         self.root = Path(self.temp_dir.name)
         self.settings = make_settings(self.root)
+        self.settings.duckdb_threads = 8
         self.settings.duckdb_database.parent.mkdir(parents=True, exist_ok=True)
         duckdb.connect(str(self.settings.duckdb_database)).close()
         self.manager = QueryJobManager(
@@ -290,8 +321,8 @@ class ProcessQueryJobManagerTests(TestCase):
     def test_process_metrics_samples_current_average_peak_and_throttles(self) -> None:
         class FakeProcessMetrics:
             def __init__(self) -> None:
-                self.samples = iter([(10.0, 1000), (30.0, 3000), (70.0, 7000)])
-                self.current = (0.0, 0)
+                self.samples = iter([(10.0, 1000, 6), (30.0, 3000, 9), (70.0, 7000, 12)])
+                self.current = (0.0, 0, 0)
 
             def cpu_percent(self, interval=None) -> float:
                 self.current = next(self.samples)
@@ -299,6 +330,9 @@ class ProcessQueryJobManagerTests(TestCase):
 
             def memory_info(self):
                 return SimpleNamespace(rss=self.current[1])
+
+            def num_threads(self) -> int:
+                return self.current[2]
 
             def children(self, recursive=True):
                 return []
@@ -313,6 +347,7 @@ class ProcessQueryJobManagerTests(TestCase):
             started_at="2026-05-13T00:00:00+00:00",
             updated_at="2026-05-13T00:00:00+00:00",
             execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+            process_id=4321,
         )
         record = QueryJobRecord(
             snapshot=snapshot,
@@ -335,7 +370,67 @@ class ProcessQueryJobManagerTests(TestCase):
         self.assertEqual(sampled.memory_rss_bytes, 3000)
         self.assertEqual(sampled.average_memory_rss_bytes, 2000)
         self.assertEqual(sampled.peak_memory_rss_bytes, 3000)
+        self.assertEqual(sampled.process_thread_count, 9)
+        self.assertEqual(sampled.peak_process_thread_count, 9)
+        self.assertEqual(sampled.duckdb_thread_limit, 8)
         self.assertEqual(len(sampled.resource_samples), 2)
+        self.assertEqual(sampled.resource_samples[-1].process_thread_count, 9)
+        self.assertEqual(sampled.resource_samples[-1].duckdb_thread_limit, 8)
+        with self.manager._condition:
+            state_payload = self.manager._state_payload_locked()
+        self.assertEqual(state_payload["summary"]["runningProcessCount"], 1)
+
+    def test_process_metrics_samples_duckdb_spill_usage(self) -> None:
+        class FakeProcessMetrics:
+            def cpu_percent(self, interval=None) -> float:
+                return 10.0
+
+            def memory_info(self):
+                return SimpleNamespace(rss=1000)
+
+            def children(self, recursive=True):
+                return []
+
+        spill_root = self.root / "duckdb-spill"
+        query_spill = spill_root / "query-spill-test"
+        other_spill = spill_root / "stale"
+        query_spill.mkdir(parents=True)
+        other_spill.mkdir()
+        (query_spill / "block.tmp").write_bytes(b"a" * 11)
+        (other_spill / "block.tmp").write_bytes(b"b" * 7)
+        self.settings.duckdb_temp_directory = spill_root
+        self.settings.duckdb_max_temp_directory_size = "96GiB"
+        snapshot = QueryJobDefinition(
+            job_id="query-spill-test",
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-1",
+            sql="select 1",
+            status="running",
+            started_at="2026-05-13T00:00:00+00:00",
+            updated_at="2026-05-13T00:00:00+00:00",
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+        )
+        record = QueryJobRecord(
+            snapshot=snapshot,
+            sort_index=1,
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+            execution_sql="select 1",
+            process_metrics=FakeProcessMetrics(),
+            spill_temp_directory=query_spill,
+        )
+        with self.manager._condition:
+            self.manager._jobs[snapshot.job_id] = record
+
+        self.manager._sample_process_metrics(snapshot.job_id, force=True)
+
+        sampled = self.manager.snapshot(snapshot.job_id)
+        self.assertEqual(sampled.duckdb_spill_bytes, 11)
+        self.assertEqual(sampled.duckdb_spill_total_bytes, 18)
+        self.assertEqual(sampled.duckdb_spill_other_bytes, 7)
+        self.assertEqual(sampled.duckdb_spill_limit_bytes, 96 * 1024**3)
+        self.assertEqual(sampled.duckdb_spill_peak_bytes, 11)
+        self.assertEqual(sampled.resource_samples[-1].duckdb_spill_bytes, 11)
 
     def test_process_metrics_include_capacity_normalized_cpu(self) -> None:
         class FakeProcessMetrics:

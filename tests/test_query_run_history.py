@@ -130,6 +130,14 @@ class QueryRunHistoryStoreTests(unittest.TestCase):
                 "memoryRssBytes": 1024,
                 "averageMemoryRssBytes": 900,
                 "peakMemoryRssBytes": 2048,
+                "processThreadCount": 12,
+                "peakProcessThreadCount": 16,
+                "duckdbThreadLimit": 8,
+                "duckdbSpillBytes": 4096,
+                "duckdbSpillPeakBytes": 8192,
+                "duckdbSpillTotalBytes": 12288,
+                "duckdbSpillOtherBytes": 4096,
+                "duckdbSpillLimitBytes": 96 * 1024**3,
                 "timings": {
                     "clientTotalMs": 250.0,
                     "backendPrepareMs": 4.0,
@@ -139,7 +147,17 @@ class QueryRunHistoryStoreTests(unittest.TestCase):
                     "resultFetchMs": 10.0,
                     "backendTotalMs": 180.0,
                 },
-                "resourceSamples": [{"elapsedMs": 2000, "cpuPercent": 12.0}],
+                "resourceSamples": [
+                    {
+                        "elapsedMs": 2000,
+                        "cpuPercent": 12.0,
+                        "processThreadCount": 12,
+                        "duckdbThreadLimit": 8,
+                        "duckdbSpillBytes": 4096,
+                        "duckdbSpillTotalBytes": 12288,
+                        "duckdbSpillOtherBytes": 4096,
+                    }
+                ],
                 "progressEvents": [
                     {
                         "occurredAt": "2026-05-13T10:00:00Z",
@@ -160,6 +178,12 @@ class QueryRunHistoryStoreTests(unittest.TestCase):
         self.assertEqual(payload["metrics"]["averageCpuPercent"], 8.0)
         self.assertEqual(payload["metrics"]["averageCpuCapacityPercent"], 4.0)
         self.assertEqual(payload["metrics"]["cpuCapacityCores"], 2.0)
+        self.assertEqual(payload["metrics"]["processThreadCount"], 12)
+        self.assertEqual(payload["metrics"]["peakProcessThreadCount"], 16)
+        self.assertEqual(payload["metrics"]["duckdbThreadLimit"], 8)
+        self.assertEqual(payload["metrics"]["duckdbSpillPeakBytes"], 8192)
+        self.assertEqual(payload["resourceSamples"][0]["processThreadCount"], 12)
+        self.assertEqual(payload["resourceSamples"][0]["duckdbSpillBytes"], 4096)
         self.assertEqual(payload["timings"]["clientTotalMs"], 250.0)
         self.assertEqual(payload["timings"]["engineQueryMs"], 100.0)
         self.assertEqual(payload["progressEvents"][0]["event"], "completed")

@@ -16,6 +16,7 @@ from urllib import request as urllib_request
 from botocore.exceptions import BotoCoreError, ClientError
 
 from ..config import Settings
+from .runtime_storage import runtime_storage_usage_metrics
 from .s3_hidden import SERVICE_CONSUMPTION_S3_PREFIX
 from .s3_storage import list_s3_buckets_from_client, s3_client
 
@@ -647,6 +648,7 @@ class ServiceConsumptionMonitor:
             "persistentVolumeHistory": self._build_persistent_volume_history(
                 samples,
             ),
+            "runtimeStorageHistory": self._build_runtime_storage_history(samples),
             "financial": financial,
         }
 
@@ -720,6 +722,7 @@ class ServiceConsumptionMonitor:
         persistent_volume_metrics, persistent_volume_status = (
             self._collect_persistent_volume_metrics()
         )
+        runtime_storage_metrics, runtime_storage_status = self._collect_runtime_storage_metrics()
         timestamp = app_metrics.observed_at.astimezone(UTC).replace(microsecond=0)
 
         app_cpu_cores_used = self._app_cpu_cores_used(app_metrics)
@@ -814,10 +817,12 @@ class ServiceConsumptionMonitor:
                     persistent_volume_metrics.get("mountPath") or ""
                 ).strip(),
             },
+            "runtimeStorage": runtime_storage_metrics,
             "status": {
                 "nodeMetrics": node_status,
                 "s3Metrics": s3_status,
                 "persistentVolumeMetrics": persistent_volume_status,
+                "runtimeStorageMetrics": runtime_storage_status,
             },
             "nodeName": str(self._settings.node_name or "").strip(),
             "podName": str(self._settings.pod_name or "").strip(),
@@ -828,6 +833,37 @@ class ServiceConsumptionMonitor:
                 "appCpuUsageMicros": app_metrics.cpu_usage_micros,
             }
         return sample
+
+    def _collect_runtime_storage_metrics(self) -> tuple[dict[str, object], dict[str, object]]:
+        try:
+            metrics = runtime_storage_usage_metrics(self._settings)
+        except Exception as exc:
+            logger.warning("Failed to collect runtime storage metrics: %s", exc)
+            return {
+                "duckdbSpill": {
+                    "totalBytes": None,
+                    "activeQueryBytes": None,
+                    "otherBytes": None,
+                    "maxTempDirectorySizeBytes": None,
+                },
+                "queryCache": {"sizeBytes": None},
+                "storageRoot": {
+                    "freeBytes": None,
+                    "usedBytes": None,
+                    "totalBytes": None,
+                },
+            }, {
+                "available": False,
+                "detail": str(exc),
+            }
+        return metrics, {
+            "available": True,
+            "detail": (
+                "Runtime storage metrics include DuckDB spill, query cache, and shared "
+                "workspace disk usage. DuckDB temp quota is separate from the shared "
+                "/workspace filesystem capacity."
+            ),
+        }
 
     def _read_app_metrics(self, *, initial: bool) -> AppMetricsReading:
         reading = self._read_raw_app_metrics()
@@ -1100,12 +1136,14 @@ class ServiceConsumptionMonitor:
         latest_status = {}
         latest_s3 = {}
         latest_persistent_volume = {}
+        latest_runtime_storage = {}
         if isinstance(self._latest_sample, dict):
             latest_status = self._latest_sample.get("status") or {}
             latest_s3 = self._latest_sample.get("s3") or {}
             latest_persistent_volume = (
                 self._latest_sample.get("persistentVolume") or {}
             )
+            latest_runtime_storage = self._latest_sample.get("runtimeStorage") or {}
         node_status = latest_status.get("nodeMetrics") or {
             "available": False,
             "detail": "Node metrics have not been sampled yet.",
@@ -1118,20 +1156,34 @@ class ServiceConsumptionMonitor:
             "available": False,
             "detail": "Persistent volume usage has not been sampled yet.",
         }
+        runtime_storage_status = latest_status.get("runtimeStorageMetrics") or {
+            "available": False,
+            "detail": "Runtime storage usage has not been sampled yet.",
+        }
+        runtime_spill_path = ""
+        if isinstance(latest_runtime_storage, dict):
+            duckdb_spill = latest_runtime_storage.get("duckdbSpill") or {}
+            if isinstance(duckdb_spill, dict):
+                runtime_spill_path = str(duckdb_spill.get("path") or "").strip()
         return {
             "nodeMetrics": node_status,
             "s3Metrics": s3_status,
             "persistentVolumeMetrics": persistent_volume_status,
+            "runtimeStorageMetrics": runtime_storage_status,
             "nodeMetricsAvailable": bool(node_status.get("available")),
             "s3MetricsAvailable": bool(s3_status.get("available")),
             "persistentVolumeMetricsAvailable": bool(
                 persistent_volume_status.get("available")
+            ),
+            "runtimeStorageMetricsAvailable": bool(
+                runtime_storage_status.get("available")
             ),
             "s3SampledAtUtc": str(latest_s3.get("sampledAtUtc") or "").strip() or None,
             "persistentVolumeMountPath": str(
                 latest_persistent_volume.get("mountPath") or ""
             ).strip()
             or None,
+            "runtimeStorageSpillPath": runtime_spill_path or None,
         }
 
     def _topology_payload_locked(self) -> dict[str, object]:
@@ -2284,6 +2336,72 @@ class ServiceConsumptionMonitor:
         return {
             "timestamps": timestamps,
             "values": [points[timestamp] for timestamp in timestamps],
+        }
+
+    def _build_runtime_storage_history(
+        self,
+        samples: list[dict[str, Any]],
+    ) -> dict[str, list[object]]:
+        points: dict[str, dict[str, object]] = {}
+        for sample in samples:
+            runtime_payload = sample.get("runtimeStorage") or {}
+            if not isinstance(runtime_payload, dict):
+                continue
+            observed_at = _parse_iso_datetime(sample.get("timestampUtc"))
+            if observed_at is None:
+                continue
+            duckdb_spill = runtime_payload.get("duckdbSpill") or {}
+            query_cache = runtime_payload.get("queryCache") or {}
+            storage_root = runtime_payload.get("storageRoot") or {}
+            if not isinstance(duckdb_spill, dict):
+                duckdb_spill = {}
+            if not isinstance(query_cache, dict):
+                query_cache = {}
+            if not isinstance(storage_root, dict):
+                storage_root = {}
+            points[observed_at.replace(microsecond=0).isoformat()] = {
+                "duckdbSpillActiveBytes": duckdb_spill.get("activeQueryBytes"),
+                "duckdbSpillTotalBytes": duckdb_spill.get("totalBytes")
+                if duckdb_spill.get("totalBytes") is not None
+                else duckdb_spill.get("sizeBytes"),
+                "duckdbSpillOtherBytes": duckdb_spill.get("otherBytes"),
+                "queryCacheBytes": query_cache.get("sizeBytes"),
+                "storageRootFreeBytes": storage_root.get("freeBytes"),
+                "storageRootUsedBytes": storage_root.get("usedBytes"),
+                "spillQuotaBytes": duckdb_spill.get("maxTempDirectorySizeBytes"),
+            }
+
+        timestamps = sorted(points)
+        return {
+            "timestamps": timestamps,
+            "duckdbSpillActiveBytes": [
+                points[timestamp].get("duckdbSpillActiveBytes")
+                for timestamp in timestamps
+            ],
+            "duckdbSpillTotalBytes": [
+                points[timestamp].get("duckdbSpillTotalBytes")
+                for timestamp in timestamps
+            ],
+            "duckdbSpillOtherBytes": [
+                points[timestamp].get("duckdbSpillOtherBytes")
+                for timestamp in timestamps
+            ],
+            "queryCacheBytes": [
+                points[timestamp].get("queryCacheBytes")
+                for timestamp in timestamps
+            ],
+            "storageRootFreeBytes": [
+                points[timestamp].get("storageRootFreeBytes")
+                for timestamp in timestamps
+            ],
+            "storageRootUsedBytes": [
+                points[timestamp].get("storageRootUsedBytes")
+                for timestamp in timestamps
+            ],
+            "spillQuotaBytes": [
+                points[timestamp].get("spillQuotaBytes")
+                for timestamp in timestamps
+            ],
         }
 
     def _append_sample_locked(self, sample: dict[str, Any]) -> None:

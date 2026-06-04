@@ -245,6 +245,7 @@ export function createRealtimeController(helpers) {
 
     const { snapshot: queryJobsSnapshot, summary: queryJobsSummary, performance: queryPerformanceState } = queryState();
     const runningCount = Number(queryJobsSummary.runningCount || 0);
+    const runningProcessCount = Math.max(0, Math.round(Number(queryJobsSummary.runningProcessCount || 0)));
     countRoot.textContent = String(runningCount);
     countRoot.classList.toggle("is-live", runningCount > 0);
     toggleCountRoots.forEach((toggleCountRoot) => {
@@ -256,7 +257,10 @@ export function createRealtimeController(helpers) {
     if (!queryJobsSnapshot.length) {
       listRoot.innerHTML = '<p class="query-monitor-empty">No query jobs yet.</p>';
     } else {
-      listRoot.innerHTML = queryJobsSnapshot.slice(0, 8).map((job) => queryMonitorItemMarkup(job)).join("");
+      listRoot.innerHTML = `
+        <p class="query-monitor-process-summary">Running processes: ${runningProcessCount}</p>
+        ${queryJobsSnapshot.slice(0, 8).map((job) => queryMonitorItemMarkup(job)).join("")}
+      `;
     }
 
     if (performanceRoot && performanceStatsRoot && performanceChartRoot && performanceDistributionRoot) {

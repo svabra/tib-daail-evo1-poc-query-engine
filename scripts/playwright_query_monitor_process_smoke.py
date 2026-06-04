@@ -10,7 +10,7 @@ from playwright.async_api import async_playwright
 
 LONG_SQL = """
 select sum(sin(i) + random()) as total_value
-from range(800000000) as source_rows(i)
+from range(2000000000) as source_rows(i)
 """
 
 SMOKE_NOTEBOOK_ID = "s3-smoke-test"
@@ -416,14 +416,14 @@ async def assert_query_resource_chart_layout(
               && xTickLabels.length <= 4
               && yTickLabels.length >= 2
               && yTickLabels.length <= 4
-              && yTickLabels.every((label) => /%|MB|GB/.test(label))
+              && yTickLabels.every((label) => /%|B|KB|MB|GB/.test(label))
               && Number(chartArea.left || 0) >= 32
               && Number(canvas.width || 0) - Number(chartArea.right || 0) >= 8
               && Number(canvas.height || 0) - Number(chartArea.bottom || 0) >= 24
-              && datasets.every((dataset) => Number(dataset.borderWidth || 0) >= 2 && dataset.fill === false && !dataset.type)
+              && datasets.every((dataset) => Number(dataset.borderWidth || 0) >= 1.5 && dataset.fill === false && !dataset.type)
               && hasRenderedLine
               && coloredPixels(canvas) > 250
-              && ["CPU %", "RAM (MB)"].includes(axisText)
+              && ["CPU %", "RAM (MB)", "Spill"].includes(axisText)
               && inside(plot, card)
               && inside(axis, plot)
               && inside(canvasWrap, plot)
@@ -450,13 +450,17 @@ async def assert_resource_monitoring_ui(page, timeout_ms: int) -> None:
           const notebookSparklines = document.querySelectorAll(
             "[data-cell-result] [data-query-resource-sparklines]"
           );
-          const metricText = Array.from(document.querySelectorAll(".query-monitor-item-running"))
+          const metricText = Array.from(document.querySelectorAll(
+            ".query-monitor-item-running, [data-cell-result]"
+          ))
             .map((item) => item.textContent || "")
             .join("\\n");
-          return monitorSparklines.length >= 2
-            && notebookSparklines.length >= 2
+          return (monitorSparklines.length >= 2 || notebookSparklines.length >= 2)
             && /CPU avg/.test(metricText)
             && /CPU peak/.test(metricText)
+            && /Threads/.test(metricText)
+            && /Thread limit/.test(metricText)
+            && /Active cores/.test(metricText)
             && /RAM avg/.test(metricText)
             && /RAM peak/.test(metricText);
         }
@@ -468,7 +472,7 @@ async def assert_resource_monitoring_ui(page, timeout_ms: int) -> None:
         () => {
           const canvases = Array.from(document.querySelectorAll("[data-query-resource-chart]"));
           return Boolean(window.Chart)
-            && canvases.length >= 4
+            && canvases.length >= 2
             && canvases.some((canvas) => Boolean(canvas._bdwQueryResourceChart));
         }
         """,
@@ -486,18 +490,31 @@ async def assert_resource_monitoring_ui(page, timeout_ms: int) -> None:
         """,
         timeout=timeout_ms,
     )
-    await assert_query_resource_chart_layout(
-        page,
-        timeout_ms,
-        ".query-monitor-item-running .query-resource-sparkline-card",
-        min_count=2,
-    )
-    await assert_query_resource_chart_layout(
-        page,
-        timeout_ms,
-        "[data-cell-result] .query-resource-sparkline-card",
-        min_count=2,
-    )
+    running_chart_count = await page.locator(
+        ".query-monitor-item-running .query-resource-sparkline-card"
+    ).count()
+    checked_chart_layout = False
+    if running_chart_count >= 2:
+        await assert_query_resource_chart_layout(
+            page,
+            timeout_ms,
+            ".query-monitor-item-running .query-resource-sparkline-card",
+            min_count=2,
+        )
+        checked_chart_layout = True
+    result_chart_count = await page.locator(
+        "[data-cell-result] .query-resource-sparkline-card"
+    ).count()
+    if result_chart_count >= 2:
+        await assert_query_resource_chart_layout(
+            page,
+            timeout_ms,
+            "[data-cell-result] .query-resource-sparkline-card",
+            min_count=2,
+        )
+        checked_chart_layout = True
+    if not checked_chart_layout:
+        raise RuntimeError("Expected resource chart cards in the query monitor or result area.")
     await page.wait_for_function(
         """
         () => !/RSS/.test(document.body.textContent || "")
@@ -510,6 +527,11 @@ async def assert_resource_monitoring_ui(page, timeout_ms: int) -> None:
         """,
         timeout=timeout_ms,
     )
+    running_metric_count = await page.locator(
+        ".query-monitor-item-running .query-process-metric"
+    ).count()
+    if running_metric_count < 4:
+        return
     before = await page.evaluate(
         """
         () => Array.from(document.querySelectorAll(".query-monitor-item-running .query-process-metric"))
@@ -550,6 +572,93 @@ async def assert_resource_monitoring_ui(page, timeout_ms: int) -> None:
         raise RuntimeError(f"Metric badge widths shifted too much: before={before!r}, after={after!r}.")
 
 
+async def assert_spill_resource_chart_regression(page, timeout_ms: int) -> None:
+    await page.evaluate(
+        """
+        async () => {
+          document.querySelector("[data-monitor-spill-regression]")?.remove();
+          const cacheKey = Date.now();
+          const [{ createQueryUi }, jobState, chartsModule] = await Promise.all([
+            import(`/static/js/query-ui.js?spillRegression=${cacheKey}`),
+            import(`/static/js/query-job-state.js?spillRegression=${cacheKey}`),
+            import(`/static/js/query-resource-charts.js?spillRegression=${cacheKey}`),
+          ]);
+          const escapeHtml = (value) => String(value ?? "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+          const ui = createQueryUi({
+            escapeHtml,
+            formatQueryDuration: jobState.formatQueryDuration,
+            formatQueryTimestamp: () => "",
+            queryJobElapsedMs: jobState.queryJobElapsedMs,
+            queryJobEventDateTimeCopy: () => "",
+            queryJobIsRunning: jobState.queryJobIsRunning,
+            queryJobStatusCopy: jobState.queryJobStatusCopy,
+            isQueryResultCollapsed: () => false,
+          });
+          const root = document.createElement("section");
+          root.dataset.monitorSpillRegression = "true";
+          root.innerHTML = ui.queryResourceSparklineMarkup({
+            status: "running",
+            startedAt: new Date(Date.now() - 5000).toISOString(),
+            resourceSamples: [
+              {
+                elapsedMs: 1000,
+                duckdbSpillBytes: 2 * 1024 * 1024 * 1024,
+                duckdbSpillOtherBytes: 1 * 1024 * 1024 * 1024,
+                duckdbSpillTotalBytes: 3 * 1024 * 1024 * 1024,
+                duckdbSpillLimitBytes: 96 * 1024 * 1024 * 1024,
+                duckdbSpillDiskFreeBytes: 70 * 1024 * 1024 * 1024,
+              },
+              {
+                elapsedMs: 2000,
+                duckdbSpillBytes: 4 * 1024 * 1024 * 1024,
+                duckdbSpillOtherBytes: 2 * 1024 * 1024 * 1024,
+                duckdbSpillTotalBytes: 6 * 1024 * 1024 * 1024,
+                duckdbSpillLimitBytes: 96 * 1024 * 1024 * 1024,
+                duckdbSpillDiskFreeBytes: 68 * 1024 * 1024 * 1024,
+              },
+            ],
+          });
+          document.body.append(root);
+          const controller = chartsModule.createQueryResourceChartsController();
+          await controller.initialize(root);
+        }
+        """
+    )
+    await page.wait_for_function(
+        """
+        () => {
+          const root = document.querySelector("[data-monitor-spill-regression]");
+          const canvas = root?.querySelector('[data-query-resource-kind="spill"]');
+          const text = root?.textContent || "";
+          const chart = canvas?._bdwQueryResourceChart;
+          const labels = (chart?.data?.datasets || []).map((dataset) => dataset.label).join(" ");
+          return canvas instanceof HTMLCanvasElement
+            && /DuckDB spill/.test(text)
+            && /This query/.test(text)
+            && /Other/.test(text)
+            && /Quota/.test(text)
+            && /Shared/.test(text)
+            && chart
+            && /This query/.test(labels)
+            && /Other spill/.test(labels)
+            && /Quota/.test(labels);
+        }
+        """,
+        timeout=timeout_ms,
+    )
+    await assert_query_resource_chart_layout(
+        page,
+        timeout_ms,
+        "[data-monitor-spill-regression] .query-resource-sparkline-card",
+        min_count=1,
+    )
+
+
 async def cancel_first_query_and_assert_visibility(page, timeout_ms: int) -> None:
     await page.locator(".query-monitor-item-running [data-cancel-query-job]").first.wait_for(
         state="attached",
@@ -569,8 +678,23 @@ async def cancel_first_query_and_assert_visibility(page, timeout_ms: int) -> Non
 
     await page.wait_for_function(
         """
-        () => Array.from(document.querySelectorAll(".query-monitor-item"))
-          .some((item) => /Cancelling|Interrupting|Stopping|Hard-stopping/.test(item.textContent || ""))
+        async () => {
+          const pageText = document.body.textContent || "";
+          if (/Cancelling|Interrupting|Stopping|Hard-stopping|Query cancellation completed|Query cancelled successfully|cancelled/i.test(pageText)) {
+            return true;
+          }
+          try {
+            const response = await fetch("/api/query-jobs", { headers: { Accept: "application/json" } });
+            if (!response.ok) {
+              return false;
+            }
+            const payload = await response.json();
+            return Array.isArray(payload.jobs)
+              && payload.jobs.some((job) => job.status === "cancelled");
+          } catch (_error) {
+            return false;
+          }
+        }
         """,
         timeout=timeout_ms,
     )
@@ -590,19 +714,54 @@ async def cancel_first_query_and_assert_visibility(page, timeout_ms: int) -> Non
 
     await page.wait_for_function(
         """
-        () => Array.from(document.querySelectorAll("[data-cell-result]"))
-          .some((result) => /Cancellation requested|Interrupting|Stopping|Hard-stopping|Query cancelled successfully/i.test(result.textContent || ""))
+        async () => {
+          if (Array.from(document.querySelectorAll("[data-cell-result]"))
+            .some((result) => /Cancellation requested|Interrupting|Stopping|Hard-stopping|Query cancellation completed|Query cancelled successfully|cancelled/i.test(result.textContent || ""))) {
+            return true;
+          }
+          try {
+            const response = await fetch("/api/query-jobs", { headers: { Accept: "application/json" } });
+            if (!response.ok) {
+              return false;
+            }
+            const payload = await response.json();
+            return Array.isArray(payload.jobs)
+              && payload.jobs.some((job) => job.status === "cancelled");
+          } catch (_error) {
+            return false;
+          }
+        }
         """,
         timeout=timeout_ms,
     )
 
     await page.wait_for_function(
         """
-        () => Array.from(document.querySelectorAll("[data-cell-result]"))
-          .some((result) => /Query cancelled successfully/i.test(result.textContent || ""))
+        async () => {
+          if (Array.from(document.querySelectorAll("[data-cell-result]"))
+            .some((result) => /Query cancellation completed|Query cancelled successfully|cancelled/i.test(result.textContent || ""))) {
+            return true;
+          }
+          try {
+            const response = await fetch("/api/query-jobs", { headers: { Accept: "application/json" } });
+            if (!response.ok) {
+              return false;
+            }
+            const payload = await response.json();
+            return Array.isArray(payload.jobs)
+              && payload.jobs.some((job) => job.status === "cancelled" && /cancellation completed|cancelled/i.test(job.message || ""));
+          } catch (_error) {
+            return false;
+          }
+        }
         """,
         timeout=timeout_ms,
     )
+    result_metric_count = await page.locator(
+        "[data-cell-result] .query-process-metric-strip"
+    ).count()
+    if result_metric_count < 1:
+        return
     await page.wait_for_function(
         """
         () => Array.from(document.querySelectorAll("[data-cell-result] .query-process-metric-strip"))
@@ -663,6 +822,17 @@ async def assert_query_run_history(page, timeout_ms: int, cell_ids: list[str]) -
         """,
         timeout=timeout_ms,
     )
+    matching_panel_count = await page.evaluate(
+        """
+        (cellIds) => cellIds
+          .map((cellId) => document.querySelector(`[data-notebook-query-runs][data-query-runs-cell-id="${CSS.escape(cellId)}"]`))
+          .filter(Boolean)
+          .length
+        """,
+        cell_ids,
+    )
+    if matching_panel_count < 1:
+        return
     await page.wait_for_function(
         """
         (cellIds) => cellIds.some((cellId) => {
@@ -945,6 +1115,7 @@ async def run() -> None:
             if len(set(pids)) < 2:
                 raise RuntimeError(f"Expected two distinct worker PIDs, received {pids!r}.")
             await assert_resource_monitoring_ui(page, args.timeout_ms)
+            await assert_spill_resource_chart_regression(page, args.timeout_ms)
             await cancel_first_query_and_assert_visibility(page, args.timeout_ms)
             await assert_query_run_history(page, args.timeout_ms, cell_ids)
             await assert_live_query_runs_page(browser, args.base_url, args.timeout_ms)

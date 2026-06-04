@@ -18,6 +18,7 @@ if str(BDW_ROOT) not in sys.path:
 from bit_data_workbench.api.router import service_consumption_state as api_service_consumption_state  # noqa: E402
 from bit_data_workbench.api.router import update_service_consumption_budget as api_update_service_consumption_budget  # noqa: E402
 from bit_data_workbench.api.router import ServiceConsumptionBudgetPayload  # noqa: E402
+from bit_data_workbench.backend.service_consumption import ServiceConsumptionMonitor  # noqa: E402
 from bit_data_workbench.version_info import current_repo_version  # noqa: E402
 from bit_data_workbench.web.router import service_consumption_page  # noqa: E402
 
@@ -98,10 +99,31 @@ class FakeWorkbenchService:
                     "percentOfCapacity": 0.01,
                     "mountPath": "/workspace/service-consumption",
                 },
+                "runtimeStorage": {
+                    "storageRoot": {
+                        "path": "/workspace",
+                        "totalBytes": 100 * 1024**3,
+                        "usedBytes": 30 * 1024**3,
+                        "freeBytes": 70 * 1024**3,
+                    },
+                    "queryCache": {
+                        "path": "/workspace/query-cache",
+                        "sizeBytes": 5 * 1024**3,
+                    },
+                    "duckdbSpill": {
+                        "path": "/workspace/tmp/duckdb-spill",
+                        "totalBytes": 12 * 1024**3,
+                        "activeQueryBytes": 8 * 1024**3,
+                        "otherBytes": 4 * 1024**3,
+                        "maxTempDirectorySize": "96GiB",
+                        "maxTempDirectorySizeBytes": 96 * 1024**3,
+                    },
+                },
                 "status": {
                     "nodeMetrics": {"available": True, "detail": "ok"},
                     "s3Metrics": {"available": True, "detail": "ok"},
                     "persistentVolumeMetrics": {"available": True, "detail": "ok"},
+                    "runtimeStorageMetrics": {"available": True, "detail": "ok"},
                 },
                 "nodeName": "bdw-node",
                 "podName": "bdw-pod",
@@ -111,11 +133,14 @@ class FakeWorkbenchService:
                 "nodeMetrics": {"available": True, "detail": "ok"},
                 "s3Metrics": {"available": True, "detail": "ok"},
                 "persistentVolumeMetrics": {"available": True, "detail": "ok"},
+                "runtimeStorageMetrics": {"available": True, "detail": "ok"},
                 "nodeMetricsAvailable": True,
                 "s3MetricsAvailable": True,
                 "persistentVolumeMetricsAvailable": True,
+                "runtimeStorageMetricsAvailable": True,
                 "s3SampledAtUtc": "2026-04-16T08:00:00+00:00",
                 "persistentVolumeMountPath": "/workspace/service-consumption",
+                "runtimeStorageSpillPath": "/workspace/tmp/duckdb-spill",
             },
             "topology": {
                 "copy": "The current PoC runs API, backend, frontend, and query execution on a single node.",
@@ -128,6 +153,16 @@ class FakeWorkbenchService:
             "memoryHistory": {"timestamps": ["2026-04-16T08:00:00+00:00"], "service": [2_048], "node": [8_192]},
             "s3History": {"timestamps": ["2026-04-16T08:00:00+00:00"], "values": [4_096]},
             "persistentVolumeHistory": {"timestamps": ["2026-04-16T08:00:00+00:00"], "values": [1_024]},
+            "runtimeStorageHistory": {
+                "timestamps": ["2026-04-16T08:00:00+00:00"],
+                "duckdbSpillActiveBytes": [8 * 1024**3],
+                "duckdbSpillTotalBytes": [12 * 1024**3],
+                "duckdbSpillOtherBytes": [4 * 1024**3],
+                "queryCacheBytes": [5 * 1024**3],
+                "storageRootFreeBytes": [70 * 1024**3],
+                "storageRootUsedBytes": [30 * 1024**3],
+                "spillQuotaBytes": [96 * 1024**3],
+            },
             "financial": {
                 "currency": "CHF",
                 "yearUtc": 2026,
@@ -295,6 +330,33 @@ def build_request(path: str, *, partial: bool) -> Request:
 
 
 class ServiceConsumptionRouteTests(unittest.TestCase):
+    def test_service_consumption_runtime_storage_history_builder(self) -> None:
+        monitor = ServiceConsumptionMonitor.__new__(ServiceConsumptionMonitor)
+
+        payload = monitor._build_runtime_storage_history(  # type: ignore[attr-defined]
+            [
+                {
+                    "timestampUtc": "2026-04-16T08:00:00+00:00",
+                    "runtimeStorage": {
+                        "duckdbSpill": {
+                            "activeQueryBytes": 8,
+                            "totalBytes": 12,
+                            "otherBytes": 4,
+                            "maxTempDirectorySizeBytes": 96,
+                        },
+                        "queryCache": {"sizeBytes": 5},
+                        "storageRoot": {"freeBytes": 70, "usedBytes": 30},
+                    },
+                }
+            ]
+        )
+
+        self.assertEqual(payload["duckdbSpillActiveBytes"], [8])
+        self.assertEqual(payload["duckdbSpillTotalBytes"], [12])
+        self.assertEqual(payload["duckdbSpillOtherBytes"], [4])
+        self.assertEqual(payload["queryCacheBytes"], [5])
+        self.assertEqual(payload["spillQuotaBytes"], [96])
+
     def test_service_consumption_partial_renders_expected_surface(self) -> None:
         response = service_consumption_page(
             request=build_request("/service-consumption", partial=True),
@@ -310,6 +372,10 @@ class ServiceConsumptionRouteTests(unittest.TestCase):
         self.assertIn('data-service-consumption-memory-legend', body)
         self.assertIn('data-service-consumption-s3-legend', body)
         self.assertIn('data-service-consumption-pv-legend', body)
+        self.assertIn('data-service-consumption-duckdb-spill-chart', body)
+        self.assertIn('data-service-consumption-duckdb-spill-legend', body)
+        self.assertIn('data-service-consumption-runtime-storage-status', body)
+        self.assertIn('data-service-consumption-summary="duckdb-spill"', body)
         self.assertIn('data-service-consumption-financial-chart', body)
         self.assertIn('data-service-consumption-financial-service-mix-chart', body)
         self.assertIn('data-service-consumption-financial-service-mix-legend', body)
@@ -327,6 +393,7 @@ class ServiceConsumptionRouteTests(unittest.TestCase):
         self.assertIn('data-service-consumption-pv-chart', body)
         self.assertIn('data-service-consumption-chart-limit="cpu"', body)
         self.assertIn('data-service-consumption-chart-limit="memory"', body)
+        self.assertIn('data-service-consumption-chart-limit="spill"', body)
         self.assertIn('service-consumption-summary-grid-compact', body)
         self.assertIn('service-consumption-panel-diagnostic', body)
         self.assertNotIn('data-service-consumption-year-select', body)
@@ -334,6 +401,14 @@ class ServiceConsumptionRouteTests(unittest.TestCase):
             "Query nodes will scale out automatically under higher query pressure once DAAIF goes live.",
             body,
         )
+
+        ui_source = (
+            REPO_ROOT / "bdw" / "bit_data_workbench" / "static" / "js" / "service-consumption-ui.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("renderRuntimeStorageHistory", ui_source)
+        self.assertIn("runtimeStorageHistory", ui_source)
+        self.assertIn("data-service-consumption-duckdb-spill-chart", ui_source)
+        self.assertIn("DuckDB spill quota", body)
 
     def test_service_consumption_full_page_hides_sidebar(self) -> None:
         response = service_consumption_page(
@@ -363,6 +438,10 @@ class ServiceConsumptionRouteTests(unittest.TestCase):
         self.assertEqual(payload["topology"]["nodeName"], "bdw-node")
         self.assertEqual(payload["s3History"]["values"], [4_096])
         self.assertEqual(payload["persistentVolumeHistory"]["values"], [1_024])
+        self.assertEqual(payload["runtimeStorageHistory"]["duckdbSpillActiveBytes"], [8 * 1024**3])
+        self.assertEqual(payload["runtimeStorageHistory"]["spillQuotaBytes"], [96 * 1024**3])
+        self.assertEqual(payload["latest"]["runtimeStorage"]["duckdbSpill"]["totalBytes"], 12 * 1024**3)
+        self.assertTrue(payload["status"]["runtimeStorageMetricsAvailable"])
         self.assertEqual(payload["financial"]["currency"], "CHF")
         self.assertEqual(payload["financial"]["annualBudgetChf"], 120_000.0)
         self.assertEqual(payload["financial"]["services"][4]["details"]["instances"][0]["label"], "OLTP")

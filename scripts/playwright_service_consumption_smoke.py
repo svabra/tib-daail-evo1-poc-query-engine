@@ -73,7 +73,34 @@ async def assert_page_surface(page, timeout_ms: int) -> None:
         state="visible",
         timeout=timeout_ms,
     )
-    await page.locator("text=Query nodes will scale out automatically under higher query pressure once DAAIFL goes live.").wait_for(
+    await page.locator("[data-service-consumption-duckdb-spill-chart]").wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
+    await page.wait_for_function(
+        """
+        () => {
+          const canvas = document.querySelector("[data-service-consumption-duckdb-spill-chart]");
+          const panel = canvas?.closest(".service-consumption-panel");
+          return /DuckDB spill quota/.test(panel?.textContent || "");
+        }
+        """,
+        timeout=timeout_ms,
+    )
+    await page.wait_for_function(
+        """
+        () => {
+          const canvas = document.querySelector("[data-service-consumption-duckdb-spill-chart]");
+          const legend = document.querySelector("[data-service-consumption-duckdb-spill-legend]");
+          const limit = document.querySelector('[data-service-consumption-chart-limit="spill"]');
+          return canvas instanceof HTMLCanvasElement
+            && /Active query spill|Total DuckDB spill|Query cache|DuckDB spill quota/.test(legend?.textContent || "")
+            && /Quota|^$/.test(limit?.textContent || "");
+        }
+        """,
+        timeout=timeout_ms,
+    )
+    await page.locator("text=Query nodes will scale out automatically under higher query pressure once DAAIF goes live.").wait_for(
         state="visible",
         timeout=timeout_ms,
     )

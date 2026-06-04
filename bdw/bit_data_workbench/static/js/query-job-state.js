@@ -19,6 +19,15 @@ export function normalizeQueryJob(job) {
   const memoryRssBytes = Number(job.memoryRssBytes);
   const averageMemoryRssBytes = Number(job.averageMemoryRssBytes);
   const peakMemoryRssBytes = Number(job.peakMemoryRssBytes);
+  const processThreadCount = Number(job.processThreadCount);
+  const peakProcessThreadCount = Number(job.peakProcessThreadCount);
+  const duckdbThreadLimit = Number(job.duckdbThreadLimit);
+  const duckdbSpillBytes = Number(job.duckdbSpillBytes);
+  const duckdbSpillPeakBytes = Number(job.duckdbSpillPeakBytes);
+  const duckdbSpillTotalBytes = Number(job.duckdbSpillTotalBytes);
+  const duckdbSpillOtherBytes = Number(job.duckdbSpillOtherBytes);
+  const duckdbSpillLimitBytes = Number(job.duckdbSpillLimitBytes);
+  const duckdbSpillDiskFreeBytes = Number(job.duckdbSpillDiskFreeBytes);
   const workerExitCode = Number(job.workerExitCode);
   const timings = {};
   if (job.timings && typeof job.timings === "object") {
@@ -66,6 +75,31 @@ export function normalizeQueryJob(job) {
     peakMemoryRssBytes: Number.isFinite(peakMemoryRssBytes)
       ? Math.max(0, Math.round(peakMemoryRssBytes))
       : null,
+    processThreadCount: Number.isFinite(processThreadCount)
+      ? Math.max(0, Math.round(processThreadCount))
+      : null,
+    peakProcessThreadCount: Number.isFinite(peakProcessThreadCount)
+      ? Math.max(0, Math.round(peakProcessThreadCount))
+      : null,
+    duckdbThreadLimit: Number.isFinite(duckdbThreadLimit) && duckdbThreadLimit > 0
+      ? Math.round(duckdbThreadLimit)
+      : null,
+    duckdbSpillBytes: Number.isFinite(duckdbSpillBytes) ? Math.max(0, Math.round(duckdbSpillBytes)) : null,
+    duckdbSpillPeakBytes: Number.isFinite(duckdbSpillPeakBytes)
+      ? Math.max(0, Math.round(duckdbSpillPeakBytes))
+      : null,
+    duckdbSpillTotalBytes: Number.isFinite(duckdbSpillTotalBytes)
+      ? Math.max(0, Math.round(duckdbSpillTotalBytes))
+      : null,
+    duckdbSpillOtherBytes: Number.isFinite(duckdbSpillOtherBytes)
+      ? Math.max(0, Math.round(duckdbSpillOtherBytes))
+      : null,
+    duckdbSpillLimitBytes: Number.isFinite(duckdbSpillLimitBytes)
+      ? Math.max(0, Math.round(duckdbSpillLimitBytes))
+      : null,
+    duckdbSpillDiskFreeBytes: Number.isFinite(duckdbSpillDiskFreeBytes)
+      ? Math.max(0, Math.round(duckdbSpillDiskFreeBytes))
+      : null,
     resourceSamples: Array.isArray(job.resourceSamples)
       ? job.resourceSamples
           .map((sample) => {
@@ -76,6 +110,13 @@ export function normalizeQueryJob(job) {
             const sampleAverageCpuCapacity = Number(sample?.averageCpuCapacityPercent);
             const sampleMemory = Number(sample?.memoryRssBytes);
             const sampleAverageMemory = Number(sample?.averageMemoryRssBytes);
+            const sampleProcessThreadCount = Number(sample?.processThreadCount);
+            const sampleDuckdbThreadLimit = Number(sample?.duckdbThreadLimit);
+            const sampleDuckdbSpill = Number(sample?.duckdbSpillBytes);
+            const sampleDuckdbSpillTotal = Number(sample?.duckdbSpillTotalBytes);
+            const sampleDuckdbSpillOther = Number(sample?.duckdbSpillOtherBytes);
+            const sampleDuckdbSpillLimit = Number(sample?.duckdbSpillLimitBytes);
+            const sampleDuckdbSpillDiskFree = Number(sample?.duckdbSpillDiskFreeBytes);
             return {
               elapsedMs: Number.isFinite(elapsedMs) ? Math.max(0, elapsedMs) : 0,
               cpuPercent: Number.isFinite(sampleCpu) ? Math.max(0, sampleCpu) : null,
@@ -88,9 +129,36 @@ export function normalizeQueryJob(job) {
               averageMemoryRssBytes: Number.isFinite(sampleAverageMemory)
                 ? Math.max(0, Math.round(sampleAverageMemory))
                 : null,
+              processThreadCount: Number.isFinite(sampleProcessThreadCount)
+                ? Math.max(0, Math.round(sampleProcessThreadCount))
+                : null,
+              duckdbThreadLimit: Number.isFinite(sampleDuckdbThreadLimit) && sampleDuckdbThreadLimit > 0
+                ? Math.round(sampleDuckdbThreadLimit)
+                : null,
+              duckdbSpillBytes: Number.isFinite(sampleDuckdbSpill)
+                ? Math.max(0, Math.round(sampleDuckdbSpill))
+                : null,
+              duckdbSpillTotalBytes: Number.isFinite(sampleDuckdbSpillTotal)
+                ? Math.max(0, Math.round(sampleDuckdbSpillTotal))
+                : null,
+              duckdbSpillOtherBytes: Number.isFinite(sampleDuckdbSpillOther)
+                ? Math.max(0, Math.round(sampleDuckdbSpillOther))
+                : null,
+              duckdbSpillLimitBytes: Number.isFinite(sampleDuckdbSpillLimit)
+                ? Math.max(0, Math.round(sampleDuckdbSpillLimit))
+                : null,
+              duckdbSpillDiskFreeBytes: Number.isFinite(sampleDuckdbSpillDiskFree)
+                ? Math.max(0, Math.round(sampleDuckdbSpillDiskFree))
+                : null,
             };
           })
-          .filter((sample) => sample.cpuPercent !== null || sample.memoryRssBytes !== null)
+          .filter((sample) =>
+            sample.cpuPercent !== null ||
+            sample.memoryRssBytes !== null ||
+            sample.processThreadCount !== null ||
+            sample.duckdbSpillBytes !== null ||
+            sample.duckdbSpillTotalBytes !== null
+          )
       : [],
     cancellationPhase: String(job.cancellationPhase ?? "").trim(),
     cancellationRequestedAt: String(job.cancellationRequestedAt ?? "").trim(),
