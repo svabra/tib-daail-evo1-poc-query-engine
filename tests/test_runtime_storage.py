@@ -39,7 +39,7 @@ class RuntimeStorageTests(unittest.TestCase):
                 duckdb_temp_directory=spill_root,
                 duckdb_memory_limit="20GiB",
                 duckdb_threads=4,
-                duckdb_max_temp_directory_size="56GiB",
+                duckdb_max_temp_directory_size="96GiB",
                 duckdb_preserve_insertion_order=False,
             )
 
@@ -68,7 +68,7 @@ class RuntimeStorageTests(unittest.TestCase):
                 duckdb_temp_directory=spill_root,
                 duckdb_memory_limit="20GiB",
                 duckdb_threads=4,
-                duckdb_max_temp_directory_size="56GiB",
+                duckdb_max_temp_directory_size="96GiB",
                 duckdb_preserve_insertion_order=False,
             )
 

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.26. Keep entries concise and
+# Derived from git history through version 0.9.27. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
     {
-        "version": "0.9.26",
+        "version": "0.9.27",
         "releasedAt": "2026-06-04T14:42:59+02:00",
         "features": [
             (
@@ -31,10 +31,10 @@ RELEASE_NOTES: list[dict[str, object]] = [
                 "settings for memory limit, threads, temp directory, temp "
                 "directory quota, and insertion-order preservation; the RHOS "
                 "deployment uses a 20 GiB memory limit, four threads, and an "
-                "expanded 56 GiB spill quota inside the 60 GiB emptyDir."
+                "expanded 96 GiB spill quota inside the 100 GiB emptyDir."
             ),
             (
-                "The RHOS deployment now provides a 60 GiB workspace emptyDir, "
+                "The RHOS deployment now provides a 100 GiB workspace emptyDir, "
                 "leaving more temporary SSD headroom for hydrated runtime query "
                 "caches and larger DuckDB spill workloads."
             ),
