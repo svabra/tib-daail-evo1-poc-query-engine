@@ -28,6 +28,8 @@ CACHE_STATUS_ERROR = "error"
 CACHE_WRITE_LOCK_SUFFIX = ".duckdb.write-lock"
 CACHE_WRITE_LOCK_MAX_WAIT_SECONDS = 90
 CACHE_WRITE_LOCK_POLL_SECONDS = 0.25
+CACHE_WRITE_LOCK_RETRY_ATTEMPTS = 3
+CACHE_WRITE_LOCK_RETRY_DELAY_SECONDS = 0.5
 QUERY_CACHE_LOCK_STALE_SECONDS = 600
 RUNTIME_CACHE_EXPECTED_BEHAVIOR = (
     "When Hydrate cache is enabled, the next query run uses this runtime DuckDB table "
@@ -125,6 +127,40 @@ def _cache_file_paths_for_key(
     return database_path, wal_path, metadata_path
 
 
+def _cache_lock_holder_is_running(pid: int) -> bool:
+    normalized_pid = int(pid)
+    if normalized_pid <= 0:
+        return False
+    with suppress(Exception):
+        os.kill(normalized_pid, 0)
+        return True
+    return False
+
+
+def _is_cache_lock_stale(lock_path: Path, *, now: float) -> bool:
+    try:
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    owner_pid = payload.get("pid")
+    if isinstance(owner_pid, int):
+        if _cache_lock_holder_is_running(owner_pid):
+            return False
+        return True
+    if isinstance(owner_pid, str):
+        normalized_owner_pid = None
+        with suppress(ValueError, TypeError):
+            normalized_owner_pid = int(owner_pid)
+        if isinstance(normalized_owner_pid, int) and normalized_owner_pid > 0:
+            if _cache_lock_holder_is_running(normalized_owner_pid):
+                return False
+            return True
+
+    with suppress(OSError):
+        return (now - lock_path.stat().st_mtime) > QUERY_CACHE_LOCK_STALE_SECONDS
+    return True
+
+
 @contextmanager
 def _acquire_cache_write_lock(
     plan: dict[str, object],
@@ -155,8 +191,7 @@ def _acquire_cache_write_lock(
             break
         except FileExistsError:
             try:
-                stale_after = start + max(1, QUERY_CACHE_LOCK_STALE_SECONDS)
-                if time.time() > stale_after:
+                if _is_cache_lock_stale(lock_path, now=time.time()):
                     try:
                         os.unlink(lock_path)
                         continue
@@ -167,6 +202,8 @@ def _acquire_cache_write_lock(
                         f"Timed out waiting for cache lock on {database_path.as_posix()}"
                     ) from None
                 time.sleep(CACHE_WRITE_LOCK_POLL_SECONDS)
+            except TimeoutError:
+                raise
             except OSError:
                 pass
         except OSError as exc:
@@ -907,43 +944,68 @@ def hydrate_cache(
         table_ref = ""
         selected_index_columns: list[str] = []
         if should_rehydrate:
-            try:
-                with _acquire_cache_write_lock(plan):
-                    status = cache_status_for_plan(plan)
-                    should_rehydrate = force or status.get("status") != CACHE_STATUS_HIT
-                    alias = _attach_cache_database(
-                        connection,
-                        plan,
-                        read_only=not should_rehydrate,
-                    )
-                    table_ref, selected_index_columns, status = _materialize_cache(
-                        alias,
-                        rebuild=should_rehydrate,
-                    )
-            except TimeoutError as exc:
-                raise RuntimeError(str(exc)) from exc
+            lock_attempts = CACHE_WRITE_LOCK_RETRY_ATTEMPTS
+            for attempt in range(1, lock_attempts + 1):
+                try:
+                    with _acquire_cache_write_lock(plan):
+                        status = cache_status_for_plan(plan)
+                        should_rehydrate = force or status.get("status") != CACHE_STATUS_HIT
+                        alias = _attach_cache_database(
+                            connection,
+                            plan,
+                            read_only=not should_rehydrate,
+                        )
+                        table_ref, selected_index_columns, status = _materialize_cache(
+                            alias,
+                            rebuild=should_rehydrate,
+                        )
+                    break
+                except TimeoutError as exc:
+                    raise RuntimeError(str(exc)) from exc
+                except duckdb.Error as exc:
+                    if not _is_cache_lock_conflict(exc) or attempt >= lock_attempts:
+                        if _is_cache_lock_conflict(exc):
+                            raise RuntimeError(
+                                "Cache database is currently locked by another process. "
+                                "Retry this query when the cache write is complete."
+                            ) from exc
+                        raise
+                    with suppress(Exception):
+                        connection.execute("ROLLBACK")
+                    time.sleep(CACHE_WRITE_LOCK_RETRY_DELAY_SECONDS * attempt)
         else:
-            try:
-                _wait_for_release_of_cache_lock(plan)
-                alias = _attach_cache_database(connection, plan, read_only=True)
-                table_ref, selected_index_columns, status = _materialize_cache(alias, rebuild=False)
-            except duckdb.Error as exc:
-                if not _is_cache_lock_conflict(exc):
-                    raise
-                # In case an unexpected concurrent writer was in progress, retry using the
-                # same cache lock and rebuild if needed.
-                with _acquire_cache_write_lock(plan):
-                    status = cache_status_for_plan(plan)
-                    should_rehydrate = force or status.get("status") != CACHE_STATUS_HIT
-                    alias = _attach_cache_database(
-                        connection,
-                        plan,
-                        read_only=not should_rehydrate,
-                    )
+            lock_attempts = CACHE_WRITE_LOCK_RETRY_ATTEMPTS
+            for attempt in range(1, lock_attempts + 1):
+                try:
+                    if attempt == 1:
+                        _wait_for_release_of_cache_lock(plan)
+                    alias = _attach_cache_database(connection, plan, read_only=True)
                     table_ref, selected_index_columns, status = _materialize_cache(
                         alias,
-                        rebuild=should_rehydrate,
+                        rebuild=False,
                     )
+                    break
+                except duckdb.Error as exc:
+                    if not _is_cache_lock_conflict(exc):
+                        raise
+                    if attempt < lock_attempts:
+                        with suppress(Exception):
+                            connection.execute("ROLLBACK")
+                        time.sleep(CACHE_WRITE_LOCK_RETRY_DELAY_SECONDS * attempt)
+                        continue
+                    with _acquire_cache_write_lock(plan):
+                        status = cache_status_for_plan(plan)
+                        should_rehydrate = force or status.get("status") != CACHE_STATUS_HIT
+                        alias = _attach_cache_database(
+                            connection,
+                            plan,
+                            read_only=not should_rehydrate,
+                        )
+                        table_ref, selected_index_columns, status = _materialize_cache(
+                            alias,
+                            rebuild=should_rehydrate,
+                        )
+                        break
 
         updated = dict(summary)
         updated["query_sql"] = f"SELECT * FROM {table_ref}"
