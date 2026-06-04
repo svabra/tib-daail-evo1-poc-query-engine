@@ -172,8 +172,6 @@ import { createWorkbenchStorage } from "./workbench-storage.js";
 
 const editorRegistry = new WeakMap();
 const editorSizingRegistry = new WeakMap();
-let currentSqlCompletionSchema = null;
-let sqlCompletionSchemaRefreshPromise = null;
 let draggedNotebook = null;
 let restoreController = null;
 let applyingNotebookState = false;
@@ -902,7 +900,6 @@ const {
   localWorkspaceSchemaKey,
   localWorkspaceSchemaMarkup,
   normalizeLocalWorkspaceFolderPath,
-  onDataSourceSchemaMayHaveChanged: scheduleSqlCompletionSchemaRefresh,
   restoreSidebarState,
   showMessageDialog,
   syncOpenLocalWorkspaceMoveDialog,
@@ -1930,30 +1927,6 @@ function readSchema() {
   }
 }
 
-function currentSqlCompletionSchemaValue() {
-  if (!currentSqlCompletionSchema) {
-    currentSqlCompletionSchema = readSchema();
-  }
-  return currentSqlCompletionSchema;
-}
-
-function normalizedSchemaJson(schema) {
-  try {
-    return JSON.stringify(schema && typeof schema === "object" && !Array.isArray(schema) ? schema : {});
-  } catch (_error) {
-    return "{}";
-  }
-}
-
-function writeSqlCompletionSchema(schema) {
-  const normalizedSchema = schema && typeof schema === "object" && !Array.isArray(schema) ? schema : {};
-  currentSqlCompletionSchema = normalizedSchema;
-  const element = document.getElementById("sql-schema");
-  if (element) {
-    element.textContent = normalizedSchemaJson(normalizedSchema);
-  }
-}
-
 function flattenS3AliasSchema(schema) {
   const aliases = [];
   const root = schema?.s3;
@@ -1980,88 +1953,6 @@ function flattenS3AliasSchema(schema) {
   return aliases;
 }
 
-function s3AliasCompletionResult({
-  from,
-  options,
-  validFor = /^[A-Za-z0-9_.]*$/,
-}) {
-  if (!options.length) {
-    return null;
-  }
-
-  return {
-    from,
-    options,
-    validFor,
-  };
-}
-
-function s3AliasSegmentCompletions({ aliases, prefixParts, currentSegment }) {
-  const normalizedPrefix = prefixParts.map((part) => String(part || "").toLowerCase());
-  const normalizedCurrentSegment = String(currentSegment || "").toLowerCase();
-  const options = [];
-  const seen = new Set();
-
-  aliases.forEach((alias) => {
-    const aliasParts = alias.toLowerCase().split(".");
-    const prefixMatches = normalizedPrefix.every((part, index) => aliasParts[index] === part);
-    if (!prefixMatches) {
-      return;
-    }
-
-    const nextSegment = aliasParts[normalizedPrefix.length] || "";
-    if (!nextSegment || !nextSegment.startsWith(normalizedCurrentSegment) || seen.has(nextSegment)) {
-      return;
-    }
-
-    seen.add(nextSegment);
-    const completingBucket = normalizedPrefix.length === 1;
-    options.push({
-      label: nextSegment,
-      type: completingBucket ? "namespace" : "table",
-      apply: nextSegment,
-      detail: completingBucket ? "S3 bucket" : "S3 path",
-      boost: 90,
-    });
-  });
-
-  return options;
-}
-
-function s3AliasDeepCompletions({ aliases, typedLower, typedBucket, typedRemainder }) {
-  const options = [];
-  const seen = new Set();
-
-  aliases.forEach((alias) => {
-    const aliasLower = alias.toLowerCase();
-    const aliasParts = aliasLower.split(".");
-    const aliasBucket = aliasParts[1] || "";
-    const aliasFileName = aliasParts.slice(-2).join(".");
-    const sameBucket = typedBucket && aliasBucket === typedBucket;
-    const matchesPrefix = aliasLower.startsWith(typedLower);
-    const matchesDeepFile =
-      sameBucket &&
-      typedRemainder &&
-      (aliasFileName.startsWith(typedRemainder) ||
-        aliasFileName.replace(/_/g, "").startsWith(typedRemainder.replace(/_/g, "")));
-
-    if ((!matchesPrefix && !matchesDeepFile) || seen.has(alias)) {
-      return;
-    }
-
-    seen.add(alias);
-    options.push({
-      label: alias,
-      type: "table",
-      apply: alias,
-      detail: "S3 object",
-      boost: matchesDeepFile ? 110 : 100,
-    });
-  });
-
-  return options;
-}
-
 function s3AliasCompletionSource(schema) {
   const aliases = flattenS3AliasSchema(schema);
   if (!aliases.length) {
@@ -2079,137 +1970,51 @@ function s3AliasCompletionSource(schema) {
     const typedParts = typedLower.split(".");
     const typedBucket = typedParts[1] || "";
     const typedRemainder = typedParts.slice(2).join(".");
-
-    if (!typedBucket || typedParts.length <= 2) {
-      const bucketOptions = s3AliasSegmentCompletions({
-        aliases,
-        prefixParts: ["s3"],
-        currentSegment: typedBucket,
-      });
-      return s3AliasCompletionResult({
-        from: match.from + "s3.".length,
-        options: bucketOptions,
-        validFor: /^[A-Za-z0-9_]*$/,
-      });
+    if (!typedBucket || !typedRemainder) {
+      return null;
     }
 
-    if (typed.endsWith(".") || typedParts.length > 3) {
-      const currentSegment = typed.endsWith(".") ? "" : typedParts[typedParts.length - 1] || "";
-      const prefixParts = typedParts.slice(0, -1);
-      const segmentOptions = s3AliasSegmentCompletions({
-        aliases,
-        prefixParts,
-        currentSegment,
-      });
-      return s3AliasCompletionResult({
-        from: typed.endsWith(".") ? match.to : match.to - currentSegment.length,
-        options: segmentOptions,
-        validFor: /^[A-Za-z0-9_]*$/,
-      });
-    }
+    const options = [];
+    const seen = new Set();
 
-    const aliasOptions = s3AliasDeepCompletions({
-      aliases,
-      typedLower,
-      typedBucket,
-      typedRemainder,
+    aliases.forEach((alias) => {
+      const aliasLower = alias.toLowerCase();
+      const aliasParts = aliasLower.split(".");
+      const aliasBucket = aliasParts[1] || "";
+      const aliasRemainder = aliasParts.slice(2).join(".");
+      const aliasFileName = aliasParts.slice(-2).join(".");
+      const sameBucket = typedBucket && aliasBucket === typedBucket;
+      const matchesPrefix = aliasLower.startsWith(typedLower);
+      const matchesDeepFile =
+        sameBucket &&
+        typedRemainder &&
+        (aliasFileName.startsWith(typedRemainder) ||
+          aliasFileName.replace(/_/g, "").startsWith(typedRemainder.replace(/_/g, "")));
+
+      if ((!matchesPrefix && !matchesDeepFile) || seen.has(alias)) {
+        return;
+      }
+
+      seen.add(alias);
+      options.push({
+        label: alias,
+        type: "table",
+        apply: alias,
+        detail: "S3 object",
+        boost: matchesDeepFile ? 110 : 100,
+      });
     });
-    return s3AliasCompletionResult({
-      from: match.from,
-      options: aliasOptions,
-    });
-  };
-}
 
-function refreshSqlEditorsForCompletionSchema() {
-  const editorRoots = Array.from(document.querySelectorAll("[data-editor-root]")).filter((editorRoot) => {
-    const textarea = editorRoot.querySelector("[data-editor-source]");
-    const editorLanguage = normalizeCellLanguage(
-      editorRoot.dataset.editorInitializedLanguage ||
-        editorRoot.dataset.editorLanguage ||
-        textarea?.dataset.editorLanguage ||
-        "sql"
-    );
-    return editorLanguage === "sql" && editorRegistry.has(editorRoot);
-  });
-  if (!editorRoots.length) {
-    return;
-  }
-
-  const activeElement = document.activeElement;
-  const activeEditorRoot =
-    activeElement instanceof Element ? activeElement.closest("[data-editor-root]") : null;
-  const states = editorRoots.map((editorRoot) => {
-    const editor = editorRegistry.get(editorRoot);
-    const textarea = editorRoot.querySelector("[data-editor-source]");
-    const sqlText = editor?.state.doc.toString() ?? textarea?.value ?? "";
-    const scrollTop = editor?.scrollDOM?.scrollTop ?? 0;
-    const scrollLeft = editor?.scrollDOM?.scrollLeft ?? 0;
-    if (textarea) {
-      textarea.value = sqlText;
+    if (!options.length) {
+      return null;
     }
+
     return {
-      editorRoot,
-      focused: editorRoot === activeEditorRoot,
-      scrollTop,
-      scrollLeft,
+      from: match.from,
+      options,
+      validFor: /^[A-Za-z0-9_.]*$/,
     };
-  });
-
-  states.forEach(({ editorRoot }) => {
-    destroyEditor(editorRoot);
-    createEditor(editorRoot);
-  });
-
-  states.forEach(({ editorRoot, focused, scrollTop, scrollLeft }) => {
-    const editor = editorRegistry.get(editorRoot);
-    if (!editor) {
-      return;
-    }
-    editor.scrollDOM.scrollTop = scrollTop;
-    editor.scrollDOM.scrollLeft = scrollLeft;
-    if (focused) {
-      editor.focus();
-    }
-  });
-}
-
-async function refreshSqlCompletionSchema({ rebuildEditors = true } = {}) {
-  if (sqlCompletionSchemaRefreshPromise) {
-    return sqlCompletionSchemaRefreshPromise;
-  }
-
-  sqlCompletionSchemaRefreshPromise = (async () => {
-    const response = await window.fetch("/api/completion-schema", {
-      headers: { Accept: "application/json" },
-    });
-    if (!response.ok) {
-      throw new Error(`Failed to refresh SQL completion schema: ${response.status}`);
-    }
-
-    const schema = await response.json();
-    const previousSchemaJson = normalizedSchemaJson(currentSqlCompletionSchemaValue());
-    const nextSchemaJson = normalizedSchemaJson(schema);
-    if (nextSchemaJson === previousSchemaJson) {
-      return { changed: false };
-    }
-
-    writeSqlCompletionSchema(schema);
-    if (rebuildEditors) {
-      refreshSqlEditorsForCompletionSchema();
-    }
-    return { changed: true };
-  })().finally(() => {
-    sqlCompletionSchemaRefreshPromise = null;
-  });
-
-  return sqlCompletionSchemaRefreshPromise;
-}
-
-function scheduleSqlCompletionSchemaRefresh() {
-  refreshSqlCompletionSchema().catch((error) => {
-    console.error("Failed to refresh SQL completion schema.", error);
-  });
+  };
 }
 
 function escapeHtml(value) {
@@ -5230,7 +5035,7 @@ function createEditor(root) {
     return null;
   }
 
-  const schema = currentSqlCompletionSchemaValue();
+  const schema = readSchema();
   const form = root.closest("form");
   const shell = document.createElement("div");
   shell.className = "editor-shell";
@@ -10391,9 +10196,6 @@ const initialLoadTasks = [
   }),
   loadDataSourceEventsState().catch((error) => {
     console.error("Failed to load data source events.", error);
-  }),
-  refreshSqlCompletionSchema().catch((error) => {
-    console.error("Failed to refresh SQL completion schema during startup.", error);
   }),
   loadNotebookEventsState().catch((error) => {
     console.error("Failed to load notebook events.", error);

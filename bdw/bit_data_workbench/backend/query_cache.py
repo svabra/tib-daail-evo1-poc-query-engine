@@ -3,10 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import time
-from contextlib import contextmanager, suppress
 import re
 import tempfile
+import time
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -828,22 +828,9 @@ def hydrate_cache(
             continue
 
         plan = _cache_plan(summary, sql=sql, query_options=query_options, settings=settings)
-        relation = str(plan["relation"])
-
-        try:
-            status = cache_status_for_plan(plan)
-        except duckdb.Error:
-            status = {
-                "status": CACHE_STATUS_MISS,
-                "statusLabel": "Cache miss",
-                "statusReason": "Unable to evaluate cache status while checking runtime cache file.",
-                "physicalCacheExists": False,
-                "cacheSizeBytes": 0,
-                "cacheSizeMb": _format_mb(0),
-            }
-            status.update({key: plan[key] for key in ("cacheKey", "cacheDatabasePath", "metadataPath", "cacheTable") if key in plan})
+        status = cache_status_for_plan(plan)
         should_rehydrate = force or status.get("status") != CACHE_STATUS_HIT
-
+        relation = str(plan["relation"])
         if should_rehydrate and progress_callback is not None:
             progress_callback(
                 {
@@ -860,6 +847,7 @@ def hydrate_cache(
         def _materialize_cache(alias: str, *, rebuild: bool) -> tuple[str, list[str], dict[str, object]]:
             table_ref = qualified_name(alias, "main", CACHE_TABLE_NAME)
             selected_index_columns: list[str] = []
+            materialized_status = status
             if rebuild:
                 hydrate_started = time.perf_counter()
                 connection.execute(f"DROP TABLE IF EXISTS {table_ref}")
@@ -904,7 +892,7 @@ def hydrate_cache(
                 timings[f"{relation}.cacheHydrationMs"] = (
                     time.perf_counter() - hydrate_started
                 ) * 1000
-                status = {
+                materialized_status = {
                     **metadata,
                     "lastCheckedAt": utc_now_iso(),
                     "status": CACHE_STATUS_HIT,
@@ -928,18 +916,18 @@ def hydrate_cache(
                         used_at=used_at,
                     )
                     _write_metadata(plan, metadata)
-                    status = cache_status_for_plan(plan)
+                    materialized_status = cache_status_for_plan(plan)
                 else:
-                    status = {
-                        **status,
+                    materialized_status = {
+                        **materialized_status,
                         "lastCheckedAt": utc_now_iso(),
                     }
             table_indexes = [
                 str(column)
-                for column in (status.get("indexColumns") or [])
+                for column in (materialized_status.get("indexColumns") or [])
                 if str(column).strip()
             ]
-            return table_ref, table_indexes, status
+            return table_ref, table_indexes, materialized_status
 
         table_ref = ""
         selected_index_columns: list[str] = []

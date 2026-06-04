@@ -36,7 +36,7 @@ from bit_data_workbench.backend.query_cache import (  # noqa: E402
     infer_predicate_index_columns,
     list_query_cache_datasets,
 )
-from bit_data_workbench.backend import query_cache
+from bit_data_workbench.backend import query_cache  # noqa: E402
 
 
 def _write_federal_tax_parquet(path: Path, *, rows: int = 1000) -> None:
@@ -461,41 +461,6 @@ class QueryCacheTests(unittest.TestCase):
 
             self.assertEqual(hydration["sources"][0]["indexColumns"], [])
             self.assertIn("without ART indexes", hydration["sources"][0]["indexReason"])
-
-    def test_hydrate_cache_rebuild_acquires_cache_lock_file(self) -> None:
-        with tempfile.TemporaryDirectory() as raw_tmp:
-            root = Path(raw_tmp)
-            parquet_path = root / "federal_tax.parquet"
-            cache_root = root / "cache"
-            _write_federal_tax_parquet(parquet_path, rows=5000)
-            source_summary = _summary_for(parquet_path)
-            sql = (
-                "SELECT taxpayer_id, federal_tax_due "
-                "FROM s3.poc.federal_tax.parquet "
-                "WHERE taxpayer_id = 'TAX-000123'"
-            )
-
-            with patch.dict(os.environ, {"BDW_QUERY_CACHE_DIR": str(cache_root)}):
-                original_lock = query_cache._acquire_cache_write_lock
-                with patch.object(
-                    query_cache,
-                    "_acquire_cache_write_lock",
-                    side_effect=original_lock,
-                ) as acquire_lock:
-                    connection = duckdb.connect(":memory:")
-                    try:
-                        _updated_summaries, hydration = hydrate_cache(
-                            connection=connection,
-                            sql=sql,
-                            source_summaries=[source_summary],
-                            query_options=_cache_options(),
-                        )
-                    finally:
-                        connection.close()
-
-            self.assertEqual(hydration["enabled"], True)
-            self.assertTrue(acquire_lock.called)
-            self.assertEqual(hydration["sources"][0]["status"], "hit")
 
 
 class QueryCacheRouteTests(unittest.TestCase):

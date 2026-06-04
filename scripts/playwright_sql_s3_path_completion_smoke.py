@@ -43,11 +43,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--headless", action="store_true", default=True)
     parser.add_argument("--headed", dest="headless", action="store_false")
     parser.add_argument("--timeout-ms", type=int, default=60000)
-    parser.add_argument(
-        "--completion-refresh-only",
-        action="store_true",
-        help="Only verify that an already-created SQL editor receives late S3 completion schema updates.",
-    )
     return parser.parse_args()
 
 
@@ -133,18 +128,6 @@ async def ensure_query_notebook(page, base_url: str, timeout_ms: int) -> None:
         await query_cells.first.wait_for(state="visible", timeout=timeout_ms)
         return
 
-    notebook_link = page.locator(".notebook-link[data-notebook-id]").first
-    if await notebook_link.count():
-        href = await notebook_link.get_attribute("href")
-        if href:
-            await page.goto(
-                f"{base_url.rstrip('/')}{href}",
-                wait_until="domcontentloaded",
-                timeout=timeout_ms,
-            )
-        await query_cells.first.wait_for(state="visible", timeout=timeout_ms)
-        return
-
     create_button = page.locator(
         "[data-query-workbench-entry-page] [data-create-notebook]"
     ).first
@@ -202,51 +185,6 @@ async def wait_for_aliases_in_completion_schema(
     raise RuntimeError(
         "Timed out waiting for S3 aliases to enter the SQL completion schema: "
         f"{aliases!r}"
-    )
-
-
-async def wait_for_aliases_in_current_completion_schema(
-    page,
-    aliases: list[str],
-    timeout_ms: int,
-) -> None:
-    deadline = time.monotonic() + timeout_ms / 1000
-    while time.monotonic() < deadline:
-        present = await page.evaluate(
-            """
-            (aliases) => {
-              const schemaNode = document.getElementById("sql-schema");
-              if (!schemaNode) {
-                return false;
-              }
-              let schema;
-              try {
-                schema = JSON.parse(schemaNode.textContent || "{}");
-              } catch (_error) {
-                return false;
-              }
-              const hasAlias = (alias) => {
-                let node = schema;
-                for (const part of String(alias || "").split(".")) {
-                  if (!node || typeof node !== "object" || !(part in node)) {
-                    return false;
-                  }
-                  node = node[part];
-                }
-                return true;
-              };
-              return aliases.every(hasAlias);
-            }
-            """,
-            aliases,
-        )
-        if present:
-            return
-        await page.wait_for_timeout(500)
-
-    raise RuntimeError(
-        "Timed out waiting for S3 aliases to refresh in the current page "
-        f"completion schema without a reload: {aliases!r}"
     )
 
 
@@ -409,40 +347,6 @@ async def open_s3_explorer_file(
     )
     await page.wait_for_timeout(1000)
 
-    source_tree_file = page.locator(
-        f'[data-data-source-explorer-navigation] [data-source-object][data-source-object-query-alias="{alias}"]'
-    ).first
-    try:
-        await source_tree_file.wait_for(state="attached", timeout=5000)
-        await source_tree_file.evaluate(
-            """
-            (node) => {
-              let current = node.parentElement;
-              while (current) {
-                if (current instanceof HTMLDetailsElement) {
-                  current.open = true;
-                }
-                current = current.parentElement;
-              }
-              node.scrollIntoView({ block: "center" });
-            }
-            """
-        )
-        await source_tree_file.wait_for(state="visible", timeout=timeout_ms)
-        await source_tree_file.click()
-        detail = page.locator("[data-data-source-explorer-detail]").first
-        await detail.get_by_text(alias, exact=True).first.wait_for(
-            state="visible",
-            timeout=timeout_ms,
-        )
-        await detail.get_by_text(f"s3://{bucket}/{key}", exact=True).first.wait_for(
-            state="visible",
-            timeout=timeout_ms,
-        )
-        return
-    except PlaywrightTimeoutError:
-        pass
-
     bucket_button = page.locator(
         f'[data-data-source-explorer-s3-location][data-bucket="{bucket}"][data-prefix=""]'
     ).first
@@ -498,41 +402,6 @@ async def open_s3_explorer_file(
 
 
 async def copy_visible_query_path(page, expected_alias: str, timeout_ms: int) -> str:
-    source_tree_copy_button = page.locator(
-        "[data-data-source-explorer-navigation] "
-        f'[data-source-object][data-source-object-query-alias="{expected_alias}"] '
-        "[data-copy-query-path]"
-    ).first
-    try:
-        await source_tree_copy_button.wait_for(state="attached", timeout=1500)
-        await source_tree_copy_button.evaluate(
-            """
-            (button) => {
-              const menu = button.closest("details");
-              if (menu instanceof HTMLDetailsElement) {
-                menu.open = true;
-              }
-              let current = button.parentElement;
-              while (current) {
-                if (current instanceof HTMLDetailsElement) {
-                  current.open = true;
-                }
-                current = current.parentElement;
-              }
-              button.scrollIntoView({ block: "center" });
-            }
-            """
-        )
-        await source_tree_copy_button.evaluate("(button) => button.click()")
-        copied = await page.evaluate("navigator.clipboard.readText()")
-        if copied != expected_alias:
-            raise RuntimeError(
-                f"Copy query path copied {copied!r}; expected {expected_alias!r}."
-            )
-        return copied
-    except PlaywrightTimeoutError:
-        pass
-
     copy_button = page.locator(
         '[data-data-source-explorer-action="copy-query-path"]'
     ).first
@@ -621,42 +490,10 @@ async def assert_copy_query_path_actions_for_other_sources(
     )
 
 
-async def assert_late_completion_refresh_without_reload(
-    page,
-    args: argparse.Namespace,
-    seeded_keys: list[str],
-) -> tuple[str, str]:
-    await ensure_query_notebook(page, args.base_url, args.timeout_ms)
-    current_url = page.url
-    late_csv_key, late_parquet_key, late_csv_alias, late_parquet_alias = seed_s3_objects(args)
-    seeded_keys.extend([late_csv_key, late_parquet_key])
-    await wait_for_aliases_in_current_completion_schema(
-        page,
-        [late_csv_alias, late_parquet_alias],
-        args.timeout_ms,
-    )
-    if page.url != current_url:
-        raise RuntimeError(
-            "Late S3 completion schema refresh navigated the page. "
-            f"Started at {current_url!r}, ended at {page.url!r}."
-        )
-    late_bucket_segment = normalize_query_alias_segment(args.bucket, fallback="bucket")
-    await assert_completion_contains(
-        page,
-        f"select * from s3.{late_bucket_segment}.sam",
-        late_csv_alias,
-        args.timeout_ms,
-    )
-    return late_csv_alias, late_parquet_alias
-
-
 async def run_smoke(args: argparse.Namespace) -> int:
+    csv_key, parquet_key, csv_alias, parquet_alias = seed_s3_objects(args)
     client = s3_client(args)
     console_messages: list[str] = []
-    seeded_keys: list[str] = []
-    csv_alias = ""
-    parquet_alias = ""
-    completion_refresh_aliases: tuple[str, str] | None = None
 
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=args.headless)
@@ -670,77 +507,61 @@ async def run_smoke(args: argparse.Namespace) -> int:
         page.on("pageerror", lambda exc: console_messages.append(f"pageerror:{exc}"))
 
         try:
-            if args.completion_refresh_only:
-                completion_refresh_aliases = await assert_late_completion_refresh_without_reload(
-                    page,
-                    args,
-                    seeded_keys,
-                )
-            else:
-                csv_key, parquet_key, csv_alias, parquet_alias = seed_s3_objects(args)
-                seeded_keys.extend([csv_key, parquet_key])
-                await wait_for_aliases_in_completion_schema(
-                    page,
-                    args.base_url,
-                    [csv_alias, parquet_alias],
-                    args.timeout_ms,
-                )
-                await ensure_query_notebook(page, args.base_url, args.timeout_ms)
-                await assert_s3_path_completions(
-                    page,
-                    args.bucket,
-                    csv_alias,
-                    parquet_alias,
-                    args.timeout_ms,
-                )
-                await run_query_and_assert_text(
-                    page,
-                    f"select source_kind, amount_chf from {csv_alias} order by record_id limit 1",
-                    "csv_path_completion",
-                    args.timeout_ms,
-                )
-                await run_query_and_assert_text(
-                    page,
-                    f"select source_kind, amount_chf from {parquet_alias} limit 1",
-                    "parquet_path_completion",
-                    args.timeout_ms,
-                )
-                await open_s3_explorer_file(
-                    page,
-                    args.base_url,
-                    args.bucket,
-                    parquet_key,
-                    parquet_alias,
-                    args.timeout_ms,
-                )
-                copied_alias = await copy_visible_query_path(
-                    page,
-                    parquet_alias,
-                    args.timeout_ms,
-                )
-                await ensure_query_notebook(page, args.base_url, args.timeout_ms)
-                await run_query_and_assert_text(
-                    page,
-                    f"select source_kind, amount_chf from {copied_alias} limit 1",
-                    "parquet_path_completion",
-                    args.timeout_ms,
-                )
-                await assert_copy_query_path_actions_for_other_sources(
-                    page,
-                    args.base_url,
-                    args.timeout_ms,
-                )
-                completion_refresh_aliases = await assert_late_completion_refresh_without_reload(
-                    page,
-                    args,
-                    seeded_keys,
-                )
+            await wait_for_aliases_in_completion_schema(
+                page,
+                args.base_url,
+                [csv_alias, parquet_alias],
+                args.timeout_ms,
+            )
+            await ensure_query_notebook(page, args.base_url, args.timeout_ms)
+            await assert_s3_path_completions(
+                page,
+                args.bucket,
+                csv_alias,
+                parquet_alias,
+                args.timeout_ms,
+            )
+            await run_query_and_assert_text(
+                page,
+                f"select source_kind, amount_chf from {csv_alias} order by record_id limit 1",
+                "csv_path_completion",
+                args.timeout_ms,
+            )
+            await run_query_and_assert_text(
+                page,
+                f"select source_kind, amount_chf from {parquet_alias} limit 1",
+                "parquet_path_completion",
+                args.timeout_ms,
+            )
+            await open_s3_explorer_file(
+                page,
+                args.base_url,
+                args.bucket,
+                parquet_key,
+                parquet_alias,
+                args.timeout_ms,
+            )
+            copied_alias = await copy_visible_query_path(
+                page,
+                parquet_alias,
+                args.timeout_ms,
+            )
+            await ensure_query_notebook(page, args.base_url, args.timeout_ms)
+            await run_query_and_assert_text(
+                page,
+                f"select source_kind, amount_chf from {copied_alias} limit 1",
+                "parquet_path_completion",
+                args.timeout_ms,
+            )
+            await assert_copy_query_path_actions_for_other_sources(
+                page,
+                args.base_url,
+                args.timeout_ms,
+            )
         except (ClientError, PlaywrightTimeoutError, RuntimeError) as exc:
             print(str(exc), file=sys.stderr)
-            if csv_alias:
-                print(f"CSV alias: {csv_alias}", file=sys.stderr)
-            if parquet_alias:
-                print(f"Parquet alias: {parquet_alias}", file=sys.stderr)
+            print(f"CSV alias: {csv_alias}", file=sys.stderr)
+            print(f"Parquet alias: {parquet_alias}", file=sys.stderr)
             for message in console_messages:
                 print(message, file=sys.stderr)
             await context.close()
@@ -751,16 +572,9 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 await context.close()
             with contextlib.suppress(Exception):
                 await browser.close()
-            for key in seeded_keys:
+            for key in (csv_key, parquet_key):
                 with contextlib.suppress(Exception):
                     client.delete_object(Bucket=args.bucket, Key=key)
-
-    if args.completion_refresh_only and completion_refresh_aliases:
-        print(
-            "Playwright SQL S3 late completion refresh regression passed for "
-            f"{completion_refresh_aliases[0]} and {completion_refresh_aliases[1]}."
-        )
-        return 0
 
     print(
         "Playwright SQL S3 path completion smoke passed for "

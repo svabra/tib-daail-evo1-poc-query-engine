@@ -19,7 +19,6 @@ export function createSourceTreeController(helpers) {
     localWorkspaceSchemaKey,
     localWorkspaceSchemaMarkup,
     normalizeLocalWorkspaceFolderPath,
-    onDataSourceSchemaMayHaveChanged,
     restoreSidebarState,
     showMessageDialog,
     syncOpenLocalWorkspaceMoveDialog,
@@ -34,13 +33,6 @@ export function createSourceTreeController(helpers) {
   let dataSourceSidebarRefreshQueued = false;
   const pendingSourceCatalogBlinks = new Set();
   const sourceConnectionRequests = new Set();
-
-  function notifyDataSourceSchemaMayHaveChanged() {
-    if (typeof onDataSourceSchemaMayHaveChanged !== "function") {
-      return;
-    }
-    onDataSourceSchemaMayHaveChanged();
-  }
 
   function escapeSelectorValue(value) {
     return typeof window.CSS?.escape === "function" ? window.CSS.escape(String(value ?? "")) : String(value ?? "");
@@ -325,7 +317,6 @@ export function createSourceTreeController(helpers) {
         throw new Error(`Failed to ${normalizedAction} ${normalizedSourceId}: ${response.status}`);
       }
       applyDataSourceEventsState(await response.json());
-      notifyDataSourceSchemaMayHaveChanged();
     } catch (error) {
       console.error(`Failed to ${normalizedAction} data source.`, error);
       await showMessageDialog({
@@ -437,7 +428,6 @@ export function createSourceTreeController(helpers) {
   function applyDataSourceEventsState(snapshot) {
     const previousVersion = dataSourceEventsStateVersion;
     dataSourceEventsStateVersion = snapshot?.version ?? null;
-    const versionChanged = previousVersion !== null && dataSourceEventsStateVersion !== previousVersion;
     const latestEvent = Array.isArray(snapshot?.events) ? snapshot.events[0] : null;
     const previousLatestEventId = dataSourceEventsLatestEventId;
     dataSourceEventsLatestEventId = typeof latestEvent?.eventId === "string" ? latestEvent.eventId : null;
@@ -448,9 +438,6 @@ export function createSourceTreeController(helpers) {
     }
 
     applyDataSourceStatusIndicators(snapshot);
-    if (versionChanged) {
-      notifyDataSourceSchemaMayHaveChanged();
-    }
 
     if (!latestEvent || dataSourceEventsLatestEventId === previousLatestEventId) {
       return;
