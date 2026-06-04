@@ -20,7 +20,7 @@ spec:
       serviceAccountName: evo1-bdw
       containers:
         - name: bdw
-          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.9.25
+          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.9.26
           imagePullPolicy: Always
           ports:
             - name: http
@@ -44,7 +44,7 @@ spec:
             - name: BDW_DUCKDB_TEMP_DIRECTORY
               value: /workspace/tmp/duckdb-spill
             - name: BDW_DUCKDB_MAX_TEMP_DIRECTORY_SIZE
-              value: 28GiB
+              value: 56GiB
             - name: BDW_DUCKDB_PRESERVE_INSERTION_ORDER
               value: "false"
             - name: BDW_QUERY_CACHE_DIR

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.25. Keep entries concise and
+# Derived from git history through version 0.9.26. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
     {
-        "version": "0.9.25",
+        "version": "0.9.26",
         "releasedAt": "2026-06-04T14:42:59+02:00",
         "features": [
             (
@@ -30,13 +30,13 @@ RELEASE_NOTES: list[dict[str, object]] = [
                 "DuckDB query workers now support explicit runtime resource "
                 "settings for memory limit, threads, temp directory, temp "
                 "directory quota, and insertion-order preservation; the RHOS "
-                "deployment uses a conservative 20 GiB memory limit, four "
-                "threads, and a 28 GiB spill quota inside the 60 GiB emptyDir."
+                "deployment uses a 20 GiB memory limit, four threads, and an "
+                "expanded 56 GiB spill quota inside the 60 GiB emptyDir."
             ),
             (
                 "The RHOS deployment now provides a 60 GiB workspace emptyDir, "
                 "leaving more temporary SSD headroom for hydrated runtime query "
-                "caches while keeping the DuckDB spill quota conservative."
+                "caches and larger DuckDB spill workloads."
             ),
             (
                 "Hydrate cache preview, rehydrate, expire, and delete actions "

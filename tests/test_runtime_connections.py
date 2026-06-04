@@ -53,7 +53,7 @@ class DuckDBWorkerConnectionRetryTests(TestCase):
                 "BDW_DUCKDB_MEMORY_LIMIT": "20GiB",
                 "BDW_DUCKDB_THREADS": "4",
                 "BDW_DUCKDB_TEMP_DIRECTORY": "/workspace/tmp/duckdb-spill",
-                "BDW_DUCKDB_MAX_TEMP_DIRECTORY_SIZE": "28GiB",
+                "BDW_DUCKDB_MAX_TEMP_DIRECTORY_SIZE": "56GiB",
                 "BDW_DUCKDB_PRESERVE_INSERTION_ORDER": "false",
                 "BDW_QUERY_CACHE_DIR": "/workspace/query-cache",
             },
@@ -64,7 +64,7 @@ class DuckDBWorkerConnectionRetryTests(TestCase):
         self.assertEqual(settings.duckdb_memory_limit, "20GiB")
         self.assertEqual(settings.duckdb_threads, 4)
         self.assertEqual(settings.duckdb_temp_directory, Path("/workspace/tmp/duckdb-spill"))
-        self.assertEqual(settings.duckdb_max_temp_directory_size, "28GiB")
+        self.assertEqual(settings.duckdb_max_temp_directory_size, "56GiB")
         self.assertFalse(settings.duckdb_preserve_insertion_order)
         self.assertEqual(settings.query_cache_dir, Path("/workspace/query-cache"))
 
@@ -83,7 +83,7 @@ class DuckDBWorkerConnectionRetryTests(TestCase):
                 duckdb_memory_limit="20GiB",
                 duckdb_threads=4,
                 duckdb_temp_directory=spill_dir,
-                duckdb_max_temp_directory_size="28GiB",
+                duckdb_max_temp_directory_size="56GiB",
                 duckdb_preserve_insertion_order=False,
             )
             connection = FakeConnection()
@@ -93,11 +93,11 @@ class DuckDBWorkerConnectionRetryTests(TestCase):
             self.assertEqual(applied["memoryLimit"], "20GiB")
             self.assertEqual(applied["threads"], 4)
             self.assertEqual(applied["tempDirectory"], spill_dir.as_posix())
-            self.assertEqual(applied["maxTempDirectorySize"], "28GiB")
+            self.assertEqual(applied["maxTempDirectorySize"], "56GiB")
             self.assertFalse(applied["preserveInsertionOrder"])
             self.assertIn("SET memory_limit = '20GiB'", connection.commands)
             self.assertIn("SET threads = 4", connection.commands)
             self.assertIn("SET preserve_insertion_order = false", connection.commands)
             self.assertIn(f"SET temp_directory = '{spill_dir.as_posix()}'", connection.commands)
-            self.assertIn("SET max_temp_directory_size = '28GiB'", connection.commands)
+            self.assertIn("SET max_temp_directory_size = '56GiB'", connection.commands)
             self.assertTrue(spill_dir.exists())

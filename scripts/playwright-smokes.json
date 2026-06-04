@@ -56,6 +56,11 @@
       "enabledByDefault": true
     },
     {
+      "id": "cache-hydration-plan",
+      "script": "playwright_cache_hydration_plan_regression.py",
+      "enabledByDefault": true
+    },
+    {
       "id": "sql-s3-path-completion",
       "script": "playwright_sql_s3_path_completion_smoke.py",
       "enabledByDefault": false
