@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 import sys
 import tempfile
@@ -35,6 +36,7 @@ from bit_data_workbench.backend.query_cache import (  # noqa: E402
     infer_predicate_index_columns,
     list_query_cache_datasets,
 )
+from bit_data_workbench.backend import query_cache  # noqa: E402
 
 
 def _write_federal_tax_parquet(path: Path, *, rows: int = 1000) -> None:
@@ -342,6 +344,101 @@ class QueryCacheTests(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             delete_cache_by_key("../not-a-cache-key")
+
+    def test_cache_lock_retries_when_stale_holder_is_misdetected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            lock_root = root / "cache"
+            lock_root.mkdir()
+            cache_key = "b" * 40
+            lock_path = lock_root / f"{cache_key}.duckdb.duckdb.write-lock"
+            lock_path.write_text("{\"pid\": 999999}", encoding="utf-8")
+            with patch.object(query_cache, "_cache_lock_holder_is_running", return_value=False):
+                with query_cache._acquire_cache_write_lock(
+                    {"cacheKey": cache_key, "cacheDatabasePath": (lock_root / f"{cache_key}.duckdb").as_posix()},
+                    max_wait_seconds=0.05,
+                ):
+                    self.assertTrue(True)
+            self.assertFalse(lock_path.exists())
+
+    def test_cache_lock_waits_when_holder_process_is_running(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            lock_root = root / "cache"
+            lock_root.mkdir()
+            cache_key = "c" * 40
+            lock_path = lock_root / f"{cache_key}.duckdb.duckdb.write-lock"
+            lock_path.write_text("{\"pid\": 12345678}", encoding="utf-8")
+            started = time.time()
+            with self.assertRaises(TimeoutError):
+                with patch.object(
+                    query_cache, "_cache_lock_holder_is_running", return_value=True
+                ):
+                    with query_cache._acquire_cache_write_lock(
+                        {
+                            "cacheKey": cache_key,
+                            "cacheDatabasePath": (lock_root / f"{cache_key}.duckdb").as_posix(),
+                        },
+                        max_wait_seconds=0.05,
+                    ):
+                        self.fail("lock was unexpectedly acquired")
+            self.assertGreaterEqual(time.time() - started, 0.0)
+            self.assertTrue(lock_path.exists())
+
+    def test_hydrate_cache_retries_after_lock_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            parquet_path = root / "federal_tax.parquet"
+            cache_root = root / "cache"
+            _write_federal_tax_parquet(parquet_path, rows=100)
+            source_summary = _summary_for(parquet_path)
+            sql = "SELECT taxpayer_id, federal_tax_due FROM s3.poc.federal_tax.parquet"
+
+            create_calls: list[str] = []
+
+            class FlakyConnection:
+                def __init__(self) -> None:
+                    self.closed = False
+                    self.attempted = 0
+
+                def execute(self, statement: str, *args: object):
+                    create_calls.append(statement)
+                    if "CREATE TABLE" in statement:
+                        self.attempted += 1
+                        if self.attempted == 1:
+                            raise duckdb.IOException(
+                                'IO Error: Failed to set lock on file "/tmp/bdw-query-cache/test.duckdb.wal": '
+                                "Conflicting lock is held"
+                            )
+                    return self
+
+                def fetchone(self):
+                    return (100,)
+
+                def fetchall(self):
+                    return []
+
+                def rollback(self):
+                    return None
+
+                def close(self):
+                    self.closed = True
+
+            connection = FlakyConnection()
+
+            with patch.dict(os.environ, {"BDW_QUERY_CACHE_DIR": str(cache_root)}):
+                _updated_summaries, hydration = hydrate_cache(
+                    connection=connection,  # type: ignore[arg-type]
+                    sql=sql,
+                    source_summaries=[source_summary],
+                    query_options=_cache_options(),
+                )
+
+            self.assertEqual(hydration["enabled"], True)
+            self.assertEqual(
+                hydration["sources"][0]["status"], "hit"
+            )
+            self.assertGreaterEqual(sum(1 for call in create_calls if "CREATE TABLE" in call), 2)
 
     def test_hydrates_without_art_index_when_no_useful_column_exists(self) -> None:
         with tempfile.TemporaryDirectory() as raw_tmp:

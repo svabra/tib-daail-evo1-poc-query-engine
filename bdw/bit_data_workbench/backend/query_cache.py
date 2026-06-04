@@ -5,9 +5,11 @@ import json
 import os
 import re
 import tempfile
+import time
+from contextlib import contextmanager, suppress
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 import duckdb
 
@@ -23,6 +25,12 @@ CACHE_STATUS_STALE = "stale"
 CACHE_STATUS_EXPIRED = "expired"
 CACHE_STATUS_UNSUPPORTED = "unsupported"
 CACHE_STATUS_ERROR = "error"
+CACHE_WRITE_LOCK_SUFFIX = ".duckdb.write-lock"
+CACHE_WRITE_LOCK_MAX_WAIT_SECONDS = 90
+CACHE_WRITE_LOCK_POLL_SECONDS = 0.25
+CACHE_WRITE_LOCK_RETRY_ATTEMPTS = 3
+CACHE_WRITE_LOCK_RETRY_DELAY_SECONDS = 0.5
+QUERY_CACHE_LOCK_STALE_SECONDS = 600
 RUNTIME_CACHE_EXPECTED_BEHAVIOR = (
     "When Hydrate cache is enabled, the next query run uses this runtime DuckDB table "
     "through a temporary source view if the cache is current."
@@ -117,6 +125,96 @@ def _cache_file_paths_for_key(
     wal_path = root / f"{normalized}.duckdb.wal"
     metadata_path = root / f"{normalized}.json"
     return database_path, wal_path, metadata_path
+
+
+def _cache_lock_holder_is_running(pid: int) -> bool:
+    normalized_pid = int(pid)
+    if normalized_pid <= 0:
+        return False
+    with suppress(Exception):
+        os.kill(normalized_pid, 0)
+        return True
+    return False
+
+
+def _is_cache_lock_stale(lock_path: Path, *, now: float) -> bool:
+    try:
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    owner_pid = payload.get("pid")
+    if isinstance(owner_pid, int):
+        if _cache_lock_holder_is_running(owner_pid):
+            return False
+        return True
+    if isinstance(owner_pid, str):
+        normalized_owner_pid = None
+        with suppress(ValueError, TypeError):
+            normalized_owner_pid = int(owner_pid)
+        if isinstance(normalized_owner_pid, int) and normalized_owner_pid > 0:
+            if _cache_lock_holder_is_running(normalized_owner_pid):
+                return False
+            return True
+
+    with suppress(OSError):
+        return (now - lock_path.stat().st_mtime) > QUERY_CACHE_LOCK_STALE_SECONDS
+    return True
+
+
+@contextmanager
+def _acquire_cache_write_lock(
+    plan: dict[str, object],
+    *,
+    max_wait_seconds: float = CACHE_WRITE_LOCK_MAX_WAIT_SECONDS,
+) -> Iterator[None]:
+    database_path = _database_path(plan)
+    lock_path = Path(str(database_path) + CACHE_WRITE_LOCK_SUFFIX)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    start = time.time()
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(
+                    fd,
+                    json.dumps(
+                        {
+                            "started_at": utc_now_iso(),
+                            "pid": os.getpid(),
+                            "cache_key": str(plan.get("cacheKey") or ""),
+                        },
+                        sort_keys=True,
+                    ).encode("utf-8"),
+                )
+            finally:
+                os.close(fd)
+            break
+        except FileExistsError:
+            try:
+                if _is_cache_lock_stale(lock_path, now=time.time()):
+                    try:
+                        os.unlink(lock_path)
+                        continue
+                    except OSError:
+                        pass
+                if time.time() - start >= max_wait_seconds:
+                    raise TimeoutError(
+                        f"Timed out waiting for cache lock on {database_path.as_posix()}"
+                    ) from None
+                time.sleep(CACHE_WRITE_LOCK_POLL_SECONDS)
+            except TimeoutError:
+                raise
+            except OSError:
+                pass
+        except OSError as exc:
+            raise RuntimeError(
+                f"Could not create cache lock file {lock_path.as_posix()}: {exc}"
+            ) from exc
+    try:
+        yield
+    finally:
+        with suppress(OSError):
+            os.unlink(lock_path)
 
 
 def infer_predicate_index_columns(sql: str) -> list[str]:
@@ -311,6 +409,25 @@ def _cache_file_size(plan: dict[str, object]) -> int:
     if wal_path.exists():
         total += wal_path.stat().st_size
     return total
+
+
+def _is_cache_lock_conflict(exc: BaseException) -> bool:
+    message = str(exc).lower()
+    return (
+        "conflicting lock is held" in message
+        or "could not set lock on file" in message
+        or "another process" in message
+        or "already open" in message
+        or "being used by another process" in message
+    )
+
+
+def _wait_for_release_of_cache_lock(plan: dict[str, object]) -> None:
+    lock_path = Path(str(_database_path(plan)) + CACHE_WRITE_LOCK_SUFFIX)
+    if not lock_path.exists():
+        return
+    with _acquire_cache_write_lock(plan):
+        pass
 
 
 def _cache_database_wal_path(plan: dict[str, object]) -> Path:
@@ -636,12 +753,20 @@ def delete_cache(
     return preview
 
 
-def _attach_cache_database(connection: duckdb.DuckDBPyConnection, plan: dict[str, object]) -> str:
+def _attach_cache_database(
+    connection: duckdb.DuckDBPyConnection,
+    plan: dict[str, object],
+    *,
+    read_only: bool = False,
+) -> str:
     alias = str(plan["cacheAlias"])
     database_path = _database_path(plan)
     database_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        connection.execute(f"ATTACH {sql_literal(database_path.as_posix())} AS {qualified_name(alias)}")
+        statement = f"ATTACH {sql_literal(database_path.as_posix())} AS {qualified_name(alias)}"
+        if read_only:
+            statement += " (READ_ONLY)"
+        connection.execute(statement)
     except duckdb.Error as exc:
         if "already exists" not in str(exc).lower() and "already attached" not in str(exc).lower():
             raise
@@ -719,69 +844,44 @@ def hydrate_cache(
                 }
             )
 
-        alias = _attach_cache_database(connection, plan)
-        table_ref = qualified_name(alias, "main", CACHE_TABLE_NAME)
-        selected_index_columns: list[str] = []
-        index_reason = ""
-        if should_rehydrate:
-            import time
-
-            hydrate_started = time.perf_counter()
-            connection.execute(f"DROP TABLE IF EXISTS {table_ref}")
-            connection.execute(f"CREATE TABLE {table_ref} AS {plan['querySql']}")
-            available_columns = _table_columns(connection, alias)
-            selected_index_columns, index_reason = _select_index_columns(
-                requested_columns=list(plan.get("indexColumns") or []),
-                available_columns=available_columns,
-            )
-            for column in selected_index_columns:
-                index_name = _safe_name(f"idx_{plan['cacheKey']}_{column}", prefix="idx")
-                connection.execute(
-                    f"CREATE INDEX {index_name} ON {table_ref} ({qualified_name(column)})"
+        def _materialize_cache(alias: str, *, rebuild: bool) -> tuple[str, list[str], dict[str, object]]:
+            table_ref = qualified_name(alias, "main", CACHE_TABLE_NAME)
+            selected_index_columns: list[str] = []
+            materialized_status = status
+            if rebuild:
+                hydrate_started = time.perf_counter()
+                connection.execute(f"DROP TABLE IF EXISTS {table_ref}")
+                connection.execute(f"CREATE TABLE {table_ref} AS {plan['querySql']}")
+                available_columns = _table_columns(connection, alias)
+                selected_index_columns, index_reason = _select_index_columns(
+                    requested_columns=list(plan.get("indexColumns") or []),
+                    available_columns=available_columns,
                 )
-            row_count = int(connection.execute(f"SELECT COUNT(*) FROM {table_ref}").fetchone()[0])
-            cache_size_bytes = _cache_file_size(plan)
-            used_at = utc_now_iso()
-            previous_metadata = _read_metadata(plan) or {}
-            metadata = {
-                **previous_metadata,
-                **plan,
-                "indexColumns": selected_index_columns,
-                "indexReason": index_reason,
-                "rowCount": row_count,
-                "cacheSizeBytes": cache_size_bytes,
-                "cacheSizeMb": _format_mb(cache_size_bytes),
-                "lastHydratedAt": used_at,
-                "lastUsedAt": used_at,
-                "expired": False,
-                "runtimeTable": True,
-                "temporary": True,
-                "temporaryWarning": RUNTIME_CACHE_TEMPORARY_WARNING,
-                "expectedBehavior": RUNTIME_CACHE_EXPECTED_BEHAVIOR,
-            }
-            metadata = _merge_cache_context(
-                metadata,
-                sql=sql,
-                cache_context=cache_context,
-                used_at=used_at,
-            )
-            _write_metadata(plan, metadata)
-            timings[f"{relation}.cacheHydrationMs"] = (time.perf_counter() - hydrate_started) * 1000
-            status = {
-                **metadata,
-                "lastCheckedAt": utc_now_iso(),
-                "status": CACHE_STATUS_HIT,
-                "statusLabel": "Cache hit",
-                "statusReason": "A local DuckDB cache table exists and matches the current S3 source revision.",
-                "physicalCacheExists": True,
-                "physicalIndexes": selected_index_columns,
-                "cacheSizeBytes": _cache_file_size(plan),
-                "cacheSizeMb": _format_mb(_cache_file_size(plan)),
-            }
-        else:
-            used_at = utc_now_iso()
-            metadata = _read_metadata(plan)
-            if metadata is not None:
+                for column in selected_index_columns:
+                    index_name = _safe_name(f"idx_{plan['cacheKey']}_{column}", prefix="idx")
+                    connection.execute(
+                        f"CREATE INDEX {index_name} ON {table_ref} ({qualified_name(column)})"
+                    )
+                row_count = int(connection.execute(f"SELECT COUNT(*) FROM {table_ref}").fetchone()[0])
+                cache_size_bytes = _cache_file_size(plan)
+                used_at = utc_now_iso()
+                previous_metadata = _read_metadata(plan) or {}
+                metadata = {
+                    **previous_metadata,
+                    **plan,
+                    "indexColumns": selected_index_columns,
+                    "indexReason": index_reason,
+                    "rowCount": row_count,
+                    "cacheSizeBytes": cache_size_bytes,
+                    "cacheSizeMb": _format_mb(cache_size_bytes),
+                    "lastHydratedAt": used_at,
+                    "lastUsedAt": used_at,
+                    "expired": False,
+                    "runtimeTable": True,
+                    "temporary": True,
+                    "temporaryWarning": RUNTIME_CACHE_TEMPORARY_WARNING,
+                    "expectedBehavior": RUNTIME_CACHE_EXPECTED_BEHAVIOR,
+                }
                 metadata = _merge_cache_context(
                     metadata,
                     sql=sql,
@@ -789,12 +889,111 @@ def hydrate_cache(
                     used_at=used_at,
                 )
                 _write_metadata(plan, metadata)
-                status = cache_status_for_plan(plan)
-            selected_index_columns = [
+                timings[f"{relation}.cacheHydrationMs"] = (
+                    time.perf_counter() - hydrate_started
+                ) * 1000
+                materialized_status = {
+                    **metadata,
+                    "lastCheckedAt": utc_now_iso(),
+                    "status": CACHE_STATUS_HIT,
+                    "statusLabel": "Cache hit",
+                    "statusReason": (
+                        "A local DuckDB cache table exists and matches the current S3 source revision."
+                    ),
+                    "physicalCacheExists": True,
+                    "physicalIndexes": selected_index_columns,
+                    "cacheSizeBytes": _cache_file_size(plan),
+                    "cacheSizeMb": _format_mb(_cache_file_size(plan)),
+                }
+            else:
+                used_at = utc_now_iso()
+                metadata = _read_metadata(plan)
+                if metadata is not None:
+                    metadata = _merge_cache_context(
+                        metadata,
+                        sql=sql,
+                        cache_context=cache_context,
+                        used_at=used_at,
+                    )
+                    _write_metadata(plan, metadata)
+                    materialized_status = cache_status_for_plan(plan)
+                else:
+                    materialized_status = {
+                        **materialized_status,
+                        "lastCheckedAt": utc_now_iso(),
+                    }
+            table_indexes = [
                 str(column)
-                for column in (status.get("indexColumns") or [])
+                for column in (materialized_status.get("indexColumns") or [])
                 if str(column).strip()
             ]
+            return table_ref, table_indexes, materialized_status
+
+        table_ref = ""
+        selected_index_columns: list[str] = []
+        if should_rehydrate:
+            lock_attempts = CACHE_WRITE_LOCK_RETRY_ATTEMPTS
+            for attempt in range(1, lock_attempts + 1):
+                try:
+                    with _acquire_cache_write_lock(plan):
+                        status = cache_status_for_plan(plan)
+                        should_rehydrate = force or status.get("status") != CACHE_STATUS_HIT
+                        alias = _attach_cache_database(
+                            connection,
+                            plan,
+                            read_only=not should_rehydrate,
+                        )
+                        table_ref, selected_index_columns, status = _materialize_cache(
+                            alias,
+                            rebuild=should_rehydrate,
+                        )
+                    break
+                except TimeoutError as exc:
+                    raise RuntimeError(str(exc)) from exc
+                except duckdb.Error as exc:
+                    if not _is_cache_lock_conflict(exc) or attempt >= lock_attempts:
+                        if _is_cache_lock_conflict(exc):
+                            raise RuntimeError(
+                                "Cache database is currently locked by another process. "
+                                "Retry this query when the cache write is complete."
+                            ) from exc
+                        raise
+                    with suppress(Exception):
+                        connection.execute("ROLLBACK")
+                    time.sleep(CACHE_WRITE_LOCK_RETRY_DELAY_SECONDS * attempt)
+        else:
+            lock_attempts = CACHE_WRITE_LOCK_RETRY_ATTEMPTS
+            for attempt in range(1, lock_attempts + 1):
+                try:
+                    if attempt == 1:
+                        _wait_for_release_of_cache_lock(plan)
+                    alias = _attach_cache_database(connection, plan, read_only=True)
+                    table_ref, selected_index_columns, status = _materialize_cache(
+                        alias,
+                        rebuild=False,
+                    )
+                    break
+                except duckdb.Error as exc:
+                    if not _is_cache_lock_conflict(exc):
+                        raise
+                    if attempt < lock_attempts:
+                        with suppress(Exception):
+                            connection.execute("ROLLBACK")
+                        time.sleep(CACHE_WRITE_LOCK_RETRY_DELAY_SECONDS * attempt)
+                        continue
+                    with _acquire_cache_write_lock(plan):
+                        status = cache_status_for_plan(plan)
+                        should_rehydrate = force or status.get("status") != CACHE_STATUS_HIT
+                        alias = _attach_cache_database(
+                            connection,
+                            plan,
+                            read_only=not should_rehydrate,
+                        )
+                        table_ref, selected_index_columns, status = _materialize_cache(
+                            alias,
+                            rebuild=should_rehydrate,
+                        )
+                        break
 
         updated = dict(summary)
         updated["query_sql"] = f"SELECT * FROM {table_ref}"
