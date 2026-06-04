@@ -1696,8 +1696,48 @@ class WorkbenchService:
     ) -> dict[str, KnownRelationReference]:
         with self._lock:
             relation_index = build_relation_index(self._catalogs)
+        self._add_s3_discovery_relation_aliases(relation_index)
         self._add_local_relation_aliases(relation_index, local_relation_map)
         return relation_index
+
+    def _add_s3_discovery_relation_aliases(
+        self,
+        relation_index: dict[str, KnownRelationReference],
+    ) -> None:
+        discovery = getattr(self, "_data_source_discovery", None)
+        s3_relation_specs = getattr(discovery, "s3_relation_specs", None)
+        if not callable(s3_relation_specs):
+            return
+        specs = s3_relation_specs()
+        if not specs:
+            return
+        metadata_by_relation = self._workspace_s3_object_metadata()
+        for relation_id, spec in specs.items():
+            relation = str(relation_id or "").strip()
+            if not relation:
+                continue
+            metadata = metadata_by_relation.get(relation, {})
+            bucket = str(metadata.get("bucket") or "").strip()
+            entry = KnownRelationReference(relation=relation, bucket=bucket)
+            aliases = {
+                relation,
+                str(metadata.get("query_alias") or "").strip(),
+                str(getattr(spec, "relation_name", "") or "").strip(),
+            }
+            schema_name = str(getattr(spec, "schema_name", "") or "").strip()
+            relation_name = str(getattr(spec, "relation_name", "") or "").strip()
+            if schema_name and relation_name:
+                aliases.add(f"{schema_name}.{relation_name}")
+            for prefix in ("workspace", "workspace.s3"):
+                aliases.add(f"{prefix}.{relation}")
+                if schema_name and relation_name:
+                    aliases.add(f"{prefix}.{schema_name}.{relation_name}")
+                if relation_name:
+                    aliases.add(f"{prefix}.{relation_name}")
+            for alias in aliases:
+                normalized_alias = normalize_query_alias_key(alias)
+                if normalized_alias:
+                    relation_index.setdefault(normalized_alias, entry)
 
     @staticmethod
     def _add_local_relation_aliases(
@@ -1748,19 +1788,23 @@ class WorkbenchService:
         if not touched_keys:
             return []
         summaries: list[dict[str, object]] = []
+        summarized_keys: set[str] = set()
         discovery = getattr(self, "_data_source_discovery", None)
         s3_relation_specs = getattr(discovery, "s3_relation_specs", None)
         specs = s3_relation_specs() if callable(s3_relation_specs) else {}
+        metadata_by_relation = self._workspace_s3_object_metadata() if specs else {}
         with self._lock:
             catalogs = list(self._catalogs)
         for catalog in catalogs:
             for source_schema in catalog.schemas:
                 for source_object in source_schema.objects:
                     relation = str(source_object.relation or "").strip()
-                    if normalize_query_alias_key(relation) not in touched_keys:
+                    normalized_relation = normalize_query_alias_key(relation)
+                    if normalized_relation not in touched_keys:
                         continue
                     if not str(source_object.s3_bucket or "").strip():
                         continue
+                    summarized_keys.add(normalized_relation)
                     spec = specs.get(relation)
                     query_sql = str(getattr(spec, "query_sql", "") or "").strip()
                     if spec is not None:
@@ -1790,6 +1834,19 @@ class WorkbenchService:
                             "query_sql": query_sql,
                         }
                     )
+        for relation, spec in specs.items():
+            normalized_relation = normalize_query_alias_key(relation)
+            if normalized_relation not in touched_keys or normalized_relation in summarized_keys:
+                continue
+            summary = self._s3_source_summary_from_spec(
+                relation=relation,
+                spec=spec,
+                metadata=metadata_by_relation.get(str(relation), {}),
+                query_options=normalized_query_options,
+            )
+            if summary:
+                summaries.append(summary)
+                summarized_keys.add(normalized_relation)
         summaries.extend(
             self._local_workspace_source_summaries(
                 touched_keys,
@@ -1816,6 +1873,56 @@ class WorkbenchService:
         if hive_option == "off":
             return build_s3_query("parquet", object_path, hive_partitioning=False)
         return query_sql
+
+    def _s3_source_summary_from_spec(
+        self,
+        *,
+        relation: str,
+        spec: object,
+        metadata: dict[str, object],
+        query_options: dict[str, object],
+    ) -> dict[str, object] | None:
+        normalized_relation = str(relation or "").strip()
+        if not normalized_relation:
+            return None
+        object_path = str(getattr(spec, "object_path", "") or metadata.get("path") or "").strip()
+        if not object_path:
+            return None
+        try:
+            bucket_name, object_key = parse_s3_path(object_path)
+        except ValueError:
+            bucket_name = str(metadata.get("bucket") or "").strip()
+            object_key = str(metadata.get("key") or "").strip()
+        query_sql = self._s3_source_query_sql_for_options(
+            spec=spec,
+            query_options=query_options,
+        )
+        if not query_sql:
+            query_sql = str(getattr(spec, "query_sql", "") or "").strip()
+        return {
+            "relation": normalized_relation,
+            "query_alias": str(metadata.get("query_alias") or "").strip(),
+            "bucket": bucket_name,
+            "key": str(metadata.get("key") or object_key or "").strip(),
+            "path": object_path,
+            "format": str(
+                metadata.get("file_format")
+                or getattr(spec, "object_format", "")
+                or ""
+            ).strip(),
+            "size_bytes": int(
+                getattr(spec, "size_bytes", 0)
+                or metadata.get("size_bytes")
+                or 0
+            ),
+            "object_revision": str(getattr(spec, "object_revision", "") or ""),
+            "display_name": str(
+                getattr(spec, "display_name", "")
+                or metadata.get("display_name")
+                or normalized_relation.split(".", 1)[-1]
+            ).strip(),
+            "query_sql": query_sql,
+        }
 
     @staticmethod
     def _bootstrap_duckdb_source_views(

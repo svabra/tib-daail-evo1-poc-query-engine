@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sys
+import tempfile
 import threading
 import unittest
 from types import SimpleNamespace
@@ -352,6 +353,80 @@ class QuerySourceValidationTests(unittest.TestCase):
         summaries = captured["source_summaries"]
         self.assertEqual(captured["query_options"]["duckdb"]["parquetHivePartitioning"], "off")
         self.assertIn("hive_partitioning=false", summaries[0]["query_sql"])
+
+    def test_validation_uses_current_s3_specs_when_catalog_is_stale(self) -> None:
+        relation = "kbpoimports.kbpo2020_521a28d3"
+        object_path = "s3://kbpoimports/kbpo2020.parquet"
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
+        service._data_source_discovery = SimpleNamespace(
+            s3_relation_specs=lambda: {
+                relation: DiscoveredRelationSpec(
+                    schema_name="kbpoimports",
+                    relation_name="kbpo2020_521a28d3",
+                    query_sql=build_s3_query("parquet", object_path),
+                    object_path=object_path,
+                    object_format="parquet",
+                    display_name="kbpo2020.parquet",
+                    size_bytes=2048,
+                    object_revision="etag-kbpo2020",
+                )
+            }
+        )
+
+        result = service.validate_query_sources(
+            sql="select * from s3.kbpoimports.kbpo2020.parquet",
+            data_sources=["workspace.s3"],
+        )
+
+        self.assertEqual(result["status"], QUERY_SOURCE_VALID)
+        self.assertEqual(result["missingReferences"], [])
+        self.assertEqual(result["matchedReferences"][0]["matchedRelation"], relation)
+
+    def test_cache_preview_uses_current_s3_specs_when_catalog_is_stale(self) -> None:
+        relation = "kbpoimports.kbpo2020_521a28d3"
+        object_path = "s3://kbpoimports/kbpo2020.parquet"
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
+        service._data_source_discovery = SimpleNamespace(
+            s3_relation_specs=lambda: {
+                relation: DiscoveredRelationSpec(
+                    schema_name="kbpoimports",
+                    relation_name="kbpo2020_521a28d3",
+                    query_sql=build_s3_query("parquet", object_path),
+                    object_path=object_path,
+                    object_format="parquet",
+                    display_name="kbpo2020.parquet",
+                    size_bytes=2048,
+                    object_revision="etag-kbpo2020",
+                )
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            service.settings = SimpleNamespace(query_cache_dir=raw_tmp)
+            preview = service.query_cache_preview(
+                sql="select * from s3.kbpoimports.kbpo2020.parquet",
+                data_sources=["workspace.s3"],
+                query_options={
+                    "duckdb": {
+                        "parquetHivePartitioning": "auto",
+                        "cacheHydration": {
+                            "mode": "on",
+                            "scope": "referencedS3Parquet",
+                            "indexPolicy": "autoPredicates",
+                        },
+                    }
+                },
+            )
+
+        self.assertEqual(preview["status"], "ready")
+        self.assertEqual(len(preview["sources"]), 1)
+        self.assertEqual(preview["sources"][0]["relation"], relation)
+        self.assertEqual(preview["sources"][0]["path"], object_path)
+        self.assertEqual(preview["sources"][0]["status"], "miss")
 
 
 class QuerySourceValidationApiTests(unittest.TestCase):
