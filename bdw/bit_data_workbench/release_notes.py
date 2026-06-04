@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.22. Keep entries concise and
+# Derived from git history through version 0.9.24. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
     {
-        "version": "0.9.22",
-        "releasedAt": "2026-06-02T15:25:38+02:00",
+        "version": "0.9.24",
+        "releasedAt": "2026-06-04T13:59:30+02:00",
         "features": [
+            (
+                "Hydrated DuckDB runtime caches now coordinate cache database "
+                "writes with a local write lock, retry transient WAL lock "
+                "conflicts, and stop waiting cleanly when another process still "
+                "owns the cache lock."
+            ),
             (
                 "Settings now includes Runtime Storage, showing temporary "
                 "DuckDB spill usage, hydrated cache datasets, linked notebook "
