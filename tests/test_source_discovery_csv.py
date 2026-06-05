@@ -289,6 +289,17 @@ class CsvS3DiscoveryTests(TestCase):
         self.assertEqual(spec.part_prefix, "incoming/april/vat_smoke/")
         self.assertEqual(spec.part_count, 2)
         self.assertTrue(spec.zip_downloadable)
+        service = object.__new__(WorkbenchService)
+        service._data_source_discovery = SimpleNamespace(
+            s3_relation_specs=lambda: specs,
+        )
+        metadata = WorkbenchService._workspace_s3_object_metadata(service)
+        item = next(iter(metadata.values()))
+        self.assertEqual(
+            item["query_alias"],
+            "s3.vat_smoke_test.incoming.april.vat_smoke.parquet",
+        )
+        self.assertNotIn("vat_smoke.vat_smoke", item["query_alias"])
 
     def test_build_s3_parquet_query_accepts_runtime_hive_option(self) -> None:
         self.assertEqual(
@@ -467,6 +478,11 @@ class CsvS3DiscoveryTests(TestCase):
         self.assertEqual(csv_metadata["download_filename"], "mwa_abrechnung_entities.csv")
         self.assertTrue(csv_metadata["merge_downloadable"])
         self.assertTrue(csv_metadata["zip_downloadable"])
+        self.assertEqual(
+            csv_metadata["query_alias"],
+            "s3.vat_smoke_test.generated.mwa_abrechnung_test.csv.mwa_abrechnung_entities.csv",
+        )
+        self.assertNotIn("mwa_abrechnung_entities.mwa_abrechnung_entities", csv_metadata["query_alias"])
 
         json_metadata = by_display_name["mwa_abrechnung_entities.jsonl"]
         self.assertFalse(json_metadata["downloadable"])
@@ -476,6 +492,11 @@ class CsvS3DiscoveryTests(TestCase):
         self.assertEqual(json_metadata["download_filename"], "mwa_abrechnung_entities.jsonl")
         self.assertTrue(json_metadata["merge_downloadable"])
         self.assertTrue(json_metadata["zip_downloadable"])
+        self.assertEqual(
+            json_metadata["query_alias"],
+            "s3.vat_smoke_test.generated.mwa_abrechnung_test.json.mwa_abrechnung_entities.jsonl",
+        )
+        self.assertNotIn("mwa_abrechnung_entities.mwa_abrechnung_entities", json_metadata["query_alias"])
 
         parquet_metadata = by_display_name["mwa_abrechnung_entities.parquet"]
         self.assertFalse(parquet_metadata["downloadable"])
@@ -485,3 +506,8 @@ class CsvS3DiscoveryTests(TestCase):
         self.assertEqual(parquet_metadata["download_filename"], "mwa_abrechnung_entities.parquet")
         self.assertFalse(parquet_metadata["merge_downloadable"])
         self.assertTrue(parquet_metadata["zip_downloadable"])
+        self.assertEqual(
+            parquet_metadata["query_alias"],
+            "s3.vat_smoke_test.generated.mwa_abrechnung_test.parquet.mwa_abrechnung_entities.parquet",
+        )
+        self.assertNotIn("mwa_abrechnung_entities.mwa_abrechnung_entities", parquet_metadata["query_alias"])

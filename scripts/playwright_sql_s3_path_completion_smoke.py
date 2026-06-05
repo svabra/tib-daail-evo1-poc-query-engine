@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+from dataclasses import dataclass
 from pathlib import Path
 import sys
 import tempfile
@@ -25,6 +26,17 @@ from bit_data_workbench.backend.query_aliases import (  # noqa: E402
     normalize_query_alias_segment,
     s3_query_alias,
 )
+
+
+@dataclass(frozen=True)
+class SeededS3Objects:
+    csv_key: str
+    parquet_key: str
+    generated_parquet_keys: tuple[str, ...]
+    csv_alias: str
+    parquet_alias: str
+    generated_parquet_alias: str
+    duplicated_generated_parquet_alias: str
 
 
 def parse_args() -> argparse.Namespace:
@@ -66,16 +78,17 @@ def ensure_bucket(client, bucket: str) -> None:
         client.create_bucket(Bucket=bucket)
 
 
-def create_parquet_payload() -> bytes:
+def create_parquet_payload(source_kind: str = "parquet_path_completion") -> bytes:
     with tempfile.TemporaryDirectory() as temp_dir:
         parquet_path = Path(temp_dir) / "records.parquet"
         escaped_path = parquet_path.as_posix().replace("'", "''")
+        escaped_source_kind = source_kind.replace("'", "''")
         connection = duckdb.connect()
         try:
             connection.execute(
                 (
                     "COPY (SELECT 2 AS record_id, "
-                    "'parquet_path_completion' AS source_kind, "
+                    f"'{escaped_source_kind}' AS source_kind, "
                     "987.65 AS amount_chf) "
                     f"TO '{escaped_path}' (FORMAT PARQUET)"
                 )
@@ -85,11 +98,34 @@ def create_parquet_payload() -> bytes:
         return parquet_path.read_bytes()
 
 
-def seed_s3_objects(args: argparse.Namespace) -> tuple[str, str, str, str]:
+def generated_parquet_aliases(bucket: str, dataset_name: str) -> tuple[str, str]:
+    bucket_segment = normalize_query_alias_segment(bucket, fallback="bucket")
+    dataset_segment = normalize_query_alias_segment(dataset_name, fallback="folder")
+    deduplicated = (
+        f"s3.{bucket_segment}.generated.{dataset_segment}."
+        "parquet.mwa_abrechnung_entities.parquet"
+    )
+    duplicated = (
+        f"s3.{bucket_segment}.generated.{dataset_segment}."
+        "parquet.mwa_abrechnung_entities.mwa_abrechnung_entities.parquet"
+    )
+    return deduplicated, duplicated
+
+
+def seed_s3_objects(args: argparse.Namespace) -> SeededS3Objects:
     run_id = uuid4().hex[:10]
     prefix = f"{args.s3_smoke_prefix_root.strip('/')}/{run_id}/test"
     csv_key = f"{prefix}/sample-tax-office-500kb (1).csv"
     parquet_key = f"{prefix}/sample-tax-office-500kb (1).parquet"
+    generated_dataset = f"playwright_sql_path_{run_id}"
+    generated_parquet_keys = (
+        f"generated/{generated_dataset}/parquet/mwa_abrechnung_entities/part-00001.parquet",
+        f"generated/{generated_dataset}/parquet/mwa_abrechnung_entities/part-00002.parquet",
+    )
+    generated_alias, duplicated_generated_alias = generated_parquet_aliases(
+        args.bucket,
+        generated_dataset,
+    )
     client = s3_client(args)
     ensure_bucket(client, args.bucket)
     client.put_object(
@@ -108,11 +144,22 @@ def seed_s3_objects(args: argparse.Namespace) -> tuple[str, str, str, str]:
         Body=create_parquet_payload(),
         ContentType="application/octet-stream",
     )
-    return (
-        csv_key,
-        parquet_key,
-        s3_query_alias(bucket=args.bucket, key=csv_key),
-        s3_query_alias(bucket=args.bucket, key=parquet_key),
+    generated_payload = create_parquet_payload("generated_parquet_path_completion")
+    for key in generated_parquet_keys:
+        client.put_object(
+            Bucket=args.bucket,
+            Key=key,
+            Body=generated_payload,
+            ContentType="application/octet-stream",
+        )
+    return SeededS3Objects(
+        csv_key=csv_key,
+        parquet_key=parquet_key,
+        generated_parquet_keys=generated_parquet_keys,
+        csv_alias=s3_query_alias(bucket=args.bucket, key=csv_key),
+        parquet_alias=s3_query_alias(bucket=args.bucket, key=parquet_key),
+        generated_parquet_alias=generated_alias,
+        duplicated_generated_parquet_alias=duplicated_generated_alias,
     )
 
 
@@ -122,18 +169,25 @@ async def ensure_query_notebook(page, base_url: str, timeout_ms: int) -> None:
         wait_until="domcontentloaded",
         timeout=timeout_ms,
     )
-    await page.wait_for_timeout(1500)
+    deadline = time.monotonic() + timeout_ms / 1000
     query_cells = page.locator("[data-query-cell]:visible")
-    if await query_cells.count():
-        await query_cells.first.wait_for(state="visible", timeout=timeout_ms)
-        return
-
     create_button = page.locator(
         "[data-query-workbench-entry-page] [data-create-notebook]"
     ).first
-    await create_button.wait_for(state="visible", timeout=timeout_ms)
-    await create_button.click(force=True)
-    await query_cells.first.wait_for(state="visible", timeout=timeout_ms)
+
+    while time.monotonic() < deadline:
+        if await query_cells.count():
+            await query_cells.first.wait_for(state="visible", timeout=timeout_ms)
+            return
+        if await create_button.count():
+            try:
+                await create_button.wait_for(state="visible", timeout=3000)
+                await create_button.click(force=True)
+            except PlaywrightTimeoutError:
+                pass
+        await page.wait_for_timeout(1000)
+
+    raise RuntimeError("A visible query notebook cell was not available after creating a workbench.")
 
 
 async def wait_for_aliases_in_completion_schema(
@@ -191,7 +245,8 @@ async def wait_for_aliases_in_completion_schema(
 async def write_sql_with_keyboard(page, sql: str, timeout_ms: int) -> None:
     editor = page.locator("[data-query-cell]:visible .cm-content").first
     await editor.wait_for(state="visible", timeout=timeout_ms)
-    await editor.click()
+    await page.keyboard.press("Escape")
+    await editor.click(force=True)
     select_shortcut = "Meta+A" if sys.platform == "darwin" else "Control+A"
     await page.keyboard.press(select_shortcut)
     await page.keyboard.press("Backspace")
@@ -225,6 +280,7 @@ async def assert_completion_contains(
     while time.monotonic() < deadline:
         labels = await completion_labels(page)
         if any(label == expected_label for label in labels):
+            await page.keyboard.press("Escape")
             return
         await page.wait_for_timeout(200)
     raise RuntimeError(
@@ -347,6 +403,36 @@ async def open_s3_explorer_file(
     )
     await page.wait_for_timeout(1000)
 
+    navigation = page.locator("[data-data-source-explorer-navigation]").first
+    await navigation.wait_for(state="visible", timeout=timeout_ms)
+    await page.evaluate(
+        """
+        () => {
+          const navigation = document.querySelector('[data-data-source-explorer-navigation]');
+          navigation?.querySelectorAll('[data-source-catalog], [data-source-schema]').forEach((node) => {
+            node.open = true;
+            node.setAttribute('open', '');
+          });
+        }
+        """
+    )
+    source_tree_file = page.locator(
+        f'[data-data-source-explorer-navigation] [data-source-object][data-s3-key="{key}"]'
+    ).first
+    if await source_tree_file.count():
+        await source_tree_file.wait_for(state="visible", timeout=timeout_ms)
+        await source_tree_file.click()
+        detail = page.locator("[data-data-source-explorer-detail]").first
+        await detail.get_by_text(alias, exact=True).first.wait_for(
+            state="visible",
+            timeout=timeout_ms,
+        )
+        await detail.get_by_text(f"s3://{bucket}/{key}", exact=True).first.wait_for(
+            state="visible",
+            timeout=timeout_ms,
+        )
+        return
+
     bucket_button = page.locator(
         f'[data-data-source-explorer-s3-location][data-bucket="{bucket}"][data-prefix=""]'
     ).first
@@ -405,14 +491,119 @@ async def copy_visible_query_path(page, expected_alias: str, timeout_ms: int) ->
     copy_button = page.locator(
         '[data-data-source-explorer-action="copy-query-path"]'
     ).first
-    await copy_button.wait_for(state="visible", timeout=timeout_ms)
-    await copy_button.click()
+    if await copy_button.count():
+        await copy_button.wait_for(state="visible", timeout=timeout_ms)
+        await copy_button.click()
+    else:
+        source = page.locator(
+            f'[data-data-source-explorer-navigation] [data-source-object][data-source-object-query-alias="{expected_alias}"]'
+        ).first
+        await source.wait_for(state="visible", timeout=timeout_ms)
+        await open_sidebar_source_action_menu(source)
+        await source.locator("[data-copy-query-path]").first.evaluate("(button) => button.click()")
     copied = await page.evaluate("navigator.clipboard.readText()")
     if copied != expected_alias:
         raise RuntimeError(
             f"Copy query path copied {copied!r}; expected {expected_alias!r}."
         )
     return copied
+
+
+async def expand_sidebar_source_tree(page) -> None:
+    await page.evaluate(
+        """
+        () => {
+          for (const selector of [
+            '[data-data-sources-section]',
+            '[data-source-catalog]',
+            '[data-source-schema]',
+          ]) {
+            document.querySelectorAll(selector).forEach((node) => {
+              node.open = true;
+              node.setAttribute('open', '');
+            });
+          }
+        }
+        """
+    )
+    await page.wait_for_timeout(250)
+
+
+async def sidebar_source_for_alias(page, alias: str, timeout_ms: int):
+    await expand_sidebar_source_tree(page)
+    source = page.locator(
+        f'[data-source-object][data-source-object-query-alias="{alias}"]'
+    ).first
+    await source.wait_for(state="visible", timeout=timeout_ms)
+    await source.scroll_into_view_if_needed(timeout=timeout_ms)
+    return source
+
+
+async def open_sidebar_source_action_menu(source) -> None:
+    menu = source.locator("[data-source-action-menu]").first
+    await menu.evaluate(
+        """
+        (menu) => {
+          if (menu instanceof HTMLDetailsElement) {
+            menu.open = true;
+            menu.setAttribute('open', '');
+          }
+        }
+        """
+    )
+
+
+async def copy_sidebar_query_path(page, expected_alias: str, timeout_ms: int) -> str:
+    source = await sidebar_source_for_alias(page, expected_alias, timeout_ms)
+    await open_sidebar_source_action_menu(source)
+    await source.locator("[data-copy-query-path]").first.evaluate("(button) => button.click()")
+    copied = await page.evaluate("navigator.clipboard.readText()")
+    if copied != expected_alias:
+        raise RuntimeError(
+            f"Sidebar copy query path copied {copied!r}; expected {expected_alias!r}."
+        )
+    return copied
+
+
+async def query_sidebar_source_in_new_notebook(
+    page,
+    expected_alias: str,
+    forbidden_alias: str,
+    timeout_ms: int,
+) -> str:
+    previous_notebook_id = (
+        await page.locator("[data-notebook-meta]").first.get_attribute("data-notebook-id")
+    ) or ""
+    source = await sidebar_source_for_alias(page, expected_alias, timeout_ms)
+    await open_sidebar_source_action_menu(source)
+    await source.locator("[data-query-source-new]").first.evaluate("(button) => button.click()")
+    await page.wait_for_function(
+        """
+        ({ previousNotebookId, expectedAlias }) => {
+          const meta = document.querySelector('[data-notebook-meta]');
+          const textarea = document.querySelector('[data-query-cell] [data-editor-source]');
+          return Boolean(
+            meta &&
+            meta.dataset.notebookId &&
+            meta.dataset.notebookId !== previousNotebookId &&
+            textarea instanceof HTMLTextAreaElement &&
+            textarea.value.includes(expectedAlias)
+          );
+        }
+        """,
+        arg={
+            "previousNotebookId": previous_notebook_id,
+            "expectedAlias": expected_alias,
+        },
+        timeout=timeout_ms,
+    )
+    sql_text = await page.locator("[data-query-cell] [data-editor-source]").first.input_value()
+    if forbidden_alias in sql_text:
+        raise RuntimeError(
+            "Query in new notebook used a duplicated generated S3 alias: "
+            f"{sql_text!r}."
+        )
+    return sql_text
 
 
 async def seed_local_workspace_entry(page, base_url: str, timeout_ms: int) -> None:
@@ -463,6 +654,18 @@ async def seed_local_workspace_entry(page, base_url: str, timeout_ms: int) -> No
     )
 
 
+async def wait_for_any_copy_query_path_action(page, timeout_ms: int) -> None:
+    await page.wait_for_function(
+        """
+        () => Boolean(
+          document.querySelector('[data-data-source-explorer-action="copy-query-path"]') ||
+          document.querySelector('[data-data-source-explorer-navigation] [data-copy-query-path]')
+        )
+        """,
+        timeout=timeout_ms,
+    )
+
+
 async def assert_copy_query_path_actions_for_other_sources(
     page,
     base_url: str,
@@ -473,10 +676,7 @@ async def assert_copy_query_path_actions_for_other_sources(
         wait_until="domcontentloaded",
         timeout=timeout_ms,
     )
-    await page.locator('[data-data-source-explorer-action="copy-query-path"]').first.wait_for(
-        state="visible",
-        timeout=timeout_ms,
-    )
+    await wait_for_any_copy_query_path_action(page, timeout_ms)
 
     await seed_local_workspace_entry(page, base_url, timeout_ms)
     await page.goto(
@@ -484,14 +684,11 @@ async def assert_copy_query_path_actions_for_other_sources(
         wait_until="domcontentloaded",
         timeout=timeout_ms,
     )
-    await page.locator('[data-data-source-explorer-action="copy-query-path"]').first.wait_for(
-        state="visible",
-        timeout=timeout_ms,
-    )
+    await wait_for_any_copy_query_path_action(page, timeout_ms)
 
 
 async def run_smoke(args: argparse.Namespace) -> int:
-    csv_key, parquet_key, csv_alias, parquet_alias = seed_s3_objects(args)
+    seeded = seed_s3_objects(args)
     client = s3_client(args)
     console_messages: list[str] = []
 
@@ -510,40 +707,50 @@ async def run_smoke(args: argparse.Namespace) -> int:
             await wait_for_aliases_in_completion_schema(
                 page,
                 args.base_url,
-                [csv_alias, parquet_alias],
+                [
+                    seeded.csv_alias,
+                    seeded.parquet_alias,
+                    seeded.generated_parquet_alias,
+                ],
                 args.timeout_ms,
             )
             await ensure_query_notebook(page, args.base_url, args.timeout_ms)
             await assert_s3_path_completions(
                 page,
                 args.bucket,
-                csv_alias,
-                parquet_alias,
+                seeded.csv_alias,
+                seeded.parquet_alias,
                 args.timeout_ms,
             )
             await run_query_and_assert_text(
                 page,
-                f"select source_kind, amount_chf from {csv_alias} order by record_id limit 1",
+                f"select source_kind, amount_chf from {seeded.csv_alias} order by record_id limit 1",
                 "csv_path_completion",
                 args.timeout_ms,
             )
             await run_query_and_assert_text(
                 page,
-                f"select source_kind, amount_chf from {parquet_alias} limit 1",
+                f"select source_kind, amount_chf from {seeded.parquet_alias} limit 1",
                 "parquet_path_completion",
+                args.timeout_ms,
+            )
+            await run_query_and_assert_text(
+                page,
+                f"select source_kind, amount_chf from {seeded.generated_parquet_alias} limit 1",
+                "generated_parquet_path_completion",
                 args.timeout_ms,
             )
             await open_s3_explorer_file(
                 page,
                 args.base_url,
                 args.bucket,
-                parquet_key,
-                parquet_alias,
+                seeded.parquet_key,
+                seeded.parquet_alias,
                 args.timeout_ms,
             )
             copied_alias = await copy_visible_query_path(
                 page,
-                parquet_alias,
+                seeded.parquet_alias,
                 args.timeout_ms,
             )
             await ensure_query_notebook(page, args.base_url, args.timeout_ms)
@@ -553,6 +760,18 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 "parquet_path_completion",
                 args.timeout_ms,
             )
+            await ensure_query_notebook(page, args.base_url, args.timeout_ms)
+            await copy_sidebar_query_path(
+                page,
+                seeded.generated_parquet_alias,
+                args.timeout_ms,
+            )
+            await query_sidebar_source_in_new_notebook(
+                page,
+                seeded.generated_parquet_alias,
+                seeded.duplicated_generated_parquet_alias,
+                args.timeout_ms,
+            )
             await assert_copy_query_path_actions_for_other_sources(
                 page,
                 args.base_url,
@@ -560,8 +779,13 @@ async def run_smoke(args: argparse.Namespace) -> int:
             )
         except (ClientError, PlaywrightTimeoutError, RuntimeError) as exc:
             print(str(exc), file=sys.stderr)
-            print(f"CSV alias: {csv_alias}", file=sys.stderr)
-            print(f"Parquet alias: {parquet_alias}", file=sys.stderr)
+            print(f"CSV alias: {seeded.csv_alias}", file=sys.stderr)
+            print(f"Parquet alias: {seeded.parquet_alias}", file=sys.stderr)
+            print(f"Generated Parquet alias: {seeded.generated_parquet_alias}", file=sys.stderr)
+            print(
+                f"Forbidden generated Parquet alias: {seeded.duplicated_generated_parquet_alias}",
+                file=sys.stderr,
+            )
             for message in console_messages:
                 print(message, file=sys.stderr)
             await context.close()
@@ -572,13 +796,18 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 await context.close()
             with contextlib.suppress(Exception):
                 await browser.close()
-            for key in (csv_key, parquet_key):
+            for key in (
+                seeded.csv_key,
+                seeded.parquet_key,
+                *seeded.generated_parquet_keys,
+            ):
                 with contextlib.suppress(Exception):
                     client.delete_object(Bucket=args.bucket, Key=key)
 
     print(
         "Playwright SQL S3 path completion smoke passed for "
-        f"{csv_alias} and {parquet_alias}."
+        f"{seeded.csv_alias}, {seeded.parquet_alias}, "
+        f"and {seeded.generated_parquet_alias}."
     )
     return 0
 

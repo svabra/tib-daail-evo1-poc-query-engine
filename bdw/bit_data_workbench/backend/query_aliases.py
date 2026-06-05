@@ -54,6 +54,57 @@ def local_query_alias(*, folder_path: str = "", file_name: str, root: str = "loc
     return ".".join(segments)
 
 
+def _contains_glob_token(value: str) -> bool:
+    return any(token in str(value or "") for token in "*?[")
+
+
+def _s3_alias_from_parts(
+    *,
+    bucket: str,
+    folder_parts: list[str],
+    file_name: str,
+    root: str = "s3",
+    drop_duplicate_leaf: bool = False,
+) -> str:
+    segments = [normalize_query_alias_segment(root, fallback="s3")]
+    segments.append(normalize_query_alias_segment(bucket, fallback="bucket"))
+
+    normalized_folders = [part for part in folder_parts if str(part or "").strip()]
+    file_segments = file_alias_segments(file_name, fallback="s3_object")
+    if normalized_folders and drop_duplicate_leaf and file_segments:
+        folder_leaf = normalize_query_alias_segment(normalized_folders[-1], fallback="folder")
+        if folder_leaf == file_segments[0]:
+            normalized_folders = normalized_folders[:-1]
+
+    segments.extend(
+        normalize_query_alias_segment(part, fallback="folder")
+        for part in normalized_folders
+    )
+    segments.extend(file_segments)
+    return ".".join(segments)
+
+
+def s3_collection_query_alias(
+    *,
+    bucket: str,
+    prefix: str = "",
+    display_name: str,
+    root: str = "s3",
+) -> str:
+    folder_parts = [
+        part
+        for part in str(prefix or "").strip().strip("/").split("/")
+        if part.strip()
+    ]
+    return _s3_alias_from_parts(
+        bucket=bucket,
+        folder_parts=folder_parts,
+        file_name=display_name,
+        root=root,
+        drop_duplicate_leaf=True,
+    )
+
+
 def s3_query_alias(
     *,
     bucket: str,
@@ -66,13 +117,22 @@ def s3_query_alias(
 
     normalized_key = str(key or "").strip().strip("/")
     key_parts = [part for part in normalized_key.split("/") if part.strip()]
-    has_glob = any(any(token in part for token in "*?[") for part in key_parts)
+    has_glob = any(_contains_glob_token(part) for part in key_parts)
+    normalized_display_name = str(display_name or "").strip()
+    if has_glob and normalized_display_name:
+        return s3_collection_query_alias(
+            bucket=bucket,
+            prefix="/".join(part for part in key_parts if not _contains_glob_token(part)),
+            display_name=normalized_display_name,
+            root=root,
+        )
+
     if key_parts and not has_glob:
         folder_parts = key_parts[:-1]
         file_name = key_parts[-1]
     else:
-        folder_parts = [part for part in key_parts if part and not any(token in part for token in "*?[")]
-        file_name = display_name or (folder_parts.pop() if folder_parts else "s3_object")
+        folder_parts = [part for part in key_parts if part and not _contains_glob_token(part)]
+        file_name = normalized_display_name or (folder_parts.pop() if folder_parts else "s3_object")
 
     segments.extend(
         normalize_query_alias_segment(part, fallback="folder")

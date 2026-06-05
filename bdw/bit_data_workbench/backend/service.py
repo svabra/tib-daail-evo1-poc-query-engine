@@ -87,6 +87,7 @@ from .query_analysis import (
 from .query_aliases import (
     normalize_relation_key as normalize_query_alias_key,
     rewrite_query_aliases,
+    s3_collection_query_alias,
     s3_query_alias,
     unique_query_aliases,
 )
@@ -4440,15 +4441,19 @@ class WorkbenchService:
                     or str(spec.display_name or "").strip()
                     or relation_id.split(".", 1)[-1]
                 )
-                object_key_for_alias = f"{part_prefix}/{part_filename}" if part_prefix else part_filename
+                query_alias = s3_collection_query_alias(
+                    bucket=bucket_name,
+                    prefix=part_prefix,
+                    display_name=part_filename,
+                )
             else:
                 object_key_for_alias = object_key
-            query_alias = s3_query_alias(
-                bucket=bucket_name,
-                key=object_key_for_alias,
-                display_name=str(spec.display_name or "").strip()
-                or str(getattr(spec, "download_filename", "") or "").strip(),
-            )
+                query_alias = s3_query_alias(
+                    bucket=bucket_name,
+                    key=object_key_for_alias,
+                    display_name=str(spec.display_name or "").strip()
+                    or str(getattr(spec, "download_filename", "") or "").strip(),
+                )
             downloadable = (
                 not generated_parts
                 and not any(token in object_key for token in "*?[")

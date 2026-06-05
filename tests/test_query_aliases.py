@@ -44,6 +44,37 @@ class QueryAliasTests(unittest.TestCase):
             "s3.poc_tests.tax.year_2026.federal_tax.jsonl",
         )
 
+    def test_s3_alias_generation_collapses_collection_leaf_duplicate(self) -> None:
+        self.assertEqual(
+            s3_query_alias(
+                bucket="poc-tests-performance-evaluation-mwa-abrechnung-3-2",
+                key="generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet",
+                display_name="mwa_abrechnung_entities.parquet",
+            ),
+            (
+                "s3.poc_tests_performance_evaluation_mwa_abrechnung_3_2."
+                "generated.mwa_abrechnung.parquet.mwa_abrechnung_entities.parquet"
+            ),
+        )
+        self.assertEqual(
+            s3_query_alias(
+                bucket="tax-bucket",
+                key="federal/manual_hive/**/*.parquet",
+                display_name="manual_hive.parquet",
+            ),
+            "s3.tax_bucket.federal.manual_hive.parquet",
+        )
+
+    def test_s3_alias_generation_keeps_literal_object_leafs_unchanged(self) -> None:
+        self.assertEqual(
+            s3_query_alias(
+                bucket="test",
+                key="foo/foo.csv",
+                display_name="foo.csv",
+            ),
+            "s3.test.foo.foo.csv",
+        )
+
     def test_alias_collisions_append_stable_suffix_to_stem(self) -> None:
         aliases = unique_query_aliases(
             [
