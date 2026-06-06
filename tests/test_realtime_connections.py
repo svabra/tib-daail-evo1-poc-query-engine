@@ -44,6 +44,7 @@ class RealtimeConnectionsTests(unittest.TestCase):
         self.assertIn("python-jobs", REALTIME_TOPIC_ORDER)
         self.assertIn("download-jobs", REALTIME_TOPIC_ORDER)
         self.assertIn("s3-delete-jobs", REALTIME_TOPIC_ORDER)
+        self.assertIn("materialized-stages", REALTIME_TOPIC_ORDER)
         self.assertLess(
             REALTIME_TOPIC_ORDER.index("query-jobs"),
             REALTIME_TOPIC_ORDER.index("python-jobs"),
@@ -55,6 +56,14 @@ class RealtimeConnectionsTests(unittest.TestCase):
         self.assertLess(
             REALTIME_TOPIC_ORDER.index("download-jobs"),
             REALTIME_TOPIC_ORDER.index("s3-delete-jobs"),
+        )
+        self.assertLess(
+            REALTIME_TOPIC_ORDER.index("service-consumption"),
+            REALTIME_TOPIC_ORDER.index("materialized-stages"),
+        )
+        self.assertLess(
+            REALTIME_TOPIC_ORDER.index("materialized-stages"),
+            REALTIME_TOPIC_ORDER.index("notebook-events"),
         )
 
     def test_register_and_unregister_realtime_clients_publish_connection_count(
@@ -168,6 +177,40 @@ class RealtimeConnectionsTests(unittest.TestCase):
                         "latest": {"timestampUtc": "2026-04-16T08:00:00+00:00"},
                         "status": {"nodeMetricsAvailable": True},
                         "financialSummary": {"annualBudgetChf": 120000.0},
+                    },
+                }
+            ],
+        )
+
+    def test_wait_for_realtime_updates_supports_materialized_stages_topic(
+        self,
+    ) -> None:
+        REALTIME_TOPIC_ORDER, service = build_realtime_service()
+
+        service._set_realtime_snapshot_locked(
+            "materialized-stages",
+            {
+                "version": 3,
+                "records": [{"stageId": "stage-raw", "status": "completed"}],
+            },
+            notify=False,
+        )
+
+        updates = service.wait_for_realtime_updates(
+            {topic: 0 for topic in REALTIME_TOPIC_ORDER},
+            timeout=0,
+        )
+
+        self.assertEqual(
+            updates,
+            [
+                {
+                    "topic": "materialized-stages",
+                    "snapshot": {
+                        "version": 3,
+                        "records": [
+                            {"stageId": "stage-raw", "status": "completed"}
+                        ],
                     },
                 }
             ],

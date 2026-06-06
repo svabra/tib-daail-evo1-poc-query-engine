@@ -181,6 +181,11 @@
       "enabledByDefault": true
     },
     {
+      "id": "notebook-stage-pipeline",
+      "script": "playwright_notebook_stage_pipeline_smoke.py",
+      "enabledByDefault": false
+    },
+    {
       "id": "local-workspace-move-file",
       "script": "playwright_local_workspace_move_file.py",
       "enabledByDefault": false

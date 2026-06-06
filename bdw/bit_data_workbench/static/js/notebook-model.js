@@ -15,6 +15,40 @@ export function createNotebookModel(helpers) {
     return fallback === "python" ? "python" : "sql";
   }
 
+  function normalizeNotebookPipelineMode(value, fallback = "exploration") {
+    const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+    if (normalized === "pipeline") {
+      return "pipeline";
+    }
+    return fallback === "pipeline" ? "pipeline" : "exploration";
+  }
+
+  function normalizeCellStage(value, fallback = {}) {
+    const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const fallbackSource =
+      fallback && typeof fallback === "object" && !Array.isArray(fallback) ? fallback : {};
+    const predecessorStageIds = Array.isArray(source.predecessorStageIds)
+      ? source.predecessorStageIds
+      : Array.isArray(source.predecessor_stage_ids)
+        ? source.predecessor_stage_ids
+        : Array.isArray(fallbackSource.predecessorStageIds)
+          ? fallbackSource.predecessorStageIds
+          : [];
+    return {
+      enabled: source.enabled ?? fallbackSource.enabled ?? true,
+      stageId: String(source.stageId ?? source.stage_id ?? fallbackSource.stageId ?? "").trim(),
+      alias: String(source.alias ?? fallbackSource.alias ?? "").trim(),
+      title: String(source.title ?? fallbackSource.title ?? "").trim(),
+      description: String(source.description ?? fallbackSource.description ?? "").trim(),
+      kind:
+        String(source.kind ?? fallbackSource.kind ?? "intermediate").trim().toLowerCase() === "final"
+          ? "final"
+          : "intermediate",
+      predecessorStageIds: predecessorStageIds.map((item) => String(item ?? "").trim()).filter(Boolean),
+      materialize: source.materialize ?? fallbackSource.materialize ?? true,
+    };
+  }
+
   function normalizeParquetHivePartitioningOption(value) {
     const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
     return ["auto", "on", "off"].includes(normalized) ? normalized : "auto";
@@ -124,6 +158,7 @@ export function createNotebookModel(helpers) {
         cell.queryOptions ?? cell.query_options,
         fallback.queryOptions ?? fallback.query_options
       ),
+      stage: normalizeCellStage(cell.stage, fallback.stage),
       sql:
         typeof cell.sql === "string"
           ? cell.sql
@@ -155,6 +190,7 @@ export function createNotebookModel(helpers) {
           language: normalizeCellLanguage(fallback.language ?? "sql"),
           dataSources: fallback.dataSources ?? [],
           queryOptions: fallback.queryOptions ?? {},
+          stage: fallback.stage ?? {},
           sql: fallback.sql ?? "",
         }
       ),
@@ -251,6 +287,7 @@ export function createNotebookModel(helpers) {
         language: normalizeCellLanguage(cell.language, "sql"),
         dataSources: normalizeDataSources(cell.dataSources),
         queryOptions: normalizeCellQueryOptions(cell.queryOptions),
+        stage: normalizeCellStage(cell.stage),
         sql: cell.sql,
       })),
     };
@@ -308,6 +345,9 @@ export function createNotebookModel(helpers) {
         link?.dataset.createdAt ??
         new Date().toISOString(),
       linkedGeneratorId: metaRoot?.dataset.linkedGeneratorId ?? "",
+      pipelineMode: normalizeNotebookPipelineMode(
+        metaRoot?.dataset.defaultPipelineMode ?? link?.dataset.defaultNotebookPipelineMode
+      ),
       cells: normalizeNotebookCells(metaCells.length ? metaCells : linkCells, {
         language: "sql",
         dataSources: fallbackDataSources,
@@ -345,6 +385,10 @@ export function createNotebookModel(helpers) {
     return {
       title: typeof storedState.title === "string" ? storedState.title : undefined,
       summary: typeof storedState.summary === "string" ? storedState.summary : undefined,
+      pipelineMode:
+        storedState.pipelineMode !== undefined
+          ? normalizeNotebookPipelineMode(storedState.pipelineMode)
+          : undefined,
       tags: Array.isArray(storedState.tags) ? normalizeTags(storedState.tags) : undefined,
       cells:
         Array.isArray(storedState.cells) && storedState.cells.length
@@ -378,7 +422,9 @@ export function createNotebookModel(helpers) {
     createInitialNotebookVersion,
     normalizeCellLanguage,
     normalizeCellEntry,
+    normalizeCellStage,
     normalizeCellQueryOptions,
+    normalizeNotebookPipelineMode,
     normalizeNotebookCells,
     normalizeNotebookSummaryValue,
     normalizeNotebookTitleValue,

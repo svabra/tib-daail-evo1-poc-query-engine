@@ -213,6 +213,12 @@ export function createQuerySourceValidationController(helpers) {
     cellLanguageForCellRoot,
     fetchImpl = (...args) => window.fetch(...args),
     selectedDataSourcesForCell,
+    validatePipelineStageAliases = async () => ({
+      aliases: [],
+      localRelations: {},
+      missingAliases: [],
+      validationSql: "",
+    }),
     validateLocalWorkspaceAliases = async (sql) => ({
       aliases: [],
       localRelations: {},
@@ -394,16 +400,35 @@ export function createQuerySourceValidationController(helpers) {
         await validateLocalWorkspaceAliases(sql),
         sql
       );
+      const pipelineStageValidation = normalizeLocalValidationPayload(
+        await validatePipelineStageAliases(cellRoot, sql),
+        sql
+      );
+      const combinedValidation = {
+        aliases: uniqueStrings([
+          ...localValidation.aliases,
+          ...pipelineStageValidation.aliases,
+        ]),
+        localRelations: {
+          ...localValidation.localRelations,
+          ...pipelineStageValidation.localRelations,
+        },
+        missingAliases: uniqueStrings([
+          ...localValidation.missingAliases,
+          ...pipelineStageValidation.missingAliases,
+        ]),
+        validationSql: localValidation.validationSql || pipelineStageValidation.validationSql || sql,
+      };
       if (abortController.signal.aborted || state.requestId !== requestId) {
         return null;
       }
 
-      if (localValidation.missingAliases.length) {
+      if (combinedValidation.missingAliases.length) {
         const result = normalizeValidationPayload({
           status: "invalid",
-          references: localValidation.aliases,
-          missingReferences: localValidation.missingAliases,
-          message: `Referenced source(s) were not found: ${localValidation.missingAliases.join(", ")}.`,
+          references: combinedValidation.aliases,
+          missingReferences: combinedValidation.missingAliases,
+          message: `Referenced source(s) were not found: ${combinedValidation.missingAliases.join(", ")}.`,
         });
         state.abortController = null;
         state.result = result;
@@ -420,7 +445,7 @@ export function createQuerySourceValidationController(helpers) {
         body: JSON.stringify({
           sql,
           dataSources: selectedDataSourcesForCell(cellRoot),
-          localRelations: localValidation.localRelations,
+          localRelations: combinedValidation.localRelations,
         }),
         signal: abortController.signal,
       });
@@ -430,7 +455,7 @@ export function createQuerySourceValidationController(helpers) {
 
       const result = mergeLocalAliasValidation(
         normalizeValidationPayload(await response.json()),
-        localValidation
+        combinedValidation
       );
       if (state.requestId !== requestId) {
         return null;

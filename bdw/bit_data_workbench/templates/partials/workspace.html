@@ -10,6 +10,7 @@
   data-can-delete="{{ 'true' if active_notebook.can_delete else 'false' }}"
   data-default-title="{{ active_notebook.title }}"
   data-default-summary="{{ active_notebook.summary }}"
+  data-default-pipeline-mode="{{ active_notebook.pipeline_mode }}"
   data-default-created-at="{{ active_notebook.created_at }}"
   data-linked-generator-id="{{ active_notebook.linked_generator_id }}"
   data-default-cells='{{ active_notebook.cells_payload | tojson }}'
@@ -50,24 +51,7 @@
         >{{ active_notebook.summary }}</textarea>
       </div>
       <div class="workspace-header-tags">
-        {% if active_notebook.can_edit or active_notebook.shared %}
-          <button
-            type="button"
-            class="workspace-sharing-toggle{% if active_notebook.shared %} is-on{% endif %}"
-            data-notebook-shared-toggle
-            aria-pressed="{{ 'true' if active_notebook.shared else 'false' }}"
-            title="{% if not active_notebook.can_edit %}Immutable preset notebooks are public.{% else %}{{ 'Shared with connected users and stored on the server.' if active_notebook.shared else 'Private to this browser workspace.' }}{% endif %}"
-            {% if not active_notebook.can_edit %}disabled{% endif %}
-          >
-            <span class="workspace-sharing-toggle-switch" aria-hidden="true">
-              <span class="workspace-sharing-toggle-thumb"></span>
-            </span>
-            <span class="workspace-sharing-toggle-copy">
-              {{ "Public / Shared" if active_notebook.shared else "Private / Local" }}
-              <small>{{ "Stores this notebook on the server and announces it to connected users." if active_notebook.shared else "Keeps this notebook local to this workspace." }}</small>
-            </span>
-          </button>
-        {% endif %}
+        {% set notebook_pipeline_enabled = active_notebook.pipeline_mode == 'pipeline' %}
         <div class="workspace-tag-toolbar">
           <div class="workspace-tag-list" data-tag-list>
             {% for tag in active_notebook.tags %}
@@ -90,7 +74,7 @@
           <input
             class="workspace-tag-input workspace-tag-input-inline"
             type="text"
-            placeholder="Add tag"
+            placeholder="Add tag or labels (comma-separated)"
             data-tag-input
             {% if not active_notebook.can_edit %}disabled{% endif %}
           >
@@ -101,6 +85,42 @@
             {% if not active_notebook.can_edit %}disabled{% endif %}
           >
             Add
+          </button>
+        </div>
+        <div class="workspace-header-toggle-row{% if active_notebook.can_edit or active_notebook.shared %} workspace-header-toggle-row-paired{% endif %}">
+          {% if active_notebook.can_edit or active_notebook.shared %}
+            <button
+              type="button"
+              class="workspace-sharing-toggle{% if active_notebook.shared %} is-on{% endif %}"
+              data-notebook-shared-toggle
+              aria-pressed="{{ 'true' if active_notebook.shared else 'false' }}"
+              title="{% if not active_notebook.can_edit %}Immutable preset notebooks are public.{% else %}{{ 'Shared with connected users and stored on the server.' if active_notebook.shared else 'Private to this browser workspace.' }}{% endif %}"
+              {% if not active_notebook.can_edit %}disabled{% endif %}
+            >
+              <span class="workspace-sharing-toggle-switch" aria-hidden="true">
+                <span class="workspace-sharing-toggle-thumb"></span>
+              </span>
+              <span class="workspace-sharing-toggle-copy">
+                {{ "Public / Shared" if active_notebook.shared else "Private / Local" }}
+                <small>{{ "Stores this notebook on the server and announces it to connected users." if active_notebook.shared else "Keeps this notebook local to this workspace." }}</small>
+              </span>
+            </button>
+          {% endif %}
+          <button
+            type="button"
+            class="workspace-sharing-toggle notebook-mode-toggle{% if notebook_pipeline_enabled %} is-on{% endif %}"
+            data-notebook-mode-toggle
+            aria-pressed="{{ 'true' if notebook_pipeline_enabled else 'false' }}"
+            title="{{ 'Notebook mode: Pipeline. Click to return to Exploration mode, which keeps cells independent for ad-hoc SQL or Python work.' if notebook_pipeline_enabled else 'Notebook mode: Exploration. Click to enable Pipeline mode, which links SQL cells into staged materialized data products with dependency-aware runs.' }}"
+            aria-label="{{ 'Notebook mode: Pipeline. Click to return to Exploration mode, which keeps cells independent for ad-hoc SQL or Python work.' if notebook_pipeline_enabled else 'Notebook mode: Exploration. Click to enable Pipeline mode, which links SQL cells into staged materialized data products with dependency-aware runs.' }}"
+          >
+            <span class="workspace-sharing-toggle-switch" aria-hidden="true">
+              <span class="workspace-sharing-toggle-thumb"></span>
+            </span>
+            <span class="workspace-sharing-toggle-copy notebook-mode-toggle-copy">
+              <span data-notebook-mode-toggle-label>{{ "Pipeline Mode" if notebook_pipeline_enabled else "Exploration Mode" }}</span>
+              <small data-notebook-mode-toggle-detail>{{ "Links SQL cells into staged materialized data products and dependency-aware runs." if notebook_pipeline_enabled else "Keeps cells independent for ad-hoc SQL or Python work." }}</small>
+            </span>
           </button>
         </div>
       </div>
@@ -234,6 +254,38 @@
           <div class="workspace-version-empty">No saved versions yet.</div>
         {% endif %}
       </div>
+    </div>
+  </section>
+
+  <section class="notebook-pipeline-panel" data-notebook-pipeline-panel {% if active_notebook.pipeline_mode != 'pipeline' %}hidden{% endif %}>
+      <div class="notebook-pipeline-header">
+        <div>
+          <span class="workspace-tags-label">Notebook Pipeline</span>
+        </div>
+        <div class="notebook-pipeline-header-actions">
+          <p class="notebook-pipeline-status" data-notebook-pipeline-status>Pipeline graph has not been built yet.</p>
+        <div class="notebook-pipeline-actions" data-notebook-pipeline-actions {% if active_notebook.pipeline_mode != 'pipeline' %}hidden{% endif %}>
+          <button type="button" class="notebook-pipeline-run-button" data-run-notebook-pipeline title="Run all pipeline stages in dependency order">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16l14-8z"></path></svg>
+            <span>Run pipeline</span>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="notebook-pipeline-graph-band" data-notebook-pipeline-graph></div>
+    <div class="notebook-pipeline-table-wrap">
+      <table class="notebook-pipeline-table">
+        <thead>
+          <tr>
+            <th>Stage</th>
+            <th>Status</th>
+            <th>Dependencies</th>
+            <th>Rows</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody data-notebook-pipeline-table></tbody>
+      </table>
     </div>
   </section>
 
@@ -498,6 +550,43 @@
                   </button>
                 </div>
               </details>
+            </div>
+          </div>
+
+          {% set cell_stage = cell.stage if cell.stage else {} %}
+          <div
+            class="cell-stage-strip"
+            data-cell-stage-strip
+            {% if active_notebook.pipeline_mode != 'pipeline' or cell_language != 'sql' %}hidden{% endif %}
+          >
+            <div class="cell-stage-main">
+              <label class="cell-stage-field cell-stage-title-field">
+                <span>Stage</span>
+                <input
+                  class="cell-stage-title-input"
+                  type="text"
+                  value="{{ cell_stage.get('title', '') }}"
+                  placeholder="Stage title"
+                  data-cell-stage-title-input
+                  {% if not active_notebook.can_edit %}disabled{% endif %}
+                >
+              </label>
+              <label class="cell-stage-field cell-stage-description-field">
+                <span>Description</span>
+                <input
+                  class="cell-stage-description-input"
+                  type="text"
+                  value="{{ cell_stage.get('description', '') }}"
+                  placeholder="Analyst description"
+                  data-cell-stage-description-input
+                  {% if not active_notebook.can_edit %}disabled{% endif %}
+                >
+              </label>
+            </div>
+            <div class="cell-stage-meta">
+              <span class="cell-stage-status-badge" data-cell-stage-status>Planned</span>
+              <span class="cell-stage-chip-row" data-cell-stage-predecessors></span>
+              <span class="cell-stage-chip-row" data-cell-stage-successors></span>
             </div>
           </div>
 

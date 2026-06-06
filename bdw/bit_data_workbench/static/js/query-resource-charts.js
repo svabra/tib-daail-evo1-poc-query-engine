@@ -290,6 +290,8 @@ function syncChart(canvas, Chart) {
   );
   const key = chartDataKey({ currentValues, averageValues, limitValues, labels, maxValue, kind, axisLabel, currentLabel, averageLabel });
   if (canvas._bdwQueryResourceChart && canvas._bdwQueryResourceChartKey === key) {
+    canvas._bdwQueryResourceChart.resize();
+    canvas._bdwQueryResourceChart.update("none");
     return;
   }
 

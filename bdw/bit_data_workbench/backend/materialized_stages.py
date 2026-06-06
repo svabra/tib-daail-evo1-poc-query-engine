@@ -1,0 +1,1233 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import shutil
+import tempfile
+import threading
+import uuid
+from collections import deque
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from botocore.exceptions import BotoCoreError, ClientError
+
+from ..config import Settings
+from .query_aliases import normalize_query_alias_segment, s3_query_alias
+from .s3_storage import s3_client
+from .sql_utils import qualified_name, sql_literal
+
+
+STAGE_ROOT_PREFIX = "_bdw_stages"
+STAGE_SCHEMA_NAME = "stage"
+TERMINAL_STAGE_STATUSES = {"completed", "failed", "cancelled", "skipped"}
+VALID_MATERIALIZED_STATUS = "valid"
+STAGE_REF_RE = re.compile(r"(?<![A-Za-z0-9_$])stage\.([A-Za-z_][A-Za-z0-9_$]*)", re.IGNORECASE)
+
+
+def utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def _sha256_text(value: str) -> str:
+    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _clean_stage_kind(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    return "final" if normalized == "final" else "intermediate"
+
+
+def _clean_stage_id(value: object, *, cell_id: str, index: int) -> str:
+    normalized = str(value or "").strip()
+    if normalized:
+        return normalized
+    seed = normalize_query_alias_segment(cell_id or f"cell-{index + 1}", fallback="cell")
+    return f"stage-{seed}"
+
+
+def _clean_stage_alias(value: object, *, title: str, cell_id: str, index: int) -> str:
+    fallback = title or cell_id or f"stage-{index + 1}"
+    return normalize_query_alias_segment(str(value or "").strip() or fallback, fallback="stage")
+
+
+def _clean_stage_title(value: object, *, alias: str, index: int) -> str:
+    title = str(value or "").strip()
+    if title:
+        return title
+    return alias.replace("_", " ").title() or f"Stage {index + 1}"
+
+
+def _unique_alias(base_alias: str, used_aliases: set[str]) -> str:
+    candidate = base_alias
+    suffix = 2
+    while candidate.lower() in used_aliases:
+        candidate = f"{base_alias}_{suffix}"
+        suffix += 1
+    used_aliases.add(candidate.lower())
+    return candidate
+
+
+def sql_stage_alias_references(sql: str) -> list[str]:
+    seen: set[str] = set()
+    aliases: list[str] = []
+    for match in STAGE_REF_RE.finditer(str(sql or "")):
+        alias = normalize_query_alias_segment(match.group(1), fallback="stage")
+        normalized = alias.lower()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        aliases.append(alias)
+    return aliases
+
+
+def notebook_slug(notebook_id: str, notebook_title: str = "") -> str:
+    source = str(notebook_id or "").strip() or str(notebook_title or "").strip()
+    return normalize_query_alias_segment(source, fallback="notebook")
+
+
+def materialized_stage_query_sql(sql: object) -> str:
+    normalized = str(sql or "").strip()
+    while normalized.endswith(";"):
+        normalized = normalized[:-1].rstrip()
+    return normalized
+
+
+@dataclass(slots=True)
+class StageRecord:
+    run_id: str
+    notebook_id: str
+    stage_id: str
+    cell_id: str
+    stage_alias: str
+    stage_title: str
+    status: str
+    revision_id: str = ""
+    sql_hash: str = ""
+    predecessor_revision_ids: list[str] = field(default_factory=list)
+    schema_fingerprint: str = ""
+    row_count: int = 0
+    size_bytes: int = 0
+    result_fingerprint: str = ""
+    output_bucket: str = ""
+    output_key: str = ""
+    metadata_key: str = ""
+    output_path: str = ""
+    query_path: str = ""
+    started_at: str = ""
+    completed_at: str = ""
+    updated_at: str = ""
+    message: str = ""
+    error: str = ""
+    changed_result: bool = False
+    can_cancel: bool = False
+
+    @property
+    def payload(self) -> dict[str, object]:
+        return {
+            "runId": self.run_id,
+            "notebookId": self.notebook_id,
+            "stageId": self.stage_id,
+            "cellId": self.cell_id,
+            "stageAlias": self.stage_alias,
+            "stageTitle": self.stage_title,
+            "status": self.status,
+            "revisionId": self.revision_id,
+            "sqlHash": self.sql_hash,
+            "predecessorRevisionIds": list(self.predecessor_revision_ids),
+            "schemaFingerprint": self.schema_fingerprint,
+            "rowCount": self.row_count,
+            "sizeBytes": self.size_bytes,
+            "resultFingerprint": self.result_fingerprint,
+            "outputBucket": self.output_bucket,
+            "outputKey": self.output_key,
+            "metadataKey": self.metadata_key,
+            "outputPath": self.output_path,
+            "queryPath": self.query_path,
+            "startedAt": self.started_at,
+            "completedAt": self.completed_at,
+            "updatedAt": self.updated_at,
+            "message": self.message,
+            "error": self.error,
+            "changedResult": self.changed_result,
+            "canCancel": self.can_cancel,
+        }
+
+    @classmethod
+    def from_payload(cls, payload: object) -> "StageRecord | None":
+        if not isinstance(payload, dict):
+            return None
+        run_id = str(payload.get("runId") or "").strip()
+        notebook_id = str(payload.get("notebookId") or "").strip()
+        stage_id = str(payload.get("stageId") or "").strip()
+        cell_id = str(payload.get("cellId") or "").strip()
+        if not run_id or not notebook_id or not stage_id:
+            return None
+        return cls(
+            run_id=run_id,
+            notebook_id=notebook_id,
+            stage_id=stage_id,
+            cell_id=cell_id,
+            stage_alias=str(payload.get("stageAlias") or "").strip(),
+            stage_title=str(payload.get("stageTitle") or "").strip(),
+            status=str(payload.get("status") or "").strip() or "planned",
+            revision_id=str(payload.get("revisionId") or "").strip(),
+            sql_hash=str(payload.get("sqlHash") or "").strip(),
+            predecessor_revision_ids=[
+                str(item).strip()
+                for item in payload.get("predecessorRevisionIds", []) or []
+                if str(item).strip()
+            ],
+            schema_fingerprint=str(payload.get("schemaFingerprint") or "").strip(),
+            row_count=max(0, int(payload.get("rowCount") or 0)),
+            size_bytes=max(0, int(payload.get("sizeBytes") or 0)),
+            result_fingerprint=str(payload.get("resultFingerprint") or "").strip(),
+            output_bucket=str(payload.get("outputBucket") or "").strip(),
+            output_key=str(payload.get("outputKey") or "").strip(),
+            metadata_key=str(payload.get("metadataKey") or "").strip(),
+            output_path=str(payload.get("outputPath") or "").strip(),
+            query_path=str(payload.get("queryPath") or "").strip(),
+            started_at=str(payload.get("startedAt") or "").strip(),
+            completed_at=str(payload.get("completedAt") or "").strip(),
+            updated_at=str(payload.get("updatedAt") or "").strip(),
+            message=str(payload.get("message") or "").strip(),
+            error=str(payload.get("error") or "").strip(),
+            changed_result=bool(payload.get("changedResult")),
+            can_cancel=bool(payload.get("canCancel")),
+        )
+
+
+class MaterializedStageStore:
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._lock = threading.RLock()
+
+    def read_state(self) -> dict[str, object]:
+        with self._lock:
+            if not self._path.exists():
+                return {"version": 0, "records": [], "stageStates": {}}
+            try:
+                raw = json.loads(self._path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                return {"version": 0, "records": [], "stageStates": {}}
+            if not isinstance(raw, dict):
+                return {"version": 0, "records": [], "stageStates": {}}
+            records = raw.get("records")
+            stage_states = raw.get("stageStates")
+            return {
+                "version": max(0, int(raw.get("version") or 0)),
+                "records": records if isinstance(records, list) else [],
+                "stageStates": stage_states if isinstance(stage_states, dict) else {},
+            }
+
+    def write_state(self, state: dict[str, object]) -> dict[str, object]:
+        with self._lock:
+            version = int(state.get("version") or 0) + 1
+            next_state = {
+                "version": version,
+                "records": list(state.get("records", []) or []),
+                "stageStates": dict(state.get("stageStates", {}) or {}),
+                "updatedAt": utc_now_iso(),
+            }
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = self._path.with_suffix(f"{self._path.suffix}.tmp")
+            temp_path.write_text(json.dumps(next_state, indent=2), encoding="utf-8")
+            temp_path.replace(self._path)
+            return next_state
+
+
+def normalize_stage_cells(cells: Iterable[dict[str, object]]) -> list[dict[str, object]]:
+    stages: list[dict[str, object]] = []
+    used_aliases: set[str] = set()
+    for index, raw_cell in enumerate(cells or []):
+        if not isinstance(raw_cell, dict):
+            continue
+        language = str(raw_cell.get("language") or "sql").strip().lower()
+        if language == "python":
+            continue
+        cell_id = str(raw_cell.get("cellId") or raw_cell.get("cell_id") or "").strip()
+        if not cell_id:
+            cell_id = f"cell-{index + 1}"
+        raw_stage = raw_cell.get("stage")
+        stage_meta = raw_stage if isinstance(raw_stage, dict) else {}
+        if stage_meta.get("enabled") is False:
+            continue
+        stage_id = _clean_stage_id(stage_meta.get("stageId"), cell_id=cell_id, index=index)
+        base_alias = _clean_stage_alias(
+            stage_meta.get("alias"),
+            title=str(stage_meta.get("title") or "").strip(),
+            cell_id=cell_id,
+            index=index,
+        )
+        alias = _unique_alias(base_alias, used_aliases)
+        title = _clean_stage_title(stage_meta.get("title"), alias=alias, index=index)
+        predecessors = [
+            str(item).strip()
+            for item in stage_meta.get("predecessorStageIds", []) or []
+            if str(item).strip()
+        ]
+        stages.append(
+            {
+                "stageId": stage_id,
+                "cellId": cell_id,
+                "cellIndex": index,
+                "alias": alias,
+                "title": title,
+                "description": str(stage_meta.get("description") or "").strip(),
+                "kind": _clean_stage_kind(stage_meta.get("kind")),
+                "materialize": stage_meta.get("materialize") is not False,
+                "predecessorStageIds": predecessors,
+                "sql": str(raw_cell.get("sql") or ""),
+                "dataSources": [
+                    str(item).strip()
+                    for item in raw_cell.get("dataSources", []) or []
+                    if str(item).strip()
+                ],
+                "queryOptions": (
+                    dict(raw_cell.get("queryOptions") or {})
+                    if isinstance(raw_cell.get("queryOptions"), dict)
+                    else {}
+                ),
+            }
+        )
+    return stages
+
+
+def _records_from_state(state: dict[str, object]) -> list[StageRecord]:
+    records: list[StageRecord] = []
+    for item in state.get("records", []) or []:
+        record = StageRecord.from_payload(item)
+        if record is not None:
+            records.append(record)
+    return records
+
+
+def _latest_completed_by_stage(records: Iterable[StageRecord]) -> dict[tuple[str, str], StageRecord]:
+    latest: dict[tuple[str, str], StageRecord] = {}
+    for record in records:
+        if record.status != "completed":
+            continue
+        key = (record.notebook_id, record.stage_id)
+        current = latest.get(key)
+        if current is None or (record.completed_at or record.updated_at) > (current.completed_at or current.updated_at):
+            latest[key] = record
+    return latest
+
+
+def _latest_by_stage(records: Iterable[StageRecord]) -> dict[tuple[str, str], StageRecord]:
+    latest: dict[tuple[str, str], StageRecord] = {}
+    for record in records:
+        key = (record.notebook_id, record.stage_id)
+        current = latest.get(key)
+        if current is None or (record.updated_at or record.started_at) > (current.updated_at or current.started_at):
+            latest[key] = record
+    return latest
+
+
+def _notebook_stage_states(state: dict[str, object], notebook_id: str) -> dict[str, dict[str, object]]:
+    raw_stage_states = state.get("stageStates")
+    if not isinstance(raw_stage_states, dict):
+        return {}
+    raw_notebook = raw_stage_states.get(notebook_id)
+    if not isinstance(raw_notebook, dict):
+        return {}
+    return {
+        str(stage_id): dict(stage_state)
+        for stage_id, stage_state in raw_notebook.items()
+        if isinstance(stage_state, dict)
+    }
+
+
+def build_notebook_stage_graph(
+    *,
+    notebook_id: str,
+    notebook_title: str = "",
+    cells: Iterable[dict[str, object]],
+    state: dict[str, object] | None = None,
+    published_products_for_source: Callable[[dict[str, object]], list[dict[str, object]]] | None = None,
+) -> dict[str, object]:
+    stage_cells = normalize_stage_cells(cells)
+    state = state or {"version": 0, "records": [], "stageStates": {}}
+    records = _records_from_state(state)
+    latest = _latest_by_stage(records)
+    latest_completed = _latest_completed_by_stage(records)
+    stage_states = _notebook_stage_states(state, notebook_id)
+    by_id = {stage["stageId"]: stage for stage in stage_cells}
+    by_alias = {str(stage["alias"]).lower(): stage for stage in stage_cells}
+    predecessor_map: dict[str, list[str]] = {}
+    diagnostics: list[dict[str, object]] = []
+
+    for stage in stage_cells:
+        stage_id = str(stage["stageId"])
+        predecessors: list[str] = []
+        for predecessor_id in stage.get("predecessorStageIds", []) or []:
+            normalized_id = str(predecessor_id).strip()
+            if normalized_id and normalized_id not in predecessors:
+                predecessors.append(normalized_id)
+        for alias in sql_stage_alias_references(str(stage.get("sql") or "")):
+            predecessor = by_alias.get(alias.lower())
+            if predecessor is None:
+                diagnostics.append(
+                    {
+                        "severity": "error",
+                        "code": "missing-stage-reference",
+                        "stageId": stage_id,
+                        "message": f"SQL references missing stage alias stage.{alias}.",
+                    }
+                )
+                continue
+            predecessor_id = str(predecessor["stageId"])
+            if predecessor_id != stage_id and predecessor_id not in predecessors:
+                predecessors.append(predecessor_id)
+        for predecessor_id in predecessors:
+            if predecessor_id not in by_id:
+                diagnostics.append(
+                    {
+                        "severity": "error",
+                        "code": "missing-predecessor",
+                        "stageId": stage_id,
+                        "predecessorStageId": predecessor_id,
+                        "message": "Configured predecessor stage is no longer present.",
+                    }
+                )
+        predecessor_map[stage_id] = predecessors
+
+    indegree = {stage["stageId"]: 0 for stage in stage_cells}
+    successors: dict[str, list[str]] = {stage["stageId"]: [] for stage in stage_cells}
+    for stage_id, predecessors in predecessor_map.items():
+        for predecessor_id in predecessors:
+            if predecessor_id not in indegree:
+                continue
+            indegree[stage_id] += 1
+            successors[predecessor_id].append(stage_id)
+
+    ready = deque(
+        sorted(
+            (stage_id for stage_id, degree in indegree.items() if degree == 0),
+            key=lambda value: int(by_id[value].get("cellIndex", 0)),
+        )
+    )
+    ordered_stage_ids: list[str] = []
+    while ready:
+        stage_id = ready.popleft()
+        ordered_stage_ids.append(stage_id)
+        for successor_id in sorted(successors.get(stage_id, []), key=lambda value: int(by_id[value].get("cellIndex", 0))):
+            indegree[successor_id] -= 1
+            if indegree[successor_id] == 0:
+                ready.append(successor_id)
+    if len(ordered_stage_ids) != len(stage_cells):
+        cycle_stage_ids = [stage_id for stage_id, degree in indegree.items() if degree > 0]
+        diagnostics.append(
+            {
+                "severity": "error",
+                "code": "cycle",
+                "stageIds": cycle_stage_ids,
+                "message": "Pipeline dependencies contain a cycle.",
+            }
+        )
+        ordered_stage_ids.extend(stage_id for stage_id in indegree if stage_id not in ordered_stage_ids)
+
+    layer_by_stage: dict[str, int] = {}
+    for stage_id in ordered_stage_ids:
+        layer_by_stage[stage_id] = 0
+        for predecessor_id in predecessor_map.get(stage_id, []):
+            if predecessor_id in layer_by_stage:
+                layer_by_stage[stage_id] = max(layer_by_stage[stage_id], layer_by_stage[predecessor_id] + 1)
+
+    nodes: list[dict[str, object]] = []
+    for stage_id in ordered_stage_ids:
+        stage = by_id[stage_id]
+        record = latest.get((notebook_id, stage_id))
+        completed = latest_completed.get((notebook_id, stage_id))
+        stage_state = stage_states.get(stage_id, {})
+        has_stage_error = any(
+            item.get("stageId") == stage_id and item.get("severity") == "error"
+            for item in diagnostics
+        )
+        status = "planned"
+        run_warning = ""
+        if has_stage_error:
+            status = "invalid"
+        elif record and record.status in {"running", "queued", "planned"}:
+            status = record.status
+        elif stage_state.get("status") == "obsolete" and completed is not None:
+            status = "obsolete"
+        elif completed is not None:
+            status = VALID_MATERIALIZED_STATUS
+            if record and record.status in {"failed", "cancelled"}:
+                run_warning = (
+                    "Last run did not complete. The pipeline can still use the latest "
+                    "saved materialized revision."
+                )
+        elif record and record.status in {"failed", "cancelled"}:
+            status = record.status
+
+        output_source = {}
+        published_products: list[dict[str, object]] = []
+        if completed and completed.output_bucket and completed.output_key:
+            output_source = {
+                "sourceKind": "object",
+                "sourceId": "workspace.s3",
+                "bucket": completed.output_bucket,
+                "key": completed.output_key,
+                "sourceDisplayName": f"{stage['title']} materialized output",
+                "sourcePlatform": "s3",
+            }
+            if published_products_for_source is not None:
+                published_products = published_products_for_source(output_source)
+
+        nodes.append(
+            {
+                **stage,
+                "predecessorStageIds": predecessor_map.get(stage_id, []),
+                "status": status,
+                "order": len(nodes),
+                "layer": layer_by_stage.get(stage_id, 0),
+                "successorStageIds": successors.get(stage_id, []),
+                "latestRevision": completed.payload if completed else None,
+                "latestRun": record.payload if record else None,
+                "outputSource": output_source,
+                "published": bool(published_products),
+                "publishedDataProducts": published_products,
+                "obsoleteReason": str(stage_state.get("reason") or "").strip(),
+                "runWarning": run_warning,
+            }
+        )
+
+    source_nodes: list[dict[str, object]] = []
+    seen_sources: set[str] = set()
+    for stage in stage_cells:
+        for source_id in stage.get("dataSources", []) or []:
+            source_key = str(source_id or "").strip()
+            if not source_key or source_key in seen_sources:
+                continue
+            seen_sources.add(source_key)
+            source_nodes.append(
+                {
+                    "sourceId": f"source:{source_key}",
+                    "label": source_key,
+                    "targetStageIds": [
+                        str(item["stageId"])
+                        for item in stage_cells
+                        if source_key in (item.get("dataSources") or [])
+                    ],
+                }
+            )
+
+    edges: list[dict[str, object]] = []
+    for stage_id, predecessors in predecessor_map.items():
+        for predecessor_id in predecessors:
+            if predecessor_id in by_id:
+                edges.append({"fromStageId": predecessor_id, "toStageId": stage_id})
+    for source in source_nodes:
+        for target_stage_id in source.get("targetStageIds", []) or []:
+            edges.append({"fromSourceId": source["sourceId"], "toStageId": target_stage_id})
+
+    default_selected = ""
+    for node in nodes:
+        if node["status"] in {"invalid", "obsolete", "failed"}:
+            default_selected = str(node["stageId"])
+            break
+    if not default_selected and nodes:
+        default_selected = str(nodes[0]["stageId"])
+
+    return {
+        "notebookId": notebook_id,
+        "notebookTitle": notebook_title,
+        "version": int(state.get("version") or 0),
+        "nodes": nodes,
+        "sourceNodes": source_nodes,
+        "edges": edges,
+        "diagnostics": diagnostics,
+        "order": ordered_stage_ids,
+        "defaultSelectedStageId": default_selected,
+    }
+
+
+class MaterializedStageManager:
+    def __init__(
+        self,
+        *,
+        settings: Settings,
+        store: MaterializedStageStore,
+        connection_factory: Callable[[], Any],
+        source_summaries_provider: Callable[[str, list[str], dict[str, object]], list[dict[str, object]]],
+        bootstrap_source_views: Callable[[Any, list[dict[str, object]]], None],
+        sql_rewriter: Callable[[str, list[str], dict[str, object]], str] | None = None,
+        metadata_refresher: Callable[[], None] | None = None,
+        state_change_callback: Callable[[dict[str, object]], None] | None = None,
+        published_products_for_source: Callable[[dict[str, object]], list[dict[str, object]]] | None = None,
+        object_writer: Callable[[str, str, Path, str, dict[str, object]], dict[str, object]] | None = None,
+    ) -> None:
+        self._settings = settings
+        self._store = store
+        self._connection_factory = connection_factory
+        self._source_summaries_provider = source_summaries_provider
+        self._bootstrap_source_views = bootstrap_source_views
+        self._sql_rewriter = sql_rewriter or (lambda sql, _sources, _options: sql)
+        self._metadata_refresher = metadata_refresher
+        self._state_change_callback = state_change_callback
+        self._published_products_for_source = published_products_for_source
+        self._object_writer = object_writer or self._write_object_to_s3
+        self._lock = threading.RLock()
+        self._active_runs: dict[str, dict[str, object]] = {}
+        self._threads: list[threading.Thread] = []
+
+    def state_payload(self) -> dict[str, object]:
+        state = self._store.read_state()
+        records = [record.payload for record in _records_from_state(state)]
+        with self._lock:
+            active_runs = [dict(item) for item in self._active_runs.values()]
+        return {
+            "version": int(state.get("version") or 0),
+            "records": records,
+            "stageStates": dict(state.get("stageStates", {}) or {}),
+            "activeRuns": active_runs,
+        }
+
+    def graph_payload(
+        self,
+        *,
+        notebook_id: str,
+        notebook_title: str = "",
+        cells: Iterable[dict[str, object]],
+    ) -> dict[str, object]:
+        return build_notebook_stage_graph(
+            notebook_id=notebook_id,
+            notebook_title=notebook_title,
+            cells=cells,
+            state=self._store.read_state(),
+            published_products_for_source=self._published_products_for_source,
+        )
+
+    def run_pipeline(
+        self,
+        *,
+        notebook_id: str,
+        notebook_title: str = "",
+        cells: Iterable[dict[str, object]],
+    ) -> dict[str, object]:
+        graph = self.graph_payload(
+            notebook_id=notebook_id,
+            notebook_title=notebook_title,
+            cells=cells,
+        )
+        return self._start_run(
+            graph=graph,
+            notebook_id=notebook_id,
+            notebook_title=notebook_title,
+            stage_ids=[str(item) for item in graph.get("order", [])],
+            force=False,
+            diagnostic_stage_ids=None,
+        )
+
+    def run_stage(
+        self,
+        *,
+        notebook_id: str,
+        stage_id: str,
+        notebook_title: str = "",
+        cells: Iterable[dict[str, object]],
+    ) -> dict[str, object]:
+        graph = self.graph_payload(
+            notebook_id=notebook_id,
+            notebook_title=notebook_title,
+            cells=cells,
+        )
+        normalized_stage_id = str(stage_id or "").strip()
+        if normalized_stage_id not in {str(node.get("stageId")) for node in graph.get("nodes", [])}:
+            raise KeyError(f"Unknown stage: {normalized_stage_id}")
+        diagnostic_stage_ids = self._stage_and_predecessor_ids(graph, normalized_stage_id)
+        return self._start_run(
+            graph=graph,
+            notebook_id=notebook_id,
+            notebook_title=notebook_title,
+            stage_ids=[normalized_stage_id],
+            force=True,
+            diagnostic_stage_ids=diagnostic_stage_ids,
+        )
+
+    def stop_stage(self, *, notebook_id: str, stage_id: str) -> dict[str, object]:
+        normalized_notebook_id = str(notebook_id or "").strip()
+        normalized_stage_id = str(stage_id or "").strip()
+        cancelled = False
+        with self._lock:
+            for run in self._active_runs.values():
+                if run.get("notebookId") != normalized_notebook_id:
+                    continue
+                if normalized_stage_id not in set(run.get("stageIds", []) or []):
+                    continue
+                run["cancelRequested"] = True
+                cancelled = True
+        if cancelled:
+            self._append_record(
+                StageRecord(
+                    run_id=f"stop-{uuid.uuid4().hex}",
+                    notebook_id=normalized_notebook_id,
+                    stage_id=normalized_stage_id,
+                    cell_id="",
+                    stage_alias="",
+                    stage_title="",
+                    status="cancelled",
+                    updated_at=utc_now_iso(),
+                    completed_at=utc_now_iso(),
+                    message="Stage cancellation requested.",
+                    can_cancel=False,
+                )
+            )
+        return self.state_payload()
+
+    def wait_for_idle(self, timeout: float = 10.0) -> None:
+        deadline = datetime.now(UTC).timestamp() + timeout
+        while datetime.now(UTC).timestamp() < deadline:
+            with self._lock:
+                alive = [thread for thread in self._threads if thread.is_alive()]
+                self._threads = alive
+            if not alive:
+                return
+            for thread in alive:
+                thread.join(timeout=0.05)
+
+    def _start_run(
+        self,
+        *,
+        graph: dict[str, object],
+        notebook_id: str,
+        notebook_title: str,
+        stage_ids: list[str],
+        force: bool,
+        diagnostic_stage_ids: set[str] | None,
+    ) -> dict[str, object]:
+        diagnostics = [
+            item
+            for item in graph.get("diagnostics", []) or []
+            if (
+                isinstance(item, dict)
+                and item.get("severity") == "error"
+                and self._diagnostic_applies_to_stage_ids(item, diagnostic_stage_ids)
+            )
+        ]
+        if diagnostics:
+            raise ValueError(str(diagnostics[0].get("message") or "Pipeline graph is invalid."))
+        if not stage_ids:
+            raise ValueError("The notebook does not contain SQL stages to run.")
+        run_id = f"stage-run-{uuid.uuid4().hex}"
+        with self._lock:
+            self._active_runs[run_id] = {
+                "runId": run_id,
+                "notebookId": notebook_id,
+                "notebookTitle": notebook_title,
+                "stageIds": list(stage_ids),
+                "force": force,
+                "status": "running",
+                "cancelRequested": False,
+                "startedAt": utc_now_iso(),
+            }
+        thread = threading.Thread(
+            target=self._run_stage_sequence,
+            args=(run_id, graph, stage_ids, force),
+            daemon=True,
+            name=f"bdw-materialized-stages-{run_id}",
+        )
+        with self._lock:
+            self._threads.append(thread)
+        thread.start()
+        self._publish_state()
+        return self.state_payload()
+
+    @staticmethod
+    def _diagnostic_applies_to_stage_ids(
+        diagnostic: dict[str, object],
+        stage_ids: set[str] | None,
+    ) -> bool:
+        if stage_ids is None:
+            return True
+        stage_id = str(diagnostic.get("stageId") or "").strip()
+        if stage_id:
+            return stage_id in stage_ids
+        diagnostic_stage_ids = {
+            str(item).strip()
+            for item in diagnostic.get("stageIds", []) or []
+            if str(item).strip()
+        }
+        return not diagnostic_stage_ids or bool(diagnostic_stage_ids.intersection(stage_ids))
+
+    @staticmethod
+    def _stage_and_predecessor_ids(graph: dict[str, object], stage_id: str) -> set[str]:
+        predecessor_map = {
+            str(node.get("stageId") or ""): [
+                str(item).strip()
+                for item in node.get("predecessorStageIds", []) or []
+                if str(item).strip()
+            ]
+            for node in graph.get("nodes", []) or []
+            if isinstance(node, dict)
+        }
+        required = {str(stage_id or "").strip()}
+        queue = deque(predecessor_map.get(str(stage_id or "").strip(), []))
+        while queue:
+            predecessor_id = queue.popleft()
+            if not predecessor_id or predecessor_id in required:
+                continue
+            required.add(predecessor_id)
+            queue.extend(predecessor_map.get(predecessor_id, []))
+        return required
+
+    def _run_cancelled(self, run_id: str) -> bool:
+        with self._lock:
+            return bool(self._active_runs.get(run_id, {}).get("cancelRequested"))
+
+    def _run_stage_sequence(
+        self,
+        run_id: str,
+        graph: dict[str, object],
+        stage_ids: list[str],
+        force: bool,
+    ) -> None:
+        node_by_id = {
+            str(node.get("stageId")): node
+            for node in graph.get("nodes", []) or []
+            if isinstance(node, dict)
+        }
+        predecessor_map = {
+            str(node.get("stageId")): [
+                str(item)
+                for item in node.get("predecessorStageIds", []) or []
+                if str(item).strip()
+            ]
+            for node in node_by_id.values()
+        }
+        try:
+            for stage_id in stage_ids:
+                node = node_by_id.get(stage_id)
+                if not node:
+                    continue
+                if self._run_cancelled(run_id):
+                    self._append_record(
+                        self._record_for_node(
+                            run_id,
+                            {**node, "notebookId": graph.get("notebookId") or ""},
+                            status="cancelled",
+                            message="Run cancelled before this stage started.",
+                        )
+                    )
+                    break
+                latest_completed = self._latest_completed_record(str(graph.get("notebookId") or ""), stage_id)
+                if not force and latest_completed is not None and str(node.get("status")) == VALID_MATERIALIZED_STATUS:
+                    self._append_record(
+                        self._record_for_node(
+                            run_id,
+                            {**node, "notebookId": graph.get("notebookId") or ""},
+                            status="skipped",
+                            message="Valid materialized revision reused.",
+                        )
+                    )
+                    continue
+                missing_predecessor = self._first_missing_predecessor(
+                    notebook_id=str(graph.get("notebookId") or ""),
+                    predecessor_stage_ids=predecessor_map.get(stage_id, []),
+                )
+                if missing_predecessor:
+                    self._append_record(
+                        self._record_for_node(
+                            run_id,
+                            node,
+                            status="failed",
+                            error=f"Predecessor stage {missing_predecessor} has no completed materialized revision.",
+                        )
+                    )
+                    break
+                try:
+                    self._run_one_stage(
+                        run_id=run_id,
+                        graph=graph,
+                        node=node,
+                        predecessor_stage_ids=predecessor_map.get(stage_id, []),
+                    )
+                except Exception:
+                    break
+        finally:
+            with self._lock:
+                run = self._active_runs.get(run_id)
+                if run is not None:
+                    run["status"] = "cancelled" if run.get("cancelRequested") else "completed"
+                    run["completedAt"] = utc_now_iso()
+                self._active_runs.pop(run_id, None)
+            self._publish_state()
+
+    def _record_for_node(
+        self,
+        run_id: str,
+        node: dict[str, object],
+        *,
+        status: str,
+        message: str = "",
+        error: str = "",
+    ) -> StageRecord:
+        now = utc_now_iso()
+        return StageRecord(
+            run_id=run_id,
+            notebook_id=str(node.get("notebookId") or ""),
+            stage_id=str(node.get("stageId") or ""),
+            cell_id=str(node.get("cellId") or ""),
+            stage_alias=str(node.get("alias") or ""),
+            stage_title=str(node.get("title") or ""),
+            status=status,
+            started_at=now,
+            completed_at=now if status in TERMINAL_STAGE_STATUSES else "",
+            updated_at=now,
+            message=message,
+            error=error,
+            can_cancel=status == "running",
+        )
+
+    def _first_missing_predecessor(
+        self,
+        *,
+        notebook_id: str,
+        predecessor_stage_ids: list[str],
+    ) -> str:
+        for predecessor_id in predecessor_stage_ids:
+            record = self._latest_completed_record(notebook_id, predecessor_id)
+            if record is None:
+                return predecessor_id
+        return ""
+
+    def _latest_completed_record(self, notebook_id: str, stage_id: str) -> StageRecord | None:
+        state = self._store.read_state()
+        return _latest_completed_by_stage(_records_from_state(state)).get((notebook_id, stage_id))
+
+    def _run_one_stage(
+        self,
+        *,
+        run_id: str,
+        graph: dict[str, object],
+        node: dict[str, object],
+        predecessor_stage_ids: list[str],
+    ) -> None:
+        notebook_id = str(graph.get("notebookId") or "")
+        running_record = self._record_for_node(run_id, {**node, "notebookId": notebook_id}, status="running")
+        running_record.started_at = utc_now_iso()
+        running_record.completed_at = ""
+        running_record.can_cancel = True
+        self._append_record(running_record)
+
+        previous_record = self._latest_completed_record(notebook_id, str(node.get("stageId") or ""))
+        predecessor_records = [
+            self._latest_completed_record(notebook_id, predecessor_id)
+            for predecessor_id in predecessor_stage_ids
+        ]
+        predecessor_revision_ids = [
+            record.revision_id
+            for record in predecessor_records
+            if record is not None and record.revision_id
+        ]
+        sql = materialized_stage_query_sql(node.get("sql"))
+        sql_hash = _sha256_text(sql)
+        data_sources = [
+            str(item).strip()
+            for item in node.get("dataSources", []) or []
+            if str(item).strip()
+        ]
+        query_options = (
+            dict(node.get("queryOptions") or {})
+            if isinstance(node.get("queryOptions"), dict)
+            else {}
+        )
+        revision_seed = "|".join([sql_hash, *predecessor_revision_ids, uuid.uuid4().hex])
+        revision_id = f"{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}-{_sha256_text(revision_seed)[:10]}"
+
+        try:
+            if self._run_cancelled(run_id):
+                raise InterruptedError("Stage run was cancelled before execution.")
+            execution_sql = self._sql_rewriter(sql, data_sources, query_options)
+            completed = self._execute_stage(
+                run_id=run_id,
+                graph=graph,
+                node=node,
+                sql=sql,
+                execution_sql=execution_sql,
+                sql_hash=sql_hash,
+                revision_id=revision_id,
+                predecessor_records=[record for record in predecessor_records if record is not None],
+                predecessor_revision_ids=predecessor_revision_ids,
+            )
+            completed.changed_result = bool(
+                previous_record
+                and previous_record.result_fingerprint
+                and completed.result_fingerprint
+                and previous_record.result_fingerprint != completed.result_fingerprint
+            )
+            self._append_record(completed)
+            self._clear_stage_obsolete_state(notebook_id, str(node.get("stageId") or ""))
+            if completed.changed_result:
+                self._mark_descendants_obsolete(
+                    graph,
+                    changed_stage_id=str(node.get("stageId") or ""),
+                    changed_revision_id=completed.revision_id,
+                )
+            if self._metadata_refresher is not None:
+                self._metadata_refresher()
+        except InterruptedError as exc:
+            self._append_record(
+                self._record_for_node(
+                    run_id,
+                    {**node, "notebookId": notebook_id},
+                    status="cancelled",
+                    message=str(exc),
+                )
+            )
+        except Exception as exc:
+            self._append_record(
+                self._record_for_node(
+                    run_id,
+                    {**node, "notebookId": notebook_id},
+                    status="failed",
+                    error=str(exc),
+                )
+            )
+            raise
+
+    def _execute_stage(
+        self,
+        *,
+        run_id: str,
+        graph: dict[str, object],
+        node: dict[str, object],
+        sql: str,
+        execution_sql: str,
+        sql_hash: str,
+        revision_id: str,
+        predecessor_records: list[StageRecord],
+        predecessor_revision_ids: list[str],
+    ) -> StageRecord:
+        notebook_id = str(graph.get("notebookId") or "")
+        stage_id = str(node.get("stageId") or "")
+        stage_alias = str(node.get("alias") or "")
+        stage_title = str(node.get("title") or "")
+        data_sources = [
+            str(item).strip()
+            for item in node.get("dataSources", []) or []
+            if str(item).strip()
+        ]
+        query_options = (
+            dict(node.get("queryOptions") or {})
+            if isinstance(node.get("queryOptions"), dict)
+            else {}
+        )
+        source_summaries = self._source_summaries_provider(sql, data_sources, query_options)
+        temp_dir = Path(tempfile.mkdtemp(prefix="bdw-stage-"))
+        local_output = temp_dir / "data.parquet"
+        connection = self._connection_factory()
+        try:
+            self._bootstrap_source_views(connection, source_summaries)
+            self._bootstrap_stage_views(connection, predecessor_records)
+            connection.execute(
+                f"COPY ({execution_sql}) TO {sql_literal(local_output.as_posix())} (FORMAT PARQUET)"
+            )
+            if self._run_cancelled(run_id):
+                raise InterruptedError("Stage run was cancelled after execution.")
+            size_bytes = local_output.stat().st_size
+            row_count = int(
+                connection.execute(
+                    f"SELECT COUNT(*) FROM read_parquet({sql_literal(local_output.as_posix())})"
+                ).fetchone()[0]
+                or 0
+            )
+            schema_rows = connection.execute(
+                f"DESCRIBE SELECT * FROM read_parquet({sql_literal(local_output.as_posix())})"
+            ).fetchall()
+            schema_fingerprint = _sha256_text(json.dumps(schema_rows, default=str, sort_keys=True))
+        finally:
+            try:
+                connection.close()
+            finally:
+                pass
+
+        file_fingerprint = _sha256_file(local_output)
+        result_fingerprint = _sha256_text(
+            json.dumps(
+                {
+                    "sqlHash": sql_hash,
+                    "predecessorRevisionIds": predecessor_revision_ids,
+                    "schemaFingerprint": schema_fingerprint,
+                    "rowCount": row_count,
+                    "fileFingerprint": file_fingerprint,
+                },
+                sort_keys=True,
+            )
+        )
+        bucket = self._stage_bucket()
+        key_prefix = "/".join(
+            [
+                STAGE_ROOT_PREFIX,
+                notebook_slug(notebook_id, str(graph.get("notebookTitle") or "")),
+                stage_alias,
+                revision_id,
+            ]
+        )
+        output_key = f"{key_prefix}/data.parquet"
+        metadata_key = f"{key_prefix}/_bdw_stage.json"
+        metadata = {
+            "notebookId": notebook_id,
+            "stageId": stage_id,
+            "stageAlias": stage_alias,
+            "stageTitle": stage_title,
+            "revisionId": revision_id,
+            "sqlHash": sql_hash,
+            "predecessorRevisionIds": predecessor_revision_ids,
+            "schemaFingerprint": schema_fingerprint,
+            "rowCount": row_count,
+            "sizeBytes": size_bytes,
+            "resultFingerprint": result_fingerprint,
+            "createdAt": utc_now_iso(),
+        }
+        self._object_writer(bucket, output_key, local_output, metadata_key, metadata)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        now = utc_now_iso()
+        return StageRecord(
+            run_id=run_id,
+            notebook_id=notebook_id,
+            stage_id=stage_id,
+            cell_id=str(node.get("cellId") or ""),
+            stage_alias=stage_alias,
+            stage_title=stage_title,
+            status="completed",
+            revision_id=revision_id,
+            sql_hash=sql_hash,
+            predecessor_revision_ids=predecessor_revision_ids,
+            schema_fingerprint=schema_fingerprint,
+            row_count=row_count,
+            size_bytes=size_bytes,
+            result_fingerprint=result_fingerprint,
+            output_bucket=bucket,
+            output_key=output_key,
+            metadata_key=metadata_key,
+            output_path=f"s3://{bucket}/{output_key}",
+            query_path=s3_query_alias(bucket=bucket, key=output_key, display_name="data.parquet"),
+            started_at=now,
+            completed_at=now,
+            updated_at=now,
+            message=f"Materialized {row_count} rows.",
+            can_cancel=False,
+        )
+
+    def _bootstrap_stage_views(self, connection: Any, predecessor_records: list[StageRecord]) -> None:
+        if not predecessor_records:
+            return
+        connection.execute(f"CREATE SCHEMA IF NOT EXISTS {qualified_name(STAGE_SCHEMA_NAME)}")
+        for record in predecessor_records:
+            if not record.output_path or not record.stage_alias:
+                continue
+            connection.execute(
+                (
+                    f"CREATE OR REPLACE VIEW {qualified_name(STAGE_SCHEMA_NAME, record.stage_alias)} "
+                    f"AS SELECT * FROM read_parquet({sql_literal(record.output_path)})"
+                )
+            )
+
+    def _stage_bucket(self) -> str:
+        bucket = str(self._settings.s3_bucket or self._settings.shared_notebooks_bucket or "").strip()
+        if not bucket:
+            raise ValueError("S3_BUCKET or BDW_SHARED_NOTEBOOKS_BUCKET is required for materialized stages.")
+        return bucket
+
+    def _write_object_to_s3(
+        self,
+        bucket: str,
+        output_key: str,
+        local_output: Path,
+        metadata_key: str,
+        metadata: dict[str, object],
+    ) -> dict[str, object]:
+        try:
+            client = s3_client(self._settings)
+            client.upload_file(str(local_output), bucket, output_key)
+            client.put_object(
+                Bucket=bucket,
+                Key=metadata_key,
+                Body=json.dumps(metadata, indent=2).encode("utf-8"),
+                ContentType="application/json",
+            )
+        except (BotoCoreError, ClientError, OSError) as exc:
+            raise RuntimeError(f"Failed to write materialized stage to S3: {exc}") from exc
+        return {"bucket": bucket, "key": output_key, "metadataKey": metadata_key}
+
+    def _append_record(self, record: StageRecord) -> None:
+        state = self._store.read_state()
+        records = list(state.get("records", []) or [])
+        records.append(record.payload)
+        state["records"] = records[-400:]
+        self._store.write_state(state)
+        self._publish_state()
+
+    def _clear_stage_obsolete_state(self, notebook_id: str, stage_id: str) -> None:
+        state = self._store.read_state()
+        stage_states = dict(state.get("stageStates", {}) or {})
+        notebook_states = dict(stage_states.get(notebook_id, {}) or {})
+        if stage_id not in notebook_states:
+            return
+        notebook_states.pop(stage_id, None)
+        stage_states[notebook_id] = notebook_states
+        state["stageStates"] = stage_states
+        self._store.write_state(state)
+        self._publish_state()
+
+    def _mark_descendants_obsolete(
+        self,
+        graph: dict[str, object],
+        *,
+        changed_stage_id: str,
+        changed_revision_id: str,
+    ) -> None:
+        notebook_id = str(graph.get("notebookId") or "")
+        successors: dict[str, list[str]] = {}
+        for edge in graph.get("edges", []) or []:
+            if not isinstance(edge, dict):
+                continue
+            source = str(edge.get("fromStageId") or "").strip()
+            target = str(edge.get("toStageId") or "").strip()
+            if source and target:
+                successors.setdefault(source, []).append(target)
+        queue = deque(successors.get(changed_stage_id, []))
+        descendants: set[str] = set()
+        while queue:
+            stage_id = queue.popleft()
+            if stage_id in descendants:
+                continue
+            descendants.add(stage_id)
+            queue.extend(successors.get(stage_id, []))
+        if not descendants:
+            return
+        state = self._store.read_state()
+        stage_states = dict(state.get("stageStates", {}) or {})
+        notebook_states = dict(stage_states.get(notebook_id, {}) or {})
+        now = utc_now_iso()
+        for descendant_id in descendants:
+            notebook_states[descendant_id] = {
+                "status": "obsolete",
+                "reason": "A predecessor was re-materialized with changed results.",
+                "changedPredecessorStageId": changed_stage_id,
+                "changedPredecessorRevisionId": changed_revision_id,
+                "updatedAt": now,
+            }
+        stage_states[notebook_id] = notebook_states
+        state["stageStates"] = stage_states
+        self._store.write_state(state)
+        self._publish_state()
+
+    def _publish_state(self) -> None:
+        if self._state_change_callback is not None:
+            self._state_change_callback(self.state_payload())

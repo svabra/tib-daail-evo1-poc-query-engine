@@ -8,6 +8,7 @@ export function createQueryUi(helpers) {
     queryJobIsRunning,
     queryJobStatusCopy,
     isQueryResultCollapsed = () => false,
+    isQueryResultChartsVisible = () => false,
   } = helpers;
 
   const bytesPerMegabyte = 1024 * 1024;
@@ -31,6 +32,25 @@ export function createQueryUi(helpers) {
           <p>Run this cell to inspect the selected data sources.</p>
         </div>
       </section>
+    `;
+  }
+
+  function resultChartsToggleMarkup(showToggle, visible = false) {
+    const title = visible ? "Hide resource charts" : "Show resource charts";
+    return `
+      <button
+        type="button"
+        class="query-runs-chart-toggle result-chart-toggle"
+        data-query-result-toggle-charts
+        aria-pressed="${visible ? "true" : "false"}"
+        title="${title}"
+        ${showToggle ? "" : "hidden"}
+      >
+        <span class="query-runs-chart-toggle-switch" aria-hidden="true">
+          <span class="query-runs-chart-toggle-thumb"></span>
+        </span>
+        <span class="query-runs-chart-toggle-copy" data-query-result-charts-toggle-label>${title}</span>
+      </button>
     `;
   }
 
@@ -371,7 +391,7 @@ export function createQueryUi(helpers) {
     `;
   }
 
-  function queryResourceSparklineMarkup(job, { compact = false } = {}) {
+  function queryResourceSparklineMarkup(job, { compact = false, hidden = false } = {}) {
     const samples = Array.isArray(job?.resourceSamples)
       ? job.resourceSamples.filter((sample) => sample && typeof sample === "object")
       : [];
@@ -416,7 +436,7 @@ export function createQueryUi(helpers) {
         : null,
     ].filter(Boolean);
     return `
-      <div class="query-resource-sparklines${compactClass}" data-query-resource-sparklines>
+      <div class="query-resource-sparklines${compactClass}" data-query-resource-sparklines ${hidden ? "hidden" : ""}>
         ${queryResourceSparklineChartMarkup({
           label: "CPU",
           unitLabel: "%",
@@ -498,7 +518,7 @@ export function createQueryUi(helpers) {
     return "Completion percent is not available for this query yet.";
   }
 
-  function queryProgressMarkup(job) {
+  function queryProgressMarkup(job, { chartsHidden = false } = {}) {
     if (!queryJobIsRunning(job)) {
       return "";
     }
@@ -510,7 +530,7 @@ export function createQueryUi(helpers) {
     const backendCopy = escapeHtml(job.backendName || "VMTP DUCKDB");
     const progressLabel = escapeHtml(job.cancellationPhase ? queryCancellationCopy(job) : job.progressLabel || "Running...");
     const metricsMarkup = queryProcessMetricStripMarkup(job);
-    const sparklineMarkup = queryResourceSparklineMarkup(job);
+    const sparklineMarkup = queryResourceSparklineMarkup(job, { hidden: chartsHidden });
 
     if (progressValue === null) {
       return `
@@ -682,12 +702,14 @@ export function createQueryUi(helpers) {
     }
 
     const collapsed = Boolean(isQueryResultCollapsed(cellId, job));
+    const chartsVisible = Boolean(isQueryResultChartsVisible(cellId, job));
     const resultBodyId = `query-result-body-${cellId}`;
     const showExportActions = job.status === "completed" && job.columns.length > 0;
     const rowsBadge = queryRowsShownLabel(job);
     const showRowsBadge = queryJobIsRunning(job) || Number(job.rowsShown || 0) > 0 || Boolean(job.truncated);
     const terminalMetricsMarkup = queryJobIsRunning(job) ? "" : queryProcessMetricStripMarkup(job);
-    const terminalSparklineMarkup = queryJobIsRunning(job) ? "" : queryResourceSparklineMarkup(job);
+    const hasResourceCharts = Boolean(queryResourceSparklineMarkup(job));
+    const terminalSparklineMarkup = queryJobIsRunning(job) ? "" : queryResourceSparklineMarkup(job, { hidden: !chartsVisible });
     const resultBody = job.status === "cancelled"
       ? `
           <div class="result-empty result-empty-cancelled">
@@ -707,14 +729,14 @@ export function createQueryUi(helpers) {
         `
       : job.columns.length
         ? `
-            ${queryProgressMarkup(job)}
+            ${queryProgressMarkup(job, { chartsHidden: !chartsVisible })}
             ${terminalMetricsMarkup}
             ${terminalSparklineMarkup}
             ${queryResultTableMarkup(job)}
           `
         : queryJobIsRunning(job)
           ? `
-              ${queryProgressMarkup(job)}
+              ${queryProgressMarkup(job, { chartsHidden: !chartsVisible })}
               <div class="result-empty result-empty-running">
                 <p>${escapeHtml(job.message || "Running query...")}</p>
               </div>
@@ -735,6 +757,8 @@ export function createQueryUi(helpers) {
         data-query-job-id="${escapeHtml(job.jobId || "")}" 
         data-query-result-collapse-key="${escapeHtml(job.jobId || cellId || "")}"
         data-query-result-collapsed="${collapsed ? "true" : "false"}"
+        data-query-result-charts-key="${escapeHtml(job.jobId || cellId || "")}"
+        data-query-result-charts-visible="${chartsVisible ? "true" : "false"}"
       >
         <header class="result-header">
           <div class="result-header-copy">
@@ -745,6 +769,7 @@ export function createQueryUi(helpers) {
             </div>
           </div>
           <div class="result-header-actions">
+            ${resultChartsToggleMarkup(hasResourceCharts, chartsVisible)}
             <button
               type="button"
               class="result-collapse-toggle"

@@ -48,6 +48,7 @@ import {
   renderResultExportSettings,
 } from "./data-exporters/export-settings.js";
 import { createNotebookModel } from "./notebook-model.js";
+import { createNotebookStagePipelineController } from "./notebook-stage-pipeline-controller.js";
 import { createNotebookWorkspaceMarkup } from "./notebook-workspace-markup.js";
 import { createNotebookWorkspaceController } from "./notebook-workspace-controller.js";
 import { createNotebookUrlHelpers } from "./notebook-url-helpers.js";
@@ -181,6 +182,7 @@ let queryJobsSnapshot = [];
 let queryJobsSummary = { runningCount: 0, totalCount: 0 };
 let queryPerformanceState = { recent: [], stats: {} };
 const collapsedQueryResultKeys = new Set();
+const visibleQueryResultChartKeys = new Set();
 let pythonJobsStateVersion = null;
 let pythonJobsSnapshot = [];
 let pythonJobsSummary = { runningCount: 0, totalCount: 0 };
@@ -586,6 +588,7 @@ const {
   formatQueryDuration,
   formatQueryTimestamp,
   isQueryResultCollapsed,
+  isQueryResultChartsVisible,
   queryJobElapsedMs,
   queryJobEventDateTimeCopy,
   queryJobIsRunning,
@@ -600,9 +603,18 @@ const { pythonResultPanelMarkup } = createPythonUi({
   pythonJobStatusCopy,
 });
 
+let notebookStagePipelineController = null;
+
 const querySourceValidationController = createQuerySourceValidationController({
   cellLanguageForCellRoot,
   selectedDataSourcesForCell,
+  validatePipelineStageAliases: (cellRoot, sql) =>
+    notebookStagePipelineController?.validateStageAliasesForCell?.(cellRoot, sql) ?? {
+      aliases: [],
+      localRelations: {},
+      missingAliases: [],
+      validationSql: String(sql || ""),
+    },
   validateLocalWorkspaceAliases,
 });
 
@@ -1035,9 +1047,11 @@ const {
   activeWorkspaceMetaRoot,
   createInitialNotebookVersion,
   normalizeCellEntry,
+  normalizeCellStage,
   normalizeCellQueryOptions,
   normalizeCellLanguage,
   normalizeNotebookCells,
+  normalizeNotebookPipelineMode,
   normalizeNotebookSummaryValue,
   normalizeNotebookTitleValue,
   normalizeStoredNotebookState,
@@ -1057,6 +1071,7 @@ const {
 const { buildWorkspaceMarkup, cellSourceSummaryMarkup } = createNotebookWorkspaceMarkup({
   escapeHtml,
   formatVersionTimestamp,
+  normalizeCellStage,
   normalizeNotebookCells,
   normalizeTags,
   pythonResultPanelMarkup,
@@ -1115,6 +1130,32 @@ const {
   unshareNotebook,
   workspaceNotebookId,
   writeLastNotebookId,
+});
+
+notebookStagePipelineController = createNotebookStagePipelineController({
+  createCellId,
+  escapeHtml,
+  fetchJsonOrThrow,
+  getCurrentNotebookId: currentWorkspaceNotebookId,
+  getNotebookMetadata: notebookMetadata,
+  normalizeCellLanguage,
+  normalizeCellStage,
+  normalizeNotebookPipelineMode,
+  openPublishDialogForSource: async (source) => {
+    await dataProductsController.openPublishDialog({
+      source,
+      lockSource: true,
+      startStep: 2,
+    });
+  },
+  refreshSidebar,
+  requestCellRun,
+  revealDataSourceSidebarBrowser,
+  setCellStage,
+  setNotebookCells,
+  setNotebookPipelineMode,
+  showConfirmDialog,
+  showMessageDialog,
 });
 
 const {
@@ -3825,6 +3866,49 @@ function toggleQueryResultPanel(button) {
   return true;
 }
 
+function syncQueryResultChartsToggle(button, visible) {
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+  const title = visible ? "Hide resource charts" : "Show resource charts";
+  button.setAttribute("aria-pressed", visible ? "true" : "false");
+  button.title = title;
+  const label = button.querySelector("[data-query-result-charts-toggle-label]");
+  if (label) {
+    label.textContent = title;
+  }
+}
+
+function toggleQueryResultCharts(button) {
+  if (!(button instanceof HTMLButtonElement)) {
+    return false;
+  }
+  const resultRoot = button.closest("[data-cell-result]");
+  if (!(resultRoot instanceof Element)) {
+    return false;
+  }
+  const nextVisible = button.getAttribute("aria-pressed") !== "true";
+  const key = String(resultRoot.dataset.queryResultChartsKey || resultRoot.dataset.queryJobId || "").trim();
+  if (key) {
+    if (nextVisible) {
+      visibleQueryResultChartKeys.add(key);
+    } else {
+      visibleQueryResultChartKeys.delete(key);
+    }
+  }
+  resultRoot.dataset.queryResultChartsVisible = nextVisible ? "true" : "false";
+  resultRoot.querySelectorAll("[data-query-resource-sparklines]").forEach((sparklineRoot) => {
+    sparklineRoot.hidden = !nextVisible;
+  });
+  syncQueryResultChartsToggle(button, nextVisible);
+  if (nextVisible) {
+    window.requestAnimationFrame(() => {
+      queryResourceChartsController.initialize(resultRoot);
+    });
+  }
+  return true;
+}
+
 
 function defaultLocalNotebookTitle() {
   const localNotebookCount = Object.keys(readStoredNotebookMetadata()).filter((key) =>
@@ -3855,6 +3939,7 @@ function createNotebookLinkElement(notebookId, metadata) {
   link.dataset.notebookDataSources = normalizeDataSources(metadata.dataSources).join("||");
   link.dataset.defaultNotebookTitle = metadata.title;
   link.dataset.defaultNotebookSummary = metadata.summary;
+  link.dataset.defaultNotebookPipelineMode = normalizeNotebookPipelineMode(metadata.pipelineMode);
   link.dataset.defaultNotebookVersions = JSON.stringify(metadata.versions ?? []);
   link.dataset.defaultNotebookCells = JSON.stringify(
     (metadata.cells ?? []).map((cell) => ({
@@ -3862,6 +3947,7 @@ function createNotebookLinkElement(notebookId, metadata) {
       language: normalizeCellLanguage(cell.language),
       dataSources: normalizeDataSources(cell.dataSources),
       queryOptions: normalizeCellQueryOptions(cell.queryOptions),
+      stage: normalizeCellStage(cell.stage),
       sql: cell.sql,
     }))
   );
@@ -3949,6 +4035,7 @@ function notebookMetadata(notebookId) {
       notebookId,
       title: normalizeNotebookTitleValue(defaults.title),
       summary: normalizeNotebookSummaryValue(defaults.summary),
+      pipelineMode: normalizeNotebookPipelineMode(defaults.pipelineMode),
       cells: normalizeNotebookCells(defaults.cells),
       dataSources: notebookSourceIds({ cells: defaults.cells }),
       tags: normalizeTags(defaults.tags),
@@ -3962,6 +4049,7 @@ function notebookMetadata(notebookId) {
     updateStoredNotebookState(notebookId, () => ({
       title: readOnlyMetadata.title,
       summary: readOnlyMetadata.summary,
+      pipelineMode: readOnlyMetadata.pipelineMode,
       tags: readOnlyMetadata.tags,
       cells: readOnlyMetadata.cells,
       deleted: false,
@@ -3979,6 +4067,7 @@ function notebookMetadata(notebookId) {
   const cells = normalizeNotebookCells(storedState.cells ?? defaults.cells);
   const resolvedTitle = normalizeNotebookTitleValue(storedState.title, defaults.title);
   const resolvedSummary = normalizeNotebookSummaryValue(storedState.summary, defaults.summary);
+  const resolvedPipelineMode = normalizeNotebookPipelineMode(storedState.pipelineMode, defaults.pipelineMode);
   const baseMetadata = {
     ...defaults,
     notebookId,
@@ -3986,6 +4075,7 @@ function notebookMetadata(notebookId) {
     summary: resolvedSummary,
     createdAt: defaults.createdAt,
     linkedGeneratorId: defaults.linkedGeneratorId,
+    pipelineMode: resolvedPipelineMode,
     cells,
     dataSources: notebookSourceIds({ cells }),
     tags: normalizeTags(storedState.tags ?? defaults.tags),
@@ -4019,6 +4109,7 @@ function notebookMetadata(notebookId) {
       ...currentState,
       title: normalizeNotebookTitleValue(currentState.title, baseMetadata.title),
       summary: normalizeNotebookSummaryValue(currentState.summary, baseMetadata.summary),
+      pipelineMode: normalizeNotebookPipelineMode(currentState.pipelineMode, baseMetadata.pipelineMode),
       tags: currentState.tags ?? baseMetadata.tags,
       cells: currentState.cells ?? baseMetadata.cells,
       shared: currentState.shared ?? baseMetadata.shared,
@@ -4080,6 +4171,7 @@ function createNotebookVersionSnapshot(metadata) {
       language: normalizeCellLanguage(cell.language),
       dataSources: normalizeDataSources(cell.dataSources),
       queryOptions: normalizeCellQueryOptions(cell.queryOptions),
+      stage: normalizeCellStage(cell.stage),
       sql: cell.sql,
     })),
   };
@@ -4098,6 +4190,7 @@ function sharedNotebookPayload(notebookId) {
     title: metadata.title,
     summary: metadata.summary,
     tags: normalizeTags(metadata.tags),
+    pipelineMode: normalizeNotebookPipelineMode(metadata.pipelineMode),
     treePath: notebookTreePathForId(notebookId),
     linkedGeneratorId: metadata.linkedGeneratorId || "",
     createdAt: metadata.createdAt || new Date().toISOString(),
@@ -4107,6 +4200,7 @@ function sharedNotebookPayload(notebookId) {
       sql: cell.sql,
       dataSources: normalizeDataSources(cell.dataSources),
       queryOptions: normalizeCellQueryOptions(cell.queryOptions),
+      stage: normalizeCellStage(cell.stage),
     })),
     versions: (metadata.versions ?? []).map((version) => ({
       versionId: version.versionId,
@@ -4120,6 +4214,7 @@ function sharedNotebookPayload(notebookId) {
         sql: cell.sql,
         dataSources: normalizeDataSources(cell.dataSources),
         queryOptions: normalizeCellQueryOptions(cell.queryOptions),
+        stage: normalizeCellStage(cell.stage),
       })),
     })),
   };
@@ -4132,6 +4227,7 @@ function metadataFromSharedNotebookPayload(notebook) {
     notebookId,
     title: normalizeNotebookTitleValue(notebook?.title),
     summary: normalizeNotebookSummaryValue(notebook?.summary),
+    pipelineMode: normalizeNotebookPipelineMode(notebook?.pipelineMode),
     createdAt: String(notebook?.createdAt || new Date().toISOString()),
     linkedGeneratorId: String(notebook?.linkedGeneratorId || ""),
     cells,
@@ -4158,6 +4254,7 @@ function writeNotebookDefaultsToMetaRoot(metaRoot, metadata) {
 
   metaRoot.dataset.defaultTitle = metadata.title;
   metaRoot.dataset.defaultSummary = metadata.summary;
+  metaRoot.dataset.defaultPipelineMode = normalizeNotebookPipelineMode(metadata.pipelineMode);
   metaRoot.dataset.createdAt = metadata.createdAt;
   metaRoot.dataset.defaultCreatedAt = metadata.createdAt;
   metaRoot.dataset.linkedGeneratorId = metadata.linkedGeneratorId || "";
@@ -4167,6 +4264,7 @@ function writeNotebookDefaultsToMetaRoot(metaRoot, metadata) {
       language: normalizeCellLanguage(cell.language),
       dataSources: normalizeDataSources(cell.dataSources),
       queryOptions: normalizeCellQueryOptions(cell.queryOptions),
+      stage: normalizeCellStage(cell.stage),
       sql: cell.sql,
     }))
   );
@@ -4570,6 +4668,7 @@ function updateSidebarNotebookLink(link, metadata) {
   link.dataset.notebookDataSources = normalizeDataSources(metadata.dataSources).join("||");
   link.dataset.defaultNotebookTitle = metadata.title;
   link.dataset.defaultNotebookSummary = metadata.summary;
+  link.dataset.defaultNotebookPipelineMode = normalizeNotebookPipelineMode(metadata.pipelineMode);
   link.dataset.defaultNotebookVersions = JSON.stringify(metadata.versions ?? []);
   link.dataset.defaultNotebookDataSources = normalizeDataSources(metadata.dataSources).join("||");
   link.dataset.defaultNotebookTags = normalizeTags(metadata.tags ?? []).join("||");
@@ -4583,6 +4682,7 @@ function updateSidebarNotebookLink(link, metadata) {
       language: normalizeCellLanguage(cell.language),
       dataSources: normalizeDataSources(cell.dataSources),
       queryOptions: normalizeCellQueryOptions(cell.queryOptions),
+      stage: normalizeCellStage(cell.stage),
       sql: cell.sql,
     }))
   );
@@ -4659,6 +4759,21 @@ function setNotebookSummary(notebookId, summary) {
   scheduleSharedNotebookSync(notebookId);
 }
 
+function setNotebookPipelineMode(notebookId, pipelineMode, options = {}) {
+  const normalizedMode = normalizeNotebookPipelineMode(pipelineMode);
+  persistNotebookDraft(notebookId, { pipelineMode: normalizedMode });
+  const metadata = notebookMetadata(notebookId);
+  notebookLinks(notebookId).forEach((link) => updateSidebarNotebookLink(link, metadata));
+  recordNotebookActivity(notebookId, "edited");
+  if (options.rerender) {
+    renderLocalNotebookWorkspace(notebookId);
+  } else {
+    applyNotebookMetadata();
+  }
+  scheduleSharedNotebookSync(notebookId);
+  return metadata;
+}
+
 function createEmptyCellState(initial = {}) {
   return normalizeCellEntry(
     {
@@ -4666,6 +4781,7 @@ function createEmptyCellState(initial = {}) {
       language: normalizeCellLanguage(initial.language),
       dataSources: initial.dataSources ?? [],
       queryOptions: initial.queryOptions ?? {},
+      stage: initial.stage ?? {},
       sql: initial.sql ?? "",
     },
     {
@@ -4673,6 +4789,7 @@ function createEmptyCellState(initial = {}) {
       language: normalizeCellLanguage(initial.language),
       dataSources: initial.dataSources ?? [],
       queryOptions: initial.queryOptions ?? {},
+      stage: initial.stage ?? {},
       sql: initial.sql ?? "",
     }
   );
@@ -4794,6 +4911,37 @@ function setCellQueryOptions(notebookId, cellId, queryOptions) {
   applyNotebookMetadata();
   recordNotebookActivity(notebookId, "edited");
   scheduleSharedNotebookSync(notebookId);
+}
+
+function setCellStage(notebookId, cellId, stagePatch, options = {}) {
+  updateStoredNotebookState(notebookId, (currentState) => {
+    const baseCells = normalizeNotebookCells(currentState.cells ?? notebookMetadata(notebookId).cells);
+    return {
+      ...currentState,
+      cells: baseCells.map((cell) =>
+        cell.cellId === cellId
+          ? {
+              ...cell,
+              stage: normalizeCellStage({
+                ...normalizeCellStage(cell.stage),
+                ...(stagePatch && typeof stagePatch === "object" ? stagePatch : {}),
+              }),
+            }
+          : cell
+      ),
+    };
+  });
+
+  const metadata = notebookMetadata(notebookId);
+  notebookLinks(notebookId).forEach((link) => updateSidebarNotebookLink(link, metadata));
+  recordNotebookActivity(notebookId, "edited");
+  if (options.rerender) {
+    renderLocalNotebookWorkspace(notebookId);
+  } else {
+    applyNotebookMetadata();
+  }
+  scheduleSharedNotebookSync(notebookId);
+  return metadata;
 }
 
 function setCellSql(notebookId, cellId, sqlText) {
@@ -4989,6 +5137,15 @@ function queryResultCollapseKey(cellId, job = null) {
 function isQueryResultCollapsed(cellId, job = null) {
   const key = queryResultCollapseKey(cellId, job);
   return Boolean(key && collapsedQueryResultKeys.has(key));
+}
+
+function queryResultChartsKey(cellId, job = null) {
+  return String(job?.jobId || cellId || "").trim();
+}
+
+function isQueryResultChartsVisible(cellId, job = null) {
+  const key = queryResultChartsKey(cellId, job);
+  return Boolean(key && visibleQueryResultChartKeys.has(key));
 }
 
 function editorExtensionsForLanguage(language, schema) {
@@ -5293,6 +5450,9 @@ function renderLocalNotebookWorkspace(notebookId, options = {}) {
   syncVisiblePythonCells();
   querySourceValidationController.refreshAll(panel);
   refreshVisibleCacheHydrationStatuses(panel);
+  notebookStagePipelineController.initializeCurrentWorkspace().catch((error) => {
+    console.error("Failed to initialize notebook pipeline.", error);
+  });
   renderQueryNotificationMenu();
   if (scrollToTop) {
     scrollWorkspaceNotebookIntoView();
@@ -5375,6 +5535,7 @@ async function createNotebook(targetContainer, initialMetadata = {}) {
   const metadata = {
     title: initialMetadata.title ?? defaultLocalNotebookTitle(),
     summary: initialMetadata.summary ?? "Describe this notebook.",
+    pipelineMode: normalizeNotebookPipelineMode(initialMetadata.pipelineMode),
     cells: normalizeNotebookCells(initialMetadata.cells ?? [createEmptyCellState()]),
     tags: normalizeTags(initialMetadata.tags ?? []),
     canEdit: true,
@@ -5802,12 +5963,14 @@ function applyWorkspaceMetadata(metaRoot, metadata) {
   }
   metaRoot.dataset.canEdit = metadata.canEdit ? "true" : "false";
   metaRoot.dataset.canDelete = metadata.canDelete ? "true" : "false";
+  metaRoot.dataset.defaultPipelineMode = normalizeNotebookPipelineMode(metadata.pipelineMode);
   metaRoot.dataset.defaultCells = JSON.stringify(
     (metadata.cells ?? []).map((cell) => ({
       cellId: cell.cellId,
       language: normalizeCellLanguage(cell.language),
       dataSources: normalizeDataSources(cell.dataSources),
       queryOptions: normalizeCellQueryOptions(cell.queryOptions),
+      stage: normalizeCellStage(cell.stage),
       sql: cell.sql,
     }))
   );
@@ -5949,6 +6112,9 @@ function applyNotebookMetadata() {
   applySidebarSearchFilter();
   syncVisibleQueryCells();
   syncVisiblePythonCells();
+  notebookStagePipelineController.initializeCurrentWorkspace().catch((error) => {
+    console.error("Failed to sync notebook pipeline.", error);
+  });
   applyWorkbenchTitle();
 }
 
@@ -6014,9 +6180,11 @@ function copyNotebook(notebookId) {
       createEmptyCellState({
         dataSources: [...normalizeDataSources(cell.dataSources)],
         queryOptions: normalizeCellQueryOptions(cell.queryOptions),
+        stage: normalizeCellStage(cell.stage),
         sql: cell.sql,
       })
     ),
+    pipelineMode: normalizeNotebookPipelineMode(sourceMetadata.pipelineMode),
     tags: [...normalizeTags(sourceMetadata.tags)],
     canEdit: true,
     canDelete: true,
@@ -6373,6 +6541,9 @@ function applyRealtimeTopicSnapshot(topic, snapshot) {
     case "service-consumption":
       serviceConsumptionStateVersion = Number(snapshot?.version || 0);
       serviceConsumptionUi.applyRealtimeSnapshot(snapshot);
+      break;
+    case "materialized-stages":
+      notebookStagePipelineController.applyRealtimeState(snapshot);
       break;
     case "notebook-events":
       applyNotebookEventsState(snapshot);
@@ -6862,6 +7033,10 @@ function ensureRealtimeEventsEventSource() {
   if (serviceConsumptionStateVersion !== null) {
     params.set("serviceConsumptionVersion", String(serviceConsumptionStateVersion));
   }
+  const materializedStagesVersion = notebookStagePipelineController.getMaterializedStagesVersion();
+  if (materializedStagesVersion !== null) {
+    params.set("materializedStagesVersion", String(materializedStagesVersion));
+  }
   if (notebookEventsStateVersion !== null) {
     params.set("notebookEventsVersion", String(notebookEventsStateVersion));
   }
@@ -6884,6 +7059,7 @@ function ensureRealtimeEventsEventSource() {
     "s3-delete-jobs",
     "data-source-events",
     "service-consumption",
+    "materialized-stages",
     "notebook-events",
     "client-connections",
   ].forEach((topic) => {
@@ -6946,6 +7122,13 @@ function ensureRealtimeEventsEventSource() {
         loadServiceConsumptionState({
           windowRange: serviceConsumptionPageRoot() ? serviceConsumptionUi.currentWindow() : "24h",
         }).catch(() => {
+          // Ignore transient reconnect issues.
+        })
+      );
+    }
+    if (notebookStagePipelineController.getMaterializedStagesVersion() !== null) {
+      refreshTasks.push(
+        notebookStagePipelineController.loadState().catch(() => {
           // Ignore transient reconnect issues.
         })
       );
@@ -7255,6 +7438,9 @@ async function startQueryJobForForm(form) {
         localRelationMap[logicalRelation] = physicalRelation;
       }
     });
+    executionSql =
+      notebookStagePipelineController?.prepareQuerySqlForCell?.(cellRoot, executionSql) ||
+      executionSql;
   } catch (error) {
     renderLocalQueryFailure(cellRoot, {
       cellId,
@@ -9221,6 +9407,9 @@ async function loadNotebookWorkspace(notebookId, options = {}) {
   syncVisiblePythonCells();
   querySourceValidationController.refreshAll(panel);
   refreshVisibleCacheHydrationStatuses(panel);
+  notebookStagePipelineController.initializeCurrentWorkspace().catch((error) => {
+    console.error("Failed to initialize notebook pipeline.", error);
+  });
   renderQueryNotificationMenu();
   if (scrollToTop) {
     scrollWorkspaceNotebookIntoView();
@@ -9270,6 +9459,9 @@ document.addEventListener(
     const queryForm = event.target.closest("[data-query-form]");
     if (queryForm) {
       event.preventDefault();
+      if (await notebookStagePipelineController.handleQueryFormSubmit(queryForm)) {
+        return;
+      }
       await startQueryJobForForm(queryForm);
       return;
     }
@@ -9548,6 +9740,14 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const resultChartsToggle = event.target.closest("[data-query-result-toggle-charts]");
+  if (resultChartsToggle) {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleQueryResultCharts(resultChartsToggle);
+    return;
+  }
+
   const queryExplainTab = event.target.closest("[data-query-explain-tab]");
   if (queryExplainTab) {
     event.preventDefault();
@@ -9570,6 +9770,9 @@ document.body.addEventListener("click", async (event) => {
   const runCellButton = event.target.closest("[data-run-cell]");
   if (runCellButton) {
     event.preventDefault();
+    if (await notebookStagePipelineController.handleRunCellButton(runCellButton)) {
+      return;
+    }
     const form = runCellButton.closest("[data-query-form]");
     if (!form) {
       return;
@@ -9606,6 +9809,10 @@ document.body.addEventListener("click", async (event) => {
   }
 
   if (await serviceConsumptionUi.handleClick(event)) {
+    return;
+  }
+
+  if (await notebookStagePipelineController.handleClick(event)) {
     return;
   }
 
@@ -9709,6 +9916,10 @@ document.body.addEventListener("focusin", (event) => {
   handleNotebookWorkspaceFocusIn(event);
 });
 
+document.body.addEventListener("contextmenu", (event) => {
+  notebookStagePipelineController.handleContextMenu(event);
+});
+
 document.body.addEventListener("input", (event) => {
   if (dataProductsController.handleInput(event)) {
     return;
@@ -9728,6 +9939,10 @@ document.body.addEventListener("input", (event) => {
   }
 
   if (handleNotebookWorkspaceInput(event)) {
+    return;
+  }
+
+  if (notebookStagePipelineController.handleInput(event)) {
     return;
   }
 

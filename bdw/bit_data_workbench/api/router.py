@@ -59,6 +59,7 @@ class NotebookCellPayload(BaseModel):
         validation_alias="queryOptions",
         serialization_alias="queryOptions",
     )
+    stage: dict[str, object] = Field(default_factory=dict)
 
 
 class NotebookVersionPayload(BaseModel):
@@ -89,6 +90,11 @@ class SharedNotebookUpsertPayload(BaseModel):
         validation_alias="linkedGeneratorId",
         serialization_alias="linkedGeneratorId",
     )
+    pipeline_mode: str = Field(
+        default="exploration",
+        validation_alias="pipelineMode",
+        serialization_alias="pipelineMode",
+    )
     created_at: str | None = Field(default=None, validation_alias="createdAt", serialization_alias="createdAt")
     cells: list[NotebookCellPayload] = Field(default_factory=list)
     versions: list[NotebookVersionPayload] = Field(default_factory=list)
@@ -111,6 +117,12 @@ class SharedNotebookFolderVisibilityPayload(BaseModel):
 class NotebookActivityTouchPayload(BaseModel):
     notebook_id: str = Field(validation_alias="notebookId", serialization_alias="notebookId")
     action: str = "open"
+
+
+class NotebookStagePipelinePayload(BaseModel):
+    notebook_id: str = Field(validation_alias="notebookId", serialization_alias="notebookId")
+    notebook_title: str = Field(default="", validation_alias="notebookTitle", serialization_alias="notebookTitle")
+    cells: list[dict[str, object]] = Field(default_factory=list)
 
 
 class S3BucketCreatePayload(BaseModel):
@@ -1729,6 +1741,7 @@ def upsert_shared_notebook(
             tags=list(payload.tags),
             tree_path=list(payload.tree_path),
             linked_generator_id=payload.linked_generator_id,
+            pipeline_mode=payload.pipeline_mode,
             created_at=payload.created_at,
             cells=[cell.model_dump(by_alias=True) for cell in payload.cells],
             versions=[version.model_dump(by_alias=True) for version in payload.versions],
@@ -1807,6 +1820,78 @@ def notebook_events_state(
     return JSONResponse(jsonable_encoder(service.notebook_events_state()))
 
 
+@router.get("/api/materialized-stages/state")
+def materialized_stages_state(
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    return JSONResponse(jsonable_encoder(service.materialized_stages_state()))
+
+
+@router.post("/api/materialized-stages/graph")
+def materialized_stage_graph(
+    payload: NotebookStagePipelinePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        result = service.materialized_stage_graph(
+            notebook_id=payload.notebook_id,
+            notebook_title=payload.notebook_title,
+            cells=payload.cells,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder(result))
+
+
+@router.post("/api/materialized-stages/pipeline/run")
+def run_materialized_pipeline(
+    payload: NotebookStagePipelinePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        result = service.run_materialized_pipeline(
+            notebook_id=payload.notebook_id,
+            notebook_title=payload.notebook_title,
+            cells=payload.cells,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder(result))
+
+
+@router.post("/api/materialized-stages/stages/{stage_id}/run")
+def run_materialized_stage(
+    stage_id: str,
+    payload: NotebookStagePipelinePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        result = service.run_materialized_stage(
+            notebook_id=payload.notebook_id,
+            notebook_title=payload.notebook_title,
+            cells=payload.cells,
+            stage_id=stage_id,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder(result))
+
+
+@router.post("/api/materialized-stages/stages/{stage_id}/stop")
+def stop_materialized_stage(
+    stage_id: str,
+    payload: NotebookStagePipelinePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    result = service.stop_materialized_stage(
+        notebook_id=payload.notebook_id,
+        stage_id=stage_id,
+    )
+    return JSONResponse(jsonable_encoder(result))
+
+
 @router.post("/api/notebook-activity/touch")
 def touch_notebook_activity(
     payload: NotebookActivityTouchPayload,
@@ -1869,6 +1954,10 @@ async def stream_realtime_events(
         default=None,
         alias="serviceConsumptionVersion",
     ),
+    materialized_stages_version: int | None = Query(
+        default=None,
+        alias="materializedStagesVersion",
+    ),
     notebook_events_version: int | None = Query(
         default=None,
         alias="notebookEventsVersion",
@@ -1888,6 +1977,7 @@ async def stream_realtime_events(
             "s3-delete-jobs": s3_delete_jobs_version,
             "data-source-events": data_source_events_version,
             "service-consumption": service_consumption_version,
+            "materialized-stages": materialized_stages_version,
             "notebook-events": notebook_events_version,
             "client-connections": client_connections_version,
         }

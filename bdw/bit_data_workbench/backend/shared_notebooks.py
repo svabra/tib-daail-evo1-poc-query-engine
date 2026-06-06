@@ -122,6 +122,21 @@ def normalize_notebook_cell_language(value: object) -> str:
     return "python" if normalized == "python" else "sql"
 
 
+def normalize_notebook_pipeline_mode(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    return "pipeline" if normalized == "pipeline" else "exploration"
+
+
+def normalize_notebook_cell_stage(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(key): item
+        for key, item in value.items()
+        if str(key).strip()
+    }
+
+
 def notebook_cell_from_payload(payload: object) -> NotebookCellDefinition | None:
     if not isinstance(payload, dict):
         return None
@@ -140,6 +155,7 @@ def notebook_cell_from_payload(payload: object) -> NotebookCellDefinition | None
             if str(source_id).strip()
         ],
         query_options=normalize_query_options(payload.get("queryOptions")),
+        stage=normalize_notebook_cell_stage(payload.get("stage")),
     )
 
 
@@ -183,6 +199,7 @@ def serialize_notebook(notebook: NotebookDefinition) -> dict[str, object]:
         "tags": list(notebook.tags),
         "treePath": list(notebook.tree_path),
         "linkedGeneratorId": notebook.linked_generator_id,
+        "pipelineMode": notebook.pipeline_mode,
         "createdAt": notebook.created_at,
         "shared": True,
         "versions": notebook.versions_payload,
@@ -230,6 +247,9 @@ def deserialize_notebook(payload: object) -> NotebookDefinition | None:
             if str(segment).strip()
         ),
         linked_generator_id=str(payload.get("linkedGeneratorId") or payload.get("linked_generator_id") or ""),
+        pipeline_mode=normalize_notebook_pipeline_mode(
+            payload.get("pipelineMode", payload.get("pipeline_mode"))
+        ),
         can_edit=True,
         can_delete=True,
         shared=True,

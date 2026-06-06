@@ -29,6 +29,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
   const {
     escapeHtml,
     formatVersionTimestamp,
+    normalizeCellStage,
     normalizeNotebookCells,
     normalizeTags,
     pythonResultPanelMarkup,
@@ -113,6 +114,44 @@ export function createNotebookWorkspaceMarkup(helpers) {
     `;
   }
 
+  function cellStageStripMarkup(cell, canEdit, pipelineMode, cellLanguage) {
+    const stage = normalizeCellStage(cell.stage);
+    const hidden = pipelineMode === "pipeline" && cellLanguage === "sql" ? "" : " hidden";
+    return `
+      <div class="cell-stage-strip"${hidden} data-cell-stage-strip>
+        <div class="cell-stage-main">
+          <label class="cell-stage-field cell-stage-title-field">
+            <span>Stage</span>
+            <input
+              class="cell-stage-title-input"
+              type="text"
+              value="${escapeHtml(stage.title)}"
+              placeholder="Stage title"
+              data-cell-stage-title-input
+              ${canEdit ? "" : "disabled"}
+            >
+          </label>
+          <label class="cell-stage-field cell-stage-description-field">
+            <span>Description</span>
+            <input
+              class="cell-stage-description-input"
+              type="text"
+              value="${escapeHtml(stage.description)}"
+              placeholder="Analyst description"
+              data-cell-stage-description-input
+              ${canEdit ? "" : "disabled"}
+            >
+          </label>
+        </div>
+        <div class="cell-stage-meta">
+          <span class="cell-stage-status-badge" data-cell-stage-status>Planned</span>
+          <span class="cell-stage-chip-row" data-cell-stage-predecessors></span>
+          <span class="cell-stage-chip-row" data-cell-stage-successors></span>
+        </div>
+      </div>
+    `;
+  }
+
   function queryRunsPanelMarkup(notebookId, cellId) {
     return `
       <details
@@ -145,7 +184,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
     `;
   }
 
-  function buildCellMarkup(notebookId, cell, index, canEdit, totalCells, activeCellId) {
+  function buildCellMarkup(notebookId, cell, index, canEdit, totalCells, activeCellId, pipelineMode) {
     const selectedSources = normalizeDataSources(cell.dataSources);
     const cellLanguage = normalizeCellLanguage(cell.language);
     const canMoveUp = canEdit && index > 0;
@@ -254,6 +293,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
               </details>
             </div>
           </div>
+          ${cellStageStripMarkup(cell, canEdit, pipelineMode, cellLanguage)}
           <div class="editor-frame" data-editor-root data-editor-name="sql-${escapeHtml(cell.cellId)}" data-editor-language="${escapeHtml(cellLanguage)}">
             <button
               type="button"
@@ -287,6 +327,15 @@ export function createNotebookWorkspaceMarkup(helpers) {
   }
 
   function buildWorkspaceMarkup(notebookId, metadata, activeCellId) {
+    const pipelineMode = String(metadata.pipelineMode || "exploration").trim().toLowerCase() === "pipeline" ? "pipeline" : "exploration";
+    const pipelineModeEnabled = pipelineMode === "pipeline";
+    const modeToggleTitle = pipelineModeEnabled
+      ? "Notebook mode: Pipeline. Click to return to Exploration mode, which keeps cells independent for ad-hoc SQL or Python work."
+      : "Notebook mode: Exploration. Click to enable Pipeline mode, which links SQL cells into staged materialized data products with dependency-aware runs.";
+    const modeToggleLabel = pipelineModeEnabled ? "Pipeline Mode" : "Exploration Mode";
+    const modeToggleDetail = pipelineModeEnabled
+      ? "Links SQL cells into staged materialized data products and dependency-aware runs."
+      : "Keeps cells independent for ad-hoc SQL or Python work.";
     const tagsMarkup = metadata.tags
       .map(
         (tag) => `
@@ -310,7 +359,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
         `
       : '<span class="workspace-version-current-empty">No saved versions yet.</span>';
     const cellsMarkup = (metadata.cells ?? [])
-      .map((cell, index, cells) => buildCellMarkup(notebookId, cell, index, metadata.canEdit, cells.length, activeCellId))
+      .map((cell, index, cells) => buildCellMarkup(notebookId, cell, index, metadata.canEdit, cells.length, activeCellId, pipelineMode))
       .join("");
 
     return `
@@ -327,11 +376,13 @@ export function createNotebookWorkspaceMarkup(helpers) {
         data-default-summary="${escapeHtml(metadata.summary)}"
         data-default-created-at="${escapeHtml(metadata.createdAt || new Date().toISOString())}"
         data-linked-generator-id="${escapeHtml(metadata.linkedGeneratorId || "")}" 
+        data-default-pipeline-mode="${escapeHtml(pipelineMode)}"
         data-default-cells='${escapeHtml(JSON.stringify((metadata.cells ?? []).map((cell) => ({
           cellId: cell.cellId,
           language: normalizeCellLanguage(cell.language),
           dataSources: normalizeDataSources(cell.dataSources),
           queryOptions: cell.queryOptions,
+          stage: normalizeCellStage(cell.stage),
           sql: cell.sql,
         }))))}'
         data-default-versions='${escapeHtml(JSON.stringify((metadata.versions ?? []).map((version) => ({
@@ -345,6 +396,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
             language: normalizeCellLanguage(cell.language),
             dataSources: normalizeDataSources(cell.dataSources),
             queryOptions: cell.queryOptions,
+            stage: normalizeCellStage(cell.stage),
             sql: cell.sql,
           })),
         }))))}'
@@ -361,6 +413,15 @@ export function createNotebookWorkspaceMarkup(helpers) {
               <textarea class="workspace-summary-input" data-summary-input rows="3" placeholder="Notebook description">${escapeHtml(metadata.summary)}</textarea>
             </div>
             <div class="workspace-header-tags">
+              <div class="workspace-tag-toolbar">
+                <div class="workspace-tag-list" data-tag-list>${tagsMarkup}</div>
+                <button type="button" class="workspace-tag-badge workspace-tag-badge-add" data-tag-toggle title="Add tag" aria-label="Add tag">+</button>
+              </div>
+              <div class="workspace-tag-controls workspace-tag-controls-inline" data-tag-controls hidden>
+                <input class="workspace-tag-input workspace-tag-input-inline" type="text" placeholder="Add tag or labels (comma-separated)" data-tag-input>
+                <button class="workspace-tag-add workspace-tag-add-inline" type="button" data-tag-add>Add</button>
+              </div>
+              <div class="workspace-header-toggle-row${metadata.canEdit || metadata.shared ? " workspace-header-toggle-row-paired" : ""}">
               <button
                 type="button"
                 class="workspace-sharing-toggle${metadata.shared ? " is-on" : ""}"
@@ -377,13 +438,22 @@ export function createNotebookWorkspaceMarkup(helpers) {
                   <small>${metadata.shared ? "Stores this notebook on the server and announces it to connected users." : "Keeps this notebook local to this browser workspace."}</small>
                 </span>
               </button>
-              <div class="workspace-tag-toolbar">
-                <div class="workspace-tag-list" data-tag-list>${tagsMarkup}</div>
-                <button type="button" class="workspace-tag-badge workspace-tag-badge-add" data-tag-toggle title="Add tag" aria-label="Add tag">+</button>
-              </div>
-              <div class="workspace-tag-controls workspace-tag-controls-inline" data-tag-controls hidden>
-                <input class="workspace-tag-input workspace-tag-input-inline" type="text" placeholder="Add tag" data-tag-input>
-                <button class="workspace-tag-add workspace-tag-add-inline" type="button" data-tag-add>Add</button>
+                <button
+                  type="button"
+                  class="workspace-sharing-toggle notebook-mode-toggle${pipelineModeEnabled ? " is-on" : ""}"
+                  data-notebook-mode-toggle
+                  aria-pressed="${pipelineModeEnabled ? "true" : "false"}"
+                  title="${escapeHtml(modeToggleTitle)}"
+                  aria-label="${escapeHtml(modeToggleTitle)}"
+                >
+                  <span class="workspace-sharing-toggle-switch" aria-hidden="true">
+                    <span class="workspace-sharing-toggle-thumb"></span>
+                  </span>
+                  <span class="workspace-sharing-toggle-copy notebook-mode-toggle-copy">
+                    <span data-notebook-mode-toggle-label>${escapeHtml(modeToggleLabel)}</span>
+                    <small data-notebook-mode-toggle-detail>${escapeHtml(modeToggleDetail)}</small>
+                  </span>
+                </button>
               </div>
             </div>
           </div>
@@ -416,6 +486,38 @@ export function createNotebookWorkspaceMarkup(helpers) {
           </div>
           <div class="workspace-version-panel" data-version-panel hidden>
             <div class="workspace-version-list" data-version-list></div>
+          </div>
+        </section>
+
+        <section class="notebook-pipeline-panel"${pipelineMode === "pipeline" ? "" : " hidden"} data-notebook-pipeline-panel>
+          <div class="notebook-pipeline-header">
+            <div>
+              <span class="workspace-tags-label">Notebook Pipeline</span>
+            </div>
+            <div class="notebook-pipeline-header-actions">
+              <p class="notebook-pipeline-status" data-notebook-pipeline-status>Pipeline graph has not been built yet.</p>
+              <div class="notebook-pipeline-actions"${pipelineMode === "pipeline" ? "" : " hidden"} data-notebook-pipeline-actions>
+                <button type="button" class="notebook-pipeline-run-button" data-run-notebook-pipeline title="Run all pipeline stages in dependency order">
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16l14-8z"></path></svg>
+                  <span>Run pipeline</span>
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="notebook-pipeline-graph-band" data-notebook-pipeline-graph></div>
+          <div class="notebook-pipeline-table-wrap">
+            <table class="notebook-pipeline-table">
+              <thead>
+                <tr>
+                  <th>Stage</th>
+                  <th>Status</th>
+                  <th>Dependencies</th>
+                  <th>Rows</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody data-notebook-pipeline-table></tbody>
+            </table>
           </div>
         </section>
 

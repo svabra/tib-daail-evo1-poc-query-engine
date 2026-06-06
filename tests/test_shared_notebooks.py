@@ -140,6 +140,7 @@ class SharedNotebookServiceTests(unittest.TestCase):
             tags=[" analysis ", "", "vat"],
             tree_path=["", " "],
             linked_generator_id=" loader-a ",
+            pipeline_mode="pipeline",
             created_at="2026-04-14T10:00:00+00:00",
             cells=[
                 {
@@ -151,6 +152,13 @@ class SharedNotebookServiceTests(unittest.TestCase):
                     ],
                     "queryOptions": {
                         "duckdb": {"parquetHivePartitioning": "on"},
+                    },
+                    "stage": {
+                        "enabled": True,
+                        "stageId": "stage-raw",
+                        "alias": "raw",
+                        "title": "Raw",
+                        "predecessorStageIds": [],
                     },
                 },
                 "ignored",
@@ -166,6 +174,13 @@ class SharedNotebookServiceTests(unittest.TestCase):
                             "dataSources": [" workspace.s3.vat_smoke ", ""],
                             "queryOptions": {
                                 "duckdb": {"parquetHivePartitioning": "off"},
+                            },
+                            "stage": {
+                                "enabled": True,
+                                "stageId": "stage-saved",
+                                "alias": "saved",
+                                "title": "Saved",
+                                "predecessorStageIds": ["stage-raw"],
                             },
                         }
                     ],
@@ -183,6 +198,7 @@ class SharedNotebookServiceTests(unittest.TestCase):
         self.assertEqual(notebook["treePath"], ["Shared Notebooks"])
         self.assertEqual(notebook["tags"], ["analysis", "vat"])
         self.assertEqual(notebook["linkedGeneratorId"], "loader-a")
+        self.assertEqual(notebook["pipelineMode"], "pipeline")
         self.assertEqual(notebook["createdAt"], "2026-04-14T10:00:00+00:00")
         self.assertEqual(
             notebook["cells"][0]["dataSources"],
@@ -197,6 +213,8 @@ class SharedNotebookServiceTests(unittest.TestCase):
             "off",
         )
         self.assertEqual(notebook["cells"][0]["language"], "sql")
+        self.assertEqual(notebook["cells"][0]["stage"]["stageId"], "stage-raw")
+        self.assertEqual(notebook["cells"][0]["stage"]["alias"], "raw")
         self.assertTrue(
             notebook["cells"][0]["cellId"].startswith("shared-cell-")
         )
@@ -223,6 +241,10 @@ class SharedNotebookServiceTests(unittest.TestCase):
             "off",
         )
         self.assertEqual(notebook["versions"][0]["cells"][0]["language"], "sql")
+        self.assertEqual(
+            notebook["versions"][0]["cells"][0]["stage"]["predecessorStageIds"],
+            ["stage-raw"],
+        )
         self.assertTrue(
             notebook["versions"][0]["versionId"].startswith("shared-version-")
         )

@@ -77,6 +77,11 @@ from .ingestion_types.tabular import (
 )
 from .local_workspace_query_sources import LocalWorkspaceQuerySourceManager
 from .local_workspace_transfers import LocalWorkspaceTransferManager
+from .materialized_stages import (
+    MaterializedStageManager,
+    MaterializedStageStore,
+    sql_stage_alias_references,
+)
 from .python_execution import KernelSessionManager, PythonJobManager
 from .query_analysis import (
     KnownRelationReference,
@@ -133,7 +138,9 @@ from .shared_notebooks import (
     SharedNotebookStore,
     default_shared_notebook_folder,
     normalize_folder_path,
+    normalize_notebook_cell_stage,
     normalize_notebook_cell_language,
+    normalize_notebook_pipeline_mode,
 )
 from .source_discovery import (
     build_s3_query,
@@ -158,6 +165,7 @@ REALTIME_TOPIC_ORDER = (
     "s3-delete-jobs",
     "data-source-events",
     "service-consumption",
+    "materialized-stages",
     "notebook-events",
     "client-connections",
 )
@@ -372,6 +380,25 @@ class WorkbenchService:
             catalog_provider=self.catalogs,
             s3_bucket_snapshot_provider=self.s3_explorer_snapshot,
         )
+        self._materialized_stage_store = MaterializedStageStore(
+            self._materialized_stage_store_path()
+        )
+        self._materialized_stages = MaterializedStageManager(
+            settings=settings,
+            store=self._materialized_stage_store,
+            connection_factory=self._create_worker_connection,
+            source_summaries_provider=self._materialized_stage_source_summaries,
+            bootstrap_source_views=self._bootstrap_duckdb_source_views,
+            sql_rewriter=self._materialized_stage_execution_sql,
+            metadata_refresher=self.refresh_metadata_state,
+            state_change_callback=lambda snapshot: self._publish_realtime_snapshot(
+                "materialized-stages",
+                snapshot,
+            ),
+            published_products_for_source=lambda source: self._data_products.published_products_for_source(
+                source=source
+            ),
+        )
         self._service_consumption = ServiceConsumptionMonitor(
             settings,
             state_change_callback=lambda snapshot: self._publish_realtime_snapshot(
@@ -422,6 +449,11 @@ class WorkbenchService:
         self._set_realtime_snapshot(
             "service-consumption",
             self._service_consumption.realtime_payload(),
+            notify=False,
+        )
+        self._set_realtime_snapshot(
+            "materialized-stages",
+            self._materialized_stages.state_payload(),
             notify=False,
         )
         with self._condition:
@@ -1117,6 +1149,7 @@ class WorkbenchService:
         linked_generator_id: str,
         cells: list[dict[str, object]],
         versions: list[dict[str, object]],
+        pipeline_mode: str = "exploration",
         created_at: str | None = None,
         origin_client_id: str = "",
     ) -> dict[str, object]:
@@ -1146,6 +1179,7 @@ class WorkbenchService:
                     if source_id
                 ],
                 query_options=normalize_query_options(cell.get("queryOptions")),
+                stage=normalize_notebook_cell_stage(cell.get("stage")),
             )
             for cell in cells
             if isinstance(cell, dict)
@@ -1175,6 +1209,7 @@ class WorkbenchService:
                             if source_id
                         ],
                         query_options=normalize_query_options(cell.get("queryOptions")),
+                        stage=normalize_notebook_cell_stage(cell.get("stage")),
                     ).payload
                     for cell in version.get("cells", []) or []
                     if isinstance(cell, dict)
@@ -1192,6 +1227,7 @@ class WorkbenchService:
             tags=normalized_tags,
             tree_path=normalized_tree_path,
             linked_generator_id=str(linked_generator_id or "").strip(),
+            pipeline_mode=normalize_notebook_pipeline_mode(pipeline_mode),
             can_edit=True,
             can_delete=True,
             shared=True,
@@ -1384,6 +1420,61 @@ class WorkbenchService:
     ) -> dict[str, object]:
         return self._service_consumption.state_payload(
             window=window,
+        )
+
+    def materialized_stages_state(self) -> dict[str, object]:
+        return self._materialized_stages.state_payload()
+
+    def materialized_stage_graph(
+        self,
+        *,
+        notebook_id: str,
+        notebook_title: str = "",
+        cells: list[dict[str, object]] | None = None,
+    ) -> dict[str, object]:
+        return self._materialized_stages.graph_payload(
+            notebook_id=str(notebook_id or "").strip(),
+            notebook_title=str(notebook_title or "").strip(),
+            cells=cells or [],
+        )
+
+    def run_materialized_pipeline(
+        self,
+        *,
+        notebook_id: str,
+        notebook_title: str = "",
+        cells: list[dict[str, object]] | None = None,
+    ) -> dict[str, object]:
+        return self._materialized_stages.run_pipeline(
+            notebook_id=str(notebook_id or "").strip(),
+            notebook_title=str(notebook_title or "").strip(),
+            cells=cells or [],
+        )
+
+    def run_materialized_stage(
+        self,
+        *,
+        notebook_id: str,
+        stage_id: str,
+        notebook_title: str = "",
+        cells: list[dict[str, object]] | None = None,
+    ) -> dict[str, object]:
+        return self._materialized_stages.run_stage(
+            notebook_id=str(notebook_id or "").strip(),
+            stage_id=str(stage_id or "").strip(),
+            notebook_title=str(notebook_title or "").strip(),
+            cells=cells or [],
+        )
+
+    def stop_materialized_stage(
+        self,
+        *,
+        notebook_id: str,
+        stage_id: str,
+    ) -> dict[str, object]:
+        return self._materialized_stages.stop_stage(
+            notebook_id=str(notebook_id or "").strip(),
+            stage_id=str(stage_id or "").strip(),
         )
 
     def update_service_consumption_budget(
@@ -1670,6 +1761,49 @@ class WorkbenchService:
             local_relation_map=local_relation_map,
             query_options=query_options,
         )
+
+    def _materialized_stage_source_summaries(
+        self,
+        sql: str,
+        data_sources: list[str],
+        query_options: dict[str, object],
+    ) -> list[dict[str, object]]:
+        relation_index = self._query_source_relation_index(local_relation_map=None)
+        for stage_alias in sql_stage_alias_references(sql):
+            relation = f"stage.{stage_alias}"
+            relation_index[normalize_query_alias_key(relation)] = KnownRelationReference(
+                relation=relation
+            )
+        source_validation = self.validate_query_sources(
+            sql=sql,
+            data_sources=data_sources,
+            local_relation_map=None,
+            relation_index=relation_index,
+        )
+        if source_validation.get("status") == QUERY_SOURCE_INVALID:
+            raise ValueError(
+                str(source_validation.get("message") or "Referenced source(s) were not found.")
+            )
+        query_analysis = self._analyze_query(sql, relation_index=relation_index)
+        return self._query_source_summaries(
+            query_analysis.touched_relations,
+            local_relation_map=None,
+            query_options=query_options,
+        )
+
+    def _materialized_stage_execution_sql(
+        self,
+        sql: str,
+        data_sources: list[str],
+        query_options: dict[str, object],
+    ) -> str:
+        relation_index = self._query_source_relation_index(local_relation_map=None)
+        for stage_alias in sql_stage_alias_references(sql):
+            relation = f"stage.{stage_alias}"
+            relation_index[normalize_query_alias_key(relation)] = KnownRelationReference(
+                relation=relation
+            )
+        return self._rewrite_query_source_aliases(sql, relation_index, local_relation_map=None)
 
     def validate_query_sources(
         self,
@@ -3255,6 +3389,9 @@ class WorkbenchService:
 
     def _data_product_store_path(self) -> Path:
         return self.settings.duckdb_database.parent / "data-products.json"
+
+    def _materialized_stage_store_path(self) -> Path:
+        return self.settings.duckdb_database.parent / "materialized-stages.json"
 
     def _data_exchange_store_path(self) -> Path:
         return self.settings.duckdb_database.parent / "data-exchange.json"

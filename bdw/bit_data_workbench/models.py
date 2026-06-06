@@ -201,6 +201,7 @@ class NotebookCellDefinition:
     language: str = "sql"
     data_sources: list[str] = field(default_factory=list)
     query_options: dict[str, Any] = field(default_factory=dict)
+    stage: dict[str, Any] = field(default_factory=dict)
 
     @property
     def access_mode(self) -> str:
@@ -220,6 +221,7 @@ class NotebookCellDefinition:
             "language": self.language,
             "dataSources": list(self.data_sources),
             "queryOptions": dict(self.query_options),
+            "stage": dict(self.stage),
         }
 
 
@@ -253,6 +255,7 @@ class NotebookDefinition:
     tags: list[str] = field(default_factory=list)
     tree_path: tuple[str, ...] = ()
     linked_generator_id: str = ""
+    pipeline_mode: str = "exploration"
     can_edit: bool = True
     can_delete: bool = True
     shared: bool = False
@@ -322,6 +325,7 @@ class NotebookDefinition:
             "tags": list(self.tags),
             "treePath": list(self.tree_path),
             "linkedGeneratorId": self.linked_generator_id,
+            "pipelineMode": self.pipeline_mode,
             "canEdit": self.can_edit,
             "canDelete": self.can_delete,
             "shared": self.shared,

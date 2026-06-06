@@ -63,12 +63,15 @@ export function createNotebookWorkspaceController(helpers) {
       return false;
     }
 
-    const nextTag = String(rawValue ?? "").trim();
-    if (!nextTag) {
+    const nextTags = String(rawValue ?? "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter((value) => value);
+    if (!nextTags.length) {
       return true;
     }
 
-    setNotebookTags(notebookId, [...notebookMetadata(notebookId).tags, nextTag]);
+    setNotebookTags(notebookId, [...notebookMetadata(notebookId).tags, ...nextTags]);
     setTagControlsOpen(metaRoot, false);
     return true;
   }

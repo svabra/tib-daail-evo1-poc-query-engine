@@ -440,6 +440,71 @@ async def assert_query_resource_chart_layout(
     )
 
 
+async def assert_result_chart_toggle(page, timeout_ms: int) -> None:
+    await page.wait_for_function(
+        """
+        () => Array.from(document.querySelectorAll("[data-cell-result]"))
+          .some((root) => root.querySelector("[data-query-result-toggle-charts]:not([hidden])")
+            && root.querySelector("[data-query-resource-sparklines]"))
+        """,
+        timeout=timeout_ms,
+    )
+    toggle_state = await page.evaluate(
+        """
+        async () => {
+          const root = Array.from(document.querySelectorAll("[data-cell-result]"))
+            .find((candidate) => candidate.querySelector("[data-query-result-toggle-charts]:not([hidden])")
+              && candidate.querySelector("[data-query-resource-sparklines]"));
+          const button = root?.querySelector("[data-query-result-toggle-charts]");
+          if (!(root instanceof HTMLElement) || !(button instanceof HTMLButtonElement)) {
+            throw new Error("Result chart toggle is missing.");
+          }
+          const chartRoots = Array.from(root.querySelectorAll("[data-query-resource-sparklines]"));
+          const visibleCardCount = () => Array.from(root.querySelectorAll(".query-resource-sparkline-card"))
+            .filter((card) => {
+              const rect = card.getBoundingClientRect();
+              return rect.width > 0 && rect.height > 0;
+            }).length;
+          const beforePressed = button.getAttribute("aria-pressed");
+          const beforeLabel = button.textContent || "";
+          const beforeChartsHidden = chartRoots.every((chartRoot) => chartRoot.hidden);
+          const beforeVisibleCards = visibleCardCount();
+          button.click();
+          await new Promise((resolve) => setTimeout(resolve, 350));
+          return {
+            beforePressed,
+            beforeLabel,
+            beforeChartsHidden,
+            beforeVisibleCards,
+            afterPressed: button.getAttribute("aria-pressed"),
+            afterLabel: button.textContent || "",
+            afterChartsHidden: chartRoots.every((chartRoot) => chartRoot.hidden),
+            afterVisibleCards: visibleCardCount(),
+            rootChartsVisible: root.dataset.queryResultChartsVisible,
+          };
+        }
+        """
+    )
+    if toggle_state.get("beforePressed") != "false" or not toggle_state.get("beforeChartsHidden"):
+        raise RuntimeError(f"Result charts should be hidden by default: {toggle_state!r}.")
+    if toggle_state.get("beforeVisibleCards") != 0:
+        raise RuntimeError(f"Hidden result charts still occupied visible layout: {toggle_state!r}.")
+    if toggle_state.get("afterPressed") != "true" or toggle_state.get("afterChartsHidden"):
+        raise RuntimeError(f"Result chart toggle did not switch charts on: {toggle_state!r}.")
+    if "Hide resource charts" not in str(toggle_state.get("afterLabel", "")):
+        raise RuntimeError(f"Result chart toggle label did not update: {toggle_state!r}.")
+    if int(toggle_state.get("afterVisibleCards") or 0) < 2:
+        raise RuntimeError(f"Result chart toggle did not reveal chart cards: {toggle_state!r}.")
+    if toggle_state.get("rootChartsVisible") != "true":
+        raise RuntimeError(f"Result chart visibility state was not stored on the result root: {toggle_state!r}.")
+    await assert_query_resource_chart_layout(
+        page,
+        timeout_ms,
+        "[data-cell-result] [data-query-resource-sparklines]:not([hidden]) .query-resource-sparkline-card",
+        min_count=2,
+    )
+
+
 async def assert_resource_monitoring_ui(page, timeout_ms: int) -> None:
     await page.wait_for_function(
         """
@@ -503,18 +568,19 @@ async def assert_resource_monitoring_ui(page, timeout_ms: int) -> None:
         )
         checked_chart_layout = True
     result_chart_count = await page.locator(
-        "[data-cell-result] .query-resource-sparkline-card"
+        "[data-cell-result] [data-query-resource-sparklines]:not([hidden]) .query-resource-sparkline-card"
     ).count()
     if result_chart_count >= 2:
         await assert_query_resource_chart_layout(
             page,
             timeout_ms,
-            "[data-cell-result] .query-resource-sparkline-card",
+            "[data-cell-result] [data-query-resource-sparklines]:not([hidden]) .query-resource-sparkline-card",
             min_count=2,
         )
         checked_chart_layout = True
     if not checked_chart_layout:
         raise RuntimeError("Expected resource chart cards in the query monitor or result area.")
+    await assert_result_chart_toggle(page, timeout_ms)
     await page.wait_for_function(
         """
         () => !/RSS/.test(document.body.textContent || "")
