@@ -60,7 +60,7 @@ class WorkbenchRealtimeFacade:
         timeout: float,
     ) -> list[dict[str, Any]]:
         normalized_versions = {
-            topic: int((last_versions or {}).get(topic, -1))
+            topic: self._normalize_version((last_versions or {}).get(topic, -1))
             for topic in self._topic_order
         }
         with self._service._condition:
@@ -72,6 +72,15 @@ class WorkbenchRealtimeFacade:
                 timeout=timeout,
             )
             return self.updates_locked(normalized_versions)
+
+    @staticmethod
+    def _normalize_version(value: object) -> int:
+        if value is None:
+            return -1
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return -1
 
     def set_snapshot(
         self,

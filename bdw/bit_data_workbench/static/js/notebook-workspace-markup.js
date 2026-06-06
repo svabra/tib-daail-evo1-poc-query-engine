@@ -501,17 +501,32 @@ export function createNotebookWorkspaceMarkup(helpers) {
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16l14-8z"></path></svg>
                   <span>Run pipeline</span>
                 </button>
+                <button type="button" class="notebook-pipeline-cancel-button" data-cancel-notebook-pipeline title="Cancel the active pipeline run" hidden>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10"></rect></svg>
+                  <span>Cancel pipeline</span>
+                </button>
               </div>
             </div>
           </div>
           <div class="notebook-pipeline-graph-band" data-notebook-pipeline-graph></div>
           <div class="notebook-pipeline-table-wrap">
             <table class="notebook-pipeline-table">
+              <colgroup>
+                <col class="pipeline-col-stage">
+                <col class="pipeline-col-run">
+                <col class="pipeline-col-status">
+                <col class="pipeline-col-dependencies">
+                <col class="pipeline-col-duration">
+                <col class="pipeline-col-rows">
+                <col class="pipeline-col-actions">
+              </colgroup>
               <thead>
                 <tr>
                   <th>Stage</th>
+                  <th></th>
                   <th>Status</th>
                   <th>Dependencies</th>
+                  <th>Duration</th>
                   <th>Rows</th>
                   <th></th>
                 </tr>

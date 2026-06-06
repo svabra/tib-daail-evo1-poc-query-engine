@@ -135,6 +135,34 @@ async def create_root_folder(page, folder_name: str, timeout_ms: int) -> float:
     return (time.perf_counter() - started) * 1000
 
 
+async def create_child_folder(
+    page,
+    parent_folder_name: str,
+    folder_name: str,
+    timeout_ms: int,
+) -> float:
+    parent_folder = await wait_for_notebook_folder(
+        page,
+        parent_folder_name,
+        timeout_ms,
+    )
+    await ensure_folder_open(parent_folder)
+    summary = parent_folder.locator(":scope > summary")
+    await summary.hover()
+    await summary.locator("[data-add-tree-item]").click()
+    await page.locator("[data-folder-name-input]").fill(folder_name)
+    started = time.perf_counter()
+    await page.locator("[data-folder-name-submit]").click()
+    child_folder = parent_folder.locator(
+        "xpath=.//details[@data-tree-folder]"
+        "[./summary//span["
+        "contains(@class, 'tree-folder-label') and "
+        f"normalize-space()=\"{folder_name}\"]]"
+    ).first
+    await child_folder.wait_for(state="attached", timeout=timeout_ms)
+    return (time.perf_counter() - started) * 1000
+
+
 async def create_notebook_in_folder(
     page,
     folder_name: str,
@@ -198,6 +226,8 @@ async def drag_notebook_to_folder(
     source_folder_name: str,
     destination_folder_name: str,
     timeout_ms: int,
+    *,
+    drop_on_header: bool = False,
 ) -> float:
     source_folder = await wait_for_notebook_folder(
         page,
@@ -224,7 +254,7 @@ async def drag_notebook_to_folder(
     started = time.perf_counter()
     await page.evaluate(
         """
-        ({ notebookId, destinationFolderName }) => {
+        ({ notebookId, destinationFolderName, dropOnHeader }) => {
             const source = document.querySelector(
                 `[data-draggable-notebook][data-notebook-id="${notebookId}"]`
             );
@@ -239,6 +269,12 @@ async def drag_notebook_to_folder(
             const destinationChildren = destination?.querySelector(
                 ':scope > [data-tree-children]'
             );
+            const destinationHeader = destination?.querySelector(
+                ':scope > summary'
+            );
+            const destinationDropTarget = dropOnHeader
+                ? destinationHeader
+                : destinationChildren;
             if (!(source instanceof HTMLElement)) {
                 throw new Error('Source notebook element could not be found.');
             }
@@ -250,6 +286,11 @@ async def drag_notebook_to_folder(
             if (!(destinationChildren instanceof HTMLElement)) {
                 throw new Error(
                     'Destination folder container could not be found.'
+                );
+            }
+            if (!(destinationDropTarget instanceof HTMLElement)) {
+                throw new Error(
+                    'Destination folder drop target could not be found.'
                 );
             }
 
@@ -264,14 +305,14 @@ async def drag_notebook_to_folder(
                     dataTransfer,
                 })
             );
-            destinationChildren.dispatchEvent(
+            destinationDropTarget.dispatchEvent(
                 new DragEvent('dragover', {
                     bubbles: true,
                     cancelable: true,
                     dataTransfer,
                 })
             );
-            destinationChildren.dispatchEvent(
+            destinationDropTarget.dispatchEvent(
                 new DragEvent('drop', {
                     bubbles: true,
                     cancelable: true,
@@ -290,6 +331,7 @@ async def drag_notebook_to_folder(
         {
             "notebookId": notebook_id,
             "destinationFolderName": destination_folder_name,
+            "dropOnHeader": drop_on_header,
         },
     )
     await source_folder.locator(
@@ -303,7 +345,10 @@ async def drag_notebook_to_folder(
 
 async def run_smoke(args: argparse.Namespace) -> int:
     source_folder_name = unique_name("pw-nb-move-src")
+    header_source_folder_name = unique_name("pw-nb-header-src")
     destination_folder_name = unique_name("pw-nb-move-dst")
+    nested_parent_folder_name = unique_name("pw-nb-move-parent")
+    nested_destination_folder_name = unique_name("pw-nb-move-nested-dst")
 
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=args.headless)
@@ -340,15 +385,38 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 source_folder_name,
                 args.timeout_ms,
             )
+            create_header_source_ms = await create_root_folder(
+                page,
+                header_source_folder_name,
+                args.timeout_ms,
+            )
             create_destination_ms = await create_root_folder(
                 page,
                 destination_folder_name,
+                args.timeout_ms,
+            )
+            create_nested_parent_ms = await create_root_folder(
+                page,
+                nested_parent_folder_name,
+                args.timeout_ms,
+            )
+            create_nested_destination_ms = await create_child_folder(
+                page,
+                nested_parent_folder_name,
+                nested_destination_folder_name,
                 args.timeout_ms,
             )
             notebook_id, create_notebook_ms = await create_notebook_in_folder(
                 page,
                 source_folder_name,
                 args.timeout_ms,
+            )
+            nested_notebook_id, create_nested_notebook_ms = (
+                await create_notebook_in_folder(
+                    page,
+                    header_source_folder_name,
+                    args.timeout_ms,
+                )
             )
 
             move_ms = await drag_notebook_to_folder(
@@ -357,6 +425,14 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 source_folder_name,
                 destination_folder_name,
                 args.timeout_ms,
+            )
+            nested_header_move_ms = await drag_notebook_to_folder(
+                page,
+                nested_notebook_id,
+                header_source_folder_name,
+                nested_destination_folder_name,
+                args.timeout_ms,
+                drop_on_header=True,
             )
 
             state = await notebook_tree_state(page)
@@ -369,6 +445,15 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     "Dragged notebook is still recorded under the source "
                     "folder."
                 )
+            if folder_contains_notebook(
+                state,
+                header_source_folder_name,
+                nested_notebook_id,
+            ):
+                raise RuntimeError(
+                    "Header-dropped notebook is still recorded under the "
+                    "source folder."
+                )
             if not folder_contains_notebook(
                 state,
                 destination_folder_name,
@@ -377,6 +462,15 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 raise RuntimeError(
                     "Dragged notebook was not recorded under the "
                     "destination folder."
+                )
+            if not folder_contains_notebook(
+                state,
+                nested_destination_folder_name,
+                nested_notebook_id,
+            ):
+                raise RuntimeError(
+                    "Header-dropped notebook was not recorded under the "
+                    "nested destination folder."
                 )
 
             await page.reload(
@@ -388,18 +482,36 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 source_folder_name,
                 args.timeout_ms,
             )
+            header_source_folder = await wait_for_notebook_folder(
+                page,
+                header_source_folder_name,
+                args.timeout_ms,
+            )
             destination_folder = await wait_for_notebook_folder(
                 page,
                 destination_folder_name,
                 args.timeout_ms,
             )
+            nested_destination_folder = await wait_for_notebook_folder(
+                page,
+                nested_destination_folder_name,
+                args.timeout_ms,
+            )
             await ensure_folder_open(source_folder)
+            await ensure_folder_open(header_source_folder)
             await ensure_folder_open(destination_folder)
+            await ensure_folder_open(nested_destination_folder)
             await source_folder.locator(
                 f'[data-draggable-notebook][data-notebook-id="{notebook_id}"]'
             ).wait_for(state="detached", timeout=args.timeout_ms)
+            await header_source_folder.locator(
+                f'[data-draggable-notebook][data-notebook-id="{nested_notebook_id}"]'
+            ).wait_for(state="detached", timeout=args.timeout_ms)
             await destination_folder.locator(
                 f'[data-draggable-notebook][data-notebook-id="{notebook_id}"]'
+            ).wait_for(state="attached", timeout=args.timeout_ms)
+            await nested_destination_folder.locator(
+                f'[data-draggable-notebook][data-notebook-id="{nested_notebook_id}"]'
             ).wait_for(state="attached", timeout=args.timeout_ms)
         except (PlaywrightTimeoutError, RuntimeError) as exc:
             print(str(exc), file=sys.stderr)
@@ -412,11 +524,31 @@ async def run_smoke(args: argparse.Namespace) -> int:
 
     print(f"Notebook move create source folder: {create_source_ms:.0f} ms")
     print(
+        "Notebook move create header source folder: "
+        f"{create_header_source_ms:.0f} ms"
+    )
+    print(
         "Notebook move create destination folder: "
         f"{create_destination_ms:.0f} ms"
     )
+    print(
+        "Notebook move create nested parent folder: "
+        f"{create_nested_parent_ms:.0f} ms"
+    )
+    print(
+        "Notebook move create nested destination folder: "
+        f"{create_nested_destination_ms:.0f} ms"
+    )
     print(f"Notebook move create notebook: {create_notebook_ms:.0f} ms")
+    print(
+        "Notebook move create header-drop notebook: "
+        f"{create_nested_notebook_ms:.0f} ms"
+    )
     print(f"Notebook move drag and drop: {move_ms:.0f} ms")
+    print(
+        "Notebook move nested header drag and drop: "
+        f"{nested_header_move_ms:.0f} ms"
+    )
     print("Playwright notebook drag-and-drop smoke passed.")
     return 0
 

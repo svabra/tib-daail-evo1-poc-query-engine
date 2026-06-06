@@ -1859,6 +1859,17 @@ def run_materialized_pipeline(
     return JSONResponse(jsonable_encoder(result))
 
 
+@router.post("/api/materialized-stages/pipeline/cancel")
+def cancel_materialized_pipeline(
+    payload: NotebookStagePipelinePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    result = service.cancel_materialized_pipeline(
+        notebook_id=payload.notebook_id,
+    )
+    return JSONResponse(jsonable_encoder(result))
+
+
 @router.post("/api/materialized-stages/stages/{stage_id}/run")
 def run_materialized_stage(
     stage_id: str,

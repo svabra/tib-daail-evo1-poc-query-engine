@@ -33,6 +33,21 @@ def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _parse_iso_datetime(value: object) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed
+
+
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
 
@@ -135,6 +150,18 @@ class StageRecord:
     can_cancel: bool = False
 
     @property
+    def duration_ms(self) -> int | None:
+        started = _parse_iso_datetime(self.started_at)
+        if started is None:
+            return None
+        completed = _parse_iso_datetime(self.completed_at)
+        if completed is None and self.status in {"running", "queued"}:
+            completed = datetime.now(UTC)
+        if completed is None:
+            return None
+        return max(0, round((completed - started).total_seconds() * 1000))
+
+    @property
     def payload(self) -> dict[str, object]:
         return {
             "runId": self.run_id,
@@ -163,6 +190,7 @@ class StageRecord:
             "error": self.error,
             "changedResult": self.changed_result,
             "canCancel": self.can_cancel,
+            "durationMs": self.duration_ms,
         }
 
     @classmethod
@@ -604,13 +632,23 @@ class MaterializedStageManager:
         notebook_title: str = "",
         cells: Iterable[dict[str, object]],
     ) -> dict[str, object]:
-        return build_notebook_stage_graph(
+        graph = build_notebook_stage_graph(
             notebook_id=notebook_id,
             notebook_title=notebook_title,
             cells=cells,
             state=self._store.read_state(),
             published_products_for_source=self._published_products_for_source,
         )
+        with self._lock:
+            active_runs = [
+                dict(item)
+                for item in self._active_runs.values()
+                if item.get("notebookId") == notebook_id
+            ]
+        if active_runs:
+            self._apply_active_runs_to_graph(graph, active_runs)
+        graph["activeRuns"] = active_runs
+        return graph
 
     def run_pipeline(
         self,
@@ -629,7 +667,7 @@ class MaterializedStageManager:
             notebook_id=notebook_id,
             notebook_title=notebook_title,
             stage_ids=[str(item) for item in graph.get("order", [])],
-            force=False,
+            force=True,
             diagnostic_stage_ids=None,
         )
 
@@ -687,6 +725,16 @@ class MaterializedStageManager:
                     can_cancel=False,
                 )
             )
+        return self.state_payload()
+
+    def cancel_pipeline(self, *, notebook_id: str) -> dict[str, object]:
+        normalized_notebook_id = str(notebook_id or "").strip()
+        with self._lock:
+            for run in self._active_runs.values():
+                if run.get("notebookId") == normalized_notebook_id:
+                    run["cancelRequested"] = True
+                    run["status"] = "cancelling"
+        self._publish_state()
         return self.state_payload()
 
     def wait_for_idle(self, timeout: float = 10.0) -> None:
@@ -814,6 +862,10 @@ class MaterializedStageManager:
                 node = node_by_id.get(stage_id)
                 if not node:
                     continue
+                with self._lock:
+                    run = self._active_runs.get(run_id)
+                    if run is not None:
+                        run["currentStageId"] = stage_id
                 if self._run_cancelled(run_id):
                     self._append_record(
                         self._record_for_node(
@@ -875,8 +927,10 @@ class MaterializedStageManager:
         status: str,
         message: str = "",
         error: str = "",
+        started_at: str = "",
     ) -> StageRecord:
         now = utc_now_iso()
+        normalized_started_at = started_at or now
         return StageRecord(
             run_id=run_id,
             notebook_id=str(node.get("notebookId") or ""),
@@ -885,7 +939,7 @@ class MaterializedStageManager:
             stage_alias=str(node.get("alias") or ""),
             stage_title=str(node.get("title") or ""),
             status=status,
-            started_at=now,
+            started_at=normalized_started_at,
             completed_at=now if status in TERMINAL_STAGE_STATUSES else "",
             updated_at=now,
             message=message,
@@ -918,8 +972,9 @@ class MaterializedStageManager:
         predecessor_stage_ids: list[str],
     ) -> None:
         notebook_id = str(graph.get("notebookId") or "")
+        started_at = utc_now_iso()
         running_record = self._record_for_node(run_id, {**node, "notebookId": notebook_id}, status="running")
-        running_record.started_at = utc_now_iso()
+        running_record.started_at = started_at
         running_record.completed_at = ""
         running_record.can_cancel = True
         self._append_record(running_record)
@@ -963,6 +1018,7 @@ class MaterializedStageManager:
                 revision_id=revision_id,
                 predecessor_records=[record for record in predecessor_records if record is not None],
                 predecessor_revision_ids=predecessor_revision_ids,
+                started_at=started_at,
             )
             completed.changed_result = bool(
                 previous_record
@@ -987,6 +1043,7 @@ class MaterializedStageManager:
                     {**node, "notebookId": notebook_id},
                     status="cancelled",
                     message=str(exc),
+                    started_at=started_at,
                 )
             )
         except Exception as exc:
@@ -996,6 +1053,7 @@ class MaterializedStageManager:
                     {**node, "notebookId": notebook_id},
                     status="failed",
                     error=str(exc),
+                    started_at=started_at,
                 )
             )
             raise
@@ -1012,6 +1070,7 @@ class MaterializedStageManager:
         revision_id: str,
         predecessor_records: list[StageRecord],
         predecessor_revision_ids: list[str],
+        started_at: str,
     ) -> StageRecord:
         notebook_id = str(graph.get("notebookId") or "")
         stage_id = str(node.get("stageId") or "")
@@ -1117,12 +1176,38 @@ class MaterializedStageManager:
             metadata_key=metadata_key,
             output_path=f"s3://{bucket}/{output_key}",
             query_path=s3_query_alias(bucket=bucket, key=output_key, display_name="data.parquet"),
-            started_at=now,
+            started_at=started_at or now,
             completed_at=now,
             updated_at=now,
             message=f"Materialized {row_count} rows.",
             can_cancel=False,
         )
+
+    @staticmethod
+    def _apply_active_runs_to_graph(graph: dict[str, object], active_runs: list[dict[str, object]]) -> None:
+        nodes = graph.get("nodes")
+        if not isinstance(nodes, list):
+            return
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            stage_id = str(node.get("stageId") or "")
+            for run in active_runs:
+                stage_ids = {str(item) for item in run.get("stageIds", []) or []}
+                if stage_id not in stage_ids:
+                    continue
+                run_id = str(run.get("runId") or "")
+                latest_run = node.get("latestRun")
+                latest_run_id = str(latest_run.get("runId") or "") if isinstance(latest_run, dict) else ""
+                latest_status = str(latest_run.get("status") or "").lower() if isinstance(latest_run, dict) else ""
+                if latest_run_id == run_id and latest_status in TERMINAL_STAGE_STATUSES:
+                    break
+                if latest_run_id == run_id and latest_status == "running":
+                    node["status"] = "running"
+                else:
+                    node["status"] = "queued"
+                node["activeRun"] = dict(run)
+                break
 
     def _bootstrap_stage_views(self, connection: Any, predecessor_records: list[StageRecord]) -> None:
         if not predecessor_records:

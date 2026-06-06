@@ -1136,6 +1136,7 @@ notebookStagePipelineController = createNotebookStagePipelineController({
   createCellId,
   escapeHtml,
   fetchJsonOrThrow,
+  formatQueryDuration,
   getCurrentNotebookId: currentWorkspaceNotebookId,
   getNotebookMetadata: notebookMetadata,
   normalizeCellLanguage,

@@ -1451,6 +1451,15 @@ class WorkbenchService:
             cells=cells or [],
         )
 
+    def cancel_materialized_pipeline(
+        self,
+        *,
+        notebook_id: str,
+    ) -> dict[str, object]:
+        return self._materialized_stages.cancel_pipeline(
+            notebook_id=str(notebook_id or "").strip(),
+        )
+
     def run_materialized_stage(
         self,
         *,

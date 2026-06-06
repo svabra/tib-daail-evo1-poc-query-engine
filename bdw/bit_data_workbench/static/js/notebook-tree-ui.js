@@ -581,6 +581,12 @@ export function createNotebookTreeUi(helpers) {
       return null;
     }
 
+    const summary = target.closest("summary");
+    const summaryFolder = summary?.parentElement;
+    if (summaryFolder instanceof Element && summaryFolder.matches("[data-tree-folder]")) {
+      return directChildrenContainer(summaryFolder);
+    }
+
     const explicitContainer = target.closest("[data-tree-children]");
     if (explicitContainer) {
       return explicitContainer;

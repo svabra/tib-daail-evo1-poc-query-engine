@@ -82,6 +82,7 @@ class FakeStageManager(import_stage_components()[0]):
         revision_id,
         predecessor_records,
         predecessor_revision_ids,
+        started_at,
     ):
         _, _, StageRecord, _, _, utc_now_iso = import_stage_components()
         stage_id = str(node["stageId"])
@@ -108,13 +109,30 @@ class FakeStageManager(import_stage_components()[0]):
             output_key=f"_bdw_stages/test/{node['alias']}/{revision_id}/data.parquet",
             output_path=f"s3://stage-bucket/_bdw_stages/test/{node['alias']}/{revision_id}/data.parquet",
             query_path=f"s3.stage_bucket._bdw_stages.test.{node['alias']}.data.parquet",
-            started_at=now,
+            started_at=started_at or now,
             completed_at=now,
             updated_at=now,
         )
 
 
 class NotebookStagePipelineTests(unittest.TestCase):
+    def test_stage_record_payload_includes_duration_ms(self) -> None:
+        _, _, StageRecord, _, _, _ = import_stage_components()
+        record = StageRecord(
+            run_id="run-1",
+            notebook_id="nb-1",
+            stage_id="stage-raw",
+            cell_id="cell-1",
+            stage_alias="raw",
+            stage_title="Raw",
+            status="completed",
+            started_at="2026-06-06T00:00:00+00:00",
+            completed_at="2026-06-06T00:00:01.250000+00:00",
+            updated_at="2026-06-06T00:00:01.250000+00:00",
+        )
+
+        self.assertEqual(record.payload["durationMs"], 1250)
+
     def test_graph_orders_sql_stage_references_and_reports_missing_and_cycles(self) -> None:
         _, _, _, build_graph, _, _ = import_stage_components()
         cells = [
@@ -192,6 +210,41 @@ class NotebookStagePipelineTests(unittest.TestCase):
                 ["valid", "obsolete", "obsolete"],
             )
 
+    def test_pipeline_run_reexecutes_valid_stages_in_dependency_order(self) -> None:
+        _, Store, _, _, _, _ = import_stage_components()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = FakeStageManager(
+                Store(Path(temp_dir) / "materialized-stages.json"),
+                {
+                    "stage-raw": "raw-v1",
+                    "stage-scope": "scope-v1",
+                    "stage-final": "final-v1",
+                },
+            )
+            cells = [
+                stage_cell("cell-1", "raw", "select 1"),
+                stage_cell("cell-2", "scope", "select * from stage.raw"),
+                stage_cell("cell-3", "final", "select * from stage.scope"),
+            ]
+
+            manager.run_pipeline(notebook_id="nb-1", cells=cells)
+            manager.wait_for_idle()
+            self.assertEqual(
+                manager.execution_order,
+                ["stage-raw", "stage-scope", "stage-final"],
+            )
+            graph = manager.graph_payload(notebook_id="nb-1", cells=cells)
+            self.assertEqual([node["status"] for node in graph["nodes"]], ["valid", "valid", "valid"])
+
+            manager.execution_order.clear()
+            manager.run_pipeline(notebook_id="nb-1", cells=cells)
+            manager.wait_for_idle()
+
+            self.assertEqual(
+                manager.execution_order,
+                ["stage-raw", "stage-scope", "stage-final"],
+            )
+
     def test_graph_keeps_completed_revision_usable_after_failed_rerun(self) -> None:
         _, Store, _, _, _, _ = import_stage_components()
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -242,6 +295,38 @@ class NotebookStagePipelineTests(unittest.TestCase):
                     record["stageId"] == "stage-raw" and record["status"] == "cancelled"
                     for record in payload["records"]
                 )
+            )
+
+    def test_cancel_pipeline_marks_matching_active_runs_cancel_requested(self) -> None:
+        _, Store, _, _, _, _ = import_stage_components()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = FakeStageManager(
+                Store(Path(temp_dir) / "materialized-stages.json"),
+                {"stage-raw": "raw-v1"},
+            )
+            with manager._lock:
+                manager._active_runs["run-1"] = {
+                    "runId": "run-1",
+                    "notebookId": "nb-1",
+                    "stageIds": ["stage-raw"],
+                    "status": "running",
+                    "cancelRequested": False,
+                }
+                manager._active_runs["run-2"] = {
+                    "runId": "run-2",
+                    "notebookId": "nb-2",
+                    "stageIds": ["stage-other"],
+                    "status": "running",
+                    "cancelRequested": False,
+                }
+
+            payload = manager.cancel_pipeline(notebook_id="nb-1")
+
+            self.assertTrue(manager._active_runs["run-1"]["cancelRequested"])
+            self.assertEqual(manager._active_runs["run-1"]["status"], "cancelling")
+            self.assertFalse(manager._active_runs["run-2"]["cancelRequested"])
+            self.assertTrue(
+                any(run["runId"] == "run-1" and run["cancelRequested"] for run in payload["activeRuns"])
             )
 
     def test_atomic_stage_run_ignores_unrelated_downstream_diagnostics(self) -> None:

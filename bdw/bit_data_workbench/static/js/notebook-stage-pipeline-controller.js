@@ -3,6 +3,7 @@ export function createNotebookStagePipelineController(helpers) {
     createCellId,
     escapeHtml,
     fetchJsonOrThrow,
+    formatQueryDuration,
     getCurrentNotebookId,
     getNotebookMetadata,
     normalizeCellLanguage,
@@ -125,6 +126,72 @@ export function createNotebookStagePipelineController(helpers) {
 
   function statusClass(value) {
     return String(value || "planned").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "planned";
+  }
+
+  function formatStageDuration(durationMs) {
+    const numeric = Number(durationMs);
+    if (!Number.isFinite(numeric) || numeric < 0) {
+      return "-";
+    }
+    if (typeof formatQueryDuration === "function") {
+      return formatQueryDuration(numeric);
+    }
+    if (numeric < 1000) {
+      return `${Math.round(numeric)} ms`;
+    }
+    if (numeric < 60000) {
+      return `${(numeric / 1000).toFixed(numeric < 10000 ? 1 : 0)} s`;
+    }
+    return `${Math.floor(numeric / 60000)} min ${Math.round((numeric % 60000) / 1000)} s`;
+  }
+
+  function timestampMs(value) {
+    const parsed = Date.parse(String(value || ""));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function stageRunDurationMs(node) {
+    const run = node?.latestRun;
+    if (!run) {
+      return null;
+    }
+    const direct = Number(run.durationMs);
+    if (Number.isFinite(direct) && direct >= 0) {
+      return direct;
+    }
+    const started = timestampMs(run.startedAt);
+    if (started === null) {
+      return null;
+    }
+    const status = String(run.status || "").toLowerCase();
+    const completed = timestampMs(run.completedAt);
+    const ended = completed ?? (status === "running" || status === "queued" ? Date.now() : null);
+    return ended === null ? null : Math.max(0, ended - started);
+  }
+
+  function stageDurationCopy(node) {
+    const durationMs = stageRunDurationMs(node);
+    return durationMs === null ? "-" : formatStageDuration(durationMs);
+  }
+
+  function activeRunsForGraph(graph) {
+    const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+    const nodeById = new Map(nodes.map((node) => [String(node.stageId || ""), node]));
+    return (Array.isArray(graph?.activeRuns) ? graph.activeRuns : []).filter((run) => {
+      const status = String(run?.status || "running").toLowerCase();
+      if (["completed", "failed", "cancelled"].includes(status)) {
+        return false;
+      }
+      const stageIds = Array.isArray(run?.stageIds) ? run.stageIds.map((item) => String(item)) : [];
+      if (!nodes.length || !stageIds.length) {
+        return true;
+      }
+      return stageIds.some((stageId) => stageIsProcessing(nodeById.get(stageId)));
+    });
+  }
+
+  function graphHasActiveRun(graph) {
+    return activeRunsForGraph(graph).length > 0;
   }
 
   function nodeDescription(node) {
@@ -310,24 +377,69 @@ export function createNotebookStagePipelineController(helpers) {
 
   function statusIcon(node) {
     const status = String(node?.status || "").trim().toLowerCase();
+    const label = statusLabel(node?.status);
     if (status === "valid") {
       return `
-        <svg class="pipeline-status-icon pipeline-status-icon-ok" viewBox="0 0 24 24" aria-hidden="true">
+        <svg class="pipeline-status-icon pipeline-status-icon-ok" viewBox="0 0 24 24" role="img" aria-label="${escapeHtml(label)}">
+          <title>${escapeHtml(label)}</title>
           <path d="M20 6 9 17l-5-5"></path>
         </svg>
       `;
     }
     if (status === "running" || status === "queued") {
       return `
-        <svg class="pipeline-status-icon pipeline-status-icon-running" viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 3v4"></path>
-          <path d="M12 17v4"></path>
-          <path d="M3 12h4"></path>
-          <path d="M17 12h4"></path>
+        <svg class="pipeline-status-icon pipeline-status-icon-running pipeline-spinner" viewBox="0 0 24 24" role="img" aria-label="${escapeHtml(label)}">
+          <title>${escapeHtml(label)}</title>
+          <path d="M12 3a9 9 0 1 1-9 9"></path>
         </svg>
       `;
     }
-    return "";
+    if (status === "failed" || status === "cancelled") {
+      return `
+        <svg class="pipeline-status-icon pipeline-status-icon-failed" viewBox="0 0 24 24" role="img" aria-label="${escapeHtml(label)}">
+          <title>${escapeHtml(label)}</title>
+          <path d="M8 8l8 8"></path>
+          <path d="M16 8l-8 8"></path>
+        </svg>
+      `;
+    }
+    return `
+      <svg class="pipeline-status-icon pipeline-status-icon-attention" viewBox="0 0 24 24" role="img" aria-label="${escapeHtml(label)}">
+        <title>${escapeHtml(label)}</title>
+        <path d="M12 8v5"></path>
+        <path d="M12 17h.01"></path>
+        <path d="M10 3h4l8 16H2z"></path>
+      </svg>
+    `;
+  }
+
+  function stageIsProcessing(node) {
+    const status = String(node?.status || "").trim().toLowerCase();
+    return status === "running" || status === "queued";
+  }
+
+  function stageActionButton(node, variant = "graph") {
+    const stageId = String(node?.stageId || "");
+    if (!stageId) {
+      return "";
+    }
+    const processing = stageIsProcessing(node);
+    const action = processing ? "cancel" : "run";
+    const dataAttribute = processing
+      ? `data-cancel-pipeline-stage="${escapeHtml(stageId)}"`
+      : `data-run-pipeline-stage="${escapeHtml(stageId)}"`;
+    const label = processing ? "Cancel stage" : "Run stage";
+    return `
+      <button
+        type="button"
+        class="pipeline-stage-action-button pipeline-stage-action-button-${escapeHtml(variant)}${processing ? " is-running" : ""}"
+        ${dataAttribute}
+        aria-label="${escapeHtml(label)}"
+        title="${escapeHtml(label)}"
+      >
+        ${menuIcon(processing ? "stop" : "run")}
+      </button>
+    `;
   }
 
   function nodeStatusMarker(node) {
@@ -344,13 +456,15 @@ export function createNotebookStagePipelineController(helpers) {
       icon = '<path d="M8 8l8 8"></path><path d="M16 8l-8 8"></path>';
       label = "Stage failed";
     } else if (status === "running" || status === "queued") {
-      label = "Stage is running";
+      tone = "running";
+      icon = '<path d="M12 3a9 9 0 1 1-9 9"></path>';
+      label = status === "queued" ? "Stage is queued" : "Stage is running";
     } else if (status === "obsolete") {
       label = "Stage is obsolete and should be rerun";
     }
     return `
       <span class="pipeline-node-state pipeline-node-state-${tone}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">
-        <svg viewBox="0 0 24 24" aria-hidden="true">${icon}</svg>
+        <svg class="${tone === "running" ? "pipeline-spinner" : ""}" viewBox="0 0 24 24" aria-hidden="true">${icon}</svg>
       </span>
     `;
   }
@@ -468,15 +582,15 @@ export function createNotebookStagePipelineController(helpers) {
             <rect class="pipeline-node-rect" width="${box.width}" height="${box.height}"></rect>
             <foreignObject x="0" y="0" width="${box.width}" height="${box.height}">
               <div class="pipeline-node-body">
-                ${nodeStatusMarker(node)}
                 <div class="pipeline-node-top">
                   ${graphNodeIcon(node)}
                   <span class="pipeline-node-title">${escapeHtml(node.title || node.alias || "Stage")}</span>
                   ${publishedIcon(node)}
                   ${obsoleteIcon(node)}
+                  ${stageActionButton(node, "graph")}
+                  ${nodeStatusMarker(node)}
                 </div>
                 <div class="pipeline-node-bottom">
-                  <span class="pipeline-status-pill pipeline-status-${statusClass(node.status)}">${escapeHtml(statusLabel(node.status))}</span>
                   <span class="pipeline-node-alias">${escapeHtml(stageQueryReference(node))}</span>
                 </div>
               </div>
@@ -523,8 +637,10 @@ export function createNotebookStagePipelineController(helpers) {
             <span class="pipeline-table-stage-title">${escapeHtml(node.title || node.alias || "Stage")}</span>
             <span class="pipeline-table-stage-alias">${escapeHtml(stageQueryReference(node))}</span>
           </td>
-          <td><span class="pipeline-table-status">${statusIcon(node)}<span class="pipeline-status-pill pipeline-status-${statusClass(node.status)}">${escapeHtml(statusLabel(node.status))}</span></span></td>
+          <td class="pipeline-table-run-cell">${stageActionButton(node, "table")}</td>
+          <td><span class="pipeline-table-status" title="${escapeHtml(statusLabel(node.status))}">${statusIcon(node)}</span></td>
           <td>${escapeHtml(dependencyCopy(node, graph))}</td>
+          <td><span class="pipeline-table-duration">${escapeHtml(stageDurationCopy(node))}</span></td>
           <td>${node.latestRevision ? escapeHtml(String(node.latestRevision.rowCount ?? 0)) : "-"}</td>
           <td>
             ${publishedIcon(node)}
@@ -613,6 +729,7 @@ export function createNotebookStagePipelineController(helpers) {
     renderGraph(workspaceRoot, graph);
     renderTable(workspaceRoot, graph);
     renderCellStageState(workspaceRoot, graph);
+    updatePipelineRunControlsFromGraph(workspaceRoot, graph);
     focusSelectedCell(workspaceRoot, graph);
   }
 
@@ -839,19 +956,49 @@ export function createNotebookStagePipelineController(helpers) {
     });
   }
 
-  function setPipelineRunButtonBusy(notebookId, busy) {
+  function setPipelineRunControls(notebookId, { running = false, cancelling = false } = {}) {
     const workspaceRoot = document.querySelector(
       `[data-workspace-notebook][data-notebook-id="${CSS.escape(notebookId)}"]`
     );
-    const button = workspaceRoot?.querySelector("[data-run-notebook-pipeline]");
-    if (!button) {
-      return;
+    const runButton = workspaceRoot?.querySelector("[data-run-notebook-pipeline]");
+    const cancelButton = workspaceRoot?.querySelector("[data-cancel-notebook-pipeline]");
+    if (runButton) {
+      runButton.hidden = Boolean(running);
+      runButton.disabled = false;
+      runButton.classList.toggle("is-running", Boolean(running));
+      const label = runButton.querySelector("span");
+      if (label) {
+        label.textContent = "Run pipeline";
+      }
     }
-    button.disabled = Boolean(busy);
-    button.classList.toggle("is-running", Boolean(busy));
-    const label = button.querySelector("span");
-    if (label) {
-      label.textContent = busy ? "Running pipeline" : "Run pipeline";
+    if (cancelButton) {
+      cancelButton.hidden = !running;
+      cancelButton.disabled = Boolean(cancelling);
+      cancelButton.classList.toggle("is-running", Boolean(running));
+      cancelButton.classList.toggle("is-cancelling", Boolean(cancelling));
+      const label = cancelButton.querySelector("span");
+      if (label) {
+        label.textContent = cancelling ? "Cancelling" : "Cancel pipeline";
+      }
+    }
+  }
+
+  function setPipelineRunButtonBusy(notebookId, busy) {
+    setPipelineRunControls(notebookId, { running: Boolean(busy), cancelling: false });
+  }
+
+  function updatePipelineRunControlsFromGraph(workspaceRoot, graph) {
+    const activeRuns = activeRunsForGraph(graph);
+    const cancelling = activeRuns.some((run) => {
+      const status = String(run?.status || "").toLowerCase();
+      return Boolean(run?.cancelRequested) || status === "cancelling";
+    });
+    const notebookId = String(graph?.notebookId || workspaceRoot?.dataset?.notebookId || "").trim();
+    if (notebookId) {
+      setPipelineRunControls(notebookId, {
+        running: activeRuns.length > 0,
+        cancelling,
+      });
     }
   }
 
@@ -879,7 +1026,7 @@ export function createNotebookStagePipelineController(helpers) {
     while (Date.now() < deadline) {
       const snapshot = await materializedStageState();
       applyRealtimeState(snapshot);
-      const active = (Array.isArray(snapshot?.activeRuns) ? snapshot.activeRuns : []).some(
+      const active = activeRunsForGraph(snapshot).some(
         (run) => String(run?.notebookId || "") === String(notebookId || "")
       );
       if (!active) {
@@ -905,7 +1052,7 @@ export function createNotebookStagePipelineController(helpers) {
       }
       const snapshot = await materializedStageState();
       applyRealtimeState(snapshot);
-      const active = (Array.isArray(snapshot?.activeRuns) ? snapshot.activeRuns : []).some(
+      const active = activeRunsForGraph(snapshot).some(
         (run) =>
           String(run?.notebookId || "") === String(notebookId || "") &&
           (run?.stageIds || []).map((item) => String(item)).includes(normalizedStageId)
@@ -932,12 +1079,42 @@ export function createNotebookStagePipelineController(helpers) {
         },
         body: JSON.stringify(pipelinePayload(notebookId)),
       });
+      await refreshGraph(notebookId);
       await waitForNotebookRunsIdle(notebookId);
       await refreshGraph(notebookId);
     } catch (error) {
       await reportPipelineError(notebookId, "Pipeline run failed", error);
     } finally {
       setPipelineRunButtonBusy(notebookId, false);
+    }
+  }
+
+  async function cancelPipeline(notebookId = getCurrentNotebookId()) {
+    if (!notebookId) {
+      return;
+    }
+    setPipelineRunControls(notebookId, { running: true, cancelling: true });
+    try {
+      const snapshot = await fetchJsonOrThrow("/api/materialized-stages/pipeline/cancel", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(pipelinePayload(notebookId)),
+      });
+      applyRealtimeState(snapshot);
+      await refreshGraph(notebookId);
+      await waitForNotebookRunsIdle(notebookId);
+      await refreshGraph(notebookId);
+    } catch (error) {
+      await reportPipelineError(notebookId, "Pipeline cancellation failed", error);
+    } finally {
+      const graph = graphByNotebookId.get(notebookId);
+      setPipelineRunControls(notebookId, {
+        running: graphHasActiveRun(graph),
+        cancelling: false,
+      });
     }
   }
 
@@ -954,6 +1131,35 @@ export function createNotebookStagePipelineController(helpers) {
     await refreshGraph(notebookId);
   }
 
+  function setStageTransientStatus(notebookId, stageId, status) {
+    const graph = graphByNotebookId.get(notebookId);
+    const workspaceRoot = document.querySelector(
+      `[data-workspace-notebook][data-notebook-id="${CSS.escape(String(notebookId || ""))}"]`
+    );
+    if (!graph || !workspaceRoot) {
+      return;
+    }
+    const nodes = (graph.nodes || []).map((node) =>
+      String(node.stageId || "") === String(stageId || "")
+        ? { ...node, status }
+        : node
+    );
+    const nextGraph = { ...graph, nodes };
+    graphByNotebookId.set(notebookId, nextGraph);
+    renderWorkspaceGraph(workspaceRoot, nextGraph);
+  }
+
+  async function runStageFromButton(notebookId, stageId) {
+    setStageTransientStatus(notebookId, stageId, "running");
+    try {
+      await runStage(notebookId, stageId);
+    } catch (error) {
+      await reportPipelineError(notebookId, "Stage run failed", error);
+    } finally {
+      await refreshGraph(notebookId);
+    }
+  }
+
   async function stopStage(notebookId, stageId) {
     await fetchJsonOrThrow(`/api/materialized-stages/stages/${encodeURIComponent(stageId)}/stop`, {
       method: "POST",
@@ -964,6 +1170,16 @@ export function createNotebookStagePipelineController(helpers) {
       body: JSON.stringify(pipelinePayload(notebookId)),
     });
     await refreshGraph(notebookId);
+  }
+
+  async function cancelStageFromButton(notebookId, stageId) {
+    try {
+      await stopStage(notebookId, stageId);
+    } catch (error) {
+      await reportPipelineError(notebookId, "Stage cancellation failed", error);
+    } finally {
+      await refreshGraph(notebookId);
+    }
   }
 
   async function inspectStage(node) {
@@ -1193,6 +1409,35 @@ export function createNotebookStagePipelineController(helpers) {
     if (runPipelineButton) {
       event.preventDefault();
       await runPipeline();
+      return true;
+    }
+
+    const cancelPipelineButton = event.target.closest("[data-cancel-notebook-pipeline]");
+    if (cancelPipelineButton) {
+      event.preventDefault();
+      await cancelPipeline();
+      return true;
+    }
+
+    const runStageButton = event.target.closest("[data-run-pipeline-stage]");
+    if (runStageButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      await runStageFromButton(
+        getCurrentNotebookId(),
+        runStageButton.dataset.runPipelineStage || ""
+      );
+      return true;
+    }
+
+    const cancelStageButton = event.target.closest("[data-cancel-pipeline-stage]");
+    if (cancelStageButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      await cancelStageFromButton(
+        getCurrentNotebookId(),
+        cancelStageButton.dataset.cancelPipelineStage || ""
+      );
       return true;
     }
 

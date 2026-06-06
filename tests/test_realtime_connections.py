@@ -118,6 +118,21 @@ class RealtimeConnectionsTests(unittest.TestCase):
             [{"topic": "query-jobs", "snapshot": {"version": 1, "items": []}}],
         )
 
+    def test_wait_for_realtime_updates_treats_missing_versions_as_stale(
+        self,
+    ) -> None:
+        REALTIME_TOPIC_ORDER, service = build_realtime_service()
+
+        updates = service.wait_for_realtime_updates(
+            {topic: None for topic in REALTIME_TOPIC_ORDER},
+            timeout=0,
+        )
+
+        self.assertTrue(updates)
+        self.assertTrue(
+            all("topic" in update and "snapshot" in update for update in updates)
+        )
+
     def test_wait_for_realtime_updates_returns_python_job_snapshots(self) -> None:
         REALTIME_TOPIC_ORDER, service = build_realtime_service()
 

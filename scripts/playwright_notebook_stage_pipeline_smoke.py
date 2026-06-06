@@ -69,6 +69,14 @@ def graph_payload(cells: list[dict[str, object]], statuses: dict[str, str], revi
                 "outputPath": f"s3://stage-bucket/{key}",
                 "queryPath": f"s3.stage_bucket._bdw_stages.notebook.{node['alias']}.data.parquet",
             }
+            node["latestRun"] = {
+                "runId": f"run-{revision_suffix}",
+                "stageId": stage_id,
+                "status": "completed",
+                "startedAt": "2026-06-06T00:00:00Z",
+                "completedAt": "2026-06-06T00:00:01.200Z",
+                "durationMs": 1200,
+            }
             node["outputSource"] = {
                 "sourceKind": "object",
                 "sourceId": "workspace.s3",
@@ -79,6 +87,7 @@ def graph_payload(cells: list[dict[str, object]], statuses: dict[str, str], revi
             }
         else:
             node["latestRevision"] = None
+            node["latestRun"] = None
             node["outputSource"] = {}
         by_id[stage_id] = node
         nodes.append(node)
@@ -344,6 +353,11 @@ async def main() -> None:
     last_cells: list[dict[str, object]] = []
     stage_scope_run_count = 0
     last_query_job_sql = ""
+    pipeline_active = False
+    pipeline_state_poll_count = 0
+    pipeline_run_payload_stage_ids: list[str] = []
+    pipeline_active_stage_timeline: list[str] = []
+    active_pipeline_notebook_id = "mock-notebook"
 
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=args.headless)
@@ -359,6 +373,16 @@ async def main() -> None:
             graph = graph_payload(last_cells, statuses, revision_suffix)
             graph["notebookId"] = payload.get("notebookId") or "mock-notebook"
             graph["notebookTitle"] = payload.get("notebookTitle") or "Pipeline smoke"
+            if pipeline_active:
+                graph["activeRuns"] = [
+                    {
+                        "runId": "pipeline-run-active",
+                        "notebookId": graph["notebookId"],
+                        "stageIds": ["stage-raw", "stage-scope", "stage-final"],
+                        "status": "running",
+                        "cancelRequested": False,
+                    }
+                ]
             await route.fulfill(
                 status=200,
                 content_type="application/json",
@@ -366,19 +390,42 @@ async def main() -> None:
             )
 
         async def handle_pipeline_run(route):
+            nonlocal active_pipeline_notebook_id, pipeline_active, pipeline_state_poll_count, pipeline_run_payload_stage_ids
+            payload = json.loads(route.request.post_data or "{}")
+            active_pipeline_notebook_id = str(payload.get("notebookId") or "mock-notebook")
+            pipeline_run_payload_stage_ids = [
+                str((cell.get("stage") or {}).get("stageId") or "")
+                for cell in payload.get("cells") or []
+                if (cell.get("stage") or {}).get("stageId")
+            ]
+            pipeline_active = True
+            pipeline_state_poll_count = 0
             statuses.update(
                 {
-                    "stage-raw": "valid",
-                    "stage-scope": "valid",
-                    "stage-final": "valid",
+                    "stage-raw": "queued",
+                    "stage-scope": "queued",
+                    "stage-final": "queued",
                 }
             )
             await route.fulfill(
                 status=200,
                 content_type="application/json",
-                body=json.dumps({"version": 2, "records": []}),
+                body=json.dumps(
+                    {
+                        "version": 2,
+                        "records": [],
+                        "activeRuns": [
+                            {
+                                "runId": "pipeline-run-active",
+                                "notebookId": active_pipeline_notebook_id,
+                                "stageIds": ["stage-raw", "stage-scope", "stage-final"],
+                                "status": "running",
+                                "cancelRequested": False,
+                            }
+                        ],
+                    }
+                ),
             )
-
         async def handle_stage_run(route):
             nonlocal revision_suffix
             revision_suffix = "rev-b"
@@ -420,10 +467,52 @@ async def main() -> None:
             )
 
         async def handle_stage_state(route):
+            nonlocal pipeline_active, pipeline_state_poll_count
+            active_runs = []
+            if pipeline_active:
+                pipeline_state_poll_count += 1
+                current_stage_id = ["stage-raw", "stage-scope", "stage-final"][
+                    min(pipeline_state_poll_count - 1, 2)
+                ]
+                if not pipeline_active_stage_timeline or pipeline_active_stage_timeline[-1] != current_stage_id:
+                    pipeline_active_stage_timeline.append(current_stage_id)
+                statuses.update(
+                    {
+                        "stage-raw": "running" if current_stage_id == "stage-raw" else "valid",
+                        "stage-scope": (
+                            "queued"
+                            if current_stage_id == "stage-raw"
+                            else "running"
+                            if current_stage_id == "stage-scope"
+                            else "valid"
+                        ),
+                        "stage-final": "running" if current_stage_id == "stage-final" else "queued",
+                    }
+                )
+                active_runs = [
+                    {
+                        "runId": "pipeline-run-active",
+                        "notebookId": active_pipeline_notebook_id,
+                        "stageIds": ["stage-raw", "stage-scope", "stage-final"],
+                        "currentStageId": current_stage_id,
+                        "status": "running",
+                        "cancelRequested": False,
+                    }
+                ]
+                if pipeline_state_poll_count >= 4:
+                    statuses.update(
+                        {
+                            "stage-raw": "valid",
+                            "stage-scope": "valid",
+                            "stage-final": "valid",
+                        }
+                    )
+                    active_runs = []
+                    pipeline_active = False
             await route.fulfill(
                 status=200,
                 content_type="application/json",
-                body=json.dumps({"version": 1, "records": []}),
+                body=json.dumps({"version": 1, "records": [], "activeRuns": active_runs}),
             )
 
         async def handle_query_job(route):
@@ -613,8 +702,8 @@ async def main() -> None:
                         ".pipeline-node-title",
                         ".pipeline-node-state",
                         ".pipeline-node-state svg",
-                        ".pipeline-status-pill",
                         ".pipeline-node-alias",
+                        ".pipeline-stage-action-button",
                     ];
                     const optionalSelectors = [
                         ".pipeline-published-icon",
@@ -622,7 +711,6 @@ async def main() -> None:
                     ];
                     const textSelectors = new Set([
                         ".pipeline-node-title",
-                        ".pipeline-status-pill",
                         ".pipeline-node-alias",
                     ]);
                     const iconSelectors = new Set([
@@ -631,6 +719,7 @@ async def main() -> None:
                         ".pipeline-node-state svg",
                         ".pipeline-published-icon",
                         ".pipeline-obsolete-icon",
+                        ".pipeline-stage-action-button",
                     ]);
                     const selectors = requiredSelectors.concat(optionalSelectors);
                     const tolerance = 1;
@@ -705,11 +794,177 @@ async def main() -> None:
             node_icon_width = await page.locator("[data-notebook-pipeline-graph] .pipeline-node-icon").first.evaluate(
                 "(node) => node.getBoundingClientRect().width"
             )
-            if node_icon_width < 20:
+            if node_icon_width < 38:
                 raise RuntimeError(f"Pipeline table icon rendered too small: {node_icon_width}px")
             node_state_count = await page.locator("[data-notebook-pipeline-graph] .pipeline-node-state").count()
             if node_state_count < 3:
                 raise RuntimeError(f"Pipeline graph rendered too few node state circles: {node_state_count}")
+            graph_action_alignment = await page.locator(
+                "[data-notebook-pipeline-graph] .pipeline-node-body"
+            ).evaluate_all(
+                """
+                (nodes) => nodes.map((node, nodeIndex) => {
+                  const title = node.querySelector('.pipeline-node-title');
+                  const action = node.querySelector('.pipeline-stage-action-button-graph');
+                  const state = node.querySelector('.pipeline-node-state');
+                  const titleRect = title?.getBoundingClientRect();
+                  const actionRect = action?.getBoundingClientRect();
+                  const stateRect = state?.getBoundingClientRect();
+                  const centerY = (rect) => rect.top + rect.height / 2;
+                  return {
+                    nodeIndex,
+                    missing: !(titleRect && actionRect && stateRect),
+                    actionStateCenterDelta: actionRect && stateRect
+                      ? Math.abs(centerY(actionRect) - centerY(stateRect))
+                      : null,
+                    titleActionCenterDelta: titleRect && actionRect
+                      ? Math.abs(centerY(titleRect) - centerY(actionRect))
+                      : null,
+                    titleStateCenterDelta: titleRect && stateRect
+                      ? Math.abs(centerY(titleRect) - centerY(stateRect))
+                      : null,
+                  };
+                })
+                """
+            )
+            misaligned_graph_actions = [
+                item
+                for item in graph_action_alignment
+                if (
+                    item.get("missing")
+                    or float(item.get("actionStateCenterDelta") or 0) > 1.25
+                    or float(item.get("titleActionCenterDelta") or 0) > 1.25
+                    or float(item.get("titleStateCenterDelta") or 0) > 1.25
+                )
+            ]
+            if misaligned_graph_actions:
+                raise RuntimeError(
+                    "Pipeline graph stage run/status controls were not centered on the title line: "
+                    f"{misaligned_graph_actions}"
+                )
+            graph_stage_run_count = await page.locator("[data-notebook-pipeline-graph] [data-run-pipeline-stage]").count()
+            table_stage_run_count = await page.locator("[data-notebook-pipeline-table] [data-run-pipeline-stage]").count()
+            if graph_stage_run_count < 3 or table_stage_run_count < 3:
+                raise RuntimeError(
+                    "Pipeline stage run actions did not render in both graph and table: "
+                    f"graph={graph_stage_run_count}, table={table_stage_run_count}"
+                )
+            table_action_status_alignment = await page.locator(
+                "[data-pipeline-stage-row]"
+            ).evaluate_all(
+                """
+                (rows) => rows.map((row) => {
+                  const runCell = row.cells[1];
+                  const statusCell = row.cells[2];
+                  const action = row.querySelector('.pipeline-stage-action-button-table');
+                  const statusIcon = row.querySelector('.pipeline-status-icon');
+                  const actionRect = action?.getBoundingClientRect();
+                  const iconRect = statusIcon?.getBoundingClientRect();
+                  const statusRect = statusCell?.getBoundingClientRect();
+                  return {
+                    stageId: row.dataset.pipelineStageRow || '',
+                    missing: !(runCell && statusCell && actionRect && iconRect && statusRect),
+                    actionStatusCenterYDelta: actionRect && iconRect
+                      ? Math.abs(
+                          (actionRect.top + actionRect.height / 2) -
+                          (iconRect.top + iconRect.height / 2)
+                        )
+                      : null,
+                    statusCenterXDelta: iconRect && statusRect
+                      ? Math.abs(
+                          (iconRect.left + iconRect.width / 2) -
+                          (statusRect.left + statusRect.width / 2)
+                        )
+                      : null,
+                  };
+                })
+                """
+            )
+            misaligned_table_actions = [
+                item
+                for item in table_action_status_alignment
+                if (
+                    item.get("missing")
+                    or float(item.get("actionStatusCenterYDelta") or 0) > 0.5
+                    or float(item.get("statusCenterXDelta") or 0) > 0.75
+                )
+            ]
+            if misaligned_table_actions:
+                raise RuntimeError(
+                    "Pipeline table run/status icons were not centered in their columns: "
+                    f"{misaligned_table_actions}"
+                )
+            table_end_geometry = await page.locator(".notebook-pipeline-table").first.evaluate(
+                """
+                (table) => {
+                  const bodyRow = table.tBodies?.[0]?.rows?.[0];
+                  const headerRow = table.tHead?.rows?.[0];
+                  const lastCell = bodyRow?.cells?.[6];
+                  const lastHeader = headerRow?.cells?.[6];
+                  const tableRect = table.getBoundingClientRect();
+                  const cellRect = lastCell?.getBoundingClientRect();
+                  const headerRect = lastHeader?.getBoundingClientRect();
+                  const buttonRect = lastCell?.querySelector('.pipeline-row-menu-button')?.getBoundingClientRect();
+                  return {
+                    missing: !(cellRect && headerRect && buttonRect),
+                    tableRight: tableRect.right,
+                    lastCellWidth: cellRect?.width ?? null,
+                    lastHeaderWidth: headerRect?.width ?? null,
+                    lastCellRightDelta: cellRect ? Math.abs(tableRect.right - cellRect.right) : null,
+                    actionRightPadding: cellRect && buttonRect ? cellRect.right - buttonRect.right : null,
+                  };
+                }
+                """
+            )
+            if (
+                table_end_geometry.get("missing")
+                or float(table_end_geometry.get("lastCellWidth") or 0) > 72
+                or float(table_end_geometry.get("lastHeaderWidth") or 0) > 72
+                or float(table_end_geometry.get("lastCellRightDelta") or 0) > 2
+                or float(table_end_geometry.get("actionRightPadding") or 0) > 18
+            ):
+                raise RuntimeError(f"Pipeline stage table left an oversized trailing action gap: {table_end_geometry}")
+            alias_state_before_hover = await page.locator(
+                '[data-pipeline-stage-node="stage-raw"] .pipeline-node-alias'
+            ).first.evaluate(
+                """
+                (node) => {
+                  const style = getComputedStyle(node);
+                  return { opacity: style.opacity, visibility: style.visibility };
+                }
+                """
+            )
+            if alias_state_before_hover["visibility"] != "hidden" or float(alias_state_before_hover["opacity"]) > 0.01:
+                raise RuntimeError(
+                    "Pipeline graph target path should be hidden until hover: "
+                    f"{alias_state_before_hover}"
+                )
+            await page.locator('[data-pipeline-stage-node="stage-raw"]').first.hover()
+            await page.wait_for_function(
+                """
+                () => {
+                  const node = document.querySelector('[data-pipeline-stage-node="stage-raw"] .pipeline-node-alias');
+                  const style = node ? getComputedStyle(node) : null;
+                  return Boolean(style && style.visibility === 'visible' && Number(style.opacity) > 0.98);
+                }
+                """,
+                timeout=args.timeout_ms,
+            )
+            alias_state_after_hover = await page.locator(
+                '[data-pipeline-stage-node="stage-raw"] .pipeline-node-alias'
+            ).first.evaluate(
+                """
+                (node) => {
+                  const style = getComputedStyle(node);
+                  return { opacity: style.opacity, visibility: style.visibility };
+                }
+                """
+            )
+            if alias_state_after_hover["visibility"] != "visible" or float(alias_state_after_hover["opacity"]) < 0.95:
+                raise RuntimeError(
+                    "Pipeline graph target path should appear on hover: "
+                    f"{alias_state_after_hover}"
+                )
             marker_end = await page.locator("[data-notebook-pipeline-graph] .pipeline-edge").first.get_attribute("marker-end")
             if marker_end != "url(#pipeline-arrowhead)":
                 raise RuntimeError("Pipeline edge did not render with an arrowhead marker.")
@@ -841,7 +1096,10 @@ async def main() -> None:
             await page.wait_for_function(
                 """
                 () => Array.from(document.querySelectorAll('[data-pipeline-stage-row]'))
-                  .some((row) => row.dataset.pipelineStageRow === 'stage-scope' && row.textContent.includes('OK'))
+                  .some((row) =>
+                    row.dataset.pipelineStageRow === 'stage-scope' &&
+                    row.querySelector('.pipeline-status-icon-ok')
+                  )
                 """,
                 timeout=args.timeout_ms,
             )
@@ -857,14 +1115,124 @@ async def main() -> None:
                 raise RuntimeError("Pipeline Run Cell did not rewrite the predecessor stage alias to its materialized S3 path.")
 
             await page.locator("[data-run-notebook-pipeline]").first.click()
+            await page.locator("[data-cancel-notebook-pipeline]").first.wait_for(
+                state="visible",
+                timeout=args.timeout_ms,
+            )
+            await page.wait_for_function(
+                "() => document.querySelectorAll('[data-notebook-pipeline-graph] .pipeline-spinner').length >= 3",
+                timeout=args.timeout_ms,
+            )
+            await page.wait_for_function(
+                "() => document.querySelectorAll('[data-pipeline-stage-row] .pipeline-spinner').length >= 3",
+                timeout=args.timeout_ms,
+            )
+            await page.wait_for_function(
+                "() => document.querySelectorAll('[data-notebook-pipeline-graph] [data-cancel-pipeline-stage]').length >= 3",
+                timeout=args.timeout_ms,
+            )
+            await page.wait_for_function(
+                "() => document.querySelectorAll('[data-pipeline-stage-row] [data-cancel-pipeline-stage]').length >= 3",
+                timeout=args.timeout_ms,
+            )
+            running_node_measurement_script = """
+                (node) => {
+                  const bounds = (element) => {
+                    const rect = element?.getBoundingClientRect();
+                    return rect
+                      ? {
+                          left: rect.left,
+                          top: rect.top,
+                          width: rect.width,
+                          height: rect.height,
+                        }
+                      : null;
+                  };
+                  const rect = node.querySelector('.pipeline-node-rect');
+                  return {
+                    node: bounds(node),
+                    body: bounds(node.querySelector('.pipeline-node-body')),
+                    border: bounds(rect),
+                    icon: bounds(node.querySelector('.pipeline-node-icon')),
+                    title: bounds(node.querySelector('.pipeline-node-title')),
+                    action: bounds(node.querySelector('.pipeline-stage-action-button-graph')),
+                    state: bounds(node.querySelector('.pipeline-node-state')),
+                    borderAnimation: rect ? getComputedStyle(rect).animationName : '',
+                  };
+                }
+            """
+            pulse_before = await page.locator('[data-pipeline-stage-node="stage-raw"]').first.evaluate(
+                running_node_measurement_script
+            )
+            if "pipeline-node-computing-pulse" not in str(pulse_before.get("borderAnimation") or ""):
+                raise RuntimeError(f"Running pipeline stage border was not pulsing: {pulse_before}")
+            await page.wait_for_timeout(250)
+            pulse_after = await page.locator('[data-pipeline-stage-node="stage-raw"]').first.evaluate(
+                running_node_measurement_script
+            )
+            pulse_shift_violations = []
+            for key in ["node", "body", "border", "icon", "title", "action", "state"]:
+                before_rect = pulse_before.get(key)
+                after_rect = pulse_after.get(key)
+                if not before_rect or not after_rect:
+                    pulse_shift_violations.append({"part": key, "before": before_rect, "after": after_rect})
+                    continue
+                for field in ["left", "top", "width", "height"]:
+                    delta = abs(float(before_rect[field]) - float(after_rect[field]))
+                    if delta > 0.5:
+                        pulse_shift_violations.append(
+                            {
+                                "part": key,
+                                "field": field,
+                                "delta": delta,
+                                "before": before_rect,
+                                "after": after_rect,
+                            }
+                        )
+            if pulse_shift_violations:
+                raise RuntimeError(
+                    "Pipeline stage border pulse moved the stage box or its contents: "
+                    f"{pulse_shift_violations}"
+                )
             await page.wait_for_function(
                 "() => document.querySelectorAll('[data-notebook-pipeline-graph] .pipeline-node-state-ok').length >= 3",
                 timeout=args.timeout_ms,
             )
-            if "OK" not in await page.locator('[data-pipeline-stage-row="stage-raw"]').first.inner_text():
-                raise RuntimeError("Completed pipeline stage did not show an OK status.")
+            row_text_after_pipeline = await page.locator('[data-pipeline-stage-row="stage-raw"]').first.inner_text()
+            if "OK" in row_text_after_pipeline:
+                raise RuntimeError("Completed pipeline stage should not show a duplicate OK text tag.")
+            if await page.locator('[data-pipeline-stage-row="stage-raw"] .pipeline-status-icon-ok').count() < 1:
+                raise RuntimeError("Completed pipeline stage did not show the green status tick.")
+            if "1s 200 ms" not in await page.locator('[data-pipeline-stage-row="stage-raw"]').first.inner_text():
+                raise RuntimeError("Completed pipeline stage did not show its last run duration.")
             if await page.locator("[data-notebook-pipeline-graph] .pipeline-node-state-ok").count() < 3:
                 raise RuntimeError("Completed pipeline stages did not show green OK state circles.")
+            await page.locator("[data-run-notebook-pipeline]").first.wait_for(
+                state="visible",
+                timeout=args.timeout_ms,
+            )
+            if await page.locator("[data-cancel-notebook-pipeline]").first.is_visible():
+                raise RuntimeError("Pipeline cancel button stayed visible after all stages completed.")
+            expected_pipeline_stage_ids = ["stage-raw", "stage-scope", "stage-final"]
+            if pipeline_run_payload_stage_ids != expected_pipeline_stage_ids:
+                raise RuntimeError(
+                    "Run pipeline did not submit the full dependency-ordered stage set: "
+                    f"{pipeline_run_payload_stage_ids}"
+                )
+            if pipeline_active_stage_timeline != expected_pipeline_stage_ids:
+                raise RuntimeError(
+                    "Run pipeline did not remain active through the full mocked stage sequence: "
+                    f"{pipeline_active_stage_timeline}"
+                )
+            if pipeline_state_poll_count < 4:
+                raise RuntimeError(
+                    "Run pipeline returned to idle before Playwright observed the active run complete: "
+                    f"{pipeline_state_poll_count} state polls"
+                )
+            if await page.locator("[data-notebook-pipeline-graph] .pipeline-status-pill").count():
+                raise RuntimeError("Pipeline graph should not render duplicate status text pills.")
+            if await page.locator("[data-pipeline-stage-row] .pipeline-status-pill").count():
+                raise RuntimeError("Pipeline table should not render duplicate status text pills.")
             run_button_rect = await page.locator("[data-run-notebook-pipeline]").first.evaluate(
                 """
                 (button) => {

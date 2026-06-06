@@ -58,6 +58,26 @@ class NotebookTreeUiRegressionTests(unittest.TestCase):
         self.assertIn("isShared: folder.isShared === true", state_source)
         self.assertIn("findStoredFolderMetadata", state_source)
 
+    def test_drop_target_resolves_folder_summary_before_parent_container(self) -> None:
+        ui_source = (STATIC_JS_ROOT / "notebook-tree-ui.js").read_text(
+            encoding="utf-8"
+        )
+
+        summary_index = ui_source.index('const summary = target.closest("summary");')
+        container_index = ui_source.index(
+            'const explicitContainer = target.closest("[data-tree-children]");'
+        )
+
+        self.assertLess(summary_index, container_index)
+        self.assertIn(
+            'summaryFolder.matches("[data-tree-folder]")',
+            ui_source,
+        )
+        self.assertIn(
+            "return directChildrenContainer(summaryFolder);",
+            ui_source,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
