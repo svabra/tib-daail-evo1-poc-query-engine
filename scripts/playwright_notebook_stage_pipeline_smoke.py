@@ -1313,6 +1313,20 @@ async def main() -> None:
                 raise RuntimeError("Completed pipeline stage did not show the green status tick.")
             if "1s 200 ms" not in await page.locator('[data-pipeline-stage-row="stage-raw"]').first.inner_text():
                 raise RuntimeError("Completed pipeline stage did not show its last run duration.")
+            header_total_duration = (
+                await page.locator("[data-notebook-pipeline-total-duration]").first.inner_text()
+            )
+            if "3s 600 ms" not in header_total_duration:
+                raise RuntimeError(
+                    f"Pipeline header did not show the summed stage duration: {header_total_duration}"
+                )
+            footer_total_duration = (
+                await page.locator("[data-notebook-pipeline-table-duration-total]").first.inner_text()
+            )
+            if footer_total_duration.strip() != "3s 600 ms":
+                raise RuntimeError(
+                    f"Pipeline table footer did not show the summed stage duration: {footer_total_duration}"
+                )
             if await page.locator("[data-notebook-pipeline-graph] .pipeline-node-state-ok").count() < 3:
                 raise RuntimeError("Completed pipeline stages did not show green OK state circles.")
             await page.locator("[data-run-notebook-pipeline]").first.wait_for(

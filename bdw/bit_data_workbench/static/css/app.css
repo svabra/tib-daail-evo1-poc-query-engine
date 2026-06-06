@@ -10017,6 +10017,14 @@ details:not([open]) > .tree-children {
   color: var(--accent-deep);
 }
 
+.notebook-pipeline-total-duration {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .notebook-pipeline-graph-band {
   min-height: 168px;
   overflow-x: auto;
@@ -10516,6 +10524,14 @@ details:not([open]) > .tree-children {
   text-transform: uppercase;
 }
 
+.notebook-pipeline-table tfoot td {
+  border-bottom: 0;
+  background: #fbfcfd;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
 .notebook-pipeline-table th:nth-child(1),
 .notebook-pipeline-table td:nth-child(1) {
   width: calc(100% - 594px);
@@ -10663,6 +10679,14 @@ details:not([open]) > .tree-children {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.pipeline-table-total-label {
+  text-transform: uppercase;
+}
+
+.pipeline-table-total-duration {
+  color: var(--text);
 }
 
 .pipeline-row-menu-button {

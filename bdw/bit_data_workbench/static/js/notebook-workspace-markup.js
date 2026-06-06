@@ -496,6 +496,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
             </div>
             <div class="notebook-pipeline-header-actions">
               <p class="notebook-pipeline-status" data-notebook-pipeline-status>Pipeline graph has not been built yet.</p>
+              <p class="notebook-pipeline-total-duration" data-notebook-pipeline-total-duration>Total duration -</p>
               <div class="notebook-pipeline-actions"${pipelineMode === "pipeline" ? "" : " hidden"} data-notebook-pipeline-actions>
                 <button type="button" class="notebook-pipeline-run-button" data-run-notebook-pipeline aria-label="Run all pipeline stages in dependency order" data-pipeline-tooltip="Run all pipeline stages in dependency order">
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16l14-8z"></path></svg>
@@ -532,6 +533,17 @@ export function createNotebookWorkspaceMarkup(helpers) {
                 </tr>
               </thead>
               <tbody data-notebook-pipeline-table></tbody>
+              <tfoot>
+                <tr class="pipeline-stage-total-row">
+                  <td></td>
+                  <td></td>
+                  <td></td>
+                  <td class="pipeline-table-total-label">Total duration</td>
+                  <td><span class="pipeline-table-duration pipeline-table-total-duration" data-notebook-pipeline-table-duration-total>-</span></td>
+                  <td></td>
+                  <td></td>
+                </tr>
+              </tfoot>
             </table>
           </div>
         </section>

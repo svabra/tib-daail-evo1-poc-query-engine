@@ -190,6 +190,21 @@ export function createNotebookStagePipelineController(helpers) {
     return durationMs === null ? "-" : formatStageDuration(durationMs);
   }
 
+  function pipelineTotalDurationMs(graph) {
+    const durations = (Array.isArray(graph?.nodes) ? graph.nodes : [])
+      .map((node) => stageRunDurationMs(node))
+      .filter((durationMs) => durationMs !== null);
+    if (!durations.length) {
+      return null;
+    }
+    return durations.reduce((total, durationMs) => total + durationMs, 0);
+  }
+
+  function pipelineTotalDurationCopy(graph) {
+    const durationMs = pipelineTotalDurationMs(graph);
+    return durationMs === null ? "-" : formatStageDuration(durationMs);
+  }
+
   function activeRunsForGraph(graph) {
     const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
     const nodeById = new Map(nodes.map((node) => [String(node.stageId || ""), node]));
@@ -718,12 +733,20 @@ export function createNotebookStagePipelineController(helpers) {
         </tr>
       `)
       .join("");
+    const tableTotalRoot = workspaceRoot?.querySelector("[data-notebook-pipeline-table-duration-total]");
+    if (tableTotalRoot) {
+      tableTotalRoot.textContent = pipelineTotalDurationCopy(graph);
+    }
   }
 
   function renderStatus(workspaceRoot, graph) {
     const statusRoot = workspaceRoot?.querySelector("[data-notebook-pipeline-status]");
     if (!statusRoot) {
       return;
+    }
+    const totalDurationRoot = workspaceRoot?.querySelector("[data-notebook-pipeline-total-duration]");
+    if (totalDurationRoot) {
+      totalDurationRoot.textContent = `Total duration ${pipelineTotalDurationCopy(graph)}`;
     }
     const errors = (graph.diagnostics || []).filter((item) => item.severity === "error");
     if (errors.length) {
