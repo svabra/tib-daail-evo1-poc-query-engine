@@ -265,13 +265,13 @@
         <div class="notebook-pipeline-header-actions">
           <p class="notebook-pipeline-status" data-notebook-pipeline-status>Pipeline graph has not been built yet.</p>
         <div class="notebook-pipeline-actions" data-notebook-pipeline-actions {% if active_notebook.pipeline_mode != 'pipeline' %}hidden{% endif %}>
-          <button type="button" class="notebook-pipeline-run-button" data-run-notebook-pipeline title="Run all pipeline stages in dependency order">
+          <button type="button" class="notebook-pipeline-run-button" data-run-notebook-pipeline aria-label="Run all pipeline stages in dependency order" data-pipeline-tooltip="Run all pipeline stages in dependency order">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16l14-8z"></path></svg>
             <span>Run pipeline</span>
           </button>
-          <button type="button" class="notebook-pipeline-cancel-button" data-cancel-notebook-pipeline title="Cancel the active pipeline run" hidden>
+          <button type="button" class="notebook-pipeline-cancel-button" data-cancel-notebook-pipeline aria-label="Abort the active pipeline run" data-pipeline-tooltip="Abort the active pipeline run" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10"></rect></svg>
-            <span>Cancel pipeline</span>
+            <span>Abort pipeline</span>
           </button>
         </div>
       </div>

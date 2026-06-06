@@ -324,6 +324,144 @@ class SharedNotebookServiceTests(unittest.TestCase):
         )
         self.assertEqual(appended_events[1]["origin_client_id"], "client-2")
 
+    def test_startup_seed_reestablishes_editable_mwa_parquet_pipeline(
+        self,
+    ) -> None:
+        _, notebook_cell_type, notebook_type, _, _, _ = (
+            import_shared_notebook_components()
+        )
+        from bit_data_workbench.models import SourceCatalog, SourceObject, SourceSchema
+
+        existing_seed = notebook_type(
+            notebook_id="mwa-abrechnung-s3-parquet-pipeline",
+            title="User edited seed",
+            summary="Changed during a session",
+            cells=[
+                notebook_cell_type(
+                    cell_id="edited-cell",
+                    sql="select 99 as user_edit",
+                )
+            ],
+            tree_path=(
+                "PoC Tests",
+                "Performance Evaluation",
+                "MWA Abrechnung (3.2)",
+            ),
+            pipeline_mode="pipeline",
+            can_edit=True,
+            can_delete=True,
+            shared=True,
+        )
+        service, rebuild_calls, appended_events = build_shared_notebook_service(
+            [existing_seed],
+        )
+        service._catalogs = [
+            SourceCatalog(
+                name="workspace",
+                schemas=[
+                    SourceSchema(
+                        name="mwa",
+                        objects=[
+                            SourceObject(
+                                name="mwa_abrechnung_entities_parquet",
+                                kind="view",
+                                relation="workspace.mwa.mwa_abrechnung_entities_parquet",
+                            ),
+                            SourceObject(
+                                name="mwa_abrechnungs_ziffern_entities_parquet",
+                                kind="view",
+                                relation=(
+                                    "workspace.mwa."
+                                    "mwa_abrechnungs_ziffern_entities_parquet"
+                                ),
+                            ),
+                        ],
+                    )
+                ],
+            )
+        ]
+
+        service._ensure_startup_shared_notebook_seeds()
+
+        seeded = service._shared_notebook_store.list_notebooks()[0]
+        self.assertEqual(
+            seeded.notebook_id,
+            "mwa-abrechnung-s3-parquet-pipeline",
+        )
+        self.assertEqual(
+            seeded.title,
+            "MWA Abrechnung (3.2) S3 Parquet Pipeline",
+        )
+        self.assertTrue(seeded.can_edit)
+        self.assertTrue(seeded.can_delete)
+        self.assertTrue(seeded.shared)
+        self.assertEqual(seeded.pipeline_mode, "pipeline")
+        self.assertEqual(len(seeded.cells), 5)
+        all_sql = "\n".join(cell.sql for cell in seeded.cells)
+        self.assertNotIn("user_edit", all_sql)
+        self.assertIn("mwa_abrechnung_entities_parquet", all_sql)
+        self.assertIn("mwa_abrechnungs_ziffern_entities_parquet", all_sql)
+        self.assertEqual(rebuild_calls, ["rebuild"])
+        self.assertEqual(appended_events, [])
+
+    def test_startup_seed_syncs_s3_discovery_before_reestablishing_pipeline(
+        self,
+    ) -> None:
+        from bit_data_workbench.models import SourceCatalog, SourceObject, SourceSchema
+
+        service, rebuild_calls, _ = build_shared_notebook_service()
+        service._catalogs = []
+
+        discovered_catalogs = [
+            SourceCatalog(
+                name="workspace",
+                schemas=[
+                    SourceSchema(
+                        name="mwa",
+                        objects=[
+                            SourceObject(
+                                name="mwa_abrechnung_entities_parquet",
+                                kind="view",
+                                relation="workspace.mwa.mwa_abrechnung_entities_parquet",
+                            ),
+                            SourceObject(
+                                name="mwa_abrechnungs_ziffern_entities_parquet",
+                                kind="view",
+                                relation=(
+                                    "workspace.mwa."
+                                    "mwa_abrechnungs_ziffern_entities_parquet"
+                                ),
+                            ),
+                        ],
+                    )
+                ],
+            )
+        ]
+
+        class FakeStartupDiscovery:
+            def __init__(self) -> None:
+                self.calls: list[tuple[str, bool]] = []
+
+            def sync_source(self, source_id: str, *, emit_event: bool = True):
+                self.calls.append((source_id, emit_event))
+                service._catalogs = discovered_catalogs
+                return {}
+
+        discovery = FakeStartupDiscovery()
+        service._data_source_discovery = discovery
+
+        service._sync_startup_seed_data_sources()
+        service._ensure_startup_shared_notebook_seeds()
+
+        self.assertEqual(discovery.calls, [("workspace.s3", False)])
+        seeded = service._shared_notebook_store.list_notebooks()[0]
+        self.assertEqual(len(seeded.cells), 5)
+        self.assertNotIn(
+            "Run MWA Loader",
+            "\n".join(str(cell.stage.get("title") or "") for cell in seeded.cells),
+        )
+        self.assertEqual(rebuild_calls, ["rebuild"])
+
     def test_upsert_shared_notebook_preserves_python_cell_language(self) -> None:
         service, _, _ = build_shared_notebook_service()
 

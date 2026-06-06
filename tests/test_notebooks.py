@@ -37,6 +37,24 @@ def import_notebook_helpers():
     )
 
 
+def import_restart_seed_helpers():
+    from bit_data_workbench.backend.notebooks import (
+        build_restart_seeded_shared_notebooks,
+    )
+    from bit_data_workbench.backend.materialized_stages import (
+        build_notebook_stage_graph,
+    )
+    from bit_data_workbench.models import SourceCatalog, SourceObject, SourceSchema
+
+    return (
+        build_restart_seeded_shared_notebooks,
+        build_notebook_stage_graph,
+        SourceCatalog,
+        SourceObject,
+        SourceSchema,
+    )
+
+
 def import_completion_schema_helpers():
     from bit_data_workbench.backend.notebooks import build_completion_schema
     from bit_data_workbench.models import SourceCatalog, SourceObject, SourceSchema
@@ -571,6 +589,117 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
                 notebooks["mwa-abrechnung-s3-json"].linked_generator_id,
             },
             {"mwa_abrechnung_multi_format_loader"},
+        )
+
+    def test_restart_seeded_mwa_parquet_pipeline_is_editable_and_forked(
+        self,
+    ) -> None:
+        (
+            build_restart_seeded_shared_notebooks,
+            build_stage_graph,
+            source_catalog_type,
+            source_object_type,
+            source_schema_type,
+        ) = import_restart_seed_helpers()
+
+        catalogs = [
+            source_catalog_type(
+                name="workspace",
+                schemas=[
+                    source_schema_type(
+                        name="mwa",
+                        objects=[
+                            source_object_type(
+                                name="mwa_abrechnung_entities_parquet",
+                                kind="view",
+                                relation="workspace.mwa.mwa_abrechnung_entities_parquet",
+                            ),
+                            source_object_type(
+                                name="mwa_abrechnungs_ziffern_entities_parquet",
+                                kind="view",
+                                relation=(
+                                    "workspace.mwa."
+                                    "mwa_abrechnungs_ziffern_entities_parquet"
+                                ),
+                            ),
+                            source_object_type(
+                                name="mwa_abrechnung_entities_csv",
+                                kind="view",
+                                relation="workspace.mwa.mwa_abrechnung_entities_csv",
+                            ),
+                            source_object_type(
+                                name="mwa_abrechnung_entities_json",
+                                kind="view",
+                                relation="workspace.mwa.mwa_abrechnung_entities_json",
+                            ),
+                        ],
+                    )
+                ],
+            )
+        ]
+
+        notebooks = build_restart_seeded_shared_notebooks(catalogs)
+        self.assertEqual(len(notebooks), 1)
+
+        notebook = notebooks[0]
+        self.assertEqual(
+            notebook.notebook_id,
+            "mwa-abrechnung-s3-parquet-pipeline",
+        )
+        self.assertTrue(notebook.can_edit)
+        self.assertTrue(notebook.can_delete)
+        self.assertTrue(notebook.shared)
+        self.assertEqual(notebook.pipeline_mode, "pipeline")
+        self.assertEqual(
+            notebook.tree_path,
+            ("PoC Tests", "Performance Evaluation", "MWA Abrechnung (3.2)"),
+        )
+        self.assertEqual(len(notebook.cells), 5)
+        self.assertEqual(notebook.cells[0].data_sources, ["workspace.s3"])
+        self.assertEqual(notebook.cells[1].data_sources, ["workspace.s3"])
+        self.assertEqual(notebook.cells[2].data_sources, [])
+
+        all_sql = "\n".join(cell.sql for cell in notebook.cells)
+        self.assertIn("workspace.mwa.mwa_abrechnung_entities_parquet", all_sql)
+        self.assertIn(
+            "workspace.mwa.mwa_abrechnungs_ziffern_entities_parquet",
+            all_sql,
+        )
+        self.assertNotIn("_csv", all_sql)
+        self.assertNotIn("_json", all_sql)
+
+        graph = build_stage_graph(
+            notebook_id=notebook.notebook_id,
+            notebook_title=notebook.title,
+            cells=notebook.cells_payload,
+        )
+        self.assertEqual(graph["diagnostics"], [])
+        self.assertEqual(
+            graph["order"],
+            [
+                "stage-mwa-abrechnung-scope",
+                "stage-mwa-ziffer-rollup",
+                "stage-mwa-joined-abrechnungen",
+                "stage-mwa-status-pressure",
+                "stage-mwa-audit-backlog",
+            ],
+        )
+        node_by_id = {node["stageId"]: node for node in graph["nodes"]}
+        self.assertEqual(
+            node_by_id["stage-mwa-joined-abrechnungen"]["predecessorStageIds"],
+            ["stage-mwa-abrechnung-scope", "stage-mwa-ziffer-rollup"],
+        )
+        self.assertEqual(
+            set(node_by_id["stage-mwa-joined-abrechnungen"]["successorStageIds"]),
+            {"stage-mwa-status-pressure", "stage-mwa-audit-backlog"},
+        )
+        self.assertEqual(
+            node_by_id["stage-mwa-status-pressure"]["kind"],
+            "final",
+        )
+        self.assertEqual(
+            node_by_id["stage-mwa-audit-backlog"]["kind"],
+            "final",
         )
 
     def test_build_notebooks_includes_parquet_performance_options_presets(

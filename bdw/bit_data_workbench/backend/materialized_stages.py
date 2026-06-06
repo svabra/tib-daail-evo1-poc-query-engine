@@ -655,6 +655,7 @@ class MaterializedStageManager:
         *,
         notebook_id: str,
         notebook_title: str = "",
+        start_stage_id: str = "",
         cells: Iterable[dict[str, object]],
     ) -> dict[str, object]:
         graph = self.graph_payload(
@@ -662,13 +663,21 @@ class MaterializedStageManager:
             notebook_title=notebook_title,
             cells=cells,
         )
+        ordered_stage_ids = [str(item) for item in graph.get("order", [])]
+        diagnostic_stage_ids = None
+        normalized_start_stage_id = str(start_stage_id or "").strip()
+        if normalized_start_stage_id:
+            if normalized_start_stage_id not in set(ordered_stage_ids):
+                raise ValueError(f"Unknown stage: {normalized_start_stage_id}")
+            diagnostic_stage_ids = self._stage_and_successor_ids(graph, normalized_start_stage_id)
+            ordered_stage_ids = [stage_id for stage_id in ordered_stage_ids if stage_id in diagnostic_stage_ids]
         return self._start_run(
             graph=graph,
             notebook_id=notebook_id,
             notebook_title=notebook_title,
-            stage_ids=[str(item) for item in graph.get("order", [])],
+            stage_ids=ordered_stage_ids,
             force=True,
-            diagnostic_stage_ids=None,
+            diagnostic_stage_ids=diagnostic_stage_ids,
         )
 
     def run_stage(
@@ -831,6 +840,29 @@ class MaterializedStageManager:
                 continue
             required.add(predecessor_id)
             queue.extend(predecessor_map.get(predecessor_id, []))
+        return required
+
+    @staticmethod
+    def _stage_and_successor_ids(graph: dict[str, object], stage_id: str) -> set[str]:
+        successor_map: dict[str, list[str]] = {}
+        for node in graph.get("nodes", []) or []:
+            if not isinstance(node, dict):
+                continue
+            source_id = str(node.get("stageId") or "").strip()
+            if not source_id:
+                continue
+            for successor_id in node.get("successorStageIds", []) or []:
+                normalized_successor_id = str(successor_id or "").strip()
+                if normalized_successor_id:
+                    successor_map.setdefault(source_id, []).append(normalized_successor_id)
+        required = {str(stage_id or "").strip()}
+        queue = deque(successor_map.get(str(stage_id or "").strip(), []))
+        while queue:
+            successor_id = queue.popleft()
+            if not successor_id or successor_id in required:
+                continue
+            required.add(successor_id)
+            queue.extend(successor_map.get(successor_id, []))
         return required
 
     def _run_cancelled(self, run_id: str) -> bool:
@@ -1028,12 +1060,11 @@ class MaterializedStageManager:
             )
             self._append_record(completed)
             self._clear_stage_obsolete_state(notebook_id, str(node.get("stageId") or ""))
-            if completed.changed_result:
-                self._mark_descendants_obsolete(
-                    graph,
-                    changed_stage_id=str(node.get("stageId") or ""),
-                    changed_revision_id=completed.revision_id,
-                )
+            self._mark_descendants_obsolete(
+                graph,
+                changed_stage_id=str(node.get("stageId") or ""),
+                changed_revision_id=completed.revision_id,
+            )
             if self._metadata_refresher is not None:
                 self._metadata_refresher()
         except InterruptedError as exc:
@@ -1303,7 +1334,7 @@ class MaterializedStageManager:
         for descendant_id in descendants:
             notebook_states[descendant_id] = {
                 "status": "obsolete",
-                "reason": "A predecessor was re-materialized with changed results.",
+                "reason": "A predecessor was re-materialized and this stage should be rerun.",
                 "changedPredecessorStageId": changed_stage_id,
                 "changedPredecessorRevisionId": changed_revision_id,
                 "updatedAt": now,

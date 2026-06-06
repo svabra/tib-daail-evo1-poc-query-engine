@@ -96,9 +96,9 @@ export function createNotebookStagePipelineController(helpers) {
     );
   }
 
-  function pipelinePayload(notebookId) {
+  function pipelinePayload(notebookId, { startStageId = "" } = {}) {
     const metadata = getNotebookMetadata(notebookId);
-    return {
+    const payload = {
       notebookId,
       notebookTitle: metadata.title || "Notebook",
       cells: (metadata.cells || []).map((cell) => ({
@@ -110,6 +110,11 @@ export function createNotebookStagePipelineController(helpers) {
         stage: normalizeCellStage(cell.stage),
       })),
     };
+    const normalizedStartStageId = String(startStageId || "").trim();
+    if (normalizedStartStageId) {
+      payload.startStageId = normalizedStartStageId;
+    }
+    return payload;
   }
 
   function pipelineEnabled(notebookId) {
@@ -121,11 +126,22 @@ export function createNotebookStagePipelineController(helpers) {
     if (status === "valid") {
       return "OK";
     }
+    if (status === "queued") {
+      return "Waiting";
+    }
     return status ? `${status.slice(0, 1).toUpperCase()}${status.slice(1)}` : "Planned";
   }
 
   function statusClass(value) {
     return String(value || "planned").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "planned";
+  }
+
+  function pipelineTooltipAttributes(label) {
+    const copy = String(label || "").trim();
+    if (!copy) {
+      return "";
+    }
+    return `aria-label="${escapeHtml(copy)}" data-pipeline-tooltip="${escapeHtml(copy)}"`;
   }
 
   function formatStageDuration(durationMs) {
@@ -186,7 +202,7 @@ export function createNotebookStagePipelineController(helpers) {
       if (!nodes.length || !stageIds.length) {
         return true;
       }
-      return stageIds.some((stageId) => stageIsProcessing(nodeById.get(stageId)));
+      return stageIds.some((stageId) => stageIsActiveInRun(nodeById.get(stageId)));
     });
   }
 
@@ -381,23 +397,28 @@ export function createNotebookStagePipelineController(helpers) {
     if (status === "valid") {
       return `
         <svg class="pipeline-status-icon pipeline-status-icon-ok" viewBox="0 0 24 24" role="img" aria-label="${escapeHtml(label)}">
-          <title>${escapeHtml(label)}</title>
           <path d="M20 6 9 17l-5-5"></path>
         </svg>
       `;
     }
-    if (status === "running" || status === "queued") {
+    if (status === "running") {
       return `
         <svg class="pipeline-status-icon pipeline-status-icon-running pipeline-spinner" viewBox="0 0 24 24" role="img" aria-label="${escapeHtml(label)}">
-          <title>${escapeHtml(label)}</title>
           <path d="M12 3a9 9 0 1 1-9 9"></path>
+        </svg>
+      `;
+    }
+    if (status === "queued") {
+      return `
+        <svg class="pipeline-status-icon pipeline-status-icon-waiting" viewBox="0 0 24 24" role="img" aria-label="${escapeHtml(label)}">
+          <circle cx="12" cy="12" r="8"></circle>
+          <path d="M12 7v5l3 2"></path>
         </svg>
       `;
     }
     if (status === "failed" || status === "cancelled") {
       return `
         <svg class="pipeline-status-icon pipeline-status-icon-failed" viewBox="0 0 24 24" role="img" aria-label="${escapeHtml(label)}">
-          <title>${escapeHtml(label)}</title>
           <path d="M8 8l8 8"></path>
           <path d="M16 8l-8 8"></path>
         </svg>
@@ -405,7 +426,6 @@ export function createNotebookStagePipelineController(helpers) {
     }
     return `
       <svg class="pipeline-status-icon pipeline-status-icon-attention" viewBox="0 0 24 24" role="img" aria-label="${escapeHtml(label)}">
-        <title>${escapeHtml(label)}</title>
         <path d="M12 8v5"></path>
         <path d="M12 17h.01"></path>
         <path d="M10 3h4l8 16H2z"></path>
@@ -414,6 +434,16 @@ export function createNotebookStagePipelineController(helpers) {
   }
 
   function stageIsProcessing(node) {
+    const status = String(node?.status || "").trim().toLowerCase();
+    return status === "running";
+  }
+
+  function stageIsWaiting(node) {
+    const status = String(node?.status || "").trim().toLowerCase();
+    return status === "queued";
+  }
+
+  function stageIsActiveInRun(node) {
     const status = String(node?.status || "").trim().toLowerCase();
     return status === "running" || status === "queued";
   }
@@ -424,21 +454,56 @@ export function createNotebookStagePipelineController(helpers) {
       return "";
     }
     const processing = stageIsProcessing(node);
-    const action = processing ? "cancel" : "run";
+    const waiting = stageIsWaiting(node);
     const dataAttribute = processing
       ? `data-cancel-pipeline-stage="${escapeHtml(stageId)}"`
+      : waiting
+      ? `data-pipeline-stage-waiting="${escapeHtml(stageId)}" aria-disabled="true"`
       : `data-run-pipeline-stage="${escapeHtml(stageId)}"`;
-    const label = processing ? "Cancel stage" : "Run stage";
+    const label = processing
+      ? "Cancel this running stage"
+      : waiting
+      ? "Waiting for earlier stages to finish"
+      : "Run this stage";
     return `
       <button
         type="button"
-        class="pipeline-stage-action-button pipeline-stage-action-button-${escapeHtml(variant)}${processing ? " is-running" : ""}"
+        class="pipeline-stage-action-button pipeline-stage-action-button-${escapeHtml(variant)}${processing ? " is-running" : ""}${waiting ? " is-waiting" : ""}"
         ${dataAttribute}
-        aria-label="${escapeHtml(label)}"
-        title="${escapeHtml(label)}"
+        ${pipelineTooltipAttributes(label)}
       >
         ${menuIcon(processing ? "stop" : "run")}
       </button>
+    `;
+  }
+
+  function stageRunFromButton(node, variant = "graph") {
+    const stageId = String(node?.stageId || "");
+    if (!stageId) {
+      return "";
+    }
+    const disabled = stageIsActiveInRun(node);
+    const label = disabled
+      ? "Wait for the active stage run to finish"
+      : "Run pipeline from this stage";
+    return `
+      <button
+        type="button"
+        class="pipeline-stage-action-button pipeline-stage-action-button-${escapeHtml(variant)} pipeline-stage-action-button-from${disabled ? " is-waiting" : ""}"
+        ${disabled ? `data-pipeline-stage-waiting-from="${escapeHtml(stageId)}" aria-disabled="true"` : `data-run-pipeline-from-stage="${escapeHtml(stageId)}"`}
+        ${pipelineTooltipAttributes(label)}
+      >
+        ${menuIcon("runFrom")}
+      </button>
+    `;
+  }
+
+  function stageActionButtons(node, variant = "graph") {
+    return `
+      <span class="pipeline-stage-action-group pipeline-stage-action-group-${escapeHtml(variant)}">
+        ${stageActionButton(node, variant)}
+        ${stageRunFromButton(node, variant)}
+      </span>
     `;
   }
 
@@ -455,15 +520,19 @@ export function createNotebookStagePipelineController(helpers) {
       tone = "failed";
       icon = '<path d="M8 8l8 8"></path><path d="M16 8l-8 8"></path>';
       label = "Stage failed";
-    } else if (status === "running" || status === "queued") {
+    } else if (status === "running") {
       tone = "running";
       icon = '<path d="M12 3a9 9 0 1 1-9 9"></path>';
-      label = status === "queued" ? "Stage is queued" : "Stage is running";
+      label = "Stage is running now";
+    } else if (status === "queued") {
+      tone = "waiting";
+      icon = '<circle cx="12" cy="12" r="7"></circle><path d="M12 8v4l3 2"></path>';
+      label = "Waiting for earlier stages to finish";
     } else if (status === "obsolete") {
       label = "Stage is obsolete and should be rerun";
     }
     return `
-      <span class="pipeline-node-state pipeline-node-state-${tone}" title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">
+      <span class="pipeline-node-state pipeline-node-state-${tone}" ${pipelineTooltipAttributes(label)}>
         <svg class="${tone === "running" ? "pipeline-spinner" : ""}" viewBox="0 0 24 24" aria-hidden="true">${icon}</svg>
       </span>
     `;
@@ -477,6 +546,7 @@ export function createNotebookStagePipelineController(helpers) {
       derive: '<path d="M5 6h5a4 4 0 0 1 4 4v8"></path><path d="M10 6l-3-3"></path><path d="M10 6 7 9"></path><path d="M14 18l-3-3"></path><path d="M14 18l3-3"></path>',
       fork: '<path d="M5 12h5"></path><path d="M10 12c3 0 4-5 8-5"></path><path d="M10 12c3 0 4 5 8 5"></path><path d="M18 7l-2-2"></path><path d="M18 7l-2 2"></path><path d="M18 17l-2-2"></path><path d="M18 17l-2 2"></path>',
       run: '<path d="M8 5v14l11-7z"></path>',
+      runFrom: '<path d="M6 5v14l9-7z"></path><path d="M15 7h3v10h-3"></path><path d="M18 12h3"></path>',
       stop: '<rect x="7" y="7" width="10" height="10"></rect>',
       delete: '<path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="M7 7l1 13h8l1-13"></path><path d="M10 11v5"></path><path d="M14 11v5"></path>',
     };
@@ -511,7 +581,7 @@ export function createNotebookStagePipelineController(helpers) {
       layers.set(layer, entries);
     });
     const positions = new Map();
-    const nodeMinWidth = 264;
+    const nodeMinWidth = 320;
     const nodeMinHeight = 88;
     const nodeWidth = nodeMinWidth;
     const nodeHeight = nodeMinHeight;
@@ -571,6 +641,7 @@ export function createNotebookStagePipelineController(helpers) {
         }
         const selected = String(node.stageId) === selectedStageId;
         const description = nodeDescription(node);
+        const tooltip = description || node.title || node.alias || "Stage";
         return `
           <g
             class="pipeline-node pipeline-node-${statusClass(node.status)}${selected ? " is-selected" : ""}"
@@ -578,16 +649,15 @@ export function createNotebookStagePipelineController(helpers) {
             transform="translate(${box.x} ${box.y})"
             tabindex="0"
           >
-            <title>${escapeHtml(description || node.title || "")}</title>
             <rect class="pipeline-node-rect" width="${box.width}" height="${box.height}"></rect>
             <foreignObject x="0" y="0" width="${box.width}" height="${box.height}">
               <div class="pipeline-node-body">
                 <div class="pipeline-node-top">
                   ${graphNodeIcon(node)}
-                  <span class="pipeline-node-title">${escapeHtml(node.title || node.alias || "Stage")}</span>
+                  <span class="pipeline-node-title" ${pipelineTooltipAttributes(tooltip)}>${escapeHtml(node.title || node.alias || "Stage")}</span>
                   ${publishedIcon(node)}
                   ${obsoleteIcon(node)}
-                  ${stageActionButton(node, "graph")}
+                  ${stageActionButtons(node, "graph")}
                   ${nodeStatusMarker(node)}
                 </div>
                 <div class="pipeline-node-bottom">
@@ -631,20 +701,19 @@ export function createNotebookStagePipelineController(helpers) {
         <tr
           class="pipeline-stage-row${String(node.stageId) === selectedStageId ? " is-selected" : ""}"
           data-pipeline-stage-row="${escapeHtml(node.stageId)}"
-          title="${escapeHtml(nodeDescription(node))}"
         >
-          <td>
+          <td ${pipelineTooltipAttributes(nodeDescription(node))}>
             <span class="pipeline-table-stage-title">${escapeHtml(node.title || node.alias || "Stage")}</span>
             <span class="pipeline-table-stage-alias">${escapeHtml(stageQueryReference(node))}</span>
           </td>
-          <td class="pipeline-table-run-cell">${stageActionButton(node, "table")}</td>
-          <td><span class="pipeline-table-status" title="${escapeHtml(statusLabel(node.status))}">${statusIcon(node)}</span></td>
+          <td class="pipeline-table-run-cell">${stageActionButtons(node, "table")}</td>
+          <td><span class="pipeline-table-status" ${pipelineTooltipAttributes(statusLabel(node.status))}>${statusIcon(node)}</span></td>
           <td>${escapeHtml(dependencyCopy(node, graph))}</td>
           <td><span class="pipeline-table-duration">${escapeHtml(stageDurationCopy(node))}</span></td>
           <td>${node.latestRevision ? escapeHtml(String(node.latestRevision.rowCount ?? 0)) : "-"}</td>
           <td>
             ${publishedIcon(node)}
-            <button type="button" class="pipeline-row-menu-button" data-pipeline-stage-menu="${escapeHtml(node.stageId)}" aria-label="Stage actions" title="Stage actions">...</button>
+            <button type="button" class="pipeline-row-menu-button" data-pipeline-stage-menu="${escapeHtml(node.stageId)}" ${pipelineTooltipAttributes("Stage actions")}>...</button>
           </td>
         </tr>
       `)
@@ -857,6 +926,7 @@ export function createNotebookStagePipelineController(helpers) {
     );
     renderWorkspaceGraph(workspaceRoot, graph);
     ensurePipelineGraphVisible(workspaceRoot);
+    window.requestAnimationFrame(() => ensurePipelineGraphVisible(workspaceRoot));
   }
 
   function closeContextMenu() {
@@ -978,7 +1048,7 @@ export function createNotebookStagePipelineController(helpers) {
       cancelButton.classList.toggle("is-cancelling", Boolean(cancelling));
       const label = cancelButton.querySelector("span");
       if (label) {
-        label.textContent = cancelling ? "Cancelling" : "Cancel pipeline";
+        label.textContent = cancelling ? "Aborting" : "Abort pipeline";
       }
     }
   }
@@ -1065,10 +1135,11 @@ export function createNotebookStagePipelineController(helpers) {
     throw new Error("Stage run is still running. The graph will keep updating from live events.");
   }
 
-  async function runPipeline(notebookId = getCurrentNotebookId()) {
+  async function runPipeline(notebookId = getCurrentNotebookId(), startStageId = "") {
     if (!notebookId) {
       return;
     }
+    const normalizedStartStageId = String(startStageId || "").trim();
     setPipelineRunButtonBusy(notebookId, true);
     try {
       await fetchJsonOrThrow("/api/materialized-stages/pipeline/run", {
@@ -1077,7 +1148,7 @@ export function createNotebookStagePipelineController(helpers) {
           Accept: "application/json",
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(pipelinePayload(notebookId)),
+        body: JSON.stringify(pipelinePayload(notebookId, { startStageId: normalizedStartStageId })),
       });
       await refreshGraph(notebookId);
       await waitForNotebookRunsIdle(notebookId);
@@ -1087,6 +1158,10 @@ export function createNotebookStagePipelineController(helpers) {
     } finally {
       setPipelineRunButtonBusy(notebookId, false);
     }
+  }
+
+  async function runPipelineFromStageButton(notebookId, stageId) {
+    await runPipeline(notebookId, stageId);
   }
 
   async function cancelPipeline(notebookId = getCurrentNotebookId()) {
@@ -1108,7 +1183,7 @@ export function createNotebookStagePipelineController(helpers) {
       await waitForNotebookRunsIdle(notebookId);
       await refreshGraph(notebookId);
     } catch (error) {
-      await reportPipelineError(notebookId, "Pipeline cancellation failed", error);
+      await reportPipelineError(notebookId, "Pipeline abort failed", error);
     } finally {
       const graph = graphByNotebookId.get(notebookId);
       setPipelineRunControls(notebookId, {
@@ -1426,6 +1501,17 @@ export function createNotebookStagePipelineController(helpers) {
       await runStageFromButton(
         getCurrentNotebookId(),
         runStageButton.dataset.runPipelineStage || ""
+      );
+      return true;
+    }
+
+    const runPipelineFromStageButtonNode = event.target.closest("[data-run-pipeline-from-stage]");
+    if (runPipelineFromStageButtonNode) {
+      event.preventDefault();
+      event.stopPropagation();
+      await runPipelineFromStageButton(
+        getCurrentNotebookId(),
+        runPipelineFromStageButtonNode.dataset.runPipelineFromStage || ""
       );
       return true;
     }

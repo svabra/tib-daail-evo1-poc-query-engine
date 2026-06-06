@@ -197,7 +197,7 @@ class NotebookStagePipelineTests(unittest.TestCase):
             manager.run_stage(notebook_id="nb-1", stage_id="stage-raw", cells=cells)
             manager.wait_for_idle()
             graph = manager.graph_payload(notebook_id="nb-1", cells=cells)
-            self.assertEqual([node["status"] for node in graph["nodes"]], ["valid", "valid", "valid"])
+            self.assertEqual([node["status"] for node in graph["nodes"]], ["valid", "obsolete", "obsolete"])
 
             manager.execution_order.clear()
             manager.fingerprints["stage-raw"] = "raw-v2"
@@ -328,6 +328,51 @@ class NotebookStagePipelineTests(unittest.TestCase):
             self.assertTrue(
                 any(run["runId"] == "run-1" and run["cancelRequested"] for run in payload["activeRuns"])
             )
+
+    def test_run_pipeline_from_stage_runs_selected_stage_and_successors_only(self) -> None:
+        _, Store, _, _, _, _ = import_stage_components()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = FakeStageManager(
+                Store(Path(temp_dir) / "materialized-stages.json"),
+                {
+                    "stage-raw": "raw-v1",
+                    "stage-scope": "scope-v1",
+                    "stage-final": "final-v1",
+                },
+            )
+            cells = [
+                stage_cell("cell-1", "raw", "select 1"),
+                stage_cell("cell-2", "scope", "select * from stage.raw", ["stage-raw"]),
+                stage_cell("cell-3", "final", "select * from stage.scope", ["stage-scope"]),
+            ]
+
+            manager.run_stage(notebook_id="nb-1", stage_id="stage-raw", cells=cells)
+            manager.wait_for_idle()
+            manager.execution_order.clear()
+
+            manager.run_pipeline(
+                notebook_id="nb-1",
+                cells=cells,
+                start_stage_id="stage-scope",
+            )
+            manager.wait_for_idle()
+
+            self.assertEqual(manager.execution_order, ["stage-scope", "stage-final"])
+
+    def test_run_pipeline_from_unknown_stage_fails(self) -> None:
+        _, Store, _, _, _, _ = import_stage_components()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = FakeStageManager(
+                Store(Path(temp_dir) / "materialized-stages.json"),
+                {"stage-raw": "raw-v1"},
+            )
+
+            with self.assertRaises(ValueError):
+                manager.run_pipeline(
+                    notebook_id="nb-1",
+                    cells=[stage_cell("cell-1", "raw", "select 1")],
+                    start_stage_id="stage-missing",
+                )
 
     def test_atomic_stage_run_ignores_unrelated_downstream_diagnostics(self) -> None:
         _, Store, _, _, _, _ = import_stage_components()

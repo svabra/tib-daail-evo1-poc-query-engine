@@ -408,6 +408,10 @@ export function createNotebookTreeState(helpers) {
         folderPath: ["PoC Tests", "Performance Evaluation", "MWA Abrechnung (3.2)"],
       },
       {
+        notebookId: "mwa-abrechnung-s3-parquet-pipeline",
+        folderPath: ["PoC Tests", "Performance Evaluation", "MWA Abrechnung (3.2)"],
+      },
+      {
         notebookId: "mwa-abrechnung-s3-csv",
         folderPath: ["PoC Tests", "Performance Evaluation", "MWA Abrechnung (3.2)"],
       },

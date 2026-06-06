@@ -122,6 +122,7 @@ class NotebookActivityTouchPayload(BaseModel):
 class NotebookStagePipelinePayload(BaseModel):
     notebook_id: str = Field(validation_alias="notebookId", serialization_alias="notebookId")
     notebook_title: str = Field(default="", validation_alias="notebookTitle", serialization_alias="notebookTitle")
+    start_stage_id: str = Field(default="", validation_alias="startStageId", serialization_alias="startStageId")
     cells: list[dict[str, object]] = Field(default_factory=list)
 
 
@@ -1852,6 +1853,7 @@ def run_materialized_pipeline(
         result = service.run_materialized_pipeline(
             notebook_id=payload.notebook_id,
             notebook_title=payload.notebook_title,
+            start_stage_id=payload.start_stage_id,
             cells=payload.cells,
         )
     except ValueError as exc:

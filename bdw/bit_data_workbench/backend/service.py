@@ -123,6 +123,7 @@ from .notebooks import (
     build_generator_notebook_links,
     build_notebook_tree,
     build_notebooks,
+    build_restart_seeded_shared_notebooks,
     build_source_options,
 )
 from .notebook_activity import NotebookActivityStore
@@ -499,6 +500,30 @@ class WorkbenchService:
             )
         else:
             self._log_startup("Startup step complete: initial metadata state is ready")
+            self._log_startup_section("Discover startup PoC seed sources")
+            try:
+                self._sync_startup_seed_data_sources()
+            except Exception as exc:
+                self._log_startup(
+                    "Startup PoC source discovery failed; continuing with current metadata: %s",
+                    exc,
+                    level=logging.WARNING,
+                    exc_info=True,
+                )
+            else:
+                self._log_startup("Startup step complete: startup PoC seed sources are discovered")
+            self._log_startup_section("Seed restart-safe PoC notebooks")
+            try:
+                self._ensure_startup_shared_notebook_seeds()
+            except Exception as exc:
+                self._log_startup(
+                    "Startup PoC notebook seeding failed; continuing without seeded shared notebooks: %s",
+                    exc,
+                    level=logging.WARNING,
+                    exc_info=True,
+                )
+            else:
+                self._log_startup("Startup step complete: restart-safe PoC notebooks are seeded")
 
         self._log_startup_section("Start data source discovery manager")
         try:
@@ -1443,11 +1468,13 @@ class WorkbenchService:
         *,
         notebook_id: str,
         notebook_title: str = "",
+        start_stage_id: str = "",
         cells: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
         return self._materialized_stages.run_pipeline(
             notebook_id=str(notebook_id or "").strip(),
             notebook_title=str(notebook_title or "").strip(),
+            start_stage_id=str(start_stage_id or "").strip(),
             cells=cells or [],
         )
 
@@ -3395,6 +3422,46 @@ class WorkbenchService:
                 ensure_default_folders()
             except ValueError:
                 pass
+
+    def _sync_startup_seed_data_sources(self) -> None:
+        sync_source = getattr(self._data_source_discovery, "sync_source", None)
+        if not callable(sync_source):
+            return
+        sync_source("workspace.s3", emit_event=False)
+
+    def _ensure_startup_shared_notebook_seeds(self) -> None:
+        with self._lock:
+            seeded_notebooks = build_restart_seeded_shared_notebooks(list(self._catalogs))
+
+        if not seeded_notebooks:
+            return
+
+        upsert_notebook = getattr(self._shared_notebook_store, "upsert_notebook", None)
+        if not callable(upsert_notebook):
+            return
+
+        seeded_count = 0
+        with self._condition:
+            for notebook in seeded_notebooks:
+                try:
+                    self._ensure_shared_folder_metadata_locked(notebook.tree_path)
+                    upsert_notebook(notebook)
+                    seeded_count += 1
+                except ValueError as exc:
+                    logger.warning(
+                        "Startup PoC notebook seed %r skipped: %s",
+                        notebook.notebook_id,
+                        exc,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Startup PoC notebook seed %r failed: %s",
+                        notebook.notebook_id,
+                        exc,
+                        exc_info=True,
+                    )
+            if seeded_count:
+                self._rebuild_notebooks_locked()
 
     def _data_product_store_path(self) -> Path:
         return self.settings.duckdb_database.parent / "data-products.json"

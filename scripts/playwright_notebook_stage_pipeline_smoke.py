@@ -342,6 +342,56 @@ def assert_pipeline_focused_cell_gap_alignment(measurements: list[dict[str, obje
         )
 
 
+async def app_tooltip_style_after_hover(page, locator, timeout_ms: int) -> dict[str, object]:
+    await locator.hover()
+    await page.wait_for_function(
+        """
+        () => {
+          const tooltip = document.querySelector('[data-app-floating-tooltip]');
+          return tooltip && !tooltip.hidden && Number(getComputedStyle(tooltip).opacity) > 0.95;
+        }
+        """,
+        timeout=timeout_ms,
+    )
+    return await locator.evaluate(
+        """
+        (target) => {
+          const tooltip = document.querySelector('[data-app-floating-tooltip]');
+          const style = getComputedStyle(tooltip);
+          const tooltipRect = tooltip.getBoundingClientRect();
+          const targetRect = target.getBoundingClientRect();
+          return {
+            text: tooltip.textContent || '',
+            backgroundColor: style.backgroundColor,
+            color: style.color,
+            borderRadius: style.borderRadius,
+            fontSize: style.fontSize,
+            opacity: style.opacity,
+            paddingTop: style.paddingTop,
+            paddingRight: style.paddingRight,
+            tooltipBottom: tooltipRect.bottom,
+            targetCenterY: targetRect.top + (targetRect.height / 2),
+          };
+        }
+        """
+    )
+
+
+def assert_modern_app_tooltip(style: dict[str, object], expected_text: str) -> None:
+    if (
+        expected_text not in str(style.get("text") or "")
+        or style.get("backgroundColor") != "rgba(255, 255, 255, 0.7)"
+        or style.get("color") != "rgb(17, 17, 17)"
+        or style.get("borderRadius") != "3px"
+        or float(str(style.get("fontSize") or "0").replace("px", "")) > 12
+        or float(style.get("opacity") or 0) < 0.95
+        or float(str(style.get("paddingTop") or "0").replace("px", "")) < 9
+        or float(str(style.get("paddingRight") or "0").replace("px", "")) < 11
+        or float(style.get("tooltipBottom") or 0) > float(style.get("targetCenterY") or 0) - 6
+    ):
+        raise RuntimeError(f"App tooltip did not use the modern tooltip styling above the cursor: {style}")
+
+
 async def main() -> None:
     args = parse_args()
     statuses = {
@@ -357,6 +407,8 @@ async def main() -> None:
     pipeline_state_poll_count = 0
     pipeline_run_payload_stage_ids: list[str] = []
     pipeline_active_stage_timeline: list[str] = []
+    pipeline_run_start_stage_id = ""
+    active_pipeline_stage_ids: list[str] = []
     active_pipeline_notebook_id = "mock-notebook"
 
     async with async_playwright() as playwright:
@@ -378,7 +430,7 @@ async def main() -> None:
                     {
                         "runId": "pipeline-run-active",
                         "notebookId": graph["notebookId"],
-                        "stageIds": ["stage-raw", "stage-scope", "stage-final"],
+                        "stageIds": active_pipeline_stage_ids or ["stage-raw", "stage-scope", "stage-final"],
                         "status": "running",
                         "cancelRequested": False,
                     }
@@ -390,23 +442,27 @@ async def main() -> None:
             )
 
         async def handle_pipeline_run(route):
-            nonlocal active_pipeline_notebook_id, pipeline_active, pipeline_state_poll_count, pipeline_run_payload_stage_ids
+            nonlocal active_pipeline_notebook_id, active_pipeline_stage_ids, pipeline_active, pipeline_run_payload_stage_ids
+            nonlocal pipeline_run_start_stage_id, pipeline_state_poll_count
             payload = json.loads(route.request.post_data or "{}")
             active_pipeline_notebook_id = str(payload.get("notebookId") or "mock-notebook")
-            pipeline_run_payload_stage_ids = [
+            ordered_stage_ids = [
                 str((cell.get("stage") or {}).get("stageId") or "")
                 for cell in payload.get("cells") or []
                 if (cell.get("stage") or {}).get("stageId")
             ]
+            pipeline_run_start_stage_id = str(payload.get("startStageId") or "")
+            if pipeline_run_start_stage_id and pipeline_run_start_stage_id in ordered_stage_ids:
+                start_index = ordered_stage_ids.index(pipeline_run_start_stage_id)
+                active_pipeline_stage_ids = ordered_stage_ids[start_index:]
+            else:
+                active_pipeline_stage_ids = ordered_stage_ids
+            pipeline_run_payload_stage_ids = list(active_pipeline_stage_ids)
             pipeline_active = True
             pipeline_state_poll_count = 0
-            statuses.update(
-                {
-                    "stage-raw": "queued",
-                    "stage-scope": "queued",
-                    "stage-final": "queued",
-                }
-            )
+            pipeline_active_stage_timeline.clear()
+            for stage_id in ordered_stage_ids:
+                statuses[stage_id] = "queued" if stage_id in active_pipeline_stage_ids else "valid"
             await route.fulfill(
                 status=200,
                 content_type="application/json",
@@ -418,7 +474,7 @@ async def main() -> None:
                             {
                                 "runId": "pipeline-run-active",
                                 "notebookId": active_pipeline_notebook_id,
-                                "stageIds": ["stage-raw", "stage-scope", "stage-final"],
+                                "stageIds": active_pipeline_stage_ids,
                                 "status": "running",
                                 "cancelRequested": False,
                             }
@@ -469,44 +525,35 @@ async def main() -> None:
         async def handle_stage_state(route):
             nonlocal pipeline_active, pipeline_state_poll_count
             active_runs = []
-            if pipeline_active:
+            if pipeline_active and active_pipeline_stage_ids:
                 pipeline_state_poll_count += 1
-                current_stage_id = ["stage-raw", "stage-scope", "stage-final"][
-                    min(pipeline_state_poll_count - 1, 2)
+                current_stage_id = active_pipeline_stage_ids[
+                    min(pipeline_state_poll_count - 1, len(active_pipeline_stage_ids) - 1)
                 ]
                 if not pipeline_active_stage_timeline or pipeline_active_stage_timeline[-1] != current_stage_id:
                     pipeline_active_stage_timeline.append(current_stage_id)
-                statuses.update(
-                    {
-                        "stage-raw": "running" if current_stage_id == "stage-raw" else "valid",
-                        "stage-scope": (
-                            "queued"
-                            if current_stage_id == "stage-raw"
-                            else "running"
-                            if current_stage_id == "stage-scope"
-                            else "valid"
-                        ),
-                        "stage-final": "running" if current_stage_id == "stage-final" else "queued",
-                    }
-                )
+                for index, stage_id in enumerate(active_pipeline_stage_ids):
+                    current_index = active_pipeline_stage_ids.index(current_stage_id)
+                    statuses[stage_id] = (
+                        "valid"
+                        if index < current_index
+                        else "running"
+                        if stage_id == current_stage_id
+                        else "queued"
+                    )
                 active_runs = [
                     {
                         "runId": "pipeline-run-active",
                         "notebookId": active_pipeline_notebook_id,
-                        "stageIds": ["stage-raw", "stage-scope", "stage-final"],
+                        "stageIds": active_pipeline_stage_ids,
                         "currentStageId": current_stage_id,
                         "status": "running",
                         "cancelRequested": False,
                     }
                 ]
-                if pipeline_state_poll_count >= 4:
-                    statuses.update(
-                        {
-                            "stage-raw": "valid",
-                            "stage-scope": "valid",
-                            "stage-final": "valid",
-                        }
-                    )
+                if pipeline_state_poll_count >= len(active_pipeline_stage_ids) + 1:
+                    for stage_id in active_pipeline_stage_ids:
+                        statuses[stage_id] = "valid"
                     active_runs = []
                     pipeline_active = False
             await route.fulfill(
@@ -565,12 +612,27 @@ async def main() -> None:
                 """,
             )
 
+        async def handle_query_source_validation(route):
+            await route.fulfill(
+                status=200,
+                content_type="application/json",
+                body=json.dumps(
+                    {
+                        "status": "valid",
+                        "references": [],
+                        "missingReferences": [],
+                        "message": "Sources checked: all referenced sources exist.",
+                    }
+                ),
+            )
+
         await page.route("**/api/materialized-stages/graph", handle_graph)
         await page.route("**/api/materialized-stages/pipeline/run", handle_pipeline_run)
         await page.route("**/api/materialized-stages/stages/stage-raw/run", handle_stage_run)
         await page.route("**/api/materialized-stages/stages/stage-scope/run", handle_stage_scope_run)
         await page.route("**/api/materialized-stages/stages/stage-raw/stop", handle_stage_stop)
         await page.route("**/api/materialized-stages/state", handle_stage_state)
+        await page.route("**/api/query-sources/validate", handle_query_source_validation)
         await page.route("**/api/query-jobs", handle_query_job)
 
         try:
@@ -582,6 +644,13 @@ async def main() -> None:
             exploration_tooltip = await mode_toggle.get_attribute("title")
             if "Notebook mode: Exploration" not in (exploration_tooltip or "") or "links SQL cells" not in (exploration_tooltip or ""):
                 raise RuntimeError("Exploration mode switch tooltip was missing or unclear.")
+            native_tooltip_style = await app_tooltip_style_after_hover(
+                page,
+                page.locator("[data-sidebar-resizer]").first,
+                args.timeout_ms,
+            )
+            assert_modern_app_tooltip(native_tooltip_style, "Drag to resize navigation")
+            await page.mouse.move(900, 20)
             mode_toggle_style = await mode_toggle.evaluate(
                 """
                 (toggle) => {
@@ -681,9 +750,9 @@ async def main() -> None:
             node_width = await page.locator("[data-notebook-pipeline-graph] .pipeline-node").first.evaluate(
                 "(node) => node.getBoundingClientRect().width"
             )
-            if node_width < 264:
+            if node_width < 320:
                 raise RuntimeError(f"Pipeline graph node rendered below its minimum width: {node_width}px")
-            if node_width > 280:
+            if node_width > 340:
                 raise RuntimeError(f"Pipeline graph node rendered too large: {node_width}px")
             node_height = await page.locator("[data-notebook-pipeline-graph] .pipeline-node").first.evaluate(
                 "(node) => node.getBoundingClientRect().height"
@@ -703,6 +772,7 @@ async def main() -> None:
                         ".pipeline-node-state",
                         ".pipeline-node-state svg",
                         ".pipeline-node-alias",
+                        ".pipeline-stage-action-group",
                         ".pipeline-stage-action-button",
                     ];
                     const optionalSelectors = [
@@ -719,6 +789,7 @@ async def main() -> None:
                         ".pipeline-node-state svg",
                         ".pipeline-published-icon",
                         ".pipeline-obsolete-icon",
+                        ".pipeline-stage-action-group",
                         ".pipeline-stage-action-button",
                     ]);
                     const selectors = requiredSelectors.concat(optionalSelectors);
@@ -805,7 +876,7 @@ async def main() -> None:
                 """
                 (nodes) => nodes.map((node, nodeIndex) => {
                   const title = node.querySelector('.pipeline-node-title');
-                  const action = node.querySelector('.pipeline-stage-action-button-graph');
+                  const action = node.querySelector('.pipeline-stage-action-group-graph');
                   const state = node.querySelector('.pipeline-node-state');
                   const titleRect = title?.getBoundingClientRect();
                   const actionRect = action?.getBoundingClientRect();
@@ -849,6 +920,13 @@ async def main() -> None:
                     "Pipeline stage run actions did not render in both graph and table: "
                     f"graph={graph_stage_run_count}, table={table_stage_run_count}"
                 )
+            graph_run_from_count = await page.locator("[data-notebook-pipeline-graph] [data-run-pipeline-from-stage]").count()
+            table_run_from_count = await page.locator("[data-notebook-pipeline-table] [data-run-pipeline-from-stage]").count()
+            if graph_run_from_count < 3 or table_run_from_count < 3:
+                raise RuntimeError(
+                    "Pipeline-from-stage actions did not render in both graph and table: "
+                    f"graph={graph_run_from_count}, table={table_run_from_count}"
+                )
             table_action_status_alignment = await page.locator(
                 "[data-pipeline-stage-row]"
             ).evaluate_all(
@@ -856,7 +934,7 @@ async def main() -> None:
                 (rows) => rows.map((row) => {
                   const runCell = row.cells[1];
                   const statusCell = row.cells[2];
-                  const action = row.querySelector('.pipeline-stage-action-button-table');
+                  const action = row.querySelector('.pipeline-stage-action-group-table');
                   const statusIcon = row.querySelector('.pipeline-status-icon');
                   const actionRect = action?.getBoundingClientRect();
                   const iconRect = statusIcon?.getBoundingClientRect();
@@ -1041,7 +1119,7 @@ async def main() -> None:
                 }
                 """
             )
-            await page.locator('[data-pipeline-stage-row="stage-scope"]').first.click()
+            await page.locator('[data-pipeline-stage-row="stage-scope"] td').first.click()
             await page.wait_for_timeout(150)
             assert_pipeline_stage_title_alignment(await pipeline_stage_title_positions(page))
             graph_rect_after_row_select = await page.evaluate(
@@ -1072,11 +1150,17 @@ async def main() -> None:
             if title_color in {"rgb(213, 43, 30)", "rgba(213, 43, 30, 1)"}:
                 raise RuntimeError("Stage title input is using status color instead of black text.")
 
-            row_title = await page.locator('[data-pipeline-stage-row="stage-scope"]').first.get_attribute("title")
-            if "Depends on raw" not in (row_title or ""):
+            row_native_title = await page.locator('[data-pipeline-stage-row="stage-scope"]').first.get_attribute("title")
+            if row_native_title:
+                raise RuntimeError(f"Stage table should use the custom tooltip instead of a native title: {row_native_title}")
+            row_stage_cell = page.locator('[data-pipeline-stage-row="stage-scope"] td').first
+            row_tooltip = await row_stage_cell.get_attribute("data-pipeline-tooltip")
+            if "Depends on raw" not in (row_tooltip or ""):
                 raise RuntimeError("Stage table tooltip did not expose the description.")
+            row_tooltip_style = await app_tooltip_style_after_hover(page, row_stage_cell, args.timeout_ms)
+            assert_modern_app_tooltip(row_tooltip_style, "Depends on raw")
 
-            await page.locator('[data-pipeline-stage-row="stage-scope"]').first.click()
+            await page.locator('[data-pipeline-stage-row="stage-scope"] td').first.click()
             visible_cell_id = await page.locator("[data-query-cell]:visible").first.get_attribute("data-cell-id")
             if visible_cell_id != "cell-scope":
                 raise RuntimeError("Selecting a stage did not focus its owning cell.")
@@ -1120,21 +1204,40 @@ async def main() -> None:
                 timeout=args.timeout_ms,
             )
             await page.wait_for_function(
-                "() => document.querySelectorAll('[data-notebook-pipeline-graph] .pipeline-spinner').length >= 3",
+                """
+                () =>
+                  document.querySelectorAll('[data-notebook-pipeline-graph] .pipeline-node-running .pipeline-spinner').length === 1 &&
+                  document.querySelectorAll('[data-notebook-pipeline-graph] .pipeline-node-queued .pipeline-node-state-waiting').length >= 1
+                """,
                 timeout=args.timeout_ms,
             )
             await page.wait_for_function(
-                "() => document.querySelectorAll('[data-pipeline-stage-row] .pipeline-spinner').length >= 3",
+                """
+                () =>
+                  document.querySelectorAll('[data-pipeline-stage-row] .pipeline-spinner').length === 1 &&
+                  document.querySelectorAll('[data-pipeline-stage-row] .pipeline-status-icon-waiting').length >= 1
+                """,
                 timeout=args.timeout_ms,
             )
             await page.wait_for_function(
-                "() => document.querySelectorAll('[data-notebook-pipeline-graph] [data-cancel-pipeline-stage]').length >= 3",
+                "() => document.querySelectorAll('[data-notebook-pipeline-graph] [data-cancel-pipeline-stage]').length === 1",
                 timeout=args.timeout_ms,
             )
             await page.wait_for_function(
-                "() => document.querySelectorAll('[data-pipeline-stage-row] [data-cancel-pipeline-stage]').length >= 3",
+                "() => document.querySelectorAll('[data-pipeline-stage-row] [data-cancel-pipeline-stage]').length === 1",
                 timeout=args.timeout_ms,
             )
+            await page.wait_for_function(
+                """
+                () =>
+                  document.querySelectorAll('[data-notebook-pipeline-graph] .pipeline-stage-action-button.is-waiting').length >= 1 &&
+                  document.querySelectorAll('[data-pipeline-stage-row] .pipeline-stage-action-button.is-waiting').length >= 1
+                """,
+                timeout=args.timeout_ms,
+            )
+            waiting_tooltip = page.locator("[data-notebook-pipeline-graph] .pipeline-node-state-waiting").first
+            tooltip_style = await app_tooltip_style_after_hover(page, waiting_tooltip, args.timeout_ms)
+            assert_modern_app_tooltip(tooltip_style, "Waiting for earlier stages")
             running_node_measurement_script = """
                 (node) => {
                   const bounds = (element) => {
@@ -1155,32 +1258,37 @@ async def main() -> None:
                     border: bounds(rect),
                     icon: bounds(node.querySelector('.pipeline-node-icon')),
                     title: bounds(node.querySelector('.pipeline-node-title')),
-                    action: bounds(node.querySelector('.pipeline-stage-action-button-graph')),
+                    action: bounds(node.querySelector('.pipeline-stage-action-group-graph')),
                     state: bounds(node.querySelector('.pipeline-node-state')),
                     borderAnimation: rect ? getComputedStyle(rect).animationName : '',
                   };
                 }
             """
-            pulse_before = await page.locator('[data-pipeline-stage-node="stage-raw"]').first.evaluate(
+            running_node_handle = await page.locator(
+                "[data-notebook-pipeline-graph] .pipeline-node-running"
+            ).first.element_handle()
+            if running_node_handle is None:
+                raise RuntimeError("Pipeline did not expose a running stage node for glow measurement.")
+            glow_before = await running_node_handle.evaluate(
                 running_node_measurement_script
             )
-            if "pipeline-node-computing-pulse" not in str(pulse_before.get("borderAnimation") or ""):
-                raise RuntimeError(f"Running pipeline stage border was not pulsing: {pulse_before}")
-            await page.wait_for_timeout(250)
-            pulse_after = await page.locator('[data-pipeline-stage-node="stage-raw"]').first.evaluate(
+            if "pipeline-node-computing-glow" not in str(glow_before.get("borderAnimation") or ""):
+                raise RuntimeError(f"Running pipeline stage border was not glowing: {glow_before}")
+            await page.wait_for_timeout(80)
+            glow_after = await running_node_handle.evaluate(
                 running_node_measurement_script
             )
-            pulse_shift_violations = []
+            glow_shift_violations = []
             for key in ["node", "body", "border", "icon", "title", "action", "state"]:
-                before_rect = pulse_before.get(key)
-                after_rect = pulse_after.get(key)
+                before_rect = glow_before.get(key)
+                after_rect = glow_after.get(key)
                 if not before_rect or not after_rect:
-                    pulse_shift_violations.append({"part": key, "before": before_rect, "after": after_rect})
+                    glow_shift_violations.append({"part": key, "before": before_rect, "after": after_rect})
                     continue
                 for field in ["left", "top", "width", "height"]:
                     delta = abs(float(before_rect[field]) - float(after_rect[field]))
                     if delta > 0.5:
-                        pulse_shift_violations.append(
+                        glow_shift_violations.append(
                             {
                                 "part": key,
                                 "field": field,
@@ -1189,10 +1297,10 @@ async def main() -> None:
                                 "after": after_rect,
                             }
                         )
-            if pulse_shift_violations:
+            if glow_shift_violations:
                 raise RuntimeError(
-                    "Pipeline stage border pulse moved the stage box or its contents: "
-                    f"{pulse_shift_violations}"
+                    "Pipeline stage border glow moved the stage box or its contents: "
+                    f"{glow_shift_violations}"
                 )
             await page.wait_for_function(
                 "() => document.querySelectorAll('[data-notebook-pipeline-graph] .pipeline-node-state-ok').length >= 3",
@@ -1227,6 +1335,45 @@ async def main() -> None:
             if pipeline_state_poll_count < 4:
                 raise RuntimeError(
                     "Run pipeline returned to idle before Playwright observed the active run complete: "
+                    f"{pipeline_state_poll_count} state polls"
+                )
+
+            await page.locator('[data-pipeline-stage-row="stage-scope"] [data-run-pipeline-from-stage]').first.click()
+            await page.locator("[data-cancel-notebook-pipeline]").first.wait_for(
+                state="visible",
+                timeout=args.timeout_ms,
+            )
+            await page.wait_for_function(
+                """
+                () =>
+                  document.querySelectorAll('[data-notebook-pipeline-graph] .pipeline-node-running .pipeline-spinner').length === 1 &&
+                  document.querySelectorAll('[data-notebook-pipeline-graph] .pipeline-node-queued .pipeline-node-state-waiting').length >= 1
+                """,
+                timeout=args.timeout_ms,
+            )
+            await page.locator("[data-run-notebook-pipeline]").first.wait_for(
+                state="visible",
+                timeout=args.timeout_ms,
+            )
+            expected_from_stage_ids = ["stage-scope", "stage-final"]
+            if pipeline_run_start_stage_id != "stage-scope":
+                raise RuntimeError(
+                    "Run pipeline from a stage did not submit the selected start stage: "
+                    f"{pipeline_run_start_stage_id}"
+                )
+            if pipeline_run_payload_stage_ids != expected_from_stage_ids:
+                raise RuntimeError(
+                    "Run pipeline from a stage did not limit the active run to the selected stage and downstream stages: "
+                    f"{pipeline_run_payload_stage_ids}"
+                )
+            if pipeline_active_stage_timeline != expected_from_stage_ids:
+                raise RuntimeError(
+                    "Run pipeline from a stage did not process selected and downstream stages in order: "
+                    f"{pipeline_active_stage_timeline}"
+                )
+            if pipeline_state_poll_count < 3:
+                raise RuntimeError(
+                    "Run pipeline from a stage returned to idle before both downstream stages completed: "
                     f"{pipeline_state_poll_count} state polls"
                 )
             if await page.locator("[data-notebook-pipeline-graph] .pipeline-status-pill").count():
@@ -1298,10 +1445,35 @@ async def main() -> None:
             await page.wait_for_function(
                 """
                 () => Array.from(document.querySelectorAll('[data-pipeline-stage-row]'))
-                  .some((row) => row.dataset.pipelineStageRow === 'stage-scope' && row.textContent.includes('Obsolete'))
+                  .some((row) =>
+                    row.dataset.pipelineStageRow === 'stage-scope' &&
+                    row.querySelector('.pipeline-table-status[data-pipeline-tooltip="Obsolete"]')
+                  )
                 """,
                 timeout=args.timeout_ms,
             )
+            downstream_edge_styles = await page.locator("[data-notebook-pipeline-graph] .pipeline-edge").evaluate_all(
+                """
+                (edges) => edges.map((edge) => {
+                  const style = getComputedStyle(edge);
+                  return {
+                    classes: edge.getAttribute('class') || '',
+                    strokeDasharray: style.strokeDasharray,
+                  };
+                })
+                """
+            )
+            dashed_downstream_edges = [
+                item
+                for item in downstream_edge_styles
+                if "pipeline-edge-obsolete" in str(item.get("classes") or "")
+                and str(item.get("strokeDasharray") or "").lower() not in {"none", "0px"}
+            ]
+            if len(dashed_downstream_edges) < 2:
+                raise RuntimeError(
+                    "Manual upstream stage run did not mark all downstream graph edges as dashed: "
+                    f"{downstream_edge_styles}"
+                )
 
             await page.route("**/sidebar?**", handle_sidebar)
             await page.locator('[data-pipeline-stage-menu="stage-raw"]').first.click()

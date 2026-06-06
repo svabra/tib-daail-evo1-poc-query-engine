@@ -58,6 +58,20 @@ class NotebookTreeUiRegressionTests(unittest.TestCase):
         self.assertIn("isShared: folder.isShared === true", state_source)
         self.assertIn("findStoredFolderMetadata", state_source)
 
+    def test_tree_state_places_mwa_parquet_pipeline_seed_in_mwa_folder(self) -> None:
+        state_source = (STATIC_JS_ROOT / "notebook-tree-state.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn(
+            'notebookId: "mwa-abrechnung-s3-parquet-pipeline"',
+            state_source,
+        )
+        self.assertIn(
+            'folderPath: ["PoC Tests", "Performance Evaluation", "MWA Abrechnung (3.2)"]',
+            state_source,
+        )
+
     def test_drop_target_resolves_folder_summary_before_parent_container(self) -> None:
         ui_source = (STATIC_JS_ROOT / "notebook-tree-ui.js").read_text(
             encoding="utf-8"

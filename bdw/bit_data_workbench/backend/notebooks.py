@@ -8,7 +8,10 @@ from ..models import (
     NotebookFolder,
     SourceCatalog,
 )
-from .notebook_presets import build_static_notebooks
+from .notebook_presets import (
+    build_mwa_s3_parquet_pipeline_notebook,
+    build_static_notebooks,
+)
 
 
 def _find_relation(
@@ -326,6 +329,29 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         if not notebook.can_edit:
             notebook.shared = True
     return notebooks
+
+
+def build_restart_seeded_shared_notebooks(
+    catalogs: list[SourceCatalog],
+) -> list[NotebookDefinition]:
+    mwa_object_names = (
+        "mwa_abrechnung_entities",
+        "mwa_abrechnungs_ziffern_entities",
+    )
+    mwa_s3_parquet_relations = {
+        object_name: _find_relation_by_object_name(
+            catalogs,
+            catalog_name="workspace",
+            schema_name=None,
+            object_names=(f"{object_name}_parquet",),
+        )
+        for object_name in mwa_object_names
+    }
+    return [
+        build_mwa_s3_parquet_pipeline_notebook(
+            mwa_s3_parquet_relations=mwa_s3_parquet_relations,
+        )
+    ]
 
 
 def _source_option(

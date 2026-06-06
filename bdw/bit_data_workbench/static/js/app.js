@@ -119,6 +119,7 @@ import { createQueryRunsController } from "./query-runs-controller.js";
 import { createQuerySourceValidationController } from "./query-source-validation-controller.js";
 import { createQueryUi } from "./query-ui.js";
 import { createQueryWorkbenchEntryController } from "./query-workbench-entry-controller.js";
+import { createAppTooltipController } from "./app-tooltip-controller.js";
 import {
   applyOptimisticQueryJobSnapshot,
   compareQueryJobsByCompletedAt,
@@ -170,6 +171,8 @@ import { createSourceTreeController } from "./source-tree-controller.js";
 import { formatSqlText } from "./sql-formatter.js";
 import { createWorkbenchNavigationController } from "./workbench-navigation-controller.js";
 import { createWorkbenchStorage } from "./workbench-storage.js";
+
+createAppTooltipController().install();
 
 const editorRegistry = new WeakMap();
 const editorSizingRegistry = new WeakMap();
