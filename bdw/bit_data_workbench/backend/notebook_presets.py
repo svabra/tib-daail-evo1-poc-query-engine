@@ -8,6 +8,18 @@ import re
 from ..models import NotebookCellDefinition, NotebookDefinition
 
 
+DATA_PIPELINES_TREE_PATH = (
+    "PoC Tests",
+    "Performance Evaluation",
+    "Data Pipelines",
+)
+MWA_PARQUET_PIPELINE_NOTEBOOK_ID = "mwa-abrechnung-s3-parquet-pipeline"
+MWA_PARQUET_PIPELINE_CREATED_AT = "2026-06-06T00:00:00+00:00"
+MWA_PARQUET_PIPELINE_TREE_PATH = DATA_PIPELINES_TREE_PATH
+KOSTENBELEGE_3_1_PIPELINE_NOTEBOOK_ID = "kostenbelege-3-1-s3-parquet-pipeline"
+KOSTENBELEGE_3_1_PIPELINE_CREATED_AT = "2026-06-07T00:00:00+00:00"
+KOSTENBELEGE_3_1_PIPELINE_TREE_PATH = DATA_PIPELINES_TREE_PATH
+
 KOSTENBELEGE_3_1_SOURCE_COLUMNS = {
     "KBKP": (
         "KBKP_Belegnummer",
@@ -436,6 +448,454 @@ WHERE id_ = 1;
 """.strip()
 
 
+def _mwa_pipeline_stage(
+    *,
+    stage_id: str,
+    alias: str,
+    title: str,
+    description: str,
+    predecessors: list[str] | None = None,
+    kind: str = "intermediate",
+) -> dict[str, object]:
+    return {
+        "enabled": True,
+        "stageId": stage_id,
+        "alias": alias,
+        "title": title,
+        "description": description,
+        "kind": kind,
+        "materialize": True,
+        "predecessorStageIds": predecessors or [],
+    }
+
+
+def _mwa_pipeline_loader_status_sql() -> str:
+    return (
+        "SELECT 'Run the MWA Abrechnung Multi-Format Loader (3.2) from the "
+        "Loader Workbench first. This pipeline seed switches to five Parquet "
+        "stages after the generated Parquet relations are discovered.' AS status;"
+    )
+
+
+def _build_mwa_pipeline_abrechnung_scope_sql(*, abrechnung_relation: str) -> str:
+    return f"""
+-- Pipeline split of the MWA Abrechnung S3 Parquet performance notebook.
+-- Stage 1: normalize parent Abrechnung rows and derive approval/audit buckets.
+WITH scoped_abrechnungen AS (
+  SELECT
+    id_,
+    status,
+    CAST(date_trunc('quarter', einreiche_datum) AS DATE) AS submission_quarter,
+    CAST(einreiche_datum AS TIMESTAMP) AS submitted_at,
+    contact_role,
+    is_approved,
+    is_ready_for_audit,
+    is_sub_form1056_needed,
+    tax_period_refer,
+    partner_id,
+    uid,
+    moe_id,
+    beguenstigter_partner_id,
+    approval_message_address,
+    CAST(CAST(rounded_total AS DOUBLE PRECISION) AS DECIMAL(18,2)) AS rounded_total_chf,
+    CASE
+      WHEN is_approved = 'true' AND is_ready_for_audit = 'true' THEN 'approved_ready'
+      WHEN is_approved = 'true' THEN 'approved_waiting_audit'
+      WHEN is_ready_for_audit = 'true' THEN 'audit_ready_not_approved'
+      ELSE 'open_workflow'
+    END AS approval_readiness_bucket,
+    CASE
+      WHEN is_sub_form1056_needed = 'true' AND is_ready_for_audit <> 'true' THEN 4
+      WHEN is_sub_form1056_needed = 'true' THEN 3
+      WHEN is_ready_for_audit <> 'true' THEN 2
+      ELSE 1
+    END AS audit_priority_score
+  FROM {abrechnung_relation}
+  WHERE deleted_at IS NULL
+    AND einreiche_datum >= TIMESTAMP '2024-01-01 00:00:00'
+),
+ranked_abrechnungen AS (
+  SELECT
+    *,
+    ROW_NUMBER() OVER (
+      PARTITION BY submission_quarter, status
+      ORDER BY rounded_total_chf DESC, audit_priority_score DESC, id_ DESC
+    ) AS status_amount_rank
+  FROM scoped_abrechnungen
+)
+SELECT
+  id_,
+  status,
+  submission_quarter,
+  submitted_at,
+  contact_role,
+  is_approved,
+  is_ready_for_audit,
+  is_sub_form1056_needed,
+  tax_period_refer,
+  partner_id,
+  uid,
+  moe_id,
+  beguenstigter_partner_id,
+  approval_message_address,
+  rounded_total_chf,
+  approval_readiness_bucket,
+  audit_priority_score,
+  status_amount_rank
+FROM ranked_abrechnungen
+WHERE status_amount_rank <= 5000
+""".strip()
+
+
+def _build_mwa_pipeline_ziffer_rollup_sql(*, ziffern_relation: str) -> str:
+    return f"""
+-- Pipeline split of the MWA Abrechnung S3 Parquet performance notebook.
+-- Stage 2: aggregate Abrechnungs-Ziffern children by parent Abrechnung id.
+WITH scoped_ziffern AS (
+  SELECT
+    id_,
+    abrechnung_refer,
+    ziffer_nummer,
+    CAST(umsatz AS DECIMAL(18,2)) AS umsatz_chf,
+    CAST(steuer AS DECIMAL(18,2)) AS steuer_chf,
+    CAST(satz AS DECIMAL(18,4)) AS satz_percent,
+    steuersatz_type,
+    satz_editable,
+    kommentar,
+    moe_id
+  FROM {ziffern_relation}
+  WHERE deleted_at IS NULL
+),
+ziffer_rollup AS (
+  SELECT
+    abrechnung_refer,
+    COUNT(*) AS ziffer_count,
+    COUNT(DISTINCT ziffer_nummer) AS distinct_ziffer_count,
+    CAST(SUM(umsatz_chf) AS DECIMAL(18,2)) AS umsatz_total_chf,
+    CAST(SUM(steuer_chf) AS DECIMAL(18,2)) AS steuer_total_chf,
+    CAST(AVG(satz_percent) AS DECIMAL(18,4)) AS avg_satz_percent,
+    CAST(MAX(satz_percent) AS DECIMAL(18,4)) AS max_satz_percent,
+    SUM(CASE WHEN satz_editable = 'true' THEN 1 ELSE 0 END) AS editable_ziffer_count,
+    SUM(CASE WHEN steuer_chf = 0 THEN 1 ELSE 0 END) AS zero_tax_ziffer_count,
+    SUM(CASE WHEN kommentar IS NOT NULL AND kommentar <> '' THEN 1 ELSE 0 END) AS commented_ziffer_count
+  FROM scoped_ziffern
+  GROUP BY abrechnung_refer
+)
+SELECT
+  abrechnung_refer,
+  ziffer_count,
+  distinct_ziffer_count,
+  umsatz_total_chf,
+  steuer_total_chf,
+  avg_satz_percent,
+  max_satz_percent,
+  editable_ziffer_count,
+  zero_tax_ziffer_count,
+  commented_ziffer_count,
+  CASE
+    WHEN ziffer_count = 0 THEN 'missing_children'
+    WHEN zero_tax_ziffer_count > ziffer_count / 2 THEN 'mostly_zero_tax'
+    WHEN editable_ziffer_count > 0 THEN 'editable_positions'
+    ELSE 'standard_positions'
+  END AS ziffer_quality_bucket
+FROM ziffer_rollup
+""".strip()
+
+
+def _build_mwa_pipeline_joined_sql() -> str:
+    return """
+-- Stage 3: join parent Abrechnungen with their Ziffer rollup once.
+-- Downstream stages fork from this shared materialized result.
+WITH joined_abrechnungen AS (
+  SELECT
+    a.id_,
+    a.status,
+    a.submission_quarter,
+    a.submitted_at,
+    a.contact_role,
+    a.is_approved,
+    a.is_ready_for_audit,
+    a.is_sub_form1056_needed,
+    a.tax_period_refer,
+    a.partner_id,
+    a.uid,
+    a.moe_id,
+    a.beguenstigter_partner_id,
+    a.approval_message_address,
+    a.rounded_total_chf,
+    a.approval_readiness_bucket,
+    a.audit_priority_score,
+    a.status_amount_rank,
+    COALESCE(z.ziffer_count, 0) AS ziffer_count,
+    COALESCE(z.distinct_ziffer_count, 0) AS distinct_ziffer_count,
+    COALESCE(z.umsatz_total_chf, 0) AS umsatz_total_chf,
+    COALESCE(z.steuer_total_chf, 0) AS steuer_total_chf,
+    COALESCE(z.avg_satz_percent, 0) AS avg_satz_percent,
+    COALESCE(z.max_satz_percent, 0) AS max_satz_percent,
+    COALESCE(z.editable_ziffer_count, 0) AS editable_ziffer_count,
+    COALESCE(z.zero_tax_ziffer_count, 0) AS zero_tax_ziffer_count,
+    COALESCE(z.commented_ziffer_count, 0) AS commented_ziffer_count,
+    COALESCE(z.ziffer_quality_bucket, 'no_ziffern') AS ziffer_quality_bucket
+  FROM stage.mwa_abrechnung_scope AS a
+  LEFT JOIN stage.mwa_ziffer_rollup AS z
+    ON z.abrechnung_refer = a.id_
+),
+classified_abrechnungen AS (
+  SELECT
+    *,
+    CAST(rounded_total_chf - umsatz_total_chf AS DECIMAL(18,2)) AS turnover_reconciliation_gap_chf,
+    CAST(steuer_total_chf / NULLIF(umsatz_total_chf, 0) AS DECIMAL(18,6)) AS effective_tax_rate,
+    CASE
+      WHEN ziffer_count = 0 THEN 'missing_ziffern'
+      WHEN ABS(rounded_total_chf - umsatz_total_chf) > 100000 THEN 'large_reconciliation_gap'
+      WHEN editable_ziffer_count > 0 THEN 'manual_tax_rate_review'
+      WHEN zero_tax_ziffer_count > 0 THEN 'contains_zero_tax_positions'
+      ELSE 'standard_review'
+    END AS review_reason
+  FROM joined_abrechnungen
+)
+SELECT
+  *
+FROM classified_abrechnungen
+WHERE rounded_total_chf >= 5000
+""".strip()
+
+
+def _build_mwa_pipeline_status_pressure_sql() -> str:
+    return """
+-- Stage 4: branch A, quarterly status and approval pressure.
+WITH quarterly_status_pressure AS (
+  SELECT
+    submission_quarter,
+    status,
+    approval_readiness_bucket,
+    ziffer_quality_bucket,
+    COUNT(*) AS abrechnung_count,
+    COUNT(DISTINCT partner_id) AS partner_count,
+    CAST(SUM(rounded_total_chf) AS DECIMAL(18,2)) AS rounded_total_chf,
+    CAST(SUM(umsatz_total_chf) AS DECIMAL(18,2)) AS umsatz_total_chf,
+    CAST(SUM(steuer_total_chf) AS DECIMAL(18,2)) AS steuer_total_chf,
+    CAST(AVG(effective_tax_rate) AS DECIMAL(18,6)) AS avg_effective_tax_rate,
+    SUM(ziffer_count) AS ziffer_count,
+    SUM(editable_ziffer_count) AS editable_ziffer_count,
+    SUM(zero_tax_ziffer_count) AS zero_tax_ziffer_count,
+    SUM(CASE WHEN review_reason <> 'standard_review' THEN 1 ELSE 0 END) AS review_case_count,
+    SUM(CASE WHEN is_sub_form1056_needed = 'true' THEN 1 ELSE 0 END) AS sub_form1056_count
+  FROM stage.mwa_joined_abrechnungen
+  GROUP BY submission_quarter, status, approval_readiness_bucket, ziffer_quality_bucket
+),
+ranked_pressure AS (
+  SELECT
+    *,
+    ROW_NUMBER() OVER (
+      PARTITION BY submission_quarter
+      ORDER BY rounded_total_chf DESC, steuer_total_chf DESC, review_case_count DESC
+    ) AS quarter_rank
+  FROM quarterly_status_pressure
+  WHERE abrechnung_count >= 10
+)
+SELECT
+  submission_quarter,
+  status,
+  approval_readiness_bucket,
+  ziffer_quality_bucket,
+  abrechnung_count,
+  partner_count,
+  rounded_total_chf,
+  umsatz_total_chf,
+  steuer_total_chf,
+  avg_effective_tax_rate,
+  ziffer_count,
+  editable_ziffer_count,
+  zero_tax_ziffer_count,
+  review_case_count,
+  sub_form1056_count,
+  quarter_rank
+FROM ranked_pressure
+WHERE quarter_rank <= 25
+ORDER BY submission_quarter DESC, quarter_rank, rounded_total_chf DESC
+""".strip()
+
+
+def _build_mwa_pipeline_audit_backlog_sql() -> str:
+    return """
+-- Stage 5: branch B, audit readiness backlog and contact-role ownership.
+WITH audit_worklist AS (
+  SELECT
+    contact_role,
+    approval_message_address,
+    tax_period_refer,
+    review_reason,
+    CASE
+      WHEN is_ready_for_audit = 'true' AND is_approved = 'true' THEN 'ready_and_approved'
+      WHEN is_ready_for_audit = 'true' THEN 'ready_waiting_approval'
+      WHEN is_sub_form1056_needed = 'true' THEN 'blocked_on_form1056'
+      ELSE 'workflow_backlog'
+    END AS audit_lane,
+    COUNT(*) AS abrechnung_count,
+    COUNT(DISTINCT partner_id) AS partner_count,
+    CAST(SUM(rounded_total_chf) AS DECIMAL(18,2)) AS rounded_total_chf,
+    CAST(SUM(steuer_total_chf) AS DECIMAL(18,2)) AS steuer_total_chf,
+    CAST(SUM(ABS(turnover_reconciliation_gap_chf)) AS DECIMAL(18,2)) AS abs_reconciliation_gap_chf,
+    CAST(AVG(audit_priority_score) AS DECIMAL(18,2)) AS avg_audit_priority_score,
+    MAX(submitted_at) AS latest_submission_at,
+    SUM(CASE WHEN ziffer_count = 0 THEN 1 ELSE 0 END) AS missing_ziffer_count,
+    SUM(CASE WHEN editable_ziffer_count > 0 THEN 1 ELSE 0 END) AS editable_case_count
+  FROM stage.mwa_joined_abrechnungen
+  WHERE review_reason <> 'standard_review'
+     OR is_ready_for_audit <> 'true'
+     OR is_sub_form1056_needed = 'true'
+  GROUP BY contact_role, approval_message_address, tax_period_refer, review_reason, audit_lane
+),
+ranked_worklist AS (
+  SELECT
+    *,
+    DENSE_RANK() OVER (
+      PARTITION BY audit_lane
+      ORDER BY rounded_total_chf DESC, abs_reconciliation_gap_chf DESC, abrechnung_count DESC
+    ) AS audit_lane_rank
+  FROM audit_worklist
+)
+SELECT
+  contact_role,
+  approval_message_address,
+  tax_period_refer,
+  review_reason,
+  audit_lane,
+  abrechnung_count,
+  partner_count,
+  rounded_total_chf,
+  steuer_total_chf,
+  abs_reconciliation_gap_chf,
+  avg_audit_priority_score,
+  latest_submission_at,
+  missing_ziffer_count,
+  editable_case_count,
+  audit_lane_rank
+FROM ranked_worklist
+WHERE audit_lane_rank <= 30
+ORDER BY audit_lane, audit_lane_rank, rounded_total_chf DESC
+""".strip()
+
+
+def build_mwa_s3_parquet_pipeline_notebook(
+    *,
+    mwa_s3_parquet_relations: dict[str, str | None],
+) -> NotebookDefinition:
+    abrechnung_relation = (
+        mwa_s3_parquet_relations.get("mwa_abrechnung_entities") or ""
+    )
+    ziffern_relation = (
+        mwa_s3_parquet_relations.get("mwa_abrechnungs_ziffern_entities") or ""
+    )
+
+    if abrechnung_relation and ziffern_relation:
+        cells = [
+            NotebookCellDefinition(
+                cell_id="mwa-parquet-pipeline-cell-1",
+                data_sources=["workspace.s3"],
+                query_options={"duckdb": {"parquetHivePartitioning": "auto"}},
+                sql=_build_mwa_pipeline_abrechnung_scope_sql(
+                    abrechnung_relation=abrechnung_relation,
+                ),
+                stage=_mwa_pipeline_stage(
+                    stage_id="stage-mwa-abrechnung-scope",
+                    alias="mwa_abrechnung_scope",
+                    title="MWA Abrechnung Scope",
+                    description="Normalize generated MWA Abrechnung parent rows from S3 Parquet.",
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="mwa-parquet-pipeline-cell-2",
+                data_sources=["workspace.s3"],
+                query_options={"duckdb": {"parquetHivePartitioning": "auto"}},
+                sql=_build_mwa_pipeline_ziffer_rollup_sql(
+                    ziffern_relation=ziffern_relation,
+                ),
+                stage=_mwa_pipeline_stage(
+                    stage_id="stage-mwa-ziffer-rollup",
+                    alias="mwa_ziffer_rollup",
+                    title="MWA Ziffer Rollup",
+                    description="Aggregate generated Abrechnungs-Ziffern children from S3 Parquet.",
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="mwa-parquet-pipeline-cell-3",
+                data_sources=[],
+                sql=_build_mwa_pipeline_joined_sql(),
+                stage=_mwa_pipeline_stage(
+                    stage_id="stage-mwa-joined-abrechnungen",
+                    alias="mwa_joined_abrechnungen",
+                    title="Joined Abrechnungen",
+                    description="Join parent Abrechnungen to ziffer totals before the analytics fork.",
+                    predecessors=[
+                        "stage-mwa-abrechnung-scope",
+                        "stage-mwa-ziffer-rollup",
+                    ],
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="mwa-parquet-pipeline-cell-4",
+                data_sources=[],
+                sql=_build_mwa_pipeline_status_pressure_sql(),
+                stage=_mwa_pipeline_stage(
+                    stage_id="stage-mwa-status-pressure",
+                    alias="mwa_status_pressure",
+                    title="Status Pressure",
+                    description="Branch A: summarize quarterly approval and status pressure.",
+                    predecessors=["stage-mwa-joined-abrechnungen"],
+                    kind="final",
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="mwa-parquet-pipeline-cell-5",
+                data_sources=[],
+                sql=_build_mwa_pipeline_audit_backlog_sql(),
+                stage=_mwa_pipeline_stage(
+                    stage_id="stage-mwa-audit-backlog",
+                    alias="mwa_audit_backlog",
+                    title="Audit Backlog",
+                    description="Branch B: prioritize audit readiness and form 1056 backlog.",
+                    predecessors=["stage-mwa-joined-abrechnungen"],
+                    kind="final",
+                ),
+            ),
+        ]
+    else:
+        cells = [
+            NotebookCellDefinition(
+                cell_id="mwa-parquet-pipeline-loader-status",
+                data_sources=[],
+                sql=_mwa_pipeline_loader_status_sql(),
+                stage=_mwa_pipeline_stage(
+                    stage_id="stage-mwa-loader-status",
+                    alias="mwa_loader_status",
+                    title="Run MWA Loader",
+                    description="The generated MWA 3.2 S3 Parquet relations were not discovered yet.",
+                    kind="final",
+                ),
+            )
+        ]
+
+    return NotebookDefinition(
+        notebook_id=MWA_PARQUET_PIPELINE_NOTEBOOK_ID,
+        title="MWA Abrechnung (3.2) S3 Parquet Pipeline",
+        summary=(
+            "Editable five-stage PoC pipeline over the generated MWA 3.2 S3 Parquet "
+            "data, split into two downstream analytics branches."
+        ),
+        cells=cells,
+        tags=["performance", "mwa", "abrechnung", "s3", "parquet", "pipeline"],
+        tree_path=MWA_PARQUET_PIPELINE_TREE_PATH,
+        linked_generator_id="mwa_abrechnung_multi_format_loader",
+        pipeline_mode="pipeline",
+        can_edit=True,
+        can_delete=True,
+        shared=True,
+        created_at=MWA_PARQUET_PIPELINE_CREATED_AT,
+    )
+
+
 def _build_kostenbelege_3_1_sql(
     *,
     kbkp_relation: str,
@@ -781,6 +1241,622 @@ CROSS JOIN (VALUES
     (CAST('Ausgleichsposition' AS VARCHAR(20)), -1)
 ) AS Positions(PositionsArt, AmountSign);
 """.strip()
+
+
+def _kostenbelege_pipeline_stage(
+    *,
+    stage_id: str,
+    alias: str,
+    title: str,
+    description: str,
+    predecessors: list[str] | None = None,
+    kind: str = "intermediate",
+) -> dict[str, object]:
+    return {
+        "enabled": True,
+        "stageId": stage_id,
+        "alias": alias,
+        "title": title,
+        "description": description,
+        "kind": kind,
+        "materialize": True,
+        "predecessorStageIds": predecessors or [],
+    }
+
+
+def _kostenbelege_pipeline_loader_status_sql() -> str:
+    return (
+        "SELECT 'Run the Kostenbelege Multi-Source Loader (3.1) from the Loader "
+        "Workbench first. This pipeline seed switches to nine S3 Parquet stages "
+        "after KBKP, KBPO, KBHP, and DIM_KALENDER are discovered.' AS status;"
+    )
+
+
+def _build_kostenbelege_pipeline_headers_sql(
+    *,
+    kbkp_relation: str,
+    kalender_relation: str,
+) -> str:
+    return f"""
+-- Stage 1: current technical document headers from generated S3 Parquet.
+WITH current_kalender AS (
+  SELECT Datum
+  FROM {kalender_relation}
+  WHERE Datum = CURRENT_DATE
+)
+SELECT
+    KBKP.KBKP_Belegnummer,
+    KBKP.DOCO_Belegart,
+    KBKP.KBKP_BelegDt,
+    KBKP.KBKP_BuchungDt,
+    KBKP.KBKP_ErstellungVon,
+    KBKP.KBKP_StorniertBelegNummer,
+    KBKP.KBKP_StornoBelegNummer,
+    KBKP.DOCO_BelegHerkunft,
+    KBKP.DOCO_Buchunggrund,
+    KALE.Datum
+FROM {kbkp_relation} KBKP
+INNER JOIN current_kalender KALE
+  ON KALE.Datum BETWEEN KBKP.KBKP_TechBeginnDt AND KBKP.KBKP_TechEndeDt
+""".strip()
+
+
+def _build_kostenbelege_pipeline_positions_sql(
+    *,
+    kbpo_relation: str,
+    kalender_relation: str,
+) -> str:
+    return f"""
+-- Stage 2: current technical line positions from generated S3 Parquet.
+WITH current_kalender AS (
+  SELECT Datum
+  FROM {kalender_relation}
+  WHERE Datum = CURRENT_DATE
+)
+SELECT
+    KBPO.KBPO_PositionId,
+    KBPO.KBKP_AusgleichBelegnummer,
+    KBPO.KBPO_VtgKtoWiederholPos,
+    KBPO.KBPO_VtgKtoPositionNr,
+    KBPO.KBPO_Teilposition,
+    KBPO.GEFA_GeschaeftFall,
+    KBPO.PART_Partner,
+    KBPO.KBPO_KtoFindMerkmal,
+    KBPO.DOCO_Hauptvorgang,
+    KBPO.DOCO_Teilvorgang,
+    KBPO.DOCO_Belegtyp,
+    KBPO.DOCO_VtrKtoTyp,
+    KBPO.DOCO_Waehrung,
+    KBPO.DOCO_FormArt,
+    KBPO.KBPO_GesamtBetrag,
+    KBPO.KBPO_TWhrBetrag,
+    KBPO.KBPO_HbWaehrung,
+    KBPO.KBPO_HbBetrag,
+    KBPO.KBPO_HWhrBetrag1,
+    KBPO.KBPO_Umrechnungkurs,
+    KBPO.KBPO_NettoFaelligkeitDT,
+    KBPO.VTGP_VtrGegenstand,
+    KBPO.KBPO_VtrKtoNummer,
+    KBPO.KBPO_AusgleichStatus,
+    KBPO.KBPO_Ausgleichgrund,
+    KBPO.KBPO_AusgleichDt,
+    KBPO.KBPO_AusgleichBuchungDt,
+    KBPO.KBPO_HBSachkto,
+    KBPO.KBPO_Beschreibung,
+    KBPO.DOCO_SteuerCd,
+    KBPO.KBPO_WertInternDt,
+    KBPO.KBPO_Bankverbindung,
+    KBPO.DOCO_RecordArt,
+    KALE.Datum
+FROM {kbpo_relation} KBPO
+INNER JOIN current_kalender KALE
+  ON KALE.Datum BETWEEN KBPO.KBPO_TechBeginnDt AND KBPO.KBPO_TechEndeDt
+""".strip()
+
+
+def _build_kostenbelege_pipeline_ledger_accounts_sql(
+    *,
+    kbhp_relation: str,
+    kalender_relation: str,
+) -> str:
+    return f"""
+-- Stage 3: current technical ledger account assignments from generated S3 Parquet.
+WITH current_kalender AS (
+  SELECT Datum
+  FROM {kalender_relation}
+  WHERE Datum = CURRENT_DATE
+)
+SELECT
+    KBHP.KBHP_Id,
+    KBHP.KBKP_BelegNummer,
+    KBHP.KBHP_VTGKtoPositionNr,
+    KBHP.KBHP_SachKto,
+    KBHP.KBHP_HBAbstimmschluessel,
+    KALE.Datum
+FROM {kbhp_relation} KBHP
+INNER JOIN current_kalender KALE
+  ON KALE.Datum BETWEEN KBHP.KBHP_TechBeginnDt AND KBHP.KBHP_TechEndeDt
+""".strip()
+
+
+def _build_kostenbelege_pipeline_resolved_positions_sql() -> str:
+    return """
+-- Stage 4: resolve document headers, positions, and ledger account fallback once.
+SELECT
+    H.KBKP_Belegnummer,
+    P.KBPO_VtgKtoWiederholPos,
+    H.DOCO_Belegart,
+    H.KBKP_BelegDt,
+    H.KBKP_BuchungDt,
+    H.KBKP_ErstellungVon,
+    H.KBKP_StorniertBelegNummer,
+    H.KBKP_StornoBelegNummer,
+    H.DOCO_BelegHerkunft,
+    P.KBPO_VtgKtoPositionNr,
+    P.KBPO_Teilposition,
+    P.GEFA_GeschaeftFall,
+    P.PART_Partner,
+    P.KBPO_KtoFindMerkmal,
+    P.DOCO_Hauptvorgang,
+    P.DOCO_Teilvorgang,
+    P.DOCO_Belegtyp,
+    P.DOCO_VtrKtoTyp,
+    P.DOCO_Waehrung,
+    P.DOCO_FormArt,
+    P.KBPO_GesamtBetrag,
+    P.KBPO_TWhrBetrag,
+    P.KBPO_HbWaehrung,
+    P.KBPO_HbBetrag,
+    P.KBPO_HWhrBetrag1,
+    P.KBPO_Umrechnungkurs,
+    P.KBPO_NettoFaelligkeitDT,
+    P.VTGP_VtrGegenstand,
+    P.KBPO_VtrKtoNummer,
+    P.KBKP_AusgleichBelegnummer,
+    P.KBPO_AusgleichStatus,
+    P.KBPO_Ausgleichgrund,
+    P.KBPO_AusgleichDt,
+    P.KBPO_AusgleichBuchungDt,
+    P.KBPO_HBSachkto,
+    COALESCE(EXACT_ACCOUNT.KBHP_SachKto, FALLBACK_ACCOUNT.KBHP_SachKto) AS KBHP_SachKto,
+    COALESCE(EXACT_ACCOUNT.KBHP_HBAbstimmschluessel, FALLBACK_ACCOUNT.KBHP_HBAbstimmschluessel) AS KBHP_HBAbstimmschluessel,
+    CASE
+      WHEN EXACT_ACCOUNT.KBKP_BelegNummer IS NOT NULL THEN 'position_specific'
+      WHEN FALLBACK_ACCOUNT.KBKP_BelegNummer IS NOT NULL THEN 'document_fallback'
+      ELSE 'missing'
+    END AS ledger_resolution,
+    P.KBPO_Beschreibung,
+    P.DOCO_SteuerCd,
+    P.KBPO_WertInternDt,
+    P.KBPO_Bankverbindung,
+    P.DOCO_RecordArt,
+    H.DOCO_Buchunggrund,
+    H.Datum
+FROM stage.kb_current_headers H
+INNER JOIN stage.kb_current_positions P
+  ON H.KBKP_Belegnummer = P.KBKP_AusgleichBelegnummer
+ AND H.Datum = P.Datum
+LEFT JOIN stage.kb_current_ledger_accounts EXACT_ACCOUNT
+  ON H.KBKP_Belegnummer = EXACT_ACCOUNT.KBKP_BelegNummer
+ AND EXACT_ACCOUNT.KBHP_VTGKtoPositionNr = P.KBPO_VtgKtoPositionNr
+ AND H.Datum = EXACT_ACCOUNT.Datum
+LEFT JOIN stage.kb_current_ledger_accounts FALLBACK_ACCOUNT
+  ON H.KBKP_Belegnummer = FALLBACK_ACCOUNT.KBKP_BelegNummer
+ AND FALLBACK_ACCOUNT.KBHP_VTGKtoPositionNr = 1
+ AND H.Datum = FALLBACK_ACCOUNT.Datum
+ AND EXACT_ACCOUNT.KBKP_BelegNummer IS NULL
+""".strip()
+
+
+def _build_kostenbelege_pipeline_position_projection_sql(
+    *,
+    positions_art: str,
+    amount_sign: int,
+    settlement_dates: bool,
+) -> str:
+    ausgleichsbelegdatum = "RP.KBKP_BelegDt" if settlement_dates else "RP.KBPO_AusgleichDt"
+    ausgleichsbuchungsdatum = "RP.KBKP_BuchungDt" if settlement_dates else "RP.KBPO_AusgleichBuchungDt"
+    return f"""
+-- Stage projection: {positions_art} business semantics from resolved Kostenbelege positions.
+SELECT
+    RP.KBKP_Belegnummer AS Belegnummer,
+    RP.KBPO_VtgKtoWiederholPos AS Wiederholungsposition,
+    RP.KBPO_VtgKtoPositionNr AS Belegposition,
+    RP.KBPO_Teilposition AS Belegteilposition,
+    RP.DOCO_Belegart AS BelegartID,
+    RP.DOCO_BelegHerkunft AS HerkunftID,
+    RP.KBKP_ErstellungVon AS AngelegtVonID,
+    RP.KBKP_StornoBelegNummer AS StorniertDurch,
+    RP.KBKP_StorniertBelegNummer AS StornobelegZu,
+    RP.GEFA_GeschaeftFall AS GeschaeftsfallID,
+    RP.DOCO_Hauptvorgang AS HauptvorgangID,
+    RP.PART_Partner AS PartnerID,
+    RP.KBHP_SachKto AS SachkontoHBID,
+    RP.DOCO_Teilvorgang AS TeilvorgangID,
+    RP.DOCO_VtrKtoTyp AS VertragskontotypID,
+    RP.KBKP_AusgleichBelegnummer AS Ausgleichsbelegnummer,
+    {ausgleichsbelegdatum} AS Ausgleichsbelegdatum,
+    {ausgleichsbuchungsdatum} AS Ausgleichsbuchungsdatum,
+    RP.KBPO_Ausgleichgrund AS AusgleichsgrundID,
+    RP.KBKP_BelegDt AS Belegdatum,
+    RP.KBKP_BuchungDt AS Buchungsdatum,
+    RP.KBPO_NettoFaelligkeitDT AS Nettofaelligkeitsdatum,
+    RP.DOCO_SteuerCd AS SteuercodeAusFachsystem,
+    RP.KBPO_AusgleichStatus AS Ausgleichsstatus,
+    RP.KBPO_HbWaehrung AS WaehrungHauptbuchID,
+    RP.KBPO_HbBetrag * {amount_sign} AS BetragHauptbuch,
+    CAST('CHF' AS VARCHAR(3)) AS HauswaehrungID,
+    RP.KBPO_HWhrBetrag1 * {amount_sign} AS BetragHauswaehrung,
+    RP.KBPO_GesamtBetrag AS Gesamtbetrag,
+    RP.DOCO_Waehrung AS TransaktionWaehrung,
+    RP.KBPO_TWhrBetrag * {amount_sign} AS BetragTransaktionswaehrung,
+    RP.DOCO_FormArt AS Formart,
+    RP.KBPO_Umrechnungkurs AS Umrechnungskurs,
+    RP.KBKP_AusgleichBelegnummer AS Ausgleichsbeleg,
+    RP.VTGP_VtrGegenstand AS Vertragsgegenstand,
+    RP.KBPO_VtrKtoNummer AS Vertragskontonummer,
+    RP.KBHP_HBAbstimmschluessel AS Abstimmschluessel,
+    RP.KBPO_Beschreibung AS TextZurPosition,
+    CAST('{positions_art}' AS VARCHAR(20)) AS Positionsart,
+    RP.KBPO_HBSachkto AS SachkontoNBID,
+    RP.KBPO_WertInternDt AS Zinsvalutadatum,
+    RP.KBPO_Bankverbindung AS BankverbindungID,
+    RP.DOCO_RecordArt AS RecordArt,
+    RP.KBPO_KtoFindMerkmal AS Kontenfindung,
+    RP.DOCO_Buchunggrund AS BuchungsgrundID,
+    RP.Datum AS TechnischesDatum,
+    RP.ledger_resolution AS LedgerResolution
+FROM stage.kb_resolved_positions RP
+""".strip()
+
+
+def _build_kostenbelege_pipeline_canonical_output_sql() -> str:
+    return """
+-- Stage 7: canonical Kostenbelege output with the final business projection.
+SELECT
+    Belegnummer,
+    Wiederholungsposition,
+    Belegposition,
+    Belegteilposition,
+    BelegartID,
+    HerkunftID,
+    AngelegtVonID,
+    StorniertDurch,
+    StornobelegZu,
+    GeschaeftsfallID,
+    HauptvorgangID,
+    PartnerID,
+    SachkontoHBID,
+    TeilvorgangID,
+    VertragskontotypID,
+    Ausgleichsbelegnummer,
+    Ausgleichsbelegdatum,
+    Ausgleichsbuchungsdatum,
+    AusgleichsgrundID,
+    Belegdatum,
+    Buchungsdatum,
+    Nettofaelligkeitsdatum,
+    SteuercodeAusFachsystem,
+    Ausgleichsstatus,
+    WaehrungHauptbuchID,
+    BetragHauptbuch,
+    HauswaehrungID,
+    BetragHauswaehrung,
+    Gesamtbetrag,
+    TransaktionWaehrung,
+    BetragTransaktionswaehrung,
+    Formart,
+    Umrechnungskurs,
+    Ausgleichsbeleg,
+    Vertragsgegenstand,
+    Vertragskontonummer,
+    Abstimmschluessel,
+    TextZurPosition,
+    Positionsart,
+    SachkontoNBID,
+    Zinsvalutadatum,
+    BankverbindungID,
+    RecordArt,
+    Kontenfindung,
+    BuchungsgrundID,
+    TechnischesDatum
+FROM stage.kb_original_positions
+UNION ALL
+SELECT
+    Belegnummer,
+    Wiederholungsposition,
+    Belegposition,
+    Belegteilposition,
+    BelegartID,
+    HerkunftID,
+    AngelegtVonID,
+    StorniertDurch,
+    StornobelegZu,
+    GeschaeftsfallID,
+    HauptvorgangID,
+    PartnerID,
+    SachkontoHBID,
+    TeilvorgangID,
+    VertragskontotypID,
+    Ausgleichsbelegnummer,
+    Ausgleichsbelegdatum,
+    Ausgleichsbuchungsdatum,
+    AusgleichsgrundID,
+    Belegdatum,
+    Buchungsdatum,
+    Nettofaelligkeitsdatum,
+    SteuercodeAusFachsystem,
+    Ausgleichsstatus,
+    WaehrungHauptbuchID,
+    BetragHauptbuch,
+    HauswaehrungID,
+    BetragHauswaehrung,
+    Gesamtbetrag,
+    TransaktionWaehrung,
+    BetragTransaktionswaehrung,
+    Formart,
+    Umrechnungskurs,
+    Ausgleichsbeleg,
+    Vertragsgegenstand,
+    Vertragskontonummer,
+    Abstimmschluessel,
+    TextZurPosition,
+    Positionsart,
+    SachkontoNBID,
+    Zinsvalutadatum,
+    BankverbindungID,
+    RecordArt,
+    Kontenfindung,
+    BuchungsgrundID,
+    TechnischesDatum
+FROM stage.kb_settlement_positions
+""".strip()
+
+
+def _build_kostenbelege_pipeline_exception_candidates_sql() -> str:
+    return """
+-- Stage 8: settlement records that deserve audit attention before final backlog grouping.
+WITH candidates AS (
+  SELECT
+      *,
+      ABS(COALESCE(BetragHauptbuch, BetragHauswaehrung, BetragTransaktionswaehrung, 0)) AS exposure_chf,
+      CASE
+        WHEN SachkontoHBID IS NULL OR LedgerResolution = 'missing' THEN 'missing_ledger_account'
+        WHEN UPPER(COALESCE(Ausgleichsstatus, '')) IN ('OPEN', 'PARTIAL', 'REVERSED') THEN 'settlement_state_review'
+        WHEN StorniertDurch IS NOT NULL OR StornobelegZu IS NOT NULL THEN 'reversal_review'
+        WHEN ABS(COALESCE(BetragHauptbuch, BetragHauswaehrung, BetragTransaktionswaehrung, 0)) >= 100000 THEN 'high_value_settlement'
+        ELSE 'monitor'
+      END AS exception_reason
+  FROM stage.kb_settlement_positions
+)
+SELECT *
+FROM candidates
+WHERE exception_reason <> 'monitor'
+ORDER BY exposure_chf DESC, Belegnummer, Belegposition
+""".strip()
+
+
+def _build_kostenbelege_pipeline_audit_backlog_sql() -> str:
+    return """
+-- Stage 9: grouped settlement audit backlog for analysts.
+WITH grouped_backlog AS (
+  SELECT
+      exception_reason,
+      Ausgleichsstatus,
+      AusgleichsgrundID,
+      WaehrungHauptbuchID,
+      SachkontoHBID,
+      COUNT(*) AS position_count,
+      COUNT(DISTINCT Belegnummer) AS document_count,
+      COUNT(DISTINCT PartnerID) AS partner_count,
+      CAST(SUM(exposure_chf) AS DECIMAL(18,2)) AS exposure_total_chf,
+      CAST(AVG(exposure_chf) AS DECIMAL(18,2)) AS exposure_avg_chf,
+      MIN(Nettofaelligkeitsdatum) AS earliest_due_date,
+      MAX(Ausgleichsbuchungsdatum) AS latest_settlement_booking_date
+  FROM stage.kb_settlement_exception_candidates
+  GROUP BY
+      exception_reason,
+      Ausgleichsstatus,
+      AusgleichsgrundID,
+      WaehrungHauptbuchID,
+      SachkontoHBID
+),
+ranked_backlog AS (
+  SELECT
+      *,
+      DENSE_RANK() OVER (
+        PARTITION BY exception_reason
+        ORDER BY exposure_total_chf DESC, position_count DESC, document_count DESC
+      ) AS backlog_rank
+  FROM grouped_backlog
+)
+SELECT *
+FROM ranked_backlog
+WHERE backlog_rank <= 25
+ORDER BY exception_reason, backlog_rank, exposure_total_chf DESC
+""".strip()
+
+
+def build_kostenbelege_3_1_s3_parquet_pipeline_notebook(
+    *,
+    kostenbelege_3_1_s3_relations: dict[str, str | None],
+) -> NotebookDefinition:
+    kbkp_relation = kostenbelege_3_1_s3_relations.get("kbkp_2019") or ""
+    kbpo_relation = kostenbelege_3_1_s3_relations.get("kbpo_2019") or ""
+    kbhp_relation = kostenbelege_3_1_s3_relations.get("kbhp_2019") or ""
+    kalender_relation = kostenbelege_3_1_s3_relations.get("dim_kalender") or ""
+
+    if kbkp_relation and kbpo_relation and kbhp_relation and kalender_relation:
+        s3_query_options = {"duckdb": {"parquetHivePartitioning": "auto"}}
+        cells = [
+            NotebookCellDefinition(
+                cell_id="kostenbelege-3-1-pipeline-cell-1",
+                data_sources=["workspace.s3"],
+                query_options=s3_query_options,
+                sql=_build_kostenbelege_pipeline_headers_sql(
+                    kbkp_relation=kbkp_relation,
+                    kalender_relation=kalender_relation,
+                ),
+                stage=_kostenbelege_pipeline_stage(
+                    stage_id="stage-kb-current-headers",
+                    alias="kb_current_headers",
+                    title="KB Current Headers",
+                    description="Filters KBKP document headers to today's technical version and keeps document dates, origin, reversal, and booking reason fields.",
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="kostenbelege-3-1-pipeline-cell-2",
+                data_sources=["workspace.s3"],
+                query_options=s3_query_options,
+                sql=_build_kostenbelege_pipeline_positions_sql(
+                    kbpo_relation=kbpo_relation,
+                    kalender_relation=kalender_relation,
+                ),
+                stage=_kostenbelege_pipeline_stage(
+                    stage_id="stage-kb-current-positions",
+                    alias="kb_current_positions",
+                    title="KB Current Positions",
+                    description="Filters KBPO line items to today's technical version and keeps partner, contract, amount, currency, due-date, settlement, tax, and bank fields.",
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="kostenbelege-3-1-pipeline-cell-3",
+                data_sources=["workspace.s3"],
+                query_options=s3_query_options,
+                sql=_build_kostenbelege_pipeline_ledger_accounts_sql(
+                    kbhp_relation=kbhp_relation,
+                    kalender_relation=kalender_relation,
+                ),
+                stage=_kostenbelege_pipeline_stage(
+                    stage_id="stage-kb-current-ledger-accounts",
+                    alias="kb_current_ledger_accounts",
+                    title="KB Current Ledger Accounts",
+                    description="Prepares current KBHP ledger assignments for exact position matches and document-level fallback account matches.",
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="kostenbelege-3-1-pipeline-cell-4",
+                data_sources=[],
+                sql=_build_kostenbelege_pipeline_resolved_positions_sql(),
+                stage=_kostenbelege_pipeline_stage(
+                    stage_id="stage-kb-resolved-positions",
+                    alias="kb_resolved_positions",
+                    title="KB Resolved Positions",
+                    description="Joins headers, positions, and ledger assignments, resolving exact KBHP account matches before document-level fallback matches.",
+                    predecessors=[
+                        "stage-kb-current-headers",
+                        "stage-kb-current-positions",
+                        "stage-kb-current-ledger-accounts",
+                    ],
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="kostenbelege-3-1-pipeline-cell-5",
+                data_sources=[],
+                sql=_build_kostenbelege_pipeline_position_projection_sql(
+                    positions_art="Originalposition",
+                    amount_sign=1,
+                    settlement_dates=False,
+                ),
+                stage=_kostenbelege_pipeline_stage(
+                    stage_id="stage-kb-original-positions",
+                    alias="kb_original_positions",
+                    title="Original Positions",
+                    description="Branch A: applies original-position semantics with positive amounts and original document dates.",
+                    predecessors=["stage-kb-resolved-positions"],
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="kostenbelege-3-1-pipeline-cell-6",
+                data_sources=[],
+                sql=_build_kostenbelege_pipeline_position_projection_sql(
+                    positions_art="Ausgleichsposition",
+                    amount_sign=-1,
+                    settlement_dates=True,
+                ),
+                stage=_kostenbelege_pipeline_stage(
+                    stage_id="stage-kb-settlement-positions",
+                    alias="kb_settlement_positions",
+                    title="Settlement Positions",
+                    description="Branch B: applies settlement-position semantics with inverted amounts and settlement document/date mapping.",
+                    predecessors=["stage-kb-resolved-positions"],
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="kostenbelege-3-1-pipeline-cell-7",
+                data_sources=[],
+                sql=_build_kostenbelege_pipeline_canonical_output_sql(),
+                stage=_kostenbelege_pipeline_stage(
+                    stage_id="stage-kb-canonical-output",
+                    alias="kb_canonical_output",
+                    title="Kostenbelege Canonical Output",
+                    description="Terminal path: combines original and settlement positions into the final Kostenbelege business projection.",
+                    predecessors=[
+                        "stage-kb-original-positions",
+                        "stage-kb-settlement-positions",
+                    ],
+                    kind="final",
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="kostenbelege-3-1-pipeline-cell-8",
+                data_sources=[],
+                sql=_build_kostenbelege_pipeline_exception_candidates_sql(),
+                stage=_kostenbelege_pipeline_stage(
+                    stage_id="stage-kb-settlement-exception-candidates",
+                    alias="kb_settlement_exception_candidates",
+                    title="Settlement Exception Candidates",
+                    description="Filters settlement rows for audit-relevant cases such as missing ledger accounts, unusual settlement states, reversals, and high-value settlements.",
+                    predecessors=["stage-kb-settlement-positions"],
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="kostenbelege-3-1-pipeline-cell-9",
+                data_sources=[],
+                sql=_build_kostenbelege_pipeline_audit_backlog_sql(),
+                stage=_kostenbelege_pipeline_stage(
+                    stage_id="stage-kb-settlement-audit-backlog",
+                    alias="kb_settlement_audit_backlog",
+                    title="Settlement Audit Backlog",
+                    description="Terminal path: groups and ranks settlement exception candidates into an analyst backlog.",
+                    predecessors=["stage-kb-settlement-exception-candidates"],
+                    kind="final",
+                ),
+            ),
+        ]
+    else:
+        cells = [
+            NotebookCellDefinition(
+                cell_id="kostenbelege-3-1-pipeline-loader-status",
+                data_sources=[],
+                sql=_kostenbelege_pipeline_loader_status_sql(),
+                stage=_kostenbelege_pipeline_stage(
+                    stage_id="stage-kb-loader-status",
+                    alias="kb_loader_status",
+                    title="Run Kostenbelege Loader",
+                    description="The generated Kostenbelege 3.1 S3 Parquet relations were not discovered yet.",
+                    kind="final",
+                ),
+            )
+        ]
+
+    return NotebookDefinition(
+        notebook_id=KOSTENBELEGE_3_1_PIPELINE_NOTEBOOK_ID,
+        title="Kostenbelege (3.1) S3 Parquet Pipeline",
+        summary=(
+            "Editable nine-stage PoC pipeline over the generated Kostenbelege 3.1 "
+            "S3 Parquet data, with a canonical output path and a settlement audit fork."
+        ),
+        cells=cells,
+        tags=["performance", "kostenbelege", "3.1", "s3", "parquet", "pipeline"],
+        tree_path=KOSTENBELEGE_3_1_PIPELINE_TREE_PATH,
+        linked_generator_id="kostenbelege_3_1_multi_source_loader",
+        pipeline_mode="pipeline",
+        can_edit=True,
+        can_delete=True,
+        shared=True,
+        created_at=KOSTENBELEGE_3_1_PIPELINE_CREATED_AT,
+    )
 
 
 def build_static_notebooks(

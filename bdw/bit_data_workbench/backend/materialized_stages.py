@@ -33,6 +33,21 @@ def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _parse_iso_datetime(value: object) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed
+
+
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
 
@@ -135,6 +150,18 @@ class StageRecord:
     can_cancel: bool = False
 
     @property
+    def duration_ms(self) -> int | None:
+        started = _parse_iso_datetime(self.started_at)
+        if started is None:
+            return None
+        completed = _parse_iso_datetime(self.completed_at)
+        if completed is None and self.status in {"running", "queued"}:
+            completed = datetime.now(UTC)
+        if completed is None:
+            return None
+        return max(0, round((completed - started).total_seconds() * 1000))
+
+    @property
     def payload(self) -> dict[str, object]:
         return {
             "runId": self.run_id,
@@ -163,6 +190,7 @@ class StageRecord:
             "error": self.error,
             "changedResult": self.changed_result,
             "canCancel": self.can_cancel,
+            "durationMs": self.duration_ms,
         }
 
     @classmethod
@@ -350,6 +378,188 @@ def _notebook_stage_states(state: dict[str, object], notebook_id: str) -> dict[s
     }
 
 
+def _stage_cell_index(stage: dict[str, object]) -> int:
+    try:
+        return int(stage.get("cellIndex", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _pipeline_path_id(terminal_stage_id: str) -> str:
+    return f"path-{terminal_stage_id}"
+
+
+def normalize_pipeline_paths(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, object]] = []
+    seen_keys: set[str] = set()
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            continue
+        terminal_stage_id = str(
+            item.get("terminalStageId")
+            or item.get("terminal_stage_id")
+            or ""
+        ).strip()
+        path_id = str(item.get("pathId") or item.get("path_id") or "").strip()
+        if not terminal_stage_id and path_id.startswith("path-"):
+            terminal_stage_id = path_id[5:]
+        if not path_id and terminal_stage_id:
+            path_id = _pipeline_path_id(terminal_stage_id)
+        if not terminal_stage_id and not path_id:
+            continue
+        key = terminal_stage_id or path_id
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        label = str(item.get("label") or item.get("name") or "").strip()
+        try:
+            priority = int(item.get("priority") or item.get("rank") or index + 1)
+        except (TypeError, ValueError):
+            priority = index + 1
+        normalized.append(
+            {
+                "pathId": path_id,
+                "terminalStageId": terminal_stage_id,
+                "label": label,
+                "priority": max(1, priority),
+                "_index": index,
+            }
+        )
+    normalized.sort(key=lambda item: (int(item.get("priority") or 0), int(item.get("_index") or 0)))
+    for item in normalized:
+        item.pop("_index", None)
+    return normalized
+
+
+def _topological_stage_order(
+    *,
+    indegree: dict[str, int],
+    successors: dict[str, list[str]],
+    by_id: dict[str, dict[str, object]],
+    stage_priority_rank: dict[str, int] | None = None,
+) -> tuple[list[str], list[str]]:
+    remaining = dict(indegree)
+    priority_rank = stage_priority_rank or {}
+
+    def sort_key(stage_id: str) -> tuple[int, int, str]:
+        return (
+            int(priority_rank.get(stage_id, 1_000_000)),
+            _stage_cell_index(by_id.get(stage_id, {})),
+            stage_id,
+        )
+
+    ready = sorted(
+        (stage_id for stage_id, degree in remaining.items() if degree == 0),
+        key=sort_key,
+    )
+    ordered_stage_ids: list[str] = []
+    while ready:
+        stage_id = ready.pop(0)
+        ordered_stage_ids.append(stage_id)
+        for successor_id in sorted(successors.get(stage_id, []), key=sort_key):
+            remaining[successor_id] -= 1
+            if remaining[successor_id] == 0:
+                ready.append(successor_id)
+        ready.sort(key=sort_key)
+
+    cycle_stage_ids = [stage_id for stage_id, degree in remaining.items() if degree > 0]
+    if cycle_stage_ids:
+        ordered_stage_ids.extend(
+            stage_id
+            for stage_id in sorted(cycle_stage_ids, key=sort_key)
+            if stage_id not in ordered_stage_ids
+        )
+    return ordered_stage_ids, cycle_stage_ids
+
+
+def _ancestor_stage_ids(
+    terminal_stage_id: str,
+    *,
+    predecessor_map: dict[str, list[str]],
+    fallback_ordered_stage_ids: list[str],
+) -> list[str]:
+    required = {terminal_stage_id}
+    queue = deque(predecessor_map.get(terminal_stage_id, []))
+    while queue:
+        stage_id = queue.popleft()
+        if not stage_id or stage_id in required:
+            continue
+        required.add(stage_id)
+        queue.extend(predecessor_map.get(stage_id, []))
+    ordered = [stage_id for stage_id in fallback_ordered_stage_ids if stage_id in required]
+    return ordered or [terminal_stage_id]
+
+
+def _computed_pipeline_paths(
+    *,
+    by_id: dict[str, dict[str, object]],
+    successors: dict[str, list[str]],
+    predecessor_map: dict[str, list[str]],
+    fallback_ordered_stage_ids: list[str],
+    pipeline_paths: Iterable[dict[str, object]] | None = None,
+) -> list[dict[str, object]]:
+    fallback_index = {stage_id: index for index, stage_id in enumerate(fallback_ordered_stage_ids)}
+    terminal_stage_ids = sorted(
+        [
+            stage_id
+            for stage_id in by_id
+            if not [successor for successor in successors.get(stage_id, []) if successor in by_id]
+        ],
+        key=lambda stage_id: fallback_index.get(stage_id, 1_000_000),
+    )
+    if not terminal_stage_ids:
+        return []
+
+    known_terminals = set(terminal_stage_ids)
+    metadata_by_terminal: dict[str, dict[str, object]] = {}
+    priority_terminal_ids: list[str] = []
+    for path in normalize_pipeline_paths(list(pipeline_paths or [])):
+        terminal_stage_id = str(path.get("terminalStageId") or "").strip()
+        if terminal_stage_id not in known_terminals or terminal_stage_id in metadata_by_terminal:
+            continue
+        metadata_by_terminal[terminal_stage_id] = path
+        priority_terminal_ids.append(terminal_stage_id)
+
+    ordered_terminal_ids = [
+        *priority_terminal_ids,
+        *[stage_id for stage_id in terminal_stage_ids if stage_id not in metadata_by_terminal],
+    ]
+    paths: list[dict[str, object]] = []
+    for index, terminal_stage_id in enumerate(ordered_terminal_ids):
+        stage = by_id[terminal_stage_id]
+        metadata = metadata_by_terminal.get(terminal_stage_id, {})
+        label = str(metadata.get("label") or stage.get("title") or stage.get("alias") or terminal_stage_id).strip()
+        path_id = str(metadata.get("pathId") or _pipeline_path_id(terminal_stage_id)).strip()
+        paths.append(
+            {
+                "pathId": path_id,
+                "label": label,
+                "terminalStageId": terminal_stage_id,
+                "terminalStageTitle": str(stage.get("title") or stage.get("alias") or terminal_stage_id),
+                "stageIds": _ancestor_stage_ids(
+                    terminal_stage_id,
+                    predecessor_map=predecessor_map,
+                    fallback_ordered_stage_ids=fallback_ordered_stage_ids,
+                ),
+                "priority": index + 1,
+            }
+        )
+    return paths
+
+
+def _stage_priority_ranks(paths: Iterable[dict[str, object]]) -> dict[str, int]:
+    ranks: dict[str, int] = {}
+    for path in sorted(paths, key=lambda item: int(item.get("priority") or 1_000_000)):
+        rank = int(path.get("priority") or 1_000_000)
+        for stage_id in path.get("stageIds", []) or []:
+            normalized_stage_id = str(stage_id or "").strip()
+            if normalized_stage_id and normalized_stage_id not in ranks:
+                ranks[normalized_stage_id] = rank
+    return ranks
+
+
 def build_notebook_stage_graph(
     *,
     notebook_id: str,
@@ -357,6 +567,7 @@ def build_notebook_stage_graph(
     cells: Iterable[dict[str, object]],
     state: dict[str, object] | None = None,
     published_products_for_source: Callable[[dict[str, object]], list[dict[str, object]]] | None = None,
+    pipeline_paths: Iterable[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     stage_cells = normalize_stage_cells(cells)
     state = state or {"version": 0, "records": [], "stageStates": {}}
@@ -413,22 +624,25 @@ def build_notebook_stage_graph(
             indegree[stage_id] += 1
             successors[predecessor_id].append(stage_id)
 
-    ready = deque(
-        sorted(
-            (stage_id for stage_id, degree in indegree.items() if degree == 0),
-            key=lambda value: int(by_id[value].get("cellIndex", 0)),
-        )
+    fallback_ordered_stage_ids, _fallback_cycle_stage_ids = _topological_stage_order(
+        indegree=indegree,
+        successors=successors,
+        by_id=by_id,
     )
-    ordered_stage_ids: list[str] = []
-    while ready:
-        stage_id = ready.popleft()
-        ordered_stage_ids.append(stage_id)
-        for successor_id in sorted(successors.get(stage_id, []), key=lambda value: int(by_id[value].get("cellIndex", 0))):
-            indegree[successor_id] -= 1
-            if indegree[successor_id] == 0:
-                ready.append(successor_id)
-    if len(ordered_stage_ids) != len(stage_cells):
-        cycle_stage_ids = [stage_id for stage_id, degree in indegree.items() if degree > 0]
+    paths = _computed_pipeline_paths(
+        by_id=by_id,
+        successors=successors,
+        predecessor_map=predecessor_map,
+        fallback_ordered_stage_ids=fallback_ordered_stage_ids,
+        pipeline_paths=pipeline_paths,
+    )
+    ordered_stage_ids, cycle_stage_ids = _topological_stage_order(
+        indegree=indegree,
+        successors=successors,
+        by_id=by_id,
+        stage_priority_rank=_stage_priority_ranks(paths),
+    )
+    if cycle_stage_ids:
         diagnostics.append(
             {
                 "severity": "error",
@@ -437,7 +651,6 @@ def build_notebook_stage_graph(
                 "message": "Pipeline dependencies contain a cycle.",
             }
         )
-        ordered_stage_ids.extend(stage_id for stage_id in indegree if stage_id not in ordered_stage_ids)
 
     layer_by_stage: dict[str, int] = {}
     for stage_id in ordered_stage_ids:
@@ -552,6 +765,7 @@ def build_notebook_stage_graph(
         "edges": edges,
         "diagnostics": diagnostics,
         "order": ordered_stage_ids,
+        "paths": paths,
         "defaultSelectedStageId": default_selected,
     }
 
@@ -603,34 +817,57 @@ class MaterializedStageManager:
         notebook_id: str,
         notebook_title: str = "",
         cells: Iterable[dict[str, object]],
+        pipeline_paths: Iterable[dict[str, object]] | None = None,
     ) -> dict[str, object]:
-        return build_notebook_stage_graph(
+        graph = build_notebook_stage_graph(
             notebook_id=notebook_id,
             notebook_title=notebook_title,
             cells=cells,
             state=self._store.read_state(),
             published_products_for_source=self._published_products_for_source,
+            pipeline_paths=pipeline_paths,
         )
+        with self._lock:
+            active_runs = [
+                dict(item)
+                for item in self._active_runs.values()
+                if item.get("notebookId") == notebook_id
+            ]
+        if active_runs:
+            self._apply_active_runs_to_graph(graph, active_runs)
+        graph["activeRuns"] = active_runs
+        return graph
 
     def run_pipeline(
         self,
         *,
         notebook_id: str,
         notebook_title: str = "",
+        start_stage_id: str = "",
         cells: Iterable[dict[str, object]],
+        pipeline_paths: Iterable[dict[str, object]] | None = None,
     ) -> dict[str, object]:
         graph = self.graph_payload(
             notebook_id=notebook_id,
             notebook_title=notebook_title,
             cells=cells,
+            pipeline_paths=pipeline_paths,
         )
+        ordered_stage_ids = [str(item) for item in graph.get("order", [])]
+        diagnostic_stage_ids = None
+        normalized_start_stage_id = str(start_stage_id or "").strip()
+        if normalized_start_stage_id:
+            if normalized_start_stage_id not in set(ordered_stage_ids):
+                raise ValueError(f"Unknown stage: {normalized_start_stage_id}")
+            diagnostic_stage_ids = self._stage_and_successor_ids(graph, normalized_start_stage_id)
+            ordered_stage_ids = [stage_id for stage_id in ordered_stage_ids if stage_id in diagnostic_stage_ids]
         return self._start_run(
             graph=graph,
             notebook_id=notebook_id,
             notebook_title=notebook_title,
-            stage_ids=[str(item) for item in graph.get("order", [])],
-            force=False,
-            diagnostic_stage_ids=None,
+            stage_ids=ordered_stage_ids,
+            force=True,
+            diagnostic_stage_ids=diagnostic_stage_ids,
         )
 
     def run_stage(
@@ -640,11 +877,13 @@ class MaterializedStageManager:
         stage_id: str,
         notebook_title: str = "",
         cells: Iterable[dict[str, object]],
+        pipeline_paths: Iterable[dict[str, object]] | None = None,
     ) -> dict[str, object]:
         graph = self.graph_payload(
             notebook_id=notebook_id,
             notebook_title=notebook_title,
             cells=cells,
+            pipeline_paths=pipeline_paths,
         )
         normalized_stage_id = str(stage_id or "").strip()
         if normalized_stage_id not in {str(node.get("stageId")) for node in graph.get("nodes", [])}:
@@ -687,6 +926,16 @@ class MaterializedStageManager:
                     can_cancel=False,
                 )
             )
+        return self.state_payload()
+
+    def cancel_pipeline(self, *, notebook_id: str) -> dict[str, object]:
+        normalized_notebook_id = str(notebook_id or "").strip()
+        with self._lock:
+            for run in self._active_runs.values():
+                if run.get("notebookId") == normalized_notebook_id:
+                    run["cancelRequested"] = True
+                    run["status"] = "cancelling"
+        self._publish_state()
         return self.state_payload()
 
     def wait_for_idle(self, timeout: float = 10.0) -> None:
@@ -785,6 +1034,29 @@ class MaterializedStageManager:
             queue.extend(predecessor_map.get(predecessor_id, []))
         return required
 
+    @staticmethod
+    def _stage_and_successor_ids(graph: dict[str, object], stage_id: str) -> set[str]:
+        successor_map: dict[str, list[str]] = {}
+        for node in graph.get("nodes", []) or []:
+            if not isinstance(node, dict):
+                continue
+            source_id = str(node.get("stageId") or "").strip()
+            if not source_id:
+                continue
+            for successor_id in node.get("successorStageIds", []) or []:
+                normalized_successor_id = str(successor_id or "").strip()
+                if normalized_successor_id:
+                    successor_map.setdefault(source_id, []).append(normalized_successor_id)
+        required = {str(stage_id or "").strip()}
+        queue = deque(successor_map.get(str(stage_id or "").strip(), []))
+        while queue:
+            successor_id = queue.popleft()
+            if not successor_id or successor_id in required:
+                continue
+            required.add(successor_id)
+            queue.extend(successor_map.get(successor_id, []))
+        return required
+
     def _run_cancelled(self, run_id: str) -> bool:
         with self._lock:
             return bool(self._active_runs.get(run_id, {}).get("cancelRequested"))
@@ -814,6 +1086,10 @@ class MaterializedStageManager:
                 node = node_by_id.get(stage_id)
                 if not node:
                     continue
+                with self._lock:
+                    run = self._active_runs.get(run_id)
+                    if run is not None:
+                        run["currentStageId"] = stage_id
                 if self._run_cancelled(run_id):
                     self._append_record(
                         self._record_for_node(
@@ -875,8 +1151,10 @@ class MaterializedStageManager:
         status: str,
         message: str = "",
         error: str = "",
+        started_at: str = "",
     ) -> StageRecord:
         now = utc_now_iso()
+        normalized_started_at = started_at or now
         return StageRecord(
             run_id=run_id,
             notebook_id=str(node.get("notebookId") or ""),
@@ -885,7 +1163,7 @@ class MaterializedStageManager:
             stage_alias=str(node.get("alias") or ""),
             stage_title=str(node.get("title") or ""),
             status=status,
-            started_at=now,
+            started_at=normalized_started_at,
             completed_at=now if status in TERMINAL_STAGE_STATUSES else "",
             updated_at=now,
             message=message,
@@ -918,8 +1196,9 @@ class MaterializedStageManager:
         predecessor_stage_ids: list[str],
     ) -> None:
         notebook_id = str(graph.get("notebookId") or "")
+        started_at = utc_now_iso()
         running_record = self._record_for_node(run_id, {**node, "notebookId": notebook_id}, status="running")
-        running_record.started_at = utc_now_iso()
+        running_record.started_at = started_at
         running_record.completed_at = ""
         running_record.can_cancel = True
         self._append_record(running_record)
@@ -963,6 +1242,7 @@ class MaterializedStageManager:
                 revision_id=revision_id,
                 predecessor_records=[record for record in predecessor_records if record is not None],
                 predecessor_revision_ids=predecessor_revision_ids,
+                started_at=started_at,
             )
             completed.changed_result = bool(
                 previous_record
@@ -972,12 +1252,11 @@ class MaterializedStageManager:
             )
             self._append_record(completed)
             self._clear_stage_obsolete_state(notebook_id, str(node.get("stageId") or ""))
-            if completed.changed_result:
-                self._mark_descendants_obsolete(
-                    graph,
-                    changed_stage_id=str(node.get("stageId") or ""),
-                    changed_revision_id=completed.revision_id,
-                )
+            self._mark_descendants_obsolete(
+                graph,
+                changed_stage_id=str(node.get("stageId") or ""),
+                changed_revision_id=completed.revision_id,
+            )
             if self._metadata_refresher is not None:
                 self._metadata_refresher()
         except InterruptedError as exc:
@@ -987,6 +1266,7 @@ class MaterializedStageManager:
                     {**node, "notebookId": notebook_id},
                     status="cancelled",
                     message=str(exc),
+                    started_at=started_at,
                 )
             )
         except Exception as exc:
@@ -996,6 +1276,7 @@ class MaterializedStageManager:
                     {**node, "notebookId": notebook_id},
                     status="failed",
                     error=str(exc),
+                    started_at=started_at,
                 )
             )
             raise
@@ -1012,6 +1293,7 @@ class MaterializedStageManager:
         revision_id: str,
         predecessor_records: list[StageRecord],
         predecessor_revision_ids: list[str],
+        started_at: str,
     ) -> StageRecord:
         notebook_id = str(graph.get("notebookId") or "")
         stage_id = str(node.get("stageId") or "")
@@ -1117,12 +1399,38 @@ class MaterializedStageManager:
             metadata_key=metadata_key,
             output_path=f"s3://{bucket}/{output_key}",
             query_path=s3_query_alias(bucket=bucket, key=output_key, display_name="data.parquet"),
-            started_at=now,
+            started_at=started_at or now,
             completed_at=now,
             updated_at=now,
             message=f"Materialized {row_count} rows.",
             can_cancel=False,
         )
+
+    @staticmethod
+    def _apply_active_runs_to_graph(graph: dict[str, object], active_runs: list[dict[str, object]]) -> None:
+        nodes = graph.get("nodes")
+        if not isinstance(nodes, list):
+            return
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            stage_id = str(node.get("stageId") or "")
+            for run in active_runs:
+                stage_ids = {str(item) for item in run.get("stageIds", []) or []}
+                if stage_id not in stage_ids:
+                    continue
+                run_id = str(run.get("runId") or "")
+                latest_run = node.get("latestRun")
+                latest_run_id = str(latest_run.get("runId") or "") if isinstance(latest_run, dict) else ""
+                latest_status = str(latest_run.get("status") or "").lower() if isinstance(latest_run, dict) else ""
+                if latest_run_id == run_id and latest_status in TERMINAL_STAGE_STATUSES:
+                    break
+                if latest_run_id == run_id and latest_status == "running":
+                    node["status"] = "running"
+                else:
+                    node["status"] = "queued"
+                node["activeRun"] = dict(run)
+                break
 
     def _bootstrap_stage_views(self, connection: Any, predecessor_records: list[StageRecord]) -> None:
         if not predecessor_records:
@@ -1218,7 +1526,7 @@ class MaterializedStageManager:
         for descendant_id in descendants:
             notebook_states[descendant_id] = {
                 "status": "obsolete",
-                "reason": "A predecessor was re-materialized with changed results.",
+                "reason": "A predecessor was re-materialized and this stage should be rerun.",
                 "changedPredecessorStageId": changed_stage_id,
                 "changedPredecessorRevisionId": changed_revision_id,
                 "updatedAt": now,

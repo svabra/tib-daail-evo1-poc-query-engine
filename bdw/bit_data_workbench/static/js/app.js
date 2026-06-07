@@ -119,6 +119,7 @@ import { createQueryRunsController } from "./query-runs-controller.js";
 import { createQuerySourceValidationController } from "./query-source-validation-controller.js";
 import { createQueryUi } from "./query-ui.js";
 import { createQueryWorkbenchEntryController } from "./query-workbench-entry-controller.js";
+import { createAppTooltipController } from "./app-tooltip-controller.js";
 import {
   applyOptimisticQueryJobSnapshot,
   compareQueryJobsByCompletedAt,
@@ -170,6 +171,8 @@ import { createSourceTreeController } from "./source-tree-controller.js";
 import { formatSqlText } from "./sql-formatter.js";
 import { createWorkbenchNavigationController } from "./workbench-navigation-controller.js";
 import { createWorkbenchStorage } from "./workbench-storage.js";
+
+createAppTooltipController().install();
 
 const editorRegistry = new WeakMap();
 const editorSizingRegistry = new WeakMap();
@@ -1051,6 +1054,7 @@ const {
   normalizeCellQueryOptions,
   normalizeCellLanguage,
   normalizeNotebookCells,
+  normalizePipelinePaths,
   normalizeNotebookPipelineMode,
   normalizeNotebookSummaryValue,
   normalizeNotebookTitleValue,
@@ -1073,6 +1077,7 @@ const { buildWorkspaceMarkup, cellSourceSummaryMarkup } = createNotebookWorkspac
   formatVersionTimestamp,
   normalizeCellStage,
   normalizeNotebookCells,
+  normalizePipelinePaths,
   normalizeTags,
   pythonResultPanelMarkup,
   preferredSqlEditorRows,
@@ -1136,10 +1141,12 @@ notebookStagePipelineController = createNotebookStagePipelineController({
   createCellId,
   escapeHtml,
   fetchJsonOrThrow,
+  formatQueryDuration,
   getCurrentNotebookId: currentWorkspaceNotebookId,
   getNotebookMetadata: notebookMetadata,
   normalizeCellLanguage,
   normalizeCellStage,
+  normalizePipelinePaths,
   normalizeNotebookPipelineMode,
   openPublishDialogForSource: async (source) => {
     await dataProductsController.openPublishDialog({
@@ -1153,6 +1160,7 @@ notebookStagePipelineController = createNotebookStagePipelineController({
   revealDataSourceSidebarBrowser,
   setCellStage,
   setNotebookCells,
+  setNotebookPipelinePaths,
   setNotebookPipelineMode,
   showConfirmDialog,
   showMessageDialog,
@@ -3940,6 +3948,7 @@ function createNotebookLinkElement(notebookId, metadata) {
   link.dataset.defaultNotebookTitle = metadata.title;
   link.dataset.defaultNotebookSummary = metadata.summary;
   link.dataset.defaultNotebookPipelineMode = normalizeNotebookPipelineMode(metadata.pipelineMode);
+  link.dataset.defaultNotebookPipelinePaths = JSON.stringify(normalizePipelinePaths(metadata.pipelinePaths));
   link.dataset.defaultNotebookVersions = JSON.stringify(metadata.versions ?? []);
   link.dataset.defaultNotebookCells = JSON.stringify(
     (metadata.cells ?? []).map((cell) => ({
@@ -4036,6 +4045,7 @@ function notebookMetadata(notebookId) {
       title: normalizeNotebookTitleValue(defaults.title),
       summary: normalizeNotebookSummaryValue(defaults.summary),
       pipelineMode: normalizeNotebookPipelineMode(defaults.pipelineMode),
+      pipelinePaths: normalizePipelinePaths(defaults.pipelinePaths),
       cells: normalizeNotebookCells(defaults.cells),
       dataSources: notebookSourceIds({ cells: defaults.cells }),
       tags: normalizeTags(defaults.tags),
@@ -4050,6 +4060,7 @@ function notebookMetadata(notebookId) {
       title: readOnlyMetadata.title,
       summary: readOnlyMetadata.summary,
       pipelineMode: readOnlyMetadata.pipelineMode,
+      pipelinePaths: readOnlyMetadata.pipelinePaths,
       tags: readOnlyMetadata.tags,
       cells: readOnlyMetadata.cells,
       deleted: false,
@@ -4068,6 +4079,7 @@ function notebookMetadata(notebookId) {
   const resolvedTitle = normalizeNotebookTitleValue(storedState.title, defaults.title);
   const resolvedSummary = normalizeNotebookSummaryValue(storedState.summary, defaults.summary);
   const resolvedPipelineMode = normalizeNotebookPipelineMode(storedState.pipelineMode, defaults.pipelineMode);
+  const resolvedPipelinePaths = normalizePipelinePaths(storedState.pipelinePaths, defaults.pipelinePaths);
   const baseMetadata = {
     ...defaults,
     notebookId,
@@ -4076,6 +4088,7 @@ function notebookMetadata(notebookId) {
     createdAt: defaults.createdAt,
     linkedGeneratorId: defaults.linkedGeneratorId,
     pipelineMode: resolvedPipelineMode,
+    pipelinePaths: resolvedPipelinePaths,
     cells,
     dataSources: notebookSourceIds({ cells }),
     tags: normalizeTags(storedState.tags ?? defaults.tags),
@@ -4110,6 +4123,7 @@ function notebookMetadata(notebookId) {
       title: normalizeNotebookTitleValue(currentState.title, baseMetadata.title),
       summary: normalizeNotebookSummaryValue(currentState.summary, baseMetadata.summary),
       pipelineMode: normalizeNotebookPipelineMode(currentState.pipelineMode, baseMetadata.pipelineMode),
+      pipelinePaths: normalizePipelinePaths(currentState.pipelinePaths, baseMetadata.pipelinePaths),
       tags: currentState.tags ?? baseMetadata.tags,
       cells: currentState.cells ?? baseMetadata.cells,
       shared: currentState.shared ?? baseMetadata.shared,
@@ -4191,6 +4205,7 @@ function sharedNotebookPayload(notebookId) {
     summary: metadata.summary,
     tags: normalizeTags(metadata.tags),
     pipelineMode: normalizeNotebookPipelineMode(metadata.pipelineMode),
+    pipelinePaths: normalizePipelinePaths(metadata.pipelinePaths),
     treePath: notebookTreePathForId(notebookId),
     linkedGeneratorId: metadata.linkedGeneratorId || "",
     createdAt: metadata.createdAt || new Date().toISOString(),
@@ -4228,6 +4243,7 @@ function metadataFromSharedNotebookPayload(notebook) {
     title: normalizeNotebookTitleValue(notebook?.title),
     summary: normalizeNotebookSummaryValue(notebook?.summary),
     pipelineMode: normalizeNotebookPipelineMode(notebook?.pipelineMode),
+    pipelinePaths: normalizePipelinePaths(notebook?.pipelinePaths),
     createdAt: String(notebook?.createdAt || new Date().toISOString()),
     linkedGeneratorId: String(notebook?.linkedGeneratorId || ""),
     cells,
@@ -4255,6 +4271,7 @@ function writeNotebookDefaultsToMetaRoot(metaRoot, metadata) {
   metaRoot.dataset.defaultTitle = metadata.title;
   metaRoot.dataset.defaultSummary = metadata.summary;
   metaRoot.dataset.defaultPipelineMode = normalizeNotebookPipelineMode(metadata.pipelineMode);
+  metaRoot.dataset.defaultPipelinePaths = JSON.stringify(normalizePipelinePaths(metadata.pipelinePaths));
   metaRoot.dataset.createdAt = metadata.createdAt;
   metaRoot.dataset.defaultCreatedAt = metadata.createdAt;
   metaRoot.dataset.linkedGeneratorId = metadata.linkedGeneratorId || "";
@@ -4669,6 +4686,7 @@ function updateSidebarNotebookLink(link, metadata) {
   link.dataset.defaultNotebookTitle = metadata.title;
   link.dataset.defaultNotebookSummary = metadata.summary;
   link.dataset.defaultNotebookPipelineMode = normalizeNotebookPipelineMode(metadata.pipelineMode);
+  link.dataset.defaultNotebookPipelinePaths = JSON.stringify(normalizePipelinePaths(metadata.pipelinePaths));
   link.dataset.defaultNotebookVersions = JSON.stringify(metadata.versions ?? []);
   link.dataset.defaultNotebookDataSources = normalizeDataSources(metadata.dataSources).join("||");
   link.dataset.defaultNotebookTags = normalizeTags(metadata.tags ?? []).join("||");
@@ -4771,6 +4789,39 @@ function setNotebookPipelineMode(notebookId, pipelineMode, options = {}) {
     applyNotebookMetadata();
   }
   scheduleSharedNotebookSync(notebookId);
+  return metadata;
+}
+
+function setNotebookPipelinePaths(notebookId, pipelinePaths, options = {}) {
+  persistNotebookDraft(notebookId, { pipelinePaths: normalizePipelinePaths(pipelinePaths) });
+  const metadata = notebookMetadata(notebookId);
+  const syncSharedNotebook = () => {
+    if (options.syncNow) {
+      const existingHandle = sharedNotebookSyncHandles.get(notebookId);
+      if (existingHandle) {
+        window.clearTimeout(existingHandle);
+        sharedNotebookSyncHandles.delete(notebookId);
+      }
+      syncSharedNotebookNow(notebookId).catch((error) => {
+        console.error("Failed to sync shared notebook pipeline paths.", error);
+      });
+      return;
+    }
+    scheduleSharedNotebookSync(notebookId);
+  };
+  if (options.silent) {
+    recordNotebookActivity(notebookId, "edited");
+    syncSharedNotebook();
+    return metadata;
+  }
+  notebookLinks(notebookId).forEach((link) => updateSidebarNotebookLink(link, metadata));
+  recordNotebookActivity(notebookId, "edited");
+  if (options.rerender) {
+    renderLocalNotebookWorkspace(notebookId);
+  } else {
+    applyNotebookMetadata();
+  }
+  syncSharedNotebook();
   return metadata;
 }
 
@@ -5536,6 +5587,7 @@ async function createNotebook(targetContainer, initialMetadata = {}) {
     title: initialMetadata.title ?? defaultLocalNotebookTitle(),
     summary: initialMetadata.summary ?? "Describe this notebook.",
     pipelineMode: normalizeNotebookPipelineMode(initialMetadata.pipelineMode),
+    pipelinePaths: normalizePipelinePaths(initialMetadata.pipelinePaths),
     cells: normalizeNotebookCells(initialMetadata.cells ?? [createEmptyCellState()]),
     tags: normalizeTags(initialMetadata.tags ?? []),
     canEdit: true,
@@ -5964,6 +6016,7 @@ function applyWorkspaceMetadata(metaRoot, metadata) {
   metaRoot.dataset.canEdit = metadata.canEdit ? "true" : "false";
   metaRoot.dataset.canDelete = metadata.canDelete ? "true" : "false";
   metaRoot.dataset.defaultPipelineMode = normalizeNotebookPipelineMode(metadata.pipelineMode);
+  metaRoot.dataset.defaultPipelinePaths = JSON.stringify(normalizePipelinePaths(metadata.pipelinePaths));
   metaRoot.dataset.defaultCells = JSON.stringify(
     (metadata.cells ?? []).map((cell) => ({
       cellId: cell.cellId,
@@ -6185,6 +6238,7 @@ function copyNotebook(notebookId) {
       })
     ),
     pipelineMode: normalizeNotebookPipelineMode(sourceMetadata.pipelineMode),
+    pipelinePaths: normalizePipelinePaths(sourceMetadata.pipelinePaths),
     tags: [...normalizeTags(sourceMetadata.tags)],
     canEdit: true,
     canDelete: true,

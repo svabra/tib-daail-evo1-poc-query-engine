@@ -93,6 +93,8 @@
           data-created-at="{{ notebook.created_at }}"
           data-default-notebook-title="{{ notebook.title }}"
           data-default-notebook-summary="{{ notebook.summary }}"
+          data-default-notebook-pipeline-mode="{{ notebook.pipeline_mode }}"
+          data-default-notebook-pipeline-paths='{{ (notebook.pipeline_paths | default([])) | tojson }}'
           data-default-notebook-cells='{{ notebook.cells_payload | tojson }}'
           data-default-notebook-versions='{{ notebook.versions_payload | tojson }}'
           data-notebook-data-sources="{{ notebook.data_sources | join('||') }}"

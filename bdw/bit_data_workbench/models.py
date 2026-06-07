@@ -256,6 +256,7 @@ class NotebookDefinition:
     tree_path: tuple[str, ...] = ()
     linked_generator_id: str = ""
     pipeline_mode: str = "exploration"
+    pipeline_paths: list[dict[str, Any]] = field(default_factory=list)
     can_edit: bool = True
     can_delete: bool = True
     shared: bool = False
@@ -326,6 +327,7 @@ class NotebookDefinition:
             "treePath": list(self.tree_path),
             "linkedGeneratorId": self.linked_generator_id,
             "pipelineMode": self.pipeline_mode,
+            "pipelinePaths": list(self.pipeline_paths),
             "canEdit": self.can_edit,
             "canDelete": self.can_delete,
             "shared": self.shared,

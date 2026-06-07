@@ -31,6 +31,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
     formatVersionTimestamp,
     normalizeCellStage,
     normalizeNotebookCells,
+    normalizePipelinePaths,
     normalizeTags,
     pythonResultPanelMarkup,
     preferredSqlEditorRows,
@@ -377,6 +378,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
         data-default-created-at="${escapeHtml(metadata.createdAt || new Date().toISOString())}"
         data-linked-generator-id="${escapeHtml(metadata.linkedGeneratorId || "")}" 
         data-default-pipeline-mode="${escapeHtml(pipelineMode)}"
+        data-default-pipeline-paths='${escapeHtml(JSON.stringify(normalizePipelinePaths(metadata.pipelinePaths)))}'
         data-default-cells='${escapeHtml(JSON.stringify((metadata.cells ?? []).map((cell) => ({
           cellId: cell.cellId,
           language: normalizeCellLanguage(cell.language),
@@ -496,10 +498,25 @@ export function createNotebookWorkspaceMarkup(helpers) {
             </div>
             <div class="notebook-pipeline-header-actions">
               <p class="notebook-pipeline-status" data-notebook-pipeline-status>Pipeline graph has not been built yet.</p>
+              <p class="notebook-pipeline-total-duration" data-notebook-pipeline-total-duration>Total duration -</p>
+              <button
+                type="button"
+                class="notebook-pipeline-priority-button"
+                data-pipeline-priority-paths
+                aria-expanded="false"
+                data-pipeline-tooltip="Prioritize terminal paths when branches are ready to run."
+                disabled
+              >
+                <span data-pipeline-priority-summary>Priority paths</span>
+              </button>
               <div class="notebook-pipeline-actions"${pipelineMode === "pipeline" ? "" : " hidden"} data-notebook-pipeline-actions>
-                <button type="button" class="notebook-pipeline-run-button" data-run-notebook-pipeline title="Run all pipeline stages in dependency order">
+                <button type="button" class="notebook-pipeline-run-button" data-run-notebook-pipeline aria-label="Run all pipeline stages in dependency order" data-pipeline-tooltip="Runs all stages in dependency order; priority paths run first when branches fork.">
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16l14-8z"></path></svg>
                   <span>Run pipeline</span>
+                </button>
+                <button type="button" class="notebook-pipeline-cancel-button" data-cancel-notebook-pipeline aria-label="Abort the active pipeline run" data-pipeline-tooltip="Abort the active pipeline run" hidden>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10"></rect></svg>
+                  <span>Abort pipeline</span>
                 </button>
               </div>
             </div>
@@ -507,16 +524,38 @@ export function createNotebookWorkspaceMarkup(helpers) {
           <div class="notebook-pipeline-graph-band" data-notebook-pipeline-graph></div>
           <div class="notebook-pipeline-table-wrap">
             <table class="notebook-pipeline-table">
+              <colgroup>
+                <col class="pipeline-col-stage">
+                <col class="pipeline-col-run">
+                <col class="pipeline-col-status">
+                <col class="pipeline-col-dependencies">
+                <col class="pipeline-col-duration">
+                <col class="pipeline-col-rows">
+                <col class="pipeline-col-actions">
+              </colgroup>
               <thead>
                 <tr>
                   <th>Stage</th>
+                  <th></th>
                   <th>Status</th>
                   <th>Dependencies</th>
+                  <th>Duration</th>
                   <th>Rows</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody data-notebook-pipeline-table></tbody>
+              <tfoot>
+                <tr class="pipeline-stage-total-row">
+                  <td></td>
+                  <td></td>
+                  <td></td>
+                  <td class="pipeline-table-total-label">Total duration</td>
+                  <td><span class="pipeline-table-duration pipeline-table-total-duration" data-notebook-pipeline-table-duration-total>-</span></td>
+                  <td></td>
+                  <td></td>
+                </tr>
+              </tfoot>
             </table>
           </div>
         </section>

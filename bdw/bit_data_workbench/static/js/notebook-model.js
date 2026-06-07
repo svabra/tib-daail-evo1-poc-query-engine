@@ -23,6 +23,49 @@ export function createNotebookModel(helpers) {
     return fallback === "pipeline" ? "pipeline" : "exploration";
   }
 
+  function normalizePipelinePaths(value, fallback = []) {
+    const source = Array.isArray(value) ? value : Array.isArray(fallback) ? fallback : [];
+    const seen = new Set();
+    const normalized = [];
+    source.forEach((item, index) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return;
+      }
+      let terminalStageId = String(item.terminalStageId ?? item.terminal_stage_id ?? "").trim();
+      let pathId = String(item.pathId ?? item.path_id ?? "").trim();
+      if (!terminalStageId && pathId.startsWith("path-")) {
+        terminalStageId = pathId.slice(5);
+      }
+      if (!pathId && terminalStageId) {
+        pathId = `path-${terminalStageId}`;
+      }
+      if (!terminalStageId && !pathId) {
+        return;
+      }
+      const key = terminalStageId || pathId;
+      if (seen.has(key)) {
+        return;
+      }
+      seen.add(key);
+      const priority = Number.parseInt(item.priority ?? item.rank ?? index + 1, 10);
+      normalized.push({
+        pathId,
+        terminalStageId,
+        label: String(item.label ?? item.name ?? "").trim(),
+        priority: Number.isFinite(priority) && priority > 0 ? priority : index + 1,
+        index,
+      });
+    });
+    return normalized
+      .sort((left, right) => left.priority - right.priority || left.index - right.index)
+      .map((item, index) => ({
+        pathId: item.pathId,
+        terminalStageId: item.terminalStageId,
+        label: item.label,
+        priority: index + 1,
+      }));
+  }
+
   function normalizeCellStage(value, fallback = {}) {
     const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
     const fallbackSource =
@@ -275,6 +318,18 @@ export function createNotebookModel(helpers) {
     }
   }
 
+  function parsePipelinePathsPayload(value) {
+    if (!value) {
+      return [];
+    }
+
+    try {
+      return normalizePipelinePaths(JSON.parse(value));
+    } catch (_error) {
+      return [];
+    }
+  }
+
   function createInitialNotebookVersion(notebookId, metadata, createdAt = null) {
     return {
       versionId: `initial-${notebookId}`,
@@ -302,6 +357,8 @@ export function createNotebookModel(helpers) {
     const linkCells = parseCellsPayload(link?.dataset.defaultNotebookCells);
     const metaVersions = parseVersionsPayload(metaRoot?.dataset.defaultVersions);
     const linkVersions = parseVersionsPayload(link?.dataset.defaultNotebookVersions);
+    const metaPipelinePaths = parsePipelinePathsPayload(metaRoot?.dataset.defaultPipelinePaths);
+    const linkPipelinePaths = parsePipelinePathsPayload(link?.dataset.defaultNotebookPipelinePaths);
     const metaDataSources = parseDefaultDataSources(metaRoot?.dataset.defaultDataSources);
     const linkDataSources = parseDefaultDataSources(link?.dataset.defaultNotebookDataSources);
     const legacyDataSource = sourceIdFromLegacyTargetLabel(
@@ -348,6 +405,7 @@ export function createNotebookModel(helpers) {
       pipelineMode: normalizeNotebookPipelineMode(
         metaRoot?.dataset.defaultPipelineMode ?? link?.dataset.defaultNotebookPipelineMode
       ),
+      pipelinePaths: metaPipelinePaths.length ? metaPipelinePaths : linkPipelinePaths,
       cells: normalizeNotebookCells(metaCells.length ? metaCells : linkCells, {
         language: "sql",
         dataSources: fallbackDataSources,
@@ -389,6 +447,10 @@ export function createNotebookModel(helpers) {
         storedState.pipelineMode !== undefined
           ? normalizeNotebookPipelineMode(storedState.pipelineMode)
           : undefined,
+      pipelinePaths:
+        storedState.pipelinePaths !== undefined
+          ? normalizePipelinePaths(storedState.pipelinePaths)
+          : undefined,
       tags: Array.isArray(storedState.tags) ? normalizeTags(storedState.tags) : undefined,
       cells:
         Array.isArray(storedState.cells) && storedState.cells.length
@@ -424,6 +486,7 @@ export function createNotebookModel(helpers) {
     normalizeCellEntry,
     normalizeCellStage,
     normalizeCellQueryOptions,
+    normalizePipelinePaths,
     normalizeNotebookPipelineMode,
     normalizeNotebookCells,
     normalizeNotebookSummaryValue,
