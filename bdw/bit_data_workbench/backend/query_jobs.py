@@ -1998,7 +1998,7 @@ class QueryJobManager:
     @staticmethod
     def _compact_source_summary(summary: dict[str, object]) -> dict[str, object]:
         compact: dict[str, object] = {}
-        for key in ("relation", "query_alias", "bucket", "key", "path", "format"):
+        for key in ("relation", "query_reference", "query_alias", "bucket", "key", "path", "format"):
             value = summary.get(key)
             if value not in (None, "", [], {}):
                 compact[key] = _truncate_log_text(value, QUERY_LOG_MAX_TEXT_CHARS)

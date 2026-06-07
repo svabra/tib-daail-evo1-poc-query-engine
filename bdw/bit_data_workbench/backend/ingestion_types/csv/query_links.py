@@ -97,6 +97,8 @@ def _find_query_source(
             "schemaLabel": str(schema.label or schema.name),
             "relation": source_object.relation,
             "queryAlias": str(getattr(source_object, "query_alias", "") or ""),
+            "queryReference": str(getattr(source_object, "query_reference", "") or ""),
+            "querySql": str(getattr(source_object, "query_sql", "") or ""),
             "name": source_object.name,
         }
 

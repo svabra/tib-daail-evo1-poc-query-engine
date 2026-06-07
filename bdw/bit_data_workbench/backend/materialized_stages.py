@@ -17,7 +17,8 @@ from typing import Any
 from botocore.exceptions import BotoCoreError, ClientError
 
 from ..config import Settings
-from .query_aliases import normalize_query_alias_segment, s3_query_alias
+from .query_aliases import normalize_query_alias_segment
+from .source_references import s3_source_reference, s3_table_function_sql
 from .s3_storage import s3_client
 from .sql_utils import qualified_name, sql_literal
 
@@ -141,6 +142,8 @@ class StageRecord:
     metadata_key: str = ""
     output_path: str = ""
     query_path: str = ""
+    query_reference: str = ""
+    query_sql: str = ""
     started_at: str = ""
     completed_at: str = ""
     updated_at: str = ""
@@ -183,6 +186,8 @@ class StageRecord:
             "metadataKey": self.metadata_key,
             "outputPath": self.output_path,
             "queryPath": self.query_path,
+            "queryReference": self.query_reference or self.query_path,
+            "querySql": self.query_sql,
             "startedAt": self.started_at,
             "completedAt": self.completed_at,
             "updatedAt": self.updated_at,
@@ -203,6 +208,19 @@ class StageRecord:
         cell_id = str(payload.get("cellId") or "").strip()
         if not run_id or not notebook_id or not stage_id:
             return None
+        output_bucket = str(payload.get("outputBucket") or "").strip()
+        output_key = str(payload.get("outputKey") or "").strip()
+        query_reference = str(payload.get("queryReference") or "").strip()
+        if not query_reference and output_bucket and output_key:
+            query_reference = s3_source_reference(bucket=output_bucket, key=output_key)
+        query_path = str(payload.get("queryPath") or "").strip() or query_reference
+        query_sql = str(payload.get("querySql") or "").strip()
+        if not query_sql and output_bucket and output_key:
+            query_sql = s3_table_function_sql(
+                bucket=output_bucket,
+                key=output_key,
+                file_format="parquet",
+            )
         return cls(
             run_id=run_id,
             notebook_id=notebook_id,
@@ -222,11 +240,13 @@ class StageRecord:
             row_count=max(0, int(payload.get("rowCount") or 0)),
             size_bytes=max(0, int(payload.get("sizeBytes") or 0)),
             result_fingerprint=str(payload.get("resultFingerprint") or "").strip(),
-            output_bucket=str(payload.get("outputBucket") or "").strip(),
-            output_key=str(payload.get("outputKey") or "").strip(),
+            output_bucket=output_bucket,
+            output_key=output_key,
             metadata_key=str(payload.get("metadataKey") or "").strip(),
             output_path=str(payload.get("outputPath") or "").strip(),
-            query_path=str(payload.get("queryPath") or "").strip(),
+            query_path=query_path,
+            query_reference=query_reference,
+            query_sql=query_sql,
             started_at=str(payload.get("startedAt") or "").strip(),
             completed_at=str(payload.get("completedAt") or "").strip(),
             updated_at=str(payload.get("updatedAt") or "").strip(),
@@ -1379,6 +1399,12 @@ class MaterializedStageManager:
         self._object_writer(bucket, output_key, local_output, metadata_key, metadata)
         shutil.rmtree(temp_dir, ignore_errors=True)
         now = utc_now_iso()
+        query_reference = s3_source_reference(bucket=bucket, key=output_key)
+        query_sql = s3_table_function_sql(
+            bucket=bucket,
+            key=output_key,
+            file_format="parquet",
+        )
         return StageRecord(
             run_id=run_id,
             notebook_id=notebook_id,
@@ -1398,7 +1424,9 @@ class MaterializedStageManager:
             output_key=output_key,
             metadata_key=metadata_key,
             output_path=f"s3://{bucket}/{output_key}",
-            query_path=s3_query_alias(bucket=bucket, key=output_key, display_name="data.parquet"),
+            query_path=query_reference,
+            query_reference=query_reference,
+            query_sql=query_sql,
             started_at=started_at or now,
             completed_at=now,
             updated_at=now,

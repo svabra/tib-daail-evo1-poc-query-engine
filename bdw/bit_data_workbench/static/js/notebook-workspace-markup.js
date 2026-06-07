@@ -494,7 +494,10 @@ export function createNotebookWorkspaceMarkup(helpers) {
         <section class="notebook-pipeline-panel"${pipelineMode === "pipeline" ? "" : " hidden"} data-notebook-pipeline-panel>
           <div class="notebook-pipeline-header">
             <div>
-              <span class="workspace-tags-label">Notebook Pipeline</span>
+              <span class="notebook-pipeline-title-row">
+                <span class="workspace-tags-label">Notebook Pipeline</span>
+                <span class="notebook-pipeline-running-indicator" data-notebook-pipeline-running-indicator hidden aria-label="Pipeline is running"></span>
+              </span>
             </div>
             <div class="notebook-pipeline-header-actions">
               <p class="notebook-pipeline-status" data-notebook-pipeline-status>Pipeline graph has not been built yet.</p>

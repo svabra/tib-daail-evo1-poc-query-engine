@@ -490,7 +490,12 @@ class SharedNotebookServiceTests(unittest.TestCase):
         _, notebook_cell_type, notebook_type, _, _, _ = (
             import_shared_notebook_components()
         )
-        from bit_data_workbench.models import SourceCatalog, SourceObject, SourceSchema
+        from bit_data_workbench.models import (
+            NotebookVersionDefinition,
+            SourceCatalog,
+            SourceObject,
+            SourceSchema,
+        )
 
         existing_seed = notebook_type(
             notebook_id="mwa-abrechnung-s3-parquet-pipeline",
@@ -661,6 +666,79 @@ class SharedNotebookServiceTests(unittest.TestCase):
             "Run MWA Loader",
             "\n".join(str(cell.stage.get("title") or "") for cell in seeded.cells),
         )
+        self.assertEqual(rebuild_calls, ["rebuild"])
+
+    def test_shared_notebook_source_reference_migration_rewrites_known_legacy_s3_aliases(
+        self,
+    ) -> None:
+        from bit_data_workbench.backend.source_references import s3_source_reference
+        from bit_data_workbench.models import (
+            NotebookVersionDefinition,
+            SourceCatalog,
+            SourceObject,
+            SourceSchema,
+        )
+
+        _, notebook_cell_type, notebook_type, _, _, _ = import_shared_notebook_components()
+        legacy_alias = "s3.vat_smoke_test.generated.vat_smoke.part_00001.parquet"
+        query_reference = s3_source_reference(
+            bucket="vat-smoke-test",
+            key="generated/vat_smoke/part_00001.parquet",
+        )
+        notebook = notebook_type(
+            notebook_id="legacy-s3-notebook",
+            title="Legacy S3 Notebook",
+            summary="Legacy alias",
+            cells=[
+                notebook_cell_type(
+                    cell_id="cell-1",
+                    sql=f"select * from {legacy_alias}",
+                    data_sources=["workspace.s3"],
+                )
+            ],
+            saved_versions=[
+                NotebookVersionDefinition(
+                    version_id="version-1",
+                    created_at="2026-06-07T00:00:00+00:00",
+                    title="Legacy",
+                    summary="Legacy",
+                    cells=[{"cellId": "cell-1", "sql": f"select * from {legacy_alias}"}],
+                )
+            ],
+            can_edit=True,
+            can_delete=True,
+            shared=True,
+        )
+        service, rebuild_calls, _ = build_shared_notebook_service([notebook])
+        service._catalogs = [
+            SourceCatalog(
+                name="workspace",
+                connection_source_id="workspace.s3",
+                schemas=[
+                    SourceSchema(
+                        name="vat_smoke_test",
+                        objects=[
+                            SourceObject(
+                                name="vat_smoke_part_00001",
+                                kind="view",
+                                relation="vat_smoke_test.vat_smoke_part_00001",
+                                query_alias=legacy_alias,
+                                query_reference=query_reference,
+                                s3_bucket="vat-smoke-test",
+                                s3_key="generated/vat_smoke/part_00001.parquet",
+                            )
+                        ],
+                    )
+                ],
+            )
+        ]
+
+        self.assertEqual(service._migrate_shared_notebook_source_references(), 1)
+
+        migrated = service._shared_notebook_store.list_notebooks()[0]
+        self.assertIn(query_reference, migrated.cells[0].sql)
+        self.assertNotIn(legacy_alias, migrated.cells[0].sql)
+        self.assertIn(query_reference, migrated.saved_versions[0].cells[0]["sql"])
         self.assertEqual(rebuild_calls, ["rebuild"])
 
     def test_upsert_shared_notebook_preserves_python_cell_language(self) -> None:

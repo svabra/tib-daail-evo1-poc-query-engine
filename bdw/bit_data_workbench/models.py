@@ -25,6 +25,8 @@ class SourceObject:
     relation: str
     display_name: str = ""
     query_alias: str = ""
+    query_reference: str = ""
+    query_sql: str = ""
     s3_bucket: str = ""
     s3_key: str = ""
     s3_path: str = ""

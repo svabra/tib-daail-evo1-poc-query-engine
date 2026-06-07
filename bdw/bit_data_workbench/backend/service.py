@@ -5,6 +5,7 @@ import time
 import threading
 import uuid
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
@@ -96,6 +97,7 @@ from .query_aliases import (
     s3_query_alias,
     unique_query_aliases,
 )
+from .source_references import pg_source_reference, s3_source_reference, s3_table_function_sql
 from .query_source_validation import QUERY_SOURCE_INVALID, validate_query_sources
 from .query_cache import cache_preview, delete_cache, expire_cache, hydrate_cache
 from .query_options import normalize_query_options, parquet_hive_partitioning_option
@@ -526,6 +528,21 @@ class WorkbenchService:
                 )
             else:
                 self._log_startup("Startup step complete: restart-safe PoC notebooks are seeded")
+            self._log_startup_section("Migrate shared notebook source references")
+            try:
+                migrated_count = self._migrate_shared_notebook_source_references()
+            except Exception as exc:
+                self._log_startup(
+                    "Shared notebook source reference migration failed; continuing with compatibility aliases: %s",
+                    exc,
+                    level=logging.WARNING,
+                    exc_info=True,
+                )
+            else:
+                self._log_startup(
+                    "Startup step complete: migrated %d shared notebook(s) to simple source references",
+                    migrated_count,
+                )
 
         self._log_startup_section("Start data source discovery manager")
         try:
@@ -1899,10 +1916,15 @@ class WorkbenchService:
                 continue
             metadata = metadata_by_relation.get(relation, {})
             bucket = str(metadata.get("bucket") or "").strip()
-            entry = KnownRelationReference(relation=relation, bucket=bucket)
+            entry = KnownRelationReference(
+                relation=relation,
+                bucket=bucket,
+                query_sql=str(metadata.get("query_sql") or "").strip(),
+            )
             aliases = {
                 relation,
                 str(metadata.get("query_alias") or "").strip(),
+                str(metadata.get("query_reference") or "").strip(),
                 str(getattr(spec, "relation_name", "") or "").strip(),
             }
             schema_name = str(getattr(spec, "schema_name", "") or "").strip()
@@ -1942,9 +1964,13 @@ class WorkbenchService:
         local_relation_map: dict[str, str] | None = None,
     ) -> str:
         alias_map = {
-            key: value.relation
+            key: (value.query_sql if key.startswith("s3.") and value.query_sql else value.relation)
             for key, value in relation_index.items()
-            if key.startswith("s3.") and str(value.relation or "").strip()
+            if (
+                key.startswith("s3.")
+                or key.startswith("pg.")
+            )
+            and str((value.query_sql if key.startswith("s3.") else value.relation) or "").strip()
         }
         for logical_relation, physical_relation in (local_relation_map or {}).items():
             normalized_alias = normalize_query_alias_key(logical_relation)
@@ -1987,7 +2013,7 @@ class WorkbenchService:
                         continue
                     summarized_keys.add(normalized_relation)
                     spec = specs.get(relation)
-                    query_sql = str(getattr(spec, "query_sql", "") or "").strip()
+                    query_sql = str(getattr(spec, "query_sql", "") or source_object.query_sql or "").strip()
                     if spec is not None:
                         query_sql = self._s3_source_query_sql_for_options(
                             spec=spec,
@@ -1997,6 +2023,7 @@ class WorkbenchService:
                         {
                             "relation": relation,
                             "query_alias": str(source_object.query_alias or "").strip(),
+                            "query_reference": str(source_object.query_reference or "").strip(),
                             "bucket": str(source_object.s3_bucket or "").strip(),
                             "key": str(source_object.s3_key or "").strip(),
                             "path": str(source_object.s3_path or "").strip(),
@@ -2083,6 +2110,7 @@ class WorkbenchService:
         return {
             "relation": normalized_relation,
             "query_alias": str(metadata.get("query_alias") or "").strip(),
+            "query_reference": str(metadata.get("query_reference") or "").strip(),
             "bucket": bucket_name,
             "key": str(metadata.get("key") or object_key or "").strip(),
             "path": object_path,
@@ -2860,6 +2888,10 @@ class WorkbenchService:
                     "schemaName": schema_name,
                     "schemaLabel": str(next_item.get("bucket") or schema_name),
                     "relation": relation_id,
+                    "queryReference": s3_source_reference(
+                        bucket=str(next_item.get("bucket") or alias_bucket),
+                        key=str(next_item.get("objectKey") or alias_key),
+                    ),
                     "queryAlias": s3_query_alias(
                         bucket=str(next_item.get("bucket") or alias_bucket),
                         key=str(next_item.get("objectKey") or alias_key),
@@ -3480,6 +3512,81 @@ class WorkbenchService:
                     )
             if seeded_count:
                 self._rebuild_notebooks_locked()
+
+    def _source_reference_migration_alias_map(self) -> dict[str, str]:
+        alias_map: dict[str, str] = {}
+        with self._lock:
+            catalogs = list(self._catalogs)
+        for catalog in catalogs:
+            for source_schema in catalog.schemas:
+                for source_object in source_schema.objects:
+                    legacy_alias = str(source_object.query_alias or "").strip()
+                    query_reference = str(source_object.query_reference or "").strip()
+                    if (
+                        legacy_alias
+                        and query_reference
+                        and legacy_alias != query_reference
+                        and legacy_alias.startswith("s3.")
+                        and query_reference.startswith("s3.")
+                    ):
+                        alias_map[legacy_alias] = query_reference
+        return alias_map
+
+    def _migrate_shared_notebook_source_references(self) -> int:
+        alias_map = self._source_reference_migration_alias_map()
+        if not alias_map:
+            return 0
+        upsert_notebook = getattr(self._shared_notebook_store, "upsert_notebook", None)
+        if not callable(upsert_notebook):
+            return 0
+
+        migrated_count = 0
+        with self._condition:
+            for notebook in list(self._shared_notebook_store.list_notebooks()):
+                changed = False
+                migrated_cells: list[NotebookCellDefinition] = []
+                for cell in notebook.cells:
+                    migrated_sql = rewrite_query_aliases(cell.sql, alias_map)
+                    if migrated_sql != cell.sql:
+                        changed = True
+                        migrated_cells.append(replace(cell, sql=migrated_sql))
+                    else:
+                        migrated_cells.append(cell)
+
+                migrated_versions: list[NotebookVersionDefinition] = []
+                for version in notebook.saved_versions:
+                    version_changed = False
+                    migrated_version_cells: list[dict[str, Any]] = []
+                    for raw_cell in version.cells:
+                        if not isinstance(raw_cell, dict):
+                            migrated_version_cells.append(raw_cell)
+                            continue
+                        migrated_cell = dict(raw_cell)
+                        original_sql = str(migrated_cell.get("sql") or "")
+                        migrated_sql = rewrite_query_aliases(original_sql, alias_map)
+                        if migrated_sql != original_sql:
+                            migrated_cell["sql"] = migrated_sql
+                            version_changed = True
+                        migrated_version_cells.append(migrated_cell)
+                    if version_changed:
+                        changed = True
+                        migrated_versions.append(replace(version, cells=migrated_version_cells))
+                    else:
+                        migrated_versions.append(version)
+
+                if not changed:
+                    continue
+                upsert_notebook(
+                    replace(
+                        notebook,
+                        cells=migrated_cells,
+                        saved_versions=migrated_versions,
+                    )
+                )
+                migrated_count += 1
+            if migrated_count:
+                self._rebuild_notebooks_locked()
+        return migrated_count
 
     def _data_product_store_path(self) -> Path:
         return self.settings.duckdb_database.parent / "data-products.json"
@@ -4563,6 +4670,8 @@ class WorkbenchService:
                     relation=relation_id,
                     display_name=str(s3_metadata.get("display_name") or table_name),
                     query_alias=str(s3_metadata.get("query_alias") or ""),
+                    query_reference=str(s3_metadata.get("query_reference") or ""),
+                    query_sql=str(s3_metadata.get("query_sql") or ""),
                     s3_bucket=s3_bucket,
                     s3_key=str(s3_metadata.get("key") or ""),
                     s3_path=str(s3_metadata.get("path") or ""),
@@ -4685,6 +4794,16 @@ class WorkbenchService:
                     display_name=str(spec.display_name or "").strip()
                     or str(getattr(spec, "download_filename", "") or "").strip(),
                 )
+            query_reference = s3_source_reference(bucket=bucket_name, key=object_key)
+            query_sql = str(getattr(spec, "query_sql", "") or "").strip()
+            if query_sql.lower().startswith("select * from "):
+                query_sql = query_sql[len("SELECT * FROM ") :].strip()
+            if not query_sql and query_reference:
+                query_sql = s3_table_function_sql(
+                    bucket=bucket_name,
+                    key=object_key,
+                    file_format=str(spec.object_format or "").strip(),
+                )
             downloadable = (
                 not generated_parts
                 and not any(token in object_key for token in "*?[")
@@ -4695,6 +4814,8 @@ class WorkbenchService:
                 "bucket": bucket_name,
                 "key": "" if generated_parts else object_key,
                 "path": object_path,
+                "query_reference": query_reference,
+                "query_sql": query_sql,
                 "display_name": str(spec.display_name or "").strip()
                 or (
                     PurePosixPath(object_key).name

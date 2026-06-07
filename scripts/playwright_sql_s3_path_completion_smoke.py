@@ -4,7 +4,9 @@ import argparse
 import asyncio
 import contextlib
 from dataclasses import dataclass
+import json
 from pathlib import Path
+import re
 import sys
 import tempfile
 import time
@@ -26,6 +28,7 @@ from bit_data_workbench.backend.query_aliases import (  # noqa: E402
     normalize_query_alias_segment,
     s3_query_alias,
 )
+from bit_data_workbench.backend.source_references import s3_source_reference  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -33,16 +36,16 @@ class SeededS3Objects:
     csv_key: str
     parquet_key: str
     generated_parquet_keys: tuple[str, ...]
-    csv_alias: str
-    parquet_alias: str
-    generated_parquet_alias: str
+    csv_reference: str
+    parquet_reference: str
+    generated_parquet_reference: str
     duplicated_generated_parquet_alias: str
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Exercise SQL autocomplete for discovered S3 object path aliases "
+            "Exercise SQL autocomplete for discovered S3 source references "
             "and execute CSV and Parquet queries through the browser."
         )
     )
@@ -98,7 +101,7 @@ def create_parquet_payload(source_kind: str = "parquet_path_completion") -> byte
         return parquet_path.read_bytes()
 
 
-def generated_parquet_aliases(bucket: str, dataset_name: str) -> tuple[str, str]:
+def legacy_generated_parquet_aliases(bucket: str, dataset_name: str) -> tuple[str, str]:
     bucket_segment = normalize_query_alias_segment(bucket, fallback="bucket")
     dataset_segment = normalize_query_alias_segment(dataset_name, fallback="folder")
     deduplicated = (
@@ -122,9 +125,13 @@ def seed_s3_objects(args: argparse.Namespace) -> SeededS3Objects:
         f"generated/{generated_dataset}/parquet/mwa_abrechnung_entities/part-00001.parquet",
         f"generated/{generated_dataset}/parquet/mwa_abrechnung_entities/part-00002.parquet",
     )
-    generated_alias, duplicated_generated_alias = generated_parquet_aliases(
+    generated_alias, duplicated_generated_alias = legacy_generated_parquet_aliases(
         args.bucket,
         generated_dataset,
+    )
+    generated_reference = s3_source_reference(
+        bucket=args.bucket,
+        key=f"generated/{generated_dataset}/parquet/mwa_abrechnung_entities/*.parquet",
     )
     client = s3_client(args)
     ensure_bucket(client, args.bucket)
@@ -156,9 +163,9 @@ def seed_s3_objects(args: argparse.Namespace) -> SeededS3Objects:
         csv_key=csv_key,
         parquet_key=parquet_key,
         generated_parquet_keys=generated_parquet_keys,
-        csv_alias=s3_query_alias(bucket=args.bucket, key=csv_key),
-        parquet_alias=s3_query_alias(bucket=args.bucket, key=parquet_key),
-        generated_parquet_alias=generated_alias,
+        csv_reference=s3_source_reference(bucket=args.bucket, key=csv_key),
+        parquet_reference=s3_source_reference(bucket=args.bucket, key=parquet_key),
+        generated_parquet_reference=generated_reference,
         duplicated_generated_parquet_alias=duplicated_generated_alias,
     )
 
@@ -190,10 +197,10 @@ async def ensure_query_notebook(page, base_url: str, timeout_ms: int) -> None:
     raise RuntimeError("A visible query notebook cell was not available after creating a workbench.")
 
 
-async def wait_for_aliases_in_completion_schema(
+async def wait_for_references_in_completion_schema(
     page,
     base_url: str,
-    aliases: list[str],
+    references: list[str],
     timeout_ms: int,
 ) -> None:
     deadline = time.monotonic() + timeout_ms / 1000
@@ -206,7 +213,7 @@ async def wait_for_aliases_in_completion_schema(
         await page.wait_for_timeout(1200)
         present = await page.evaluate(
             """
-            (aliases) => {
+            (references) => {
               const schemaNode = document.getElementById("sql-schema");
               if (!schemaNode) {
                 return false;
@@ -217,28 +224,21 @@ async def wait_for_aliases_in_completion_schema(
               } catch (_error) {
                 return false;
               }
-              const hasAlias = (alias) => {
-                let node = schema;
-                for (const part of String(alias || "").split(".")) {
-                  if (!node || typeof node !== "object" || !(part in node)) {
-                    return false;
-                  }
-                  node = node[part];
-                }
-                return true;
-              };
-              return aliases.every(hasAlias);
+              const labels = Array.isArray(schema.s3References)
+                ? schema.s3References.map((item) => typeof item === "string" ? item : item?.label)
+                : [];
+              return references.every((reference) => labels.includes(reference));
             }
             """,
-            aliases,
+            references,
         )
         if present:
             return
         await page.wait_for_timeout(2000)
 
     raise RuntimeError(
-        "Timed out waiting for S3 aliases to enter the SQL completion schema: "
-        f"{aliases!r}"
+        "Timed out waiting for S3 source references to enter the SQL completion schema: "
+        f"{references!r}"
     )
 
 
@@ -289,45 +289,32 @@ async def assert_completion_contains(
     )
 
 
-async def assert_s3_path_completions(
+def source_reference_completion_probe(reference: str) -> str:
+    compact = re.sub(r'["/._-]+', "", str(reference or "").lower())
+    compact = compact.split(" ", 1)[0].split("(", 1)[0]
+    return f"select * from {compact[:96]}"
+
+
+def css_attr_equals(attribute: str, value: str) -> str:
+    return f"[{attribute}={json.dumps(str(value or ''))}]"
+
+
+async def assert_s3_source_reference_completions(
     page,
-    bucket: str,
-    csv_alias: str,
-    parquet_alias: str,
+    csv_reference: str,
+    parquet_reference: str,
     timeout_ms: int,
 ) -> None:
-    bucket_segment = normalize_query_alias_segment(bucket, fallback="bucket")
     await assert_completion_contains(
         page,
-        "select * from s3.",
-        bucket_segment,
-        timeout_ms,
-    )
-
-    csv_parts = csv_alias.split(".")
-    parquet_parts = parquet_alias.split(".")
-    await assert_completion_contains(
-        page,
-        f"select * from {'.'.join(csv_parts[:-1])}.",
-        csv_parts[-1],
+        source_reference_completion_probe(csv_reference),
+        csv_reference,
         timeout_ms,
     )
     await assert_completion_contains(
         page,
-        f"select * from {'.'.join(parquet_parts[:-1])}.",
-        parquet_parts[-1],
-        timeout_ms,
-    )
-    await assert_completion_contains(
-        page,
-        f"select * from s3.{bucket_segment}.sam",
-        csv_alias,
-        timeout_ms,
-    )
-    await assert_completion_contains(
-        page,
-        f"select * from s3.{bucket_segment}.sam",
-        parquet_alias,
+        source_reference_completion_probe(parquet_reference),
+        parquet_reference,
         timeout_ms,
     )
 
@@ -393,7 +380,7 @@ async def open_s3_explorer_file(
     base_url: str,
     bucket: str,
     key: str,
-    alias: str,
+    reference: str,
     timeout_ms: int,
 ) -> None:
     await page.goto(
@@ -423,7 +410,7 @@ async def open_s3_explorer_file(
         await source_tree_file.wait_for(state="visible", timeout=timeout_ms)
         await source_tree_file.click()
         detail = page.locator("[data-data-source-explorer-detail]").first
-        await detail.get_by_text(alias, exact=True).first.wait_for(
+        await detail.get_by_text(reference, exact=True).first.wait_for(
             state="visible",
             timeout=timeout_ms,
         )
@@ -450,7 +437,7 @@ async def open_s3_explorer_file(
         await location_button.click()
 
     navigation = page.locator("[data-data-source-explorer-navigation]").first
-    await navigation.get_by_text(alias, exact=True).first.wait_for(
+    await navigation.get_by_text(reference, exact=True).first.wait_for(
         state="visible",
         timeout=timeout_ms,
     )
@@ -477,7 +464,7 @@ async def open_s3_explorer_file(
     await file_button.click()
 
     detail = page.locator("[data-data-source-explorer-detail]").first
-    await detail.get_by_text(alias, exact=True).first.wait_for(
+    await detail.get_by_text(reference, exact=True).first.wait_for(
         state="visible",
         timeout=timeout_ms,
     )
@@ -487,7 +474,7 @@ async def open_s3_explorer_file(
     )
 
 
-async def copy_visible_query_path(page, expected_alias: str, timeout_ms: int) -> str:
+async def copy_visible_query_path(page, expected_reference: str, timeout_ms: int) -> str:
     copy_button = page.locator(
         '[data-data-source-explorer-action="copy-query-path"]'
     ).first
@@ -496,15 +483,16 @@ async def copy_visible_query_path(page, expected_alias: str, timeout_ms: int) ->
         await copy_button.click()
     else:
         source = page.locator(
-            f'[data-data-source-explorer-navigation] [data-source-object][data-source-object-query-alias="{expected_alias}"]'
+            "[data-data-source-explorer-navigation] [data-source-object]"
+            + css_attr_equals("data-source-object-query-reference", expected_reference)
         ).first
         await source.wait_for(state="visible", timeout=timeout_ms)
         await open_sidebar_source_action_menu(source)
         await source.locator("[data-copy-query-path]").first.evaluate("(button) => button.click()")
     copied = await page.evaluate("navigator.clipboard.readText()")
-    if copied != expected_alias:
+    if copied != expected_reference:
         raise RuntimeError(
-            f"Copy query path copied {copied!r}; expected {expected_alias!r}."
+            f"Copy source reference copied {copied!r}; expected {expected_reference!r}."
         )
     return copied
 
@@ -529,10 +517,11 @@ async def expand_sidebar_source_tree(page) -> None:
     await page.wait_for_timeout(250)
 
 
-async def sidebar_source_for_alias(page, alias: str, timeout_ms: int):
+async def sidebar_source_for_reference(page, reference: str, timeout_ms: int):
     await expand_sidebar_source_tree(page)
     source = page.locator(
-        f'[data-source-object][data-source-object-query-alias="{alias}"]'
+        "[data-source-object]"
+        + css_attr_equals("data-source-object-query-reference", reference)
     ).first
     await source.wait_for(state="visible", timeout=timeout_ms)
     await source.scroll_into_view_if_needed(timeout=timeout_ms)
@@ -553,33 +542,33 @@ async def open_sidebar_source_action_menu(source) -> None:
     )
 
 
-async def copy_sidebar_query_path(page, expected_alias: str, timeout_ms: int) -> str:
-    source = await sidebar_source_for_alias(page, expected_alias, timeout_ms)
+async def copy_sidebar_query_path(page, expected_reference: str, timeout_ms: int) -> str:
+    source = await sidebar_source_for_reference(page, expected_reference, timeout_ms)
     await open_sidebar_source_action_menu(source)
     await source.locator("[data-copy-query-path]").first.evaluate("(button) => button.click()")
     copied = await page.evaluate("navigator.clipboard.readText()")
-    if copied != expected_alias:
+    if copied != expected_reference:
         raise RuntimeError(
-            f"Sidebar copy query path copied {copied!r}; expected {expected_alias!r}."
+            f"Sidebar copy source reference copied {copied!r}; expected {expected_reference!r}."
         )
     return copied
 
 
 async def query_sidebar_source_in_new_notebook(
     page,
-    expected_alias: str,
+    expected_reference: str,
     forbidden_alias: str,
     timeout_ms: int,
 ) -> str:
     previous_notebook_id = (
         await page.locator("[data-notebook-meta]").first.get_attribute("data-notebook-id")
     ) or ""
-    source = await sidebar_source_for_alias(page, expected_alias, timeout_ms)
+    source = await sidebar_source_for_reference(page, expected_reference, timeout_ms)
     await open_sidebar_source_action_menu(source)
     await source.locator("[data-query-source-new]").first.evaluate("(button) => button.click()")
     await page.wait_for_function(
         """
-        ({ previousNotebookId, expectedAlias }) => {
+        ({ previousNotebookId, expectedReference }) => {
           const meta = document.querySelector('[data-notebook-meta]');
           const textarea = document.querySelector('[data-query-cell] [data-editor-source]');
           return Boolean(
@@ -587,13 +576,13 @@ async def query_sidebar_source_in_new_notebook(
             meta.dataset.notebookId &&
             meta.dataset.notebookId !== previousNotebookId &&
             textarea instanceof HTMLTextAreaElement &&
-            textarea.value.includes(expectedAlias)
+            textarea.value.includes(expectedReference)
           );
         }
         """,
         arg={
             "previousNotebookId": previous_notebook_id,
-            "expectedAlias": expected_alias,
+            "expectedReference": expected_reference,
         },
         timeout=timeout_ms,
     )
@@ -704,39 +693,38 @@ async def run_smoke(args: argparse.Namespace) -> int:
         page.on("pageerror", lambda exc: console_messages.append(f"pageerror:{exc}"))
 
         try:
-            await wait_for_aliases_in_completion_schema(
+            await wait_for_references_in_completion_schema(
                 page,
                 args.base_url,
                 [
-                    seeded.csv_alias,
-                    seeded.parquet_alias,
-                    seeded.generated_parquet_alias,
+                    seeded.csv_reference,
+                    seeded.parquet_reference,
+                    seeded.generated_parquet_reference,
                 ],
                 args.timeout_ms,
             )
             await ensure_query_notebook(page, args.base_url, args.timeout_ms)
-            await assert_s3_path_completions(
+            await assert_s3_source_reference_completions(
                 page,
-                args.bucket,
-                seeded.csv_alias,
-                seeded.parquet_alias,
+                seeded.csv_reference,
+                seeded.parquet_reference,
                 args.timeout_ms,
             )
             await run_query_and_assert_text(
                 page,
-                f"select source_kind, amount_chf from {seeded.csv_alias} order by record_id limit 1",
+                f"select source_kind, amount_chf from {seeded.csv_reference} order by record_id limit 1",
                 "csv_path_completion",
                 args.timeout_ms,
             )
             await run_query_and_assert_text(
                 page,
-                f"select source_kind, amount_chf from {seeded.parquet_alias} limit 1",
+                f"select source_kind, amount_chf from {seeded.parquet_reference} limit 1",
                 "parquet_path_completion",
                 args.timeout_ms,
             )
             await run_query_and_assert_text(
                 page,
-                f"select source_kind, amount_chf from {seeded.generated_parquet_alias} limit 1",
+                f"select source_kind, amount_chf from {seeded.generated_parquet_reference} limit 1",
                 "generated_parquet_path_completion",
                 args.timeout_ms,
             )
@@ -745,12 +733,12 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 args.base_url,
                 args.bucket,
                 seeded.parquet_key,
-                seeded.parquet_alias,
+                seeded.parquet_reference,
                 args.timeout_ms,
             )
             copied_alias = await copy_visible_query_path(
                 page,
-                seeded.parquet_alias,
+                seeded.parquet_reference,
                 args.timeout_ms,
             )
             await ensure_query_notebook(page, args.base_url, args.timeout_ms)
@@ -763,12 +751,12 @@ async def run_smoke(args: argparse.Namespace) -> int:
             await ensure_query_notebook(page, args.base_url, args.timeout_ms)
             await copy_sidebar_query_path(
                 page,
-                seeded.generated_parquet_alias,
+                seeded.generated_parquet_reference,
                 args.timeout_ms,
             )
             await query_sidebar_source_in_new_notebook(
                 page,
-                seeded.generated_parquet_alias,
+                seeded.generated_parquet_reference,
                 seeded.duplicated_generated_parquet_alias,
                 args.timeout_ms,
             )
@@ -779,9 +767,9 @@ async def run_smoke(args: argparse.Namespace) -> int:
             )
         except (ClientError, PlaywrightTimeoutError, RuntimeError) as exc:
             print(str(exc), file=sys.stderr)
-            print(f"CSV alias: {seeded.csv_alias}", file=sys.stderr)
-            print(f"Parquet alias: {seeded.parquet_alias}", file=sys.stderr)
-            print(f"Generated Parquet alias: {seeded.generated_parquet_alias}", file=sys.stderr)
+            print(f"CSV reference: {seeded.csv_reference}", file=sys.stderr)
+            print(f"Parquet reference: {seeded.parquet_reference}", file=sys.stderr)
+            print(f"Generated Parquet reference: {seeded.generated_parquet_reference}", file=sys.stderr)
             print(
                 f"Forbidden generated Parquet alias: {seeded.duplicated_generated_parquet_alias}",
                 file=sys.stderr,
@@ -805,9 +793,9 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     client.delete_object(Bucket=args.bucket, Key=key)
 
     print(
-        "Playwright SQL S3 path completion smoke passed for "
-        f"{seeded.csv_alias}, {seeded.parquet_alias}, "
-        f"and {seeded.generated_parquet_alias}."
+        "Playwright SQL S3 source reference completion smoke passed for "
+        f"{seeded.csv_reference}, {seeded.parquet_reference}, "
+        f"and {seeded.generated_parquet_reference}."
     )
     return 0
 

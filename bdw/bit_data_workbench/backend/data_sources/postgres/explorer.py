@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Callable
 
 from ....models import SourceConnectionStatus, SourceField, SourceObject
+from ...source_references import pg_source_reference
 from ...sql_utils import sql_identifier
 from ...source_discovery import SqlDiscoveredRelation
 from ..ddl import SourceDdlDownload, ddl_filename, safe_sql_type
@@ -85,6 +86,10 @@ class PostgresExplorerManager:
                     kind=relation.relation_kind,
                     relation=(
                         f"{self._source_id}.{relation.schema_name}.{relation.relation_name}"
+                    ),
+                    query_reference=pg_source_reference(
+                        source_id=self._source_id,
+                        relation=f"{self._source_id}.{relation.schema_name}.{relation.relation_name}",
                     ),
                 )
             )

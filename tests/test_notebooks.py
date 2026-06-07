@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import sys
 import unittest
 
@@ -85,6 +86,10 @@ class CompletionSchemaTests(unittest.TestCase):
                                 query_alias=(
                                     "s3.vat_smoke_test.incoming.tax_data.csv"
                                 ),
+                                query_reference='s3.vat_smoke_test."incoming/tax-data.csv"',
+                                s3_bucket="vat_smoke_test",
+                                s3_key="incoming/tax-data.csv",
+                                s3_file_format="csv",
                             ),
                             source_object_type(
                                 name="tax_parquet",
@@ -94,6 +99,13 @@ class CompletionSchemaTests(unittest.TestCase):
                                     "s3.vat_smoke_test.generated.vat_smoke."
                                     "part_00001.parquet"
                                 ),
+                                query_reference=(
+                                    's3.vat_smoke_test."generated/vat_smoke/'
+                                    'part_00001.parquet"'
+                                ),
+                                s3_bucket="vat_smoke_test",
+                                s3_key="generated/vat_smoke/part_00001.parquet",
+                                s3_file_format="parquet",
                             ),
                             source_object_type(
                                 name="tax_csv_duplicate",
@@ -153,14 +165,15 @@ class CompletionSchemaTests(unittest.TestCase):
             {"public": ["sales_orders"]},
         )
         self.assertEqual(
-            schema["s3"]["vat_smoke_test"]["incoming"]["tax_data"]["csv"],
-            [],
+            [item["label"] for item in schema["s3References"]],
+            [
+                's3.vat_smoke_test."generated/vat_smoke/part_00001.parquet"',
+                's3.vat_smoke_test."incoming/tax-data.csv"',
+            ],
         )
         self.assertEqual(
-            schema["s3"]["vat_smoke_test"]["generated"]["vat_smoke"][
-                "part_00001"
-            ]["parquet"],
-            [],
+            [item["label"] for item in schema["pgReferences"]],
+            ['pg.pg_oltp."public.sales_orders"'],
         )
         self.assertNotIn("local", schema)
 
@@ -198,11 +211,8 @@ class CompletionSchemaTests(unittest.TestCase):
             ]
         )
 
-        self.assertEqual(schema["s3"]["legacy_relation"], [])
-        self.assertEqual(
-            schema["s3"]["bucket"]["folder"]["file"]["csv"],
-            [],
-        )
+        self.assertEqual(schema["s3"], ["legacy_relation", "path_relation"])
+        self.assertNotIn("s3References", schema)
 
 
 class GeneratorNotebookLinkTests(unittest.TestCase):
@@ -284,6 +294,155 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
                 }
             ],
         )
+
+    def test_all_registered_loaders_have_linked_notebooks_with_simple_source_refs(
+        self,
+    ) -> None:
+        (
+            build_generator_notebook_links,
+            _,
+            build_notebooks,
+            _,
+            _,
+            source_catalog_type,
+            source_object_type,
+            source_schema_type,
+        ) = import_notebook_helpers()
+        from bit_data_workbench.backend.source_references import (  # noqa: WPS433
+            pg_source_reference,
+            s3_source_reference,
+        )
+        from bit_data_workbench.data_generator.registry import DataGeneratorRegistry  # noqa: WPS433
+
+        def pg_object(name: str, *, source_id: str = "pg_oltp"):
+            relation = f"{source_id}.public.{name}"
+            return source_object_type(
+                name=name,
+                kind="table",
+                relation=relation,
+                query_reference=pg_source_reference(source_id=source_id, relation=relation),
+            )
+
+        def s3_object(name: str, *, schema: str = "workspace_s3"):
+            key = f"generated/{name}/parquet/{name}/part-00001.parquet"
+            return source_object_type(
+                name=name,
+                kind="view",
+                relation=f"{schema}.{name}",
+                query_reference=s3_source_reference(bucket=schema, key=key),
+                s3_bucket=schema,
+                s3_key=key,
+                s3_path=f"s3://{schema}/{key}",
+                s3_file_format="parquet",
+            )
+
+        multi_table_names = (
+            "federal_tax_taxpayers_mt",
+            "federal_tax_filings_mt",
+            "federal_tax_assessments_mt",
+            "federal_tax_payments_mt",
+            "federal_tax_audits_mt",
+            "federal_tax_enforcements_mt",
+            "federal_tax_appeals_mt",
+        )
+        kostenbelege_names = ("kbkp_2019", "kbpo_2019", "kbhp_2019", "dim_kalender")
+        mwa_names = ("mwa_abrechnung_entities", "mwa_abrechnungs_ziffern_entities")
+        parquet_option_names = (
+            "federal_tax_parquet_off",
+            "federal_tax_parquet_recommended",
+            "federal_tax_parquet_manual_partition",
+            "federal_tax_parquet_manual_hive",
+            "federal_tax_parquet_manual_cache",
+        )
+
+        catalogs = [
+            source_catalog_type(
+                name="pg_oltp",
+                connection_source_id="pg_oltp",
+                schemas=[
+                    source_schema_type(
+                        name="public",
+                        objects=[
+                            pg_object("vat_smoke_test_reference"),
+                            pg_object("tax_assessment_pg_vs_s3"),
+                            pg_object("pg_union_tax_reference"),
+                            pg_object("pg_union_tax_reference_s3"),
+                            *[pg_object(name) for name in multi_table_names],
+                            *[pg_object(name) for name in mwa_names],
+                            *[pg_object(name) for name in kostenbelege_names],
+                        ],
+                    )
+                ],
+            ),
+            source_catalog_type(
+                name="pg_olap",
+                connection_source_id="pg_olap",
+                schemas=[
+                    source_schema_type(
+                        name="public",
+                        objects=[
+                            pg_object("tax_assessment_olap_smoke", source_id="pg_olap"),
+                            pg_object("pg_union_tax_reference", source_id="pg_olap"),
+                            *[
+                                pg_object(name, source_id="pg_olap")
+                                for name in kostenbelege_names
+                            ],
+                        ],
+                    )
+                ],
+            ),
+            source_catalog_type(
+                name="workspace",
+                connection_source_id="workspace.s3",
+                schemas=[
+                    source_schema_type(
+                        name="workspace_s3",
+                        objects=[
+                            s3_object("vat_smoke"),
+                            s3_object("tax_assessment_pg_vs_s3"),
+                            s3_object("pg_union_tax_reference_s3"),
+                            *[s3_object(name) for name in multi_table_names],
+                            *[s3_object(name) for name in parquet_option_names],
+                            *[
+                                s3_object(f"{name}_{suffix}")
+                                for name in mwa_names
+                                for suffix in ("parquet", "csv", "json")
+                            ],
+                        ],
+                    ),
+                    source_schema_type(
+                        name="s3_3_1_imports_a08e7385",
+                        objects=[
+                            s3_object(name, schema="s3_3_1_imports_a08e7385")
+                            for name in kostenbelege_names
+                        ],
+                    ),
+                ],
+            ),
+        ]
+
+        notebooks = build_notebooks(catalogs)
+        links = build_generator_notebook_links(notebooks)
+        registered_loader_ids = {
+            generator.generator_id for generator in DataGeneratorRegistry().discover()
+        }
+
+        self.assertEqual(registered_loader_ids - set(links), set())
+
+        linked_notebooks = [
+            notebook
+            for notebook in notebooks
+            if notebook.linked_generator_id in registered_loader_ids
+        ]
+        self.assertGreaterEqual(len(linked_notebooks), len(registered_loader_ids))
+        legacy_virtual_s3_pattern = re.compile(
+            r"\bs3\.[A-Za-z0-9_]+\.[A-Za-z0-9_]+\.[A-Za-z0-9_]+"
+        )
+        for notebook in linked_notebooks:
+            sql = "\n".join(cell.sql for cell in notebook.cells)
+            self.assertNotRegex(sql, legacy_virtual_s3_pattern, notebook.notebook_id)
+            if "s3." in sql:
+                self.assertIn('"generated/', sql, notebook.notebook_id)
 
     def test_build_generator_notebook_links_skips_empty_and_duplicate_entries(
         self,

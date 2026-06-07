@@ -35,6 +35,10 @@ from bit_data_workbench.backend.source_discovery import (  # noqa: E402
     DiscoveredRelationSpec,
     build_s3_query,
 )
+from bit_data_workbench.backend.source_references import (  # noqa: E402
+    pg_source_reference,
+    s3_source_reference,
+)
 from bit_data_workbench.backend.service import WorkbenchService  # noqa: E402
 from bit_data_workbench.models import SourceCatalog, SourceObject, SourceSchema  # noqa: E402
 
@@ -75,7 +79,14 @@ def sample_catalogs() -> list[SourceCatalog]:
                             kind="view",
                             relation="test.federal_tax_data_10gb",
                             query_alias="s3.test.federal_tax_data_10gb.csv",
+                            query_reference=s3_source_reference(
+                                bucket="test",
+                                key="federal_tax_data_10gb.csv",
+                            ),
+                            query_sql="read_csv_auto('s3://test/federal_tax_data_10gb.csv')",
                             s3_bucket="test",
+                            s3_key="federal_tax_data_10gb.csv",
+                            s3_file_format="csv",
                         ),
                         SourceObject(
                             name="vat_smoke_part_00001",
@@ -85,7 +96,17 @@ def sample_catalogs() -> list[SourceCatalog]:
                                 "s3.test.generated.vat_smoke.part_00001."
                                 "parquet"
                             ),
+                            query_reference=s3_source_reference(
+                                bucket="test",
+                                key="generated/vat_smoke/part_00001.parquet",
+                            ),
+                            query_sql=(
+                                "read_parquet('s3://test/generated/vat_smoke/"
+                                "part_00001.parquet')"
+                            ),
                             s3_bucket="test",
+                            s3_key="generated/vat_smoke/part_00001.parquet",
+                            s3_file_format="parquet",
                         )
                     ],
                 )
@@ -140,6 +161,18 @@ class QuerySourceValidationTests(unittest.TestCase):
         self.assertEqual(result.status, QUERY_SOURCE_VALID)
         self.assertEqual(result.missing_references, [])
 
+    def test_pg_source_reference_validates(self) -> None:
+        result = validate(
+            f"select * from {pg_source_reference(source_id='pg_oltp', relation='pg_oltp.public.sales_orders')}"
+        )
+
+        self.assertEqual(result.status, QUERY_SOURCE_VALID)
+        self.assertEqual(result.missing_references, [])
+        self.assertEqual(
+            result.matched_references[0].matched_relation,
+            "pg_oltp.public.sales_orders",
+        )
+
     def test_s3_query_alias_validates(self) -> None:
         result = validate("select * from s3.test.federal_tax_data_10gb.csv")
 
@@ -148,6 +181,22 @@ class QuerySourceValidationTests(unittest.TestCase):
         self.assertEqual(
             result.matched_references[0].matched_relation,
             "test.federal_tax_data_10gb",
+        )
+
+    def test_s3_source_reference_validates_with_quoted_object_key(self) -> None:
+        result = validate(
+            "select * from "
+            + s3_source_reference(
+                bucket="test",
+                key="generated/vat_smoke/part_00001.parquet",
+            )
+        )
+
+        self.assertEqual(result.status, QUERY_SOURCE_VALID)
+        self.assertEqual(result.missing_references, [])
+        self.assertEqual(
+            result.matched_references[0].matched_relation,
+            "test.vat_smoke_part_00001",
         )
 
     def test_s3_parquet_query_alias_validates(self) -> None:
@@ -269,18 +318,22 @@ class QuerySourceValidationTests(unittest.TestCase):
 
         self.assertEqual(snapshot["jobId"], "query-s3-alias")
         self.assertEqual(captured["sql"], "select * from s3.test.federal_tax_data_10gb.csv")
-        self.assertEqual(captured["execution_sql"], "select * from test.federal_tax_data_10gb")
+        self.assertEqual(
+            captured["execution_sql"],
+            "select * from read_csv_auto('s3://test/federal_tax_data_10gb.csv')",
+        )
         self.assertEqual(
             captured["source_summaries"],
             [
                 {
                     "relation": "test.federal_tax_data_10gb",
                     "query_alias": "s3.test.federal_tax_data_10gb.csv",
+                    "query_reference": 's3.test."federal_tax_data_10gb.csv"',
                     "bucket": "test",
-                    "key": "",
+                    "key": "federal_tax_data_10gb.csv",
                     "path": "",
-                    "format": "",
-                    "query_sql": "",
+                    "format": "csv",
+                    "query_sql": "read_csv_auto('s3://test/federal_tax_data_10gb.csv')",
                     "size_bytes": 0,
                     "object_revision": "",
                     "display_name": "federal_tax_data_10gb",

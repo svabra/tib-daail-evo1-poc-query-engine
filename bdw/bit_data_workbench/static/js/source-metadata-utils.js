@@ -436,7 +436,8 @@ export function sourceQueryDescriptor(sourceObjectRoot) {
 
   const physicalRelation = sourceObjectRoot.dataset.sourceObjectRelation?.trim() || "";
   const queryAlias = sourceObjectRoot.dataset.sourceObjectQueryAlias?.trim() || "";
-  const relation = queryAlias || physicalRelation;
+  const queryReference = sourceObjectRoot.dataset.sourceObjectQueryReference?.trim() || "";
+  const relation = queryReference || queryAlias || physicalRelation;
   if (!relation) {
     return null;
   }
@@ -445,6 +446,7 @@ export function sourceQueryDescriptor(sourceObjectRoot) {
     name: sourceObjectDisplayName(sourceObjectRoot),
     relation,
     physicalRelation,
+    queryReference,
     queryAlias,
     sourceId: sourceObjectRoot.dataset.sourceOptionId?.trim() || "",
   };

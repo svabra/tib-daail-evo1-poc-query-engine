@@ -5,6 +5,12 @@ from typing import Iterable
 from urllib.parse import urlparse
 
 from ..models import SourceCatalog
+from .source_references import (
+    join_reference_parts,
+    normalize_qualified_name,
+    pg_source_reference,
+    s3_source_reference,
+)
 
 
 TABLE_FUNCTION_NAMES = {
@@ -50,6 +56,7 @@ class SqlToken:
 class KnownRelationReference:
     relation: str
     bucket: str = ""
+    query_sql: str = ""
 
 
 @dataclass(slots=True)
@@ -59,12 +66,7 @@ class QueryTouchSummary:
 
 
 def normalize_relation_key(value: str) -> str:
-    parts = [
-        segment.strip().strip('"').strip("`").strip("[]").lower()
-        for segment in str(value or "").split(".")
-        if segment.strip()
-    ]
-    return ".".join(parts)
+    return normalize_qualified_name(value)
 
 
 def build_relation_index(catalogs: Iterable[SourceCatalog]) -> dict[str, KnownRelationReference]:
@@ -84,6 +86,7 @@ def build_relation_index(catalogs: Iterable[SourceCatalog]) -> dict[str, KnownRe
                 entry = KnownRelationReference(
                     relation=canonical_relation,
                     bucket=str(source_object.s3_bucket or "").strip(),
+                    query_sql=str(getattr(source_object, "query_sql", "") or "").strip(),
                 )
                 aliases = {
                     normalize_relation_key(canonical_relation),
@@ -92,6 +95,36 @@ def build_relation_index(catalogs: Iterable[SourceCatalog]) -> dict[str, KnownRe
                 query_alias = normalize_relation_key(getattr(source_object, "query_alias", ""))
                 if query_alias:
                     aliases.add(query_alias)
+                query_reference = normalize_relation_key(
+                    getattr(source_object, "query_reference", "")
+                )
+                if query_reference:
+                    aliases.add(query_reference)
+                if source_object.s3_bucket and source_object.s3_key:
+                    aliases.add(
+                        normalize_relation_key(
+                            s3_source_reference(
+                                bucket=source_object.s3_bucket,
+                                key=source_object.s3_key,
+                            )
+                        )
+                    )
+                    aliases.add(
+                        normalize_relation_key(
+                            join_reference_parts(
+                                ("s3", source_object.s3_bucket, source_object.s3_key)
+                            )
+                        )
+                    )
+                if catalog.name in {"pg_oltp", "pg_olap"}:
+                    aliases.add(
+                        normalize_relation_key(
+                            pg_source_reference(
+                                source_id=catalog.name,
+                                relation=canonical_relation,
+                            )
+                        )
+                    )
                 if schema.name:
                     aliases.add(normalize_relation_key(f"{schema.name}.{source_object.name}"))
                 for prefix in catalog_prefixes:
@@ -423,7 +456,11 @@ def read_qualified_identifier(tokens: list[SqlToken], index: int) -> tuple[str, 
         token = tokens[current]
         if not is_identifier_token(token):
             break
-        parts.append(token.value)
+        parts.append(
+            token.value
+            if token.kind == "word"
+            else '"' + token.value.replace('"', '""') + '"'
+        )
         current += 1
         if current < len(tokens) and tokens[current].value == ".":
             current += 1

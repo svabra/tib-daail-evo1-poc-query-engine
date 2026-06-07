@@ -311,6 +311,22 @@ export function createNotebookStagePipelineController(helpers) {
     return activeRunsForGraph(graph).length > 0;
   }
 
+  function runCoversWholePipeline(run, graph) {
+    const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+    if (!nodes.length) {
+      return false;
+    }
+    const runStageIds = new Set((Array.isArray(run?.stageIds) ? run.stageIds : []).map((item) => String(item)));
+    if (!runStageIds.size) {
+      return false;
+    }
+    return nodes.every((node) => runStageIds.has(String(node?.stageId || "")));
+  }
+
+  function graphHasActiveWholePipelineRun(graph) {
+    return activeRunsForGraph(graph).some((run) => runCoversWholePipeline(run, graph));
+  }
+
   function nodeDescription(node) {
     return [
       node?.description,
@@ -325,7 +341,9 @@ export function createNotebookStagePipelineController(helpers) {
   }
 
   function stageQueryReference(node) {
-    const queryPath = String(node?.latestRevision?.queryPath || "").trim();
+    const queryPath = String(
+      node?.latestRevision?.queryReference || node?.latestRevision?.queryPath || ""
+    ).trim();
     if (queryPath) {
       return queryPath;
     }
@@ -334,7 +352,9 @@ export function createNotebookStagePipelineController(helpers) {
   }
 
   function stageStorageReference(node) {
-    const queryPath = String(node?.latestRevision?.queryPath || "").trim();
+    const queryPath = String(
+      node?.latestRevision?.queryReference || node?.latestRevision?.queryPath || ""
+    ).trim();
     return queryPath.startsWith("s3.") ? queryPath : "";
   }
 
@@ -432,7 +452,9 @@ export function createNotebookStagePipelineController(helpers) {
         missingAliases.push(reference);
         return;
       }
-      localRelations[reference] = String(node.latestRevision?.queryPath || reference);
+      localRelations[reference] = String(
+        node.latestRevision?.queryReference || node.latestRevision?.queryPath || reference
+      );
     });
     return {
       aliases,
@@ -451,7 +473,9 @@ export function createNotebookStagePipelineController(helpers) {
     return String(sql || "").replace(stageReferencePattern(), (match, prefix, rawAlias) => {
       const alias = stageAlias(rawAlias, "stage");
       const node = aliasMap.get(alias.toLowerCase());
-      const queryPath = String(node?.latestRevision?.queryPath || "").trim();
+      const queryPath = String(
+        node?.latestRevision?.queryReference || node?.latestRevision?.queryPath || ""
+      ).trim();
       return queryPath ? `${prefix}${queryPath}` : match;
     });
   }
@@ -642,6 +666,7 @@ export function createNotebookStagePipelineController(helpers) {
   function menuIcon(name) {
     const icons = {
       inspect: '<path d="M3 12s3.2-5 9-5 9 5 9 5-3.2 5-9 5-9-5-9-5z"></path><circle cx="12" cy="12" r="2.3"></circle>',
+      navigate: '<path d="M4 5h16v14H4z"></path><path d="M8 9h8"></path><path d="M8 13h5"></path><path d="M15 13l3 3"></path><path d="M18 16l-3 3"></path>',
       copy: '<rect x="8" y="8" width="10" height="10"></rect><path d="M6 16H4V4h12v2"></path>',
       publish: '<path d="M12 19V5"></path><path d="M7 10l5-5 5 5"></path><path d="M5 19h14"></path>',
       derive: '<path d="M5 6h5a4 4 0 0 1 4 4v8"></path><path d="M10 6l-3-3"></path><path d="M10 6 7 9"></path><path d="M14 18l-3-3"></path><path d="M14 18l3-3"></path>',
@@ -821,9 +846,10 @@ export function createNotebookStagePipelineController(helpers) {
     tableRoot.innerHTML = (graph.nodes || [])
       .map((node) => {
         const priorityPath = terminalPathForStage(graph, node.stageId);
+        const rowStatus = statusClass(node.status);
         return `
           <tr
-            class="pipeline-stage-row${String(node.stageId) === selectedStageId ? " is-selected" : ""}"
+            class="pipeline-stage-row pipeline-stage-row-${rowStatus}${String(node.stageId) === selectedStageId ? " is-selected" : ""}"
             data-pipeline-stage-row="${escapeHtml(node.stageId)}"
           >
             <td ${pipelineTooltipAttributes(nodeDescription(node))}>
@@ -1285,13 +1311,23 @@ export function createNotebookStagePipelineController(helpers) {
       return;
     }
     closeContextMenu();
-    const hasRevision = Boolean(node.latestRevision?.outputPath || node.latestRevision?.queryPath);
+    const hasRevision = Boolean(
+      node.latestRevision?.outputPath ||
+        node.latestRevision?.queryReference ||
+        node.latestRevision?.queryPath
+    );
+    const hasTargetObject = Boolean(node.outputSource?.bucket && node.outputSource?.key);
     const hasStorageReference = Boolean(stageStorageReference(node));
     contextMenu = document.createElement("div");
     contextMenu.className = "pipeline-context-menu workspace-action-menu-panel";
     contextMenu.dataset.pipelineContextMenu = "";
     contextMenu.innerHTML = `
-      ${menuItem({ action: "inspect", label: "Inspect data", icon: "inspect", disabled: !hasRevision })}
+      ${menuItem({
+        action: "navigate-target",
+        label: "Navigate to target data object",
+        icon: "navigate",
+        disabled: !hasTargetObject,
+      })}
       ${menuItem({ action: "copy-path", label: "Copy target path", icon: "copy", disabled: !hasRevision })}
       ${menuItem({ action: "publish", label: "Publish data product", icon: "publish", disabled: !hasRevision })}
       <div class="workspace-action-menu-separator" aria-hidden="true"></div>
@@ -1359,12 +1395,16 @@ export function createNotebookStagePipelineController(helpers) {
     });
   }
 
-  function setPipelineRunControls(notebookId, { running = false, cancelling = false } = {}) {
+  function setPipelineRunControls(
+    notebookId,
+    { running = false, cancelling = false, wholePipelineRunning = false } = {}
+  ) {
     const workspaceRoot = document.querySelector(
       `[data-workspace-notebook][data-notebook-id="${CSS.escape(notebookId)}"]`
     );
     const runButton = workspaceRoot?.querySelector("[data-run-notebook-pipeline]");
     const cancelButton = workspaceRoot?.querySelector("[data-cancel-notebook-pipeline]");
+    const runningIndicator = workspaceRoot?.querySelector("[data-notebook-pipeline-running-indicator]");
     if (runButton) {
       runButton.hidden = Boolean(running);
       runButton.disabled = false;
@@ -1384,6 +1424,9 @@ export function createNotebookStagePipelineController(helpers) {
         label.textContent = cancelling ? "Aborting" : "Abort pipeline";
       }
     }
+    if (runningIndicator) {
+      runningIndicator.hidden = !wholePipelineRunning;
+    }
   }
 
   function setPipelineRunButtonBusy(notebookId, busy) {
@@ -1401,6 +1444,7 @@ export function createNotebookStagePipelineController(helpers) {
       setPipelineRunControls(notebookId, {
         running: activeRuns.length > 0,
         cancelling,
+        wholePipelineRunning: graphHasActiveWholePipelineRun(graph),
       });
     }
   }
@@ -1476,7 +1520,11 @@ export function createNotebookStagePipelineController(helpers) {
     }
     const normalizedStartStageId = String(startStageId || "").trim();
     let keepRunningControls = false;
-    setPipelineRunButtonBusy(notebookId, true);
+    setPipelineRunControls(notebookId, {
+      running: true,
+      cancelling: false,
+      wholePipelineRunning: !normalizedStartStageId,
+    });
     try {
       await fetchJsonOrThrow("/api/materialized-stages/pipeline/run", {
         method: "POST",
@@ -1597,24 +1645,68 @@ export function createNotebookStagePipelineController(helpers) {
     }
   }
 
-  async function inspectStage(node) {
+  function closeNotebookExplorer() {
+    const notebookSection = document.querySelector("[data-notebook-section]");
+    if (notebookSection instanceof HTMLDetailsElement) {
+      notebookSection.open = false;
+    }
+  }
+
+  function openSourceObjectAncestors(target) {
+    const dataSourcesSection = document.querySelector("[data-data-sources-section]");
+    if (dataSourcesSection instanceof HTMLDetailsElement) {
+      dataSourcesSection.open = true;
+    }
+    const catalog = target?.closest?.("[data-source-catalog]");
+    if (catalog instanceof HTMLDetailsElement) {
+      catalog.open = true;
+    }
+    const schema = target?.closest?.("[data-source-schema]");
+    if (schema instanceof HTMLDetailsElement) {
+      schema.open = true;
+    }
+  }
+
+  function flashTargetDataObject(target) {
+    if (!(target instanceof Element)) {
+      return;
+    }
+    const label = target.querySelector(".source-node-label > span:last-child") || target.querySelector(".source-node-label");
+    target.classList.remove("is-pipeline-inspect-flash");
+    label?.classList?.remove("is-pipeline-target-text-flash");
+    void target.offsetWidth;
+    target.classList.add("is-pipeline-inspect-flash");
+    label?.classList?.add("is-pipeline-target-text-flash");
+    window.setTimeout(() => {
+      target.classList.remove("is-pipeline-inspect-flash");
+      label?.classList?.remove("is-pipeline-target-text-flash");
+    }, 3200);
+  }
+
+  async function navigateToTargetDataObject(node) {
     const source = node?.outputSource || {};
     if (!source.bucket || !source.key) {
       await showMessageDialog({
         title: "Materialized data unavailable",
-        copy: "Run this stage before inspecting its materialized data.",
+        copy: "Run this stage before navigating to its target data object.",
       });
       return;
     }
     await revealDataSourceSidebarBrowser("workspace.s3");
     await refreshSidebar("notebook");
+    closeNotebookExplorer();
     const selector = `[data-source-object][data-s3-bucket="${CSS.escape(source.bucket)}"][data-s3-key="${CSS.escape(source.key)}"]`;
     const target = document.querySelector(selector);
     if (target) {
+      openSourceObjectAncestors(target);
       target.scrollIntoView({ block: "center" });
-      target.classList.add("is-pipeline-inspect-flash");
-      window.setTimeout(() => target.classList.remove("is-pipeline-inspect-flash"), 3000);
+      flashTargetDataObject(target);
+      return;
     }
+    await showMessageDialog({
+      title: "Target data object not visible",
+      copy: "The stage has a materialized target, but it is not currently visible in the Data Sources navigation. Refresh the data sources and try again.",
+    });
   }
 
   function appendDerivedStage(notebookId, node, mode) {
@@ -1751,8 +1843,8 @@ export function createNotebookStagePipelineController(helpers) {
     if (!node) {
       return;
     }
-    if (action === "inspect") {
-      await inspectStage(node);
+    if (action === "navigate-target") {
+      await navigateToTargetDataObject(node);
       return;
     }
     if (action === "copy-path") {

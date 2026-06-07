@@ -121,6 +121,7 @@ export function createDataSourceExplorerController(helpers) {
 
   function selectedSourceObjectQueryPath(node) {
     return (
+      node?.dataset.sourceObjectQueryReference?.trim() ||
       node?.dataset.sourceObjectQueryAlias?.trim() ||
       node?.dataset.sourceObjectRelation?.trim() ||
       ""
@@ -188,7 +189,7 @@ export function createDataSourceExplorerController(helpers) {
     const s3Size = Number(sourceObjectRoot.dataset.s3SizeBytes || 0) || 0;
     const localSize = Number(sourceObjectRoot.dataset.localWorkspaceSizeBytes || 0) || 0;
     const fieldRows = [
-      { label: "Query path", value: queryPath || "Not queryable yet" },
+      { label: "Source reference", value: queryPath || "Not queryable yet" },
       { label: "Relation", value: relation && relation !== queryPath ? relation : "" },
       { label: "Storage path", value: sourceObjectRoot.dataset.s3Path || "" },
       { label: "Bucket", value: sourceObjectRoot.dataset.s3Bucket || "" },

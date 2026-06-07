@@ -1977,6 +1977,24 @@ function readSchema() {
 }
 
 function flattenS3AliasSchema(schema) {
+  if (Array.isArray(schema?.s3References)) {
+    return schema.s3References
+      .map((item) => {
+        if (typeof item === "string") {
+          return { label: item, detail: "S3 object" };
+        }
+        const label = String(item?.label || "").trim();
+        return label
+          ? {
+              label,
+              detail: String(item?.detail || "S3 object"),
+              relation: String(item?.relation || ""),
+            }
+          : null;
+      })
+      .filter(Boolean);
+  }
+
   const aliases = [];
   const root = schema?.s3;
   if (!root || typeof root !== "object" || Array.isArray(root)) {
@@ -1986,7 +2004,7 @@ function flattenS3AliasSchema(schema) {
   const visit = (node, parts) => {
     if (Array.isArray(node)) {
       if (parts.length >= 4) {
-        aliases.push(parts.join("."));
+        aliases.push({ label: parts.join("."), detail: "Legacy S3 alias" });
       }
       return;
     }
@@ -2004,43 +2022,52 @@ function flattenS3AliasSchema(schema) {
 
 function s3AliasCompletionSource(schema) {
   const aliases = flattenS3AliasSchema(schema);
-  if (!aliases.length) {
+  const pgReferences = Array.isArray(schema?.pgReferences)
+    ? schema.pgReferences
+        .map((item) => {
+          if (typeof item === "string") {
+            return { label: item, detail: "PostgreSQL relation" };
+          }
+          const label = String(item?.label || "").trim();
+          return label
+            ? {
+                label,
+                detail: String(item?.detail || "PostgreSQL relation"),
+                relation: String(item?.relation || ""),
+              }
+            : null;
+        })
+        .filter(Boolean)
+    : [];
+  const sourceReferences = [...aliases, ...pgReferences];
+  if (!sourceReferences.length) {
     return () => null;
   }
 
   return (context) => {
-    const match = context.matchBefore(/[A-Za-z0-9_.]*/);
+    const match = context.matchBefore(/[A-Za-z0-9_.$"\/-]*/);
     const typed = String(match?.text || "").trim();
-    if (!match || !typed || !typed.toLowerCase().startsWith("s3.")) {
-      return null;
-    }
-
     const typedLower = typed.toLowerCase();
-    const typedParts = typedLower.split(".");
-    const typedBucket = typedParts[1] || "";
-    const typedRemainder = typedParts.slice(2).join(".");
-    if (!typedBucket || !typedRemainder) {
+    if (
+      !match ||
+      !typed ||
+      (!typedLower.startsWith("s3") && !typedLower.startsWith("pg"))
+    ) {
       return null;
     }
 
     const options = [];
     const seen = new Set();
 
-    aliases.forEach((alias) => {
+    sourceReferences.forEach((entry) => {
+      const alias = String(entry?.label || "").trim();
       const aliasLower = alias.toLowerCase();
-      const aliasParts = aliasLower.split(".");
-      const aliasBucket = aliasParts[1] || "";
-      const aliasRemainder = aliasParts.slice(2).join(".");
-      const aliasFileName = aliasParts.slice(-2).join(".");
-      const sameBucket = typedBucket && aliasBucket === typedBucket;
       const matchesPrefix = aliasLower.startsWith(typedLower);
-      const matchesDeepFile =
-        sameBucket &&
-        typedRemainder &&
-        (aliasFileName.startsWith(typedRemainder) ||
-          aliasFileName.replace(/_/g, "").startsWith(typedRemainder.replace(/_/g, "")));
+      const compactAlias = aliasLower.replace(/["/._-]/g, "");
+      const compactTyped = typedLower.replace(/["/._-]/g, "");
+      const matchesCompact = compactTyped.length >= 3 && compactAlias.includes(compactTyped);
 
-      if ((!matchesPrefix && !matchesDeepFile) || seen.has(alias)) {
+      if ((!matchesPrefix && !matchesCompact) || seen.has(alias)) {
         return;
       }
 
@@ -2049,8 +2076,8 @@ function s3AliasCompletionSource(schema) {
         label: alias,
         type: "table",
         apply: alias,
-        detail: "S3 object",
-        boost: matchesDeepFile ? 110 : 100,
+        detail: entry?.detail || (alias.startsWith("pg.") ? "PostgreSQL relation" : "S3 object"),
+        boost: matchesPrefix ? 110 : 100,
       });
     });
 
@@ -2061,7 +2088,7 @@ function s3AliasCompletionSource(schema) {
     return {
       from: match.from,
       options,
-      validFor: /^[A-Za-z0-9_.]*$/,
+      validFor: /^[A-Za-z0-9_.$"\/-]*$/,
     };
   };
 }

@@ -328,6 +328,12 @@ export function sourceObjectElement(descriptor = {}) {
   if (descriptor.queryAlias) {
     element.dataset.sourceObjectQueryAlias = String(descriptor.queryAlias);
   }
+  if (descriptor.queryReference) {
+    element.dataset.sourceObjectQueryReference = String(descriptor.queryReference);
+  }
+  if (descriptor.querySql) {
+    element.dataset.sourceObjectQuerySql = String(descriptor.querySql);
+  }
   if (descriptor.name) {
     element.dataset.sourceObjectName = String(descriptor.name);
   }

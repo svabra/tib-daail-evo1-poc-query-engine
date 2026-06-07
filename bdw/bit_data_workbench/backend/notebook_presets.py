@@ -1863,6 +1863,7 @@ def build_static_notebooks(
     *,
     preferred_s3_relation: str | None,
     preferred_postgres_relation: str | None,
+    preferred_postgres_olap_relation: str | None,
     contest_postgres_relation: str | None,
     contest_s3_relation: str | None,
     contest_postgres_native_relation: str | None,
@@ -1922,6 +1923,27 @@ def build_static_notebooks(
         "LIMIT 100;"
         if preferred_postgres_relation
         else "SELECT 'Run the PostgreSQL OLTP VAT Smoke Loader from the Loader Workbench first.' AS status;"
+    )
+    postgres_olap_sql = (
+        "SELECT\n"
+        "  assessment_id,\n"
+        "  taxpayer_uid,\n"
+        "  canton_code,\n"
+        "  tax_type,\n"
+        "  assessment_status,\n"
+        "  payment_status,\n"
+        "  assessed_tax_chf,\n"
+        "  collected_tax_chf,\n"
+        "  open_balance_chf,\n"
+        "  audit_risk_score,\n"
+        "  audit_flag\n"
+        f"FROM {preferred_postgres_olap_relation}\n"
+        "WHERE tax_period_end >= DATE '2025-01-01'\n"
+        "  AND (open_balance_chf > 25000 OR audit_risk_score >= 80 OR audit_flag = true)\n"
+        "ORDER BY open_balance_chf DESC, audit_risk_score DESC, assessment_id DESC\n"
+        "LIMIT 100;"
+        if preferred_postgres_olap_relation
+        else "SELECT 'Run the PostgreSQL OLAP Tax Assessment Loader from the Loader Workbench first.' AS status;"
     )
     pandas_preview_sql = (
         "SELECT\n"
@@ -2574,6 +2596,23 @@ def build_static_notebooks(
             tags=["smoke", "postgres"],
             tree_path=("PoC Tests", "Smoke Tests", "Relational"),
             linked_generator_id="postgres_oltp_smoke_orders",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="postgres-olap-smoke-test",
+            title="PostgreSQL OLAP Tax Assessment Smoke Test",
+            summary="Queries generated tax assessment smoke data in PostgreSQL OLAP for Federal Tax Administration analysis.",
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="postgres-olap-smoke-test-cell-1",
+                    data_sources=["pg_olap"],
+                    sql=postgres_olap_sql,
+                )
+            ],
+            tags=["smoke", "postgres", "olap", "tax", "assessment"],
+            tree_path=("PoC Tests", "Smoke Tests", "Relational"),
+            linked_generator_id="postgres_smoke_orders",
             can_edit=False,
             can_delete=False,
         ),
