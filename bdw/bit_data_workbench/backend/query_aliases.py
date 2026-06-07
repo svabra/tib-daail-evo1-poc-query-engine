@@ -6,10 +6,13 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from urllib.parse import urlparse
 
+from .source_references import normalize_qualified_name, normalize_reference_parts
+
 
 ALIAS_ROOT_MIN_PARTS = {
     "local": 3,
-    "s3": 4,
+    "pg": 3,
+    "s3": 3,
     "workspace": 4,
 }
 
@@ -19,6 +22,8 @@ class QueryAliasReference:
     alias: str
     start: int
     end: int
+    parts: tuple[str, ...] = ()
+    part_end_offsets: tuple[int, ...] = ()
 
 
 def normalize_query_alias_segment(value: str, *, fallback: str = "item") -> str:
@@ -179,11 +184,7 @@ def unique_query_aliases(candidates: list[tuple[str, str]]) -> dict[str, str]:
 
 
 def normalize_relation_key(value: str) -> str:
-    return ".".join(
-        segment.strip().strip('"').strip("`").strip("[]").lower()
-        for segment in str(value or "").split(".")
-        if segment.strip()
-    )
+    return normalize_qualified_name(value)
 
 
 def _is_identifier_start(char: str) -> bool:
@@ -216,6 +217,42 @@ def _skip_quoted(text: str, index: int, quote: str, *, doubled_escape: bool) -> 
 def _skip_bracketed_identifier(text: str, index: int) -> int:
     end = text.find("]", index + 1)
     return len(text) if end < 0 else end + 1
+
+
+def _read_quoted_identifier_part(text: str, index: int, quote: str) -> tuple[str, int]:
+    current = index + 1
+    fragments: list[str] = []
+    while current < len(text):
+        char = text[current]
+        if char == quote:
+            if quote == '"' and current + 1 < len(text) and text[current + 1] == quote:
+                fragments.append(quote)
+                current += 2
+                continue
+            return "".join(fragments), current + 1
+        fragments.append(char)
+        current += 1
+    return "".join(fragments), current
+
+
+def _read_bracketed_identifier_part(text: str, index: int) -> tuple[str, int]:
+    end = text.find("]", index + 1)
+    if end < 0:
+        return text[index + 1 :], len(text)
+    return text[index + 1 : end], end + 1
+
+
+def _read_alias_part_after_dot(text: str, index: int) -> tuple[str, int] | None:
+    if index >= len(text):
+        return None
+    char = text[index]
+    if char in {'"', "`"}:
+        return _read_quoted_identifier_part(text, index, char)
+    if char == "[":
+        return _read_bracketed_identifier_part(text, index)
+    if _is_identifier_start(char):
+        return _read_identifier(text, index)
+    return None
 
 
 def _root_min_parts(root: str, configured_roots: set[str]) -> int:
@@ -274,9 +311,10 @@ def find_query_alias_references(
         part_ends = [current]
         while current < len(text) and text[current] == ".":
             next_index = current + 1
-            if next_index >= len(text) or not _is_identifier_start(text[next_index]):
+            parsed_part = _read_alias_part_after_dot(text, next_index)
+            if parsed_part is None:
                 break
-            part, current = _read_identifier(text, next_index)
+            part, current = parsed_part
             parts.append(part)
             part_ends.append(current)
 
@@ -284,9 +322,11 @@ def find_query_alias_references(
         if len(parts) >= min_parts:
             references.append(
                 QueryAliasReference(
-                    alias=".".join(parts),
+                    alias=text[index : part_ends[-1]],
                     start=index,
                     end=part_ends[-1],
+                    parts=tuple(parts),
+                    part_end_offsets=tuple(part_ends),
                 )
             )
             index = part_ends[-1]
@@ -314,19 +354,22 @@ def rewrite_query_aliases(sql: str, alias_map: dict[str, str]) -> str:
     pieces: list[str] = []
     last_index = 0
     for reference in find_query_alias_references(text, roots=roots):
-        parts = reference.alias.split(".")
-        part_end_offsets: list[int] = []
-        cursor = reference.start
-        for part in parts:
-            cursor += len(part)
-            part_end_offsets.append(cursor)
-            if cursor < reference.end and text[cursor] == ".":
-                cursor += 1
+        parts = list(reference.parts)
+        part_end_offsets = list(reference.part_end_offsets)
+        if not parts or not part_end_offsets:
+            parts = [part for part in reference.alias.split(".") if part]
+            part_end_offsets = []
+            cursor = reference.start
+            for part in parts:
+                cursor += len(part)
+                part_end_offsets.append(cursor)
+                if cursor < reference.end and text[cursor] == ".":
+                    cursor += 1
 
         replacement: str | None = None
         replacement_end = reference.end
         for count in range(len(parts), 1, -1):
-            candidate = normalize_relation_key(".".join(parts[:count]))
+            candidate = normalize_reference_parts(parts[:count])
             if candidate in normalized_alias_map:
                 replacement = normalized_alias_map[candidate]
                 replacement_end = part_end_offsets[count - 1]

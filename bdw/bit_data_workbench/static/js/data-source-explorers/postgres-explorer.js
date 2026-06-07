@@ -122,10 +122,10 @@ export function createPostgresDataSourceExplorer(helpers) {
           title: "Create a new notebook with this query",
         },
         {
-          label: "Copy query path",
+          label: "Copy source reference",
           action: "copy-query-path",
           attrs: { "data-copy-query-path": true },
-          title: "Copy the SQL query path for this source",
+          title: "Copy the SQL source reference for this source",
         },
         {
           label: "Create data product ...",
@@ -147,13 +147,14 @@ export function createPostgresDataSourceExplorer(helpers) {
   function relationRowMarkup(object, state) {
     const displayName = object.displayName || object.name || "";
     const relation = object.relation || "";
+    const queryReference = object.queryReference || relation;
     const kind = object.kind || "table";
     return sourceObjectRowMarkup(
       {
         kind,
         displayName,
-        title: `${displayName}${relation ? ` | Query path: ${relation}` : ""}`,
-        searchable: `${displayName} ${object.name || ""} ${relation} ${kind}`,
+        title: `${displayName}${queryReference ? ` | Source reference: ${queryReference}` : ""}`,
+        searchable: `${displayName} ${object.name || ""} ${queryReference} ${relation} ${kind}`,
         selected: state.selectedRelation === relation,
         attrs: {
           "data-source-object": true,
@@ -161,13 +162,14 @@ export function createPostgresDataSourceExplorer(helpers) {
           "data-source-object-name": object.name || "",
           "data-source-object-display-name": displayName,
           "data-source-object-relation": relation,
+          "data-source-object-query-reference": queryReference,
           "data-source-option-id": state.selectedSourceId,
           "data-data-source-explorer-postgres-object": relation,
           "data-published-data-products": JSON.stringify(object.publishedDataProducts || []),
         },
         meta: `
           ${sourcePublicationBadgeMarkup(object.publishedDataProducts, escapeHtml)}
-          <small class="source-query-path-label" title="${escapeHtml(`Query path: ${relation}`)}">${escapeHtml(relation)}</small>
+          <small class="source-query-path-label" title="${escapeHtml(`Source reference: ${queryReference}`)}">${escapeHtml(queryReference)}</small>
           <small>${escapeHtml(String(kind).toUpperCase())}</small>
         `,
         actions: relationActionMenuMarkup(object),
@@ -238,16 +240,17 @@ export function createPostgresDataSourceExplorer(helpers) {
     }
 
     const fields = state.fieldCache.get(state.selectedRelation) || [];
+    const selectedQueryReference = selectedObject.queryReference || selectedObject.relation || "";
     detail.innerHTML = detailCardMarkup(
       {
         eyebrow: `${selectedObject.schemaName} • ${String(selectedObject.kind || "table").toUpperCase()}`,
         title: selectedObject.displayName || selectedObject.name || "Selected relation",
-        copy: `Browse ${selectedObject.relation} and hand it off into notebook-driven query flows.`,
+        copy: `Browse ${selectedQueryReference} and hand it off into notebook-driven query flows.`,
         actions: [
           actionButtonMarkup("View Data", "view", escapeHtml),
           actionButtonMarkup("Query In Current Notebook", "query-current", escapeHtml),
           actionButtonMarkup("Query In New Notebook", "query-new", escapeHtml),
-          actionButtonMarkup("Copy query path", "copy-query-path", escapeHtml),
+          actionButtonMarkup("Copy source reference", "copy-query-path", escapeHtml),
           actionButtonMarkup("Create Data Product ...", "create-data-product", escapeHtml),
           actionButtonMarkup("Download DDL", "download-ddl", escapeHtml),
         ].join(""),
@@ -255,8 +258,8 @@ export function createPostgresDataSourceExplorer(helpers) {
           ${publicationLinksMarkup(selectedObject.publishedDataProducts, escapeHtml)}
           <ul class="sidebar-source-field-list">
             <li class="sidebar-source-field">
-              <span class="sidebar-source-field-name"><span class="sidebar-source-field-name-text">Query path</span></span>
-              <span class="sidebar-source-field-type">${escapeHtml(selectedObject.relation || "")}</span>
+              <span class="sidebar-source-field-name"><span class="sidebar-source-field-name-text">Source reference</span></span>
+              <span class="sidebar-source-field-type">${escapeHtml(selectedQueryReference)}</span>
             </li>
           </ul>
           ${fieldListMarkup(fields, escapeHtml)}
@@ -388,8 +391,8 @@ export function createPostgresDataSourceExplorer(helpers) {
       if (action === "copy-query-path") {
         if ((await copySourceQueryPath?.(selectedElement)) === false) {
           await showMessageDialog({
-            title: "Query path unavailable",
-            copy: "This PostgreSQL relation does not expose a query path.",
+            title: "Source reference unavailable",
+            copy: "This PostgreSQL relation does not expose a source reference.",
           });
         }
         return true;

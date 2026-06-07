@@ -121,7 +121,7 @@ class SidebarLabelTests(unittest.TestCase):
         body = response.body.decode("utf-8")
         self.assertIn("abcdefghijklmnopqrstuvwxa[..].csv", body)
         self.assertIn(
-            'title="abcdefghijklmnopqrstuvwxabcdefghijklmnop.csv | Query path: workspace.s3.csv_imports.abcdefghijklmnopqrstuvwx"',
+            'title="abcdefghijklmnopqrstuvwxabcdefghijklmnop.csv | Source reference: workspace.s3.csv_imports.abcdefghijklmnopqrstuvwx"',
             body,
         )
         self.assertIn("CSV", body)

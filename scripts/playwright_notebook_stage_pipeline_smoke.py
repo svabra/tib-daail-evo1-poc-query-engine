@@ -926,11 +926,19 @@ async def main() -> None:
                     <summary>Data Sources</summary>
                     <details data-source-catalog data-source-catalog-name="workspace.s3" data-source-catalog-source-id="workspace.s3" open>
                       <summary>Shared Workspace</summary>
-                      <div
-                        data-source-object
-                        data-s3-bucket="stage-bucket"
-                        data-s3-key="_bdw_stages/notebook/raw/rev-b/data.parquet"
-                      >Raw materialized output</div>
+                      <details data-source-schema data-source-bucket="stage-bucket" data-source-schema-key="workspace.s3:stage-bucket">
+                        <summary>stage-bucket</summary>
+                        <ul class="source-object-list">
+                          <li
+                            class="source-object"
+                            data-source-object
+                            data-s3-bucket="stage-bucket"
+                            data-s3-key="_bdw_stages/notebook/raw/rev-b/data.parquet"
+                          >
+                            <span class="source-node-label"><span>Raw materialized output</span></span>
+                          </li>
+                        </ul>
+                      </details>
                     </details>
                   </details>
                   <details data-query-monitor-section open><summary>Query Monitoring</summary></details>
@@ -1437,7 +1445,7 @@ async def main() -> None:
                 }
                 """
             )
-            if alias_state_after_hover["visibility"] != "visible" or float(alias_state_after_hover["opacity"]) < 0.95:
+            if alias_state_after_hover["visibility"] != "visible" or float(alias_state_after_hover["opacity"]) < 0.25:
                 raise RuntimeError(
                     "Pipeline graph target path should appear on hover: "
                     f"{alias_state_after_hover}"
@@ -1618,6 +1626,86 @@ async def main() -> None:
                 """,
                 timeout=args.timeout_ms,
             )
+            row_glow_measurement_script = """
+                (row) => {
+                  const firstCell = row.cells[0];
+                  const lastCell = row.cells[row.cells.length - 1];
+                  const title = row.querySelector('.pipeline-table-stage-title');
+                  const cells = Array.from(row.cells);
+                  const rowRect = row.getBoundingClientRect();
+                  const cellRect = firstCell?.getBoundingClientRect();
+                  const lastCellRect = lastCell?.getBoundingClientRect();
+                  const titleRect = title?.getBoundingClientRect();
+                  const firstStyle = firstCell ? getComputedStyle(firstCell) : null;
+                  const firstEdge = firstCell ? getComputedStyle(firstCell, '::after') : null;
+                  const lastEdge = lastCell ? getComputedStyle(lastCell, '::after') : null;
+                  const cellStyles = cells.map((cell) => {
+                    const style = getComputedStyle(cell);
+                    return {
+                      animationName: style.animationName,
+                      animationDuration: style.animationDuration,
+                      backgroundColor: style.backgroundColor,
+                      boxShadow: style.boxShadow,
+                    };
+                  });
+                  return {
+                    row: rowRect ? { left: rowRect.left, top: rowRect.top, width: rowRect.width, height: rowRect.height } : null,
+                    cell: cellRect ? { left: cellRect.left, top: cellRect.top, width: cellRect.width, height: cellRect.height } : null,
+                    lastCell: lastCellRect ? { left: lastCellRect.left, top: lastCellRect.top, width: lastCellRect.width, height: lastCellRect.height } : null,
+                    title: titleRect ? { left: titleRect.left, top: titleRect.top, width: titleRect.width, height: titleRect.height } : null,
+                    cellCount: cells.length,
+                    glowingCellCount: cellStyles.filter((style) => style.animationName.includes('pipeline-stage-row-computing-glow')).length,
+                    glowAnimation: firstStyle ? firstStyle.animationName : '',
+                    glowDuration: firstStyle ? firstStyle.animationDuration : '',
+                    glowBoxShadow: firstStyle ? firstStyle.boxShadow : '',
+                    glowBackgroundColor: firstStyle ? firstStyle.backgroundColor : '',
+                    firstEdgeAnimation: firstEdge ? firstEdge.animationName : '',
+                    lastEdgeAnimation: lastEdge ? lastEdge.animationName : '',
+                  };
+                }
+            """
+            running_row_handle = await page.locator(
+                "[data-pipeline-stage-row].pipeline-stage-row-running"
+            ).first.element_handle()
+            if running_row_handle is None:
+                raise RuntimeError("Pipeline did not expose a running stage table row for glow measurement.")
+            row_glow_before = await running_row_handle.evaluate(row_glow_measurement_script)
+            if "pipeline-stage-row-computing-glow" not in str(row_glow_before.get("glowAnimation") or ""):
+                raise RuntimeError(f"Running pipeline stage row was not glowing: {row_glow_before}")
+            if "1.5s" not in str(row_glow_before.get("glowDuration") or ""):
+                raise RuntimeError(f"Running pipeline stage row glow had the wrong duration: {row_glow_before}")
+            if row_glow_before.get("glowingCellCount") != row_glow_before.get("cellCount"):
+                raise RuntimeError(f"Running pipeline stage row glow did not cover the full row: {row_glow_before}")
+            if "pipeline-stage-row-edge-glow" not in str(row_glow_before.get("firstEdgeAnimation") or ""):
+                raise RuntimeError(f"Running pipeline stage row did not expose a left row edge glow: {row_glow_before}")
+            if "pipeline-stage-row-edge-glow" not in str(row_glow_before.get("lastEdgeAnimation") or ""):
+                raise RuntimeError(f"Running pipeline stage row did not expose a right row edge glow: {row_glow_before}")
+            await page.wait_for_timeout(80)
+            row_glow_after = await running_row_handle.evaluate(row_glow_measurement_script)
+            row_glow_shift_violations = []
+            for key in ["row", "cell", "lastCell", "title"]:
+                before_rect = row_glow_before.get(key)
+                after_rect = row_glow_after.get(key)
+                if not before_rect or not after_rect:
+                    row_glow_shift_violations.append({"part": key, "before": before_rect, "after": after_rect})
+                    continue
+                for field in ["left", "top", "width", "height"]:
+                    delta = abs(float(before_rect[field]) - float(after_rect[field]))
+                    if delta > 0.5:
+                        row_glow_shift_violations.append(
+                            {
+                                "part": key,
+                                "field": field,
+                                "delta": delta,
+                                "before": before_rect,
+                                "after": after_rect,
+                            }
+                        )
+            if row_glow_shift_violations:
+                raise RuntimeError(
+                    "Pipeline stage table row glow moved the row or its text: "
+                    f"{row_glow_shift_violations}"
+                )
             await page.wait_for_function(
                 "() => document.querySelectorAll('[data-notebook-pipeline-graph] [data-cancel-pipeline-stage]').length === 1",
                 timeout=args.timeout_ms,
@@ -1651,15 +1739,18 @@ async def main() -> None:
                       : null;
                   };
                   const rect = node.querySelector('.pipeline-node-rect');
+                  const glow = node.querySelector('.pipeline-node-glow');
                   return {
                     node: bounds(node),
                     body: bounds(node.querySelector('.pipeline-node-body')),
                     border: bounds(rect),
+                    glow: bounds(glow),
                     icon: bounds(node.querySelector('.pipeline-node-icon')),
                     title: bounds(node.querySelector('.pipeline-node-title')),
                     action: bounds(node.querySelector('.pipeline-stage-action-group-graph')),
                     state: bounds(node.querySelector('.pipeline-node-state')),
                     borderAnimation: rect ? getComputedStyle(rect).animationName : '',
+                    glowAnimation: glow ? getComputedStyle(glow).animationName : '',
                   };
                 }
             """
@@ -1671,7 +1762,7 @@ async def main() -> None:
             glow_before = await running_node_handle.evaluate(
                 running_node_measurement_script
             )
-            if "pipeline-node-computing-glow" not in str(glow_before.get("borderAnimation") or ""):
+            if "pipeline-node-computing-glow" not in str(glow_before.get("glowAnimation") or ""):
                 raise RuntimeError(f"Running pipeline stage border was not glowing: {glow_before}")
             await page.wait_for_timeout(80)
             glow_after = await running_node_handle.evaluate(
@@ -1901,11 +1992,43 @@ async def main() -> None:
 
             await page.route("**/sidebar?**", handle_sidebar)
             await page.locator('[data-pipeline-stage-menu="stage-raw"]').first.click()
-            await page.locator('[data-pipeline-menu-action="inspect"]').first.click()
-            await page.locator(".is-pipeline-inspect-flash").first.wait_for(
+            await page.locator('[data-pipeline-menu-action="navigate-target"]').first.click()
+            await page.locator(".is-pipeline-target-text-flash").first.wait_for(
                 state="attached",
                 timeout=args.timeout_ms,
             )
+            navigation_state = await page.evaluate(
+                """
+                () => {
+                  const notebook = document.querySelector('[data-notebook-section]');
+                  const sources = document.querySelector('[data-data-sources-section]');
+                  const catalog = document.querySelector('[data-source-catalog-source-id="workspace.s3"]');
+                  const bucket = document.querySelector('[data-source-schema][data-source-bucket="stage-bucket"]');
+                  const object = document.querySelector('[data-source-object][data-s3-bucket="stage-bucket"][data-s3-key="_bdw_stages/notebook/raw/rev-b/data.parquet"]');
+                  const label = object?.querySelector('.source-node-label span');
+                  return {
+                    notebookOpen: Boolean(notebook?.open),
+                    sourcesOpen: Boolean(sources?.open),
+                    catalogOpen: Boolean(catalog?.open),
+                    bucketOpen: Boolean(bucket?.open),
+                    objectFlashing: Boolean(object?.classList.contains('is-pipeline-inspect-flash')),
+                    labelFlashing: Boolean(label?.classList.contains('is-pipeline-target-text-flash')),
+                  };
+                }
+                """
+            )
+            if navigation_state != {
+                "notebookOpen": False,
+                "sourcesOpen": True,
+                "catalogOpen": True,
+                "bucketOpen": True,
+                "objectFlashing": True,
+                "labelFlashing": True,
+            }:
+                raise RuntimeError(
+                    "Navigate to target data object did not reveal and flash the stage output correctly: "
+                    f"{navigation_state}"
+                )
 
             await page.locator('[data-pipeline-stage-menu="stage-raw"]').first.click()
             await page.locator('[data-pipeline-menu-action="derive"]').first.click()

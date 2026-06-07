@@ -62,6 +62,8 @@ export function createS3DataSourceExplorer(helpers) {
     return sourceObjectElement({
       relation: selectedEntry.relation,
       queryAlias: selectedEntry.queryAlias,
+      queryReference: selectedEntry.queryReference || selectedEntry.queryPath,
+      querySql: selectedEntry.querySql,
       name: selectedEntry.name,
       displayName: selectedEntry.displayName || selectedEntry.name,
       kind: "file",
@@ -77,7 +79,7 @@ export function createS3DataSourceExplorer(helpers) {
 
   function entrySecondaryText(entry) {
     if (entry.entryKind === "file") {
-      return entry.queryAlias ? "" : "Not queryable yet";
+      return entry.queryReference || entry.queryAlias ? "" : "Not queryable yet";
     }
     return entry.queryPath || String(entry.entryKind || "").toUpperCase();
   }
@@ -95,7 +97,7 @@ export function createS3DataSourceExplorer(helpers) {
 
   function fileActionMenuMarkup(entry) {
     const publishedItems = publicationMenuItems(entry.publishedDataProducts);
-    const queryable = Boolean(String(entry.queryAlias || entry.relation || "").trim());
+    const queryable = Boolean(String(entry.queryReference || entry.queryAlias || entry.relation || "").trim());
     const isCsv = String(entry.fileFormat || "").trim().toLowerCase() === "csv";
     return sourceActionMenuMarkup(
       [
@@ -129,11 +131,11 @@ export function createS3DataSourceExplorer(helpers) {
           disabled: !queryable,
         },
         {
-          label: "Copy query path",
+          label: "Copy source reference",
           action: "copy-query-path",
           attrs: { "data-copy-query-path": true },
           title: queryable
-            ? "Copy the SQL query path for this object"
+            ? "Copy the SQL source reference for this object"
             : "This object is not queryable yet.",
           disabled: !queryable,
         },
@@ -191,14 +193,14 @@ export function createS3DataSourceExplorer(helpers) {
   }
 
   function fileRowMarkup(entry, state) {
-    const queryPath = String(entry.queryAlias || entry.relation || "").trim();
+    const queryPath = String(entry.queryReference || entry.queryAlias || entry.relation || "").trim();
     const displayName = entry.displayName || entry.name || "";
     const fileFormat = String(entry.fileFormat || "file").toUpperCase();
     return sourceObjectRowMarkup(
       {
         kind: "file",
         displayName,
-        title: `${displayName}${queryPath ? ` | Query path: ${queryPath}` : ""}`,
+        title: `${displayName}${queryPath ? ` | Source reference: ${queryPath}` : ""}`,
         searchable: `${displayName} ${entry.name || ""} ${queryPath} ${entry.path || ""} ${fileFormat}`,
         selected:
           state.selectedEntry?.bucket === entry.bucket &&
@@ -210,6 +212,8 @@ export function createS3DataSourceExplorer(helpers) {
           "data-source-object-display-name": displayName,
           "data-source-object-relation": entry.relation || "",
           "data-source-object-query-alias": entry.queryAlias || "",
+          "data-source-object-query-reference": entry.queryReference || entry.queryPath || "",
+          "data-source-object-query-sql": entry.querySql || "",
           "data-source-option-id": "workspace.s3",
           "data-s3-bucket": entry.bucket || "",
           "data-s3-key": entry.prefix || "",
@@ -227,7 +231,7 @@ export function createS3DataSourceExplorer(helpers) {
           ${sourcePublicationBadgeMarkup(entry.publishedDataProducts, escapeHtml)}
           ${
             queryPath
-              ? `<small class="source-query-path-label" title="${escapeHtml(`Query path: ${queryPath}`)}">${escapeHtml(queryPath)}</small>`
+              ? `<small class="source-query-path-label" title="${escapeHtml(`Source reference: ${queryPath}`)}">${escapeHtml(queryPath)}</small>`
               : `<small>${escapeHtml(entrySecondaryText(entry))}</small>`
           }
           <small>${escapeHtml(fileFormat)}</small>
@@ -344,7 +348,12 @@ export function createS3DataSourceExplorer(helpers) {
     }
 
     if (state.selectedEntry?.entryKind === "file") {
-      const queryAlias = String(state.selectedEntry.queryAlias || "").trim();
+      const queryReference = String(
+        state.selectedEntry.queryReference ||
+          state.selectedEntry.queryPath ||
+          state.selectedEntry.queryAlias ||
+          ""
+      ).trim();
       const canPrepareZip = String(state.selectedEntry.fileFormat || "").trim().toLowerCase() === "csv";
       const preparedZipJob = downloadJobsController?.jobForS3Object?.(
         state.selectedEntry.bucket,
@@ -355,15 +364,15 @@ export function createS3DataSourceExplorer(helpers) {
       detail.innerHTML = detailCardMarkup(
         {
           eyebrow: `${snapshot.bucket} • ${String(state.selectedEntry.fileFormat || "file").toUpperCase()}`,
-          title: queryAlias || state.selectedEntry.name || "Selected object",
-          copy: queryAlias
-            ? `Use this path in SQL. Raw object: ${state.selectedEntry.path || ""}.`
+          title: queryReference || state.selectedEntry.name || "Selected object",
+          copy: queryReference
+            ? `Use this source reference in SQL. Raw object: ${state.selectedEntry.path || ""}.`
             : `This object is visible in S3 but is not queryable yet. Raw object: ${state.selectedEntry.path || ""}.`,
           actions: [
-            actionButtonMarkup("Copy query path", "copy-query-path", escapeHtml, {
-              disabled: !queryAlias,
-              title: queryAlias
-                ? "Copy the SQL query path for this object"
+            actionButtonMarkup("Copy source reference", "copy-query-path", escapeHtml, {
+              disabled: !queryReference,
+              title: queryReference
+                ? "Copy the SQL source reference for this object"
                 : "This object is not queryable yet.",
             }),
             actionButtonMarkup("Download", "download", escapeHtml),
@@ -385,8 +394,8 @@ export function createS3DataSourceExplorer(helpers) {
             ${downloadJobsController?.s3IndicatorMarkup?.(state.selectedEntry.bucket, state.selectedEntry.prefix) || ""}
             <ul class="sidebar-source-field-list">
               <li class="sidebar-source-field">
-                <span class="sidebar-source-field-name"><span class="sidebar-source-field-name-text">Query path</span></span>
-                <span class="sidebar-source-field-type">${escapeHtml(queryAlias || "Not queryable yet")}</span>
+                <span class="sidebar-source-field-name"><span class="sidebar-source-field-name-text">Source reference</span></span>
+                <span class="sidebar-source-field-type">${escapeHtml(queryReference || "Not queryable yet")}</span>
               </li>
               <li class="sidebar-source-field">
                 <span class="sidebar-source-field-name"><span class="sidebar-source-field-name-text">Storage path</span></span>
@@ -582,8 +591,8 @@ export function createS3DataSourceExplorer(helpers) {
         const descriptor = selectedFileDescriptor(state);
         if (!(descriptor instanceof Element) || (await copySourceQueryPath?.(descriptor)) === false) {
           await showMessageDialog({
-            title: "Query path unavailable",
-            copy: "This Shared Workspace object does not expose a query path yet.",
+            title: "Source reference unavailable",
+            copy: "This Shared Workspace object does not expose a source reference yet.",
           });
         }
         return true;

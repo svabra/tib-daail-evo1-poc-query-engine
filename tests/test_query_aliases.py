@@ -18,6 +18,11 @@ from bit_data_workbench.backend.query_aliases import (  # noqa: E402
     s3_query_alias,
     unique_query_aliases,
 )
+from bit_data_workbench.backend.source_references import (  # noqa: E402
+    parse_source_reference,
+    pg_source_reference,
+    s3_source_reference,
+)
 
 
 class QueryAliasTests(unittest.TestCase):
@@ -128,6 +133,59 @@ class QueryAliasTests(unittest.TestCase):
             ),
             "select * from workspace_local_browser.entry_local_workspace_csv_mp4h33ie_omkue1",
         )
+
+    def test_simple_source_references_quote_bucket_object_and_relation(self) -> None:
+        s3_reference = s3_source_reference(
+            bucket="vat-smoke-test",
+            key="bdw_stages/kostenbelege/kb_original_positions/data.parquet",
+        )
+        pg_reference = pg_source_reference(
+            source_id="pg_oltp",
+            relation="pg_oltp.public.sales_orders",
+        )
+
+        self.assertEqual(
+            s3_reference,
+            's3."vat-smoke-test"."bdw_stages/kostenbelege/kb_original_positions/data.parquet"',
+        )
+        self.assertEqual(pg_reference, 'pg.pg_oltp."public.sales_orders"')
+        parsed = parse_source_reference(s3_reference)
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.root, "s3")
+        self.assertEqual(parsed.container, "vat-smoke-test")
+        self.assertEqual(
+            parsed.object_name,
+            "bdw_stages/kostenbelege/kb_original_positions/data.parquet",
+        )
+
+    def test_alias_rewrite_supports_quoted_simple_source_references(self) -> None:
+        s3_reference = s3_source_reference(
+            bucket="vat-smoke-test",
+            key="bdw_stages/kostenbelege/kb_original_positions/data.parquet",
+        )
+        pg_reference = pg_source_reference(
+            source_id="pg_oltp",
+            relation="pg_oltp.public.sales_orders",
+        )
+        sql = f"""
+        select *
+        from {s3_reference}
+        join {pg_reference} on true
+        """
+
+        rewritten = rewrite_query_aliases(
+            sql,
+            {
+                s3_reference: "read_parquet('s3://vat-smoke-test/bdw_stages/kostenbelege/kb_original_positions/data.parquet')",
+                pg_reference: "pg_oltp.public.sales_orders",
+            },
+        )
+
+        self.assertIn(
+            "from read_parquet('s3://vat-smoke-test/bdw_stages/kostenbelege/kb_original_positions/data.parquet')",
+            rewritten,
+        )
+        self.assertIn("join pg_oltp.public.sales_orders on true", rewritten)
 
 
 if __name__ == "__main__":

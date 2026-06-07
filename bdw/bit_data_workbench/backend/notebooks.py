@@ -15,6 +15,7 @@ from .notebook_presets import (
     build_static_notebooks,
 )
 from .s3_storage import s3_bucket_schema_name
+from .source_references import parse_source_reference, pg_source_reference, s3_source_reference
 from .sql_utils import sql_literal
 
 
@@ -37,7 +38,7 @@ def _find_relation(
             if schema_name is not None and schema.name != schema_name:
                 continue
             if schema.objects:
-                return schema.objects[0].relation
+                return schema.objects[0].query_reference or schema.objects[0].relation
     return None
 
 
@@ -57,7 +58,7 @@ def _find_relation_by_object_name(
                 continue
             for source_object in schema.objects:
                 if source_object.name.lower() in preferred:
-                    return source_object.relation
+                    return source_object.query_reference or source_object.relation
     return None
 
 
@@ -76,10 +77,10 @@ def _find_generated_s3_relation_by_object_name(
                 if source_object.name.lower() not in preferred:
                     continue
                 if fallback_relation is None:
-                    fallback_relation = source_object.relation
+                    fallback_relation = source_object.query_reference or source_object.relation
                 normalized_key = str(source_object.s3_key or "").strip().lower()
                 if normalized_key.startswith("generated/"):
-                    return source_object.relation
+                    return source_object.query_reference or source_object.relation
     return fallback_relation
 
 
@@ -103,7 +104,7 @@ def _find_relations_by_object_names(
                 preferred_name = preferred.get(source_object.name.lower())
                 if preferred_name is None or relations[preferred_name] is not None:
                     continue
-                relations[preferred_name] = source_object.relation
+                relations[preferred_name] = source_object.query_reference or source_object.relation
     return relations
 
 
@@ -164,6 +165,13 @@ def _strip_catalog_prefix(
     prefix = f"{catalog_name}."
     if not normalized_relation:
         return None
+    source_reference = parse_source_reference(normalized_relation)
+    if (
+        source_reference is not None
+        and source_reference.root == "pg"
+        and source_reference.container == catalog_name
+    ):
+        return source_reference.object_name
     if normalized_relation.startswith(prefix):
         return normalized_relation[len(prefix):]
     return normalized_relation
@@ -232,6 +240,12 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         catalog_name="pg_oltp",
         schema_name="public",
         object_names=("vat_smoke_test_reference",),
+    )
+    preferred_postgres_olap_relation = _find_relation_by_object_name(
+        catalogs,
+        catalog_name="pg_olap",
+        schema_name="public",
+        object_names=("tax_assessment_olap_smoke",),
     )
     contest_postgres_relation = _find_relation_by_object_name(
         catalogs,
@@ -361,6 +375,7 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
     notebooks = build_static_notebooks(
         preferred_s3_relation=preferred_s3_relation,
         preferred_postgres_relation=preferred_postgres_relation,
+        preferred_postgres_olap_relation=preferred_postgres_olap_relation,
         contest_postgres_relation=contest_postgres_relation,
         contest_s3_relation=contest_s3_relation,
         contest_postgres_native_relation=contest_postgres_native_relation,
@@ -608,7 +623,7 @@ def build_completion_schema(catalogs: list[SourceCatalog]) -> dict[str, object]:
             for source_schema in catalog.schemas
         }
 
-    _add_s3_query_alias_completion_paths(schema, catalogs)
+    _add_source_reference_completion_lists(schema, catalogs)
     return schema
 
 
@@ -674,6 +689,61 @@ def _add_s3_query_alias_completion_paths(
 
     for query_alias in sorted(aliases):
         _add_s3_query_alias_path(schema, query_alias)
+
+
+def _add_source_reference_completion_lists(
+    schema: dict[str, object],
+    catalogs: list[SourceCatalog],
+) -> None:
+    s3_references: dict[str, dict[str, object]] = {}
+    pg_references: dict[str, dict[str, object]] = {}
+    for catalog in catalogs:
+        for source_schema in catalog.schemas:
+            for source_object in source_schema.objects:
+                if catalog.name == "workspace":
+                    query_reference = str(source_object.query_reference or "").strip()
+                    if not query_reference and source_object.s3_bucket and source_object.s3_key:
+                        query_reference = s3_source_reference(
+                            bucket=source_object.s3_bucket,
+                            key=source_object.s3_key,
+                        )
+                    if query_reference.startswith("s3."):
+                        s3_references.setdefault(
+                            query_reference,
+                            {
+                                "label": query_reference,
+                                "detail": str(source_object.s3_file_format or "S3 object"),
+                                "bucket": str(source_object.s3_bucket or ""),
+                                "object": str(source_object.s3_key or ""),
+                                "relation": str(source_object.relation or ""),
+                            },
+                        )
+                    continue
+                if catalog.name in {"pg_oltp", "pg_olap"}:
+                    query_reference = str(source_object.query_reference or "").strip()
+                    if not query_reference:
+                        query_reference = pg_source_reference(
+                            source_id=catalog.name,
+                            relation=source_object.relation,
+                        )
+                    if query_reference.startswith("pg."):
+                        pg_references.setdefault(
+                            query_reference,
+                            {
+                                "label": query_reference,
+                                "detail": "PostgreSQL relation",
+                                "connection": catalog.name,
+                                "relation": str(source_object.relation or ""),
+                            },
+                        )
+    if s3_references:
+        schema["s3References"] = [
+            s3_references[key] for key in sorted(s3_references, key=str.lower)
+        ]
+    if pg_references:
+        schema["pgReferences"] = [
+            pg_references[key] for key in sorted(pg_references, key=str.lower)
+        ]
 
 
 def _folder_id_for_path(path_key: tuple[str, ...]) -> str:

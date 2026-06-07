@@ -105,6 +105,7 @@ class FakeWorkbenchService:
                                 kind="file",
                                 relation="workspace.shared_finance.orders",
                                 query_alias="s3.shared_finance.exports.orders.csv",
+                                query_reference='s3."shared-finance"."exports/orders.csv"',
                                 s3_bucket="shared-finance",
                                 s3_key="exports/orders.csv",
                                 s3_path="s3://shared-finance/exports/orders.csv",
@@ -496,7 +497,8 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
         }
         orders = entries["exports/orders.csv"]
         self.assertEqual(orders["queryAlias"], "s3.shared_finance.exports.orders.csv")
-        self.assertEqual(orders["queryPath"], "s3.shared_finance.exports.orders.csv")
+        self.assertEqual(orders["queryReference"], 's3."shared-finance"."exports/orders.csv"')
+        self.assertEqual(orders["queryPath"], 's3."shared-finance"."exports/orders.csv"')
         self.assertEqual(orders["relation"], "workspace.shared_finance.orders")
 
         self.assertNotIn("queryAlias", entries["exports/raw.csv"])

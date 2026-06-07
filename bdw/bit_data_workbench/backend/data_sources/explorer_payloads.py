@@ -47,6 +47,8 @@ def _source_object_payload(
         "kind": source_object.kind,
         "relation": source_object.relation,
         "queryAlias": source_object.query_alias,
+        "queryReference": source_object.query_reference,
+        "querySql": source_object.query_sql,
         "s3Bucket": source_object.s3_bucket,
         "s3Key": source_object.s3_key,
         "s3Path": source_object.s3_path,
@@ -120,7 +122,7 @@ def _workspace_s3_source_objects(
             for source_object in schema.objects:
                 bucket = str(source_object.s3_bucket or "").strip()
                 key = str(source_object.s3_key or "").strip()
-                if bucket and key and source_object.query_alias:
+                if bucket and key and (source_object.query_reference or source_object.query_alias):
                     objects_by_path[(bucket, key)] = source_object
     return objects_by_path
 
@@ -190,7 +192,9 @@ def _annotate_s3_snapshot(
                     entry["sourceObjectName"] = source_object.name
                     entry["relation"] = source_object.relation
                     entry["queryAlias"] = source_object.query_alias
-                    entry["queryPath"] = source_object.query_alias
+                    entry["queryReference"] = source_object.query_reference
+                    entry["querySql"] = source_object.query_sql
+                    entry["queryPath"] = source_object.query_reference or source_object.query_alias
                 publication_source = {
                     "sourceKind": "object",
                     "sourceId": "workspace.s3",

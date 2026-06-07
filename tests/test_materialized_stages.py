@@ -143,6 +143,35 @@ class NotebookStagePipelineTests(unittest.TestCase):
 
         self.assertEqual(record.payload["durationMs"], 1250)
 
+    def test_stage_record_payload_exposes_simple_s3_reference(self) -> None:
+        _, _, StageRecord, _, _, _ = import_stage_components()
+        record = StageRecord.from_payload(
+            {
+                "runId": "run-1",
+                "notebookId": "nb-1",
+                "stageId": "stage-raw",
+                "cellId": "cell-1",
+                "stageAlias": "raw",
+                "stageTitle": "Raw",
+                "status": "completed",
+                "outputBucket": "stage-bucket",
+                "outputKey": "_bdw_stages/notebook/raw/n_20260607/data.parquet",
+                "outputPath": "s3://stage-bucket/_bdw_stages/notebook/raw/n_20260607/data.parquet",
+            }
+        )
+
+        self.assertIsNotNone(record)
+        self.assertEqual(
+            record.query_reference,
+            's3."stage-bucket"."_bdw_stages/notebook/raw/n_20260607/data.parquet"',
+        )
+        self.assertEqual(record.payload["queryReference"], record.query_reference)
+        self.assertEqual(record.payload["queryPath"], record.query_reference)
+        self.assertEqual(
+            record.payload["querySql"],
+            "read_parquet('s3://stage-bucket/_bdw_stages/notebook/raw/n_20260607/data.parquet')",
+        )
+
     def test_graph_orders_sql_stage_references_and_reports_missing_and_cycles(self) -> None:
         _, _, _, build_graph, _, _ = import_stage_components()
         cells = [

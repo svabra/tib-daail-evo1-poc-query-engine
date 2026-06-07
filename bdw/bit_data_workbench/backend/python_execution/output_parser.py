@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from html import escape
+import re
 from typing import Any
 
 from ...models import PythonJobOutputDefinition
@@ -54,7 +55,13 @@ def sanitize_html_fragment(value: str) -> str:
     try:
         import bleach
     except ImportError:
-        return f"<pre>{escape(raw_value)}</pre>"
+        stripped_value = re.sub(
+            r"<\s*(script|style)\b[^>]*>.*?<\s*/\s*\1\s*>",
+            "",
+            raw_value,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        return f"<pre>{escape(stripped_value)}</pre>"
 
     return bleach.clean(
         raw_value,
