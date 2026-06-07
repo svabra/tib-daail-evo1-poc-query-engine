@@ -125,6 +125,7 @@ from .notebooks import (
     build_notebooks,
     build_restart_seeded_shared_notebooks,
     build_source_options,
+    merge_restart_seeded_shared_notebook,
 )
 from .notebook_activity import NotebookActivityStore
 from .runbooks import build_runbook_tree
@@ -141,6 +142,7 @@ from .shared_notebooks import (
     normalize_folder_path,
     normalize_notebook_cell_stage,
     normalize_notebook_cell_language,
+    normalize_notebook_pipeline_paths,
     normalize_notebook_pipeline_mode,
 )
 from .source_discovery import (
@@ -1175,6 +1177,7 @@ class WorkbenchService:
         cells: list[dict[str, object]],
         versions: list[dict[str, object]],
         pipeline_mode: str = "exploration",
+        pipeline_paths: list[dict[str, object]] | None = None,
         created_at: str | None = None,
         origin_client_id: str = "",
     ) -> dict[str, object]:
@@ -1253,6 +1256,7 @@ class WorkbenchService:
             tree_path=normalized_tree_path,
             linked_generator_id=str(linked_generator_id or "").strip(),
             pipeline_mode=normalize_notebook_pipeline_mode(pipeline_mode),
+            pipeline_paths=normalize_notebook_pipeline_paths(pipeline_paths or []),
             can_edit=True,
             can_delete=True,
             shared=True,
@@ -1456,11 +1460,13 @@ class WorkbenchService:
         notebook_id: str,
         notebook_title: str = "",
         cells: list[dict[str, object]] | None = None,
+        pipeline_paths: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
         return self._materialized_stages.graph_payload(
             notebook_id=str(notebook_id or "").strip(),
             notebook_title=str(notebook_title or "").strip(),
             cells=cells or [],
+            pipeline_paths=pipeline_paths or [],
         )
 
     def run_materialized_pipeline(
@@ -1470,12 +1476,14 @@ class WorkbenchService:
         notebook_title: str = "",
         start_stage_id: str = "",
         cells: list[dict[str, object]] | None = None,
+        pipeline_paths: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
         return self._materialized_stages.run_pipeline(
             notebook_id=str(notebook_id or "").strip(),
             notebook_title=str(notebook_title or "").strip(),
             start_stage_id=str(start_stage_id or "").strip(),
             cells=cells or [],
+            pipeline_paths=pipeline_paths or [],
         )
 
     def cancel_materialized_pipeline(
@@ -1494,12 +1502,14 @@ class WorkbenchService:
         stage_id: str,
         notebook_title: str = "",
         cells: list[dict[str, object]] | None = None,
+        pipeline_paths: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
         return self._materialized_stages.run_stage(
             notebook_id=str(notebook_id or "").strip(),
             stage_id=str(stage_id or "").strip(),
             notebook_title=str(notebook_title or "").strip(),
             cells=cells or [],
+            pipeline_paths=pipeline_paths or [],
         )
 
     def stop_materialized_stage(
@@ -3442,7 +3452,15 @@ class WorkbenchService:
 
         seeded_count = 0
         with self._condition:
+            existing_seed_notebooks = {
+                notebook.notebook_id: notebook
+                for notebook in self._shared_notebook_store.list_notebooks()
+            }
             for notebook in seeded_notebooks:
+                notebook = merge_restart_seeded_shared_notebook(
+                    notebook,
+                    existing_seed_notebooks.get(notebook.notebook_id),
+                )
                 try:
                     self._ensure_shared_folder_metadata_locked(notebook.tree_path)
                     upsert_notebook(notebook)

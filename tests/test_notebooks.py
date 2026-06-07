@@ -638,10 +638,13 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             )
         ]
 
-        notebooks = build_restart_seeded_shared_notebooks(catalogs)
-        self.assertEqual(len(notebooks), 1)
+        notebooks = {
+            notebook.notebook_id: notebook
+            for notebook in build_restart_seeded_shared_notebooks(catalogs)
+        }
+        self.assertIn("mwa-abrechnung-s3-parquet-pipeline", notebooks)
 
-        notebook = notebooks[0]
+        notebook = notebooks["mwa-abrechnung-s3-parquet-pipeline"]
         self.assertEqual(
             notebook.notebook_id,
             "mwa-abrechnung-s3-parquet-pipeline",
@@ -652,7 +655,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
         self.assertEqual(notebook.pipeline_mode, "pipeline")
         self.assertEqual(
             notebook.tree_path,
-            ("PoC Tests", "Performance Evaluation", "MWA Abrechnung (3.2)"),
+            ("PoC Tests", "Performance Evaluation", "Data Pipelines"),
         )
         self.assertEqual(len(notebook.cells), 5)
         self.assertEqual(notebook.cells[0].data_sources, ["workspace.s3"])
@@ -701,6 +704,175 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             node_by_id["stage-mwa-audit-backlog"]["kind"],
             "final",
         )
+
+    def test_restart_seeded_kostenbelege_parquet_pipeline_is_editable_and_forked(
+        self,
+    ) -> None:
+        (
+            build_restart_seeded_shared_notebooks,
+            build_stage_graph,
+            source_catalog_type,
+            source_object_type,
+            source_schema_type,
+        ) = import_restart_seed_helpers()
+        table_names = (
+            "kbkp_2019",
+            "kbpo_2019",
+            "kbhp_2019",
+            "dim_kalender",
+        )
+        catalogs = [
+            source_catalog_type(
+                name="workspace",
+                schemas=[
+                    source_schema_type(
+                        name="s3_3_1_imports_a08e7385",
+                        objects=[
+                            source_object_type(
+                                name=table_name,
+                                kind="view",
+                                relation=f"workspace.s3_3_1_imports_a08e7385.{table_name}",
+                            )
+                            for table_name in table_names
+                        ],
+                    )
+                ],
+            )
+        ]
+
+        notebooks = {
+            notebook.notebook_id: notebook
+            for notebook in build_restart_seeded_shared_notebooks(catalogs)
+        }
+        notebook = notebooks["kostenbelege-3-1-s3-parquet-pipeline"]
+
+        self.assertTrue(notebook.can_edit)
+        self.assertTrue(notebook.can_delete)
+        self.assertTrue(notebook.shared)
+        self.assertEqual(notebook.pipeline_mode, "pipeline")
+        self.assertEqual(
+            notebook.tree_path,
+            ("PoC Tests", "Performance Evaluation", "Data Pipelines"),
+        )
+        self.assertEqual(len(notebook.cells), 9)
+        self.assertEqual(notebook.cells[0].data_sources, ["workspace.s3"])
+        self.assertEqual(notebook.cells[1].data_sources, ["workspace.s3"])
+        self.assertEqual(notebook.cells[2].data_sources, ["workspace.s3"])
+        self.assertTrue(
+            all(str(cell.stage.get("description") or "").strip() for cell in notebook.cells)
+        )
+
+        all_sql = "\n".join(cell.sql for cell in notebook.cells)
+        self.assertIn("workspace.s3_3_1_imports_a08e7385.kbkp_2019", all_sql)
+        self.assertIn("workspace.s3_3_1_imports_a08e7385.kbpo_2019", all_sql)
+        self.assertIn("workspace.s3_3_1_imports_a08e7385.kbhp_2019", all_sql)
+        self.assertIn("workspace.s3_3_1_imports_a08e7385.dim_kalender", all_sql)
+        self.assertIn("stage.kb_original_positions", all_sql)
+        self.assertIn("stage.kb_settlement_positions", all_sql)
+        self.assertNotIn("_csv", all_sql)
+        self.assertNotIn("_json", all_sql)
+        self.assertNotIn("pg_oltp", all_sql)
+        self.assertNotIn("pg_olap", all_sql)
+        self.assertNotIn("public.kb", all_sql)
+        canonical_output_sql = next(
+            cell.sql
+            for cell in notebook.cells
+            if cell.stage.get("stageId") == "stage-kb-canonical-output"
+        )
+        audit_sql = next(
+            cell.sql
+            for cell in notebook.cells
+            if cell.stage.get("stageId") == "stage-kb-settlement-exception-candidates"
+        )
+        self.assertNotIn("LedgerResolution", canonical_output_sql)
+        self.assertIn("LedgerResolution", audit_sql)
+
+        graph = build_stage_graph(
+            notebook_id=notebook.notebook_id,
+            notebook_title=notebook.title,
+            cells=notebook.cells_payload,
+        )
+        self.assertEqual(graph["diagnostics"], [])
+        self.assertEqual(
+            graph["order"],
+            [
+                "stage-kb-current-headers",
+                "stage-kb-current-positions",
+                "stage-kb-current-ledger-accounts",
+                "stage-kb-resolved-positions",
+                "stage-kb-original-positions",
+                "stage-kb-settlement-positions",
+                "stage-kb-canonical-output",
+                "stage-kb-settlement-exception-candidates",
+                "stage-kb-settlement-audit-backlog",
+            ],
+        )
+        self.assertEqual(
+            [path["terminalStageId"] for path in graph["paths"]],
+            [
+                "stage-kb-canonical-output",
+                "stage-kb-settlement-audit-backlog",
+            ],
+        )
+        node_by_id = {node["stageId"]: node for node in graph["nodes"]}
+        self.assertEqual(
+            set(node_by_id["stage-kb-resolved-positions"]["predecessorStageIds"]),
+            {
+                "stage-kb-current-headers",
+                "stage-kb-current-positions",
+                "stage-kb-current-ledger-accounts",
+            },
+        )
+        self.assertEqual(
+            set(node_by_id["stage-kb-resolved-positions"]["successorStageIds"]),
+            {"stage-kb-original-positions", "stage-kb-settlement-positions"},
+        )
+        self.assertEqual(node_by_id["stage-kb-canonical-output"]["kind"], "final")
+        self.assertEqual(
+            node_by_id["stage-kb-settlement-audit-backlog"]["kind"],
+            "final",
+        )
+
+    def test_restart_seeded_kostenbelege_pipeline_uses_generated_s3_folders(
+        self,
+    ) -> None:
+        (
+            build_restart_seeded_shared_notebooks,
+            _build_stage_graph,
+            source_catalog_type,
+            _source_object_type,
+            source_schema_type,
+        ) = import_restart_seed_helpers()
+        from bit_data_workbench.backend.s3_storage import s3_bucket_schema_name
+
+        bucket = "poc-tests-performance-evaluation-kostenbelege-3-1"
+        catalogs = [
+            source_catalog_type(
+                name="workspace",
+                schemas=[
+                    source_schema_type(
+                        name=s3_bucket_schema_name(bucket),
+                        objects=[],
+                    )
+                ],
+            )
+        ]
+
+        notebooks = {
+            notebook.notebook_id: notebook
+            for notebook in build_restart_seeded_shared_notebooks(catalogs)
+        }
+        notebook = notebooks["kostenbelege-3-1-s3-parquet-pipeline"]
+        all_sql = "\n".join(cell.sql for cell in notebook.cells)
+
+        self.assertEqual(len(notebook.cells), 9)
+        self.assertNotIn("Run the Kostenbelege Multi-Source Loader", all_sql)
+        for table_name in ("kbkp_2019", "kbpo_2019", "kbhp_2019", "dim_kalender"):
+            self.assertIn(
+                f"read_parquet('s3://{bucket}/generated/kostenbelege_3_1/parquet/{table_name}/*.parquet'",
+                all_sql,
+            )
+        self.assertIn("hive_partitioning=false", all_sql)
 
     def test_build_notebooks_includes_parquet_performance_options_presets(
         self,

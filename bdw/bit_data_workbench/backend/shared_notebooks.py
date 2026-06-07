@@ -127,6 +127,53 @@ def normalize_notebook_pipeline_mode(value: object) -> str:
     return "pipeline" if normalized == "pipeline" else "exploration"
 
 
+def normalize_notebook_pipeline_paths(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            continue
+        terminal_stage_id = str(
+            item.get("terminalStageId")
+            or item.get("terminal_stage_id")
+            or ""
+        ).strip()
+        path_id = str(item.get("pathId") or item.get("path_id") or "").strip()
+        if not terminal_stage_id and path_id.startswith("path-"):
+            terminal_stage_id = path_id[5:]
+        if not path_id and terminal_stage_id:
+            path_id = f"path-{terminal_stage_id}"
+        if not terminal_stage_id and not path_id:
+            continue
+        key = terminal_stage_id or path_id
+        if key in seen:
+            continue
+        seen.add(key)
+        label = str(item.get("label") or item.get("name") or "").strip()
+        try:
+            priority = int(item.get("priority") or item.get("rank") or index + 1)
+        except (TypeError, ValueError):
+            priority = index + 1
+        normalized.append(
+            {
+                "pathId": path_id,
+                "terminalStageId": terminal_stage_id,
+                "label": label,
+                "priority": max(1, priority),
+            }
+        )
+    normalized.sort(key=lambda item: int(item.get("priority") or 1_000_000))
+    return [
+        {
+            **item,
+            "priority": index + 1,
+        }
+        for index, item in enumerate(normalized)
+    ]
+
+
 def normalize_notebook_cell_stage(value: object) -> dict[str, object]:
     if not isinstance(value, dict):
         return {}
@@ -200,6 +247,7 @@ def serialize_notebook(notebook: NotebookDefinition) -> dict[str, object]:
         "treePath": list(notebook.tree_path),
         "linkedGeneratorId": notebook.linked_generator_id,
         "pipelineMode": notebook.pipeline_mode,
+        "pipelinePaths": normalize_notebook_pipeline_paths(notebook.pipeline_paths),
         "createdAt": notebook.created_at,
         "shared": True,
         "versions": notebook.versions_payload,
@@ -249,6 +297,9 @@ def deserialize_notebook(payload: object) -> NotebookDefinition | None:
         linked_generator_id=str(payload.get("linkedGeneratorId") or payload.get("linked_generator_id") or ""),
         pipeline_mode=normalize_notebook_pipeline_mode(
             payload.get("pipelineMode", payload.get("pipeline_mode"))
+        ),
+        pipeline_paths=normalize_notebook_pipeline_paths(
+            payload.get("pipelinePaths", payload.get("pipeline_paths"))
         ),
         can_edit=True,
         can_delete=True,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Iterable
 
 from ..models import (
@@ -9,9 +10,18 @@ from ..models import (
     SourceCatalog,
 )
 from .notebook_presets import (
+    build_kostenbelege_3_1_s3_parquet_pipeline_notebook,
     build_mwa_s3_parquet_pipeline_notebook,
     build_static_notebooks,
 )
+from .s3_storage import s3_bucket_schema_name
+from .sql_utils import sql_literal
+
+
+KOSTENBELEGE_3_1_GENERATED_BUCKET = (
+    "poc-tests-performance-evaluation-kostenbelege-3-1"
+)
+KOSTENBELEGE_3_1_GENERATED_DATASET = "kostenbelege_3_1"
 
 
 def _find_relation(
@@ -95,6 +105,56 @@ def _find_relations_by_object_names(
                     continue
                 relations[preferred_name] = source_object.relation
     return relations
+
+
+def _workspace_schema_exists(
+    catalogs: Iterable[SourceCatalog],
+    *,
+    schema_name: str,
+) -> bool:
+    for catalog in catalogs:
+        if catalog.name != "workspace":
+            continue
+        if any(schema.name == schema_name for schema in catalog.schemas):
+            return True
+    return False
+
+
+def _kostenbelege_3_1_generated_parquet_scan(table_name: str) -> str:
+    object_path = (
+        f"s3://{KOSTENBELEGE_3_1_GENERATED_BUCKET}/generated/"
+        f"{KOSTENBELEGE_3_1_GENERATED_DATASET}/parquet/{table_name}/*.parquet"
+    )
+    return f"read_parquet({sql_literal(object_path)}, hive_partitioning=false)"
+
+
+def _find_kostenbelege_3_1_generated_s3_relations(
+    catalogs: Iterable[SourceCatalog],
+    *,
+    object_names: Iterable[str],
+) -> dict[str, str | None]:
+    requested_names = tuple(object_names)
+    relations = {
+        object_name: _find_generated_s3_relation_by_object_name(
+            catalogs,
+            object_names=(f"{object_name}_parquet", object_name),
+        )
+        for object_name in requested_names
+    }
+    if all(relations.values()):
+        return relations
+
+    generated_bucket_schema_name = s3_bucket_schema_name(
+        KOSTENBELEGE_3_1_GENERATED_BUCKET
+    )
+    if not _workspace_schema_exists(catalogs, schema_name=generated_bucket_schema_name):
+        return relations
+
+    return {
+        object_name: relations.get(object_name)
+        or _kostenbelege_3_1_generated_parquet_scan(object_name)
+        for object_name in requested_names
+    }
 
 
 def _strip_catalog_prefix(
@@ -338,6 +398,12 @@ def build_restart_seeded_shared_notebooks(
         "mwa_abrechnung_entities",
         "mwa_abrechnungs_ziffern_entities",
     )
+    kostenbelege_3_1_object_names = (
+        "kbkp_2019",
+        "kbpo_2019",
+        "kbhp_2019",
+        "dim_kalender",
+    )
     mwa_s3_parquet_relations = {
         object_name: _find_relation_by_object_name(
             catalogs,
@@ -347,11 +413,118 @@ def build_restart_seeded_shared_notebooks(
         )
         for object_name in mwa_object_names
     }
+    kostenbelege_3_1_s3_relations = _find_relations_by_object_names(
+        catalogs,
+        catalog_name="workspace",
+        schema_name="s3_3_1_imports_a08e7385",
+        object_names=kostenbelege_3_1_object_names,
+    )
+    if not all(kostenbelege_3_1_s3_relations.values()):
+        generated_relations = _find_kostenbelege_3_1_generated_s3_relations(
+            catalogs,
+            object_names=kostenbelege_3_1_object_names,
+        )
+        kostenbelege_3_1_s3_relations = {
+            object_name: kostenbelege_3_1_s3_relations.get(object_name)
+            or generated_relations.get(object_name)
+            for object_name in kostenbelege_3_1_object_names
+        }
     return [
         build_mwa_s3_parquet_pipeline_notebook(
             mwa_s3_parquet_relations=mwa_s3_parquet_relations,
-        )
+        ),
+        build_kostenbelege_3_1_s3_parquet_pipeline_notebook(
+            kostenbelege_3_1_s3_relations=kostenbelege_3_1_s3_relations,
+        ),
     ]
+
+
+def _notebook_terminal_stage_ids(notebook: NotebookDefinition) -> set[str]:
+    stage_ids: set[str] = set()
+    successors: dict[str, set[str]] = {}
+    for cell in notebook.cells:
+        stage = cell.stage if isinstance(cell.stage, dict) else {}
+        stage_id = str(stage.get("stageId") or "").strip()
+        if not stage_id:
+            continue
+        stage_ids.add(stage_id)
+        successors.setdefault(stage_id, set())
+
+    for cell in notebook.cells:
+        stage = cell.stage if isinstance(cell.stage, dict) else {}
+        stage_id = str(stage.get("stageId") or "").strip()
+        if not stage_id:
+            continue
+        for predecessor_id in stage.get("predecessorStageIds", []) or []:
+            normalized_predecessor_id = str(predecessor_id or "").strip()
+            if normalized_predecessor_id in stage_ids:
+                successors.setdefault(normalized_predecessor_id, set()).add(stage_id)
+
+    return {
+        stage_id
+        for stage_id in stage_ids
+        if not [successor_id for successor_id in successors.get(stage_id, set()) if successor_id in stage_ids]
+    }
+
+
+def _preserved_seed_pipeline_paths(
+    seed: NotebookDefinition,
+    existing: NotebookDefinition | None,
+) -> list[dict[str, object]]:
+    if existing is None or not existing.pipeline_paths:
+        return []
+
+    terminal_stage_ids = _notebook_terminal_stage_ids(seed)
+    if not terminal_stage_ids:
+        return []
+
+    def priority_sort_key(item: object) -> int:
+        if not isinstance(item, dict):
+            return 1_000_000
+        try:
+            return int(item.get("priority") or item.get("rank") or 1_000_000)
+        except (TypeError, ValueError):
+            return 1_000_000
+
+    preserved: list[dict[str, object]] = []
+    seen: set[str] = set()
+    ordered_paths = sorted(
+        existing.pipeline_paths,
+        key=priority_sort_key,
+    )
+    for path in ordered_paths:
+        if not isinstance(path, dict):
+            continue
+        terminal_stage_id = str(
+            path.get("terminalStageId")
+            or path.get("terminal_stage_id")
+            or ""
+        ).strip()
+        path_id = str(path.get("pathId") or path.get("path_id") or "").strip()
+        if not terminal_stage_id and path_id.startswith("path-"):
+            terminal_stage_id = path_id[5:]
+        if terminal_stage_id not in terminal_stage_ids or terminal_stage_id in seen:
+            continue
+        seen.add(terminal_stage_id)
+        preserved.append(
+            {
+                "pathId": path_id or f"path-{terminal_stage_id}",
+                "terminalStageId": terminal_stage_id,
+                "label": str(path.get("label") or path.get("name") or "").strip(),
+                "priority": len(preserved) + 1,
+            }
+        )
+    return preserved
+
+
+def merge_restart_seeded_shared_notebook(
+    seed: NotebookDefinition,
+    existing: NotebookDefinition | None,
+) -> NotebookDefinition:
+    return replace(
+        seed,
+        pipeline_paths=_preserved_seed_pipeline_paths(seed, existing),
+    )
 
 
 def _source_option(

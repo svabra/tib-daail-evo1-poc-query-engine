@@ -9936,6 +9936,7 @@ details:not([open]) > .tree-children {
 }
 .notebook-pipeline-run-button,
 .notebook-pipeline-cancel-button,
+.notebook-pipeline-priority-button,
 .pipeline-row-menu-button,
 .pipeline-stage-action-button {
   border-radius: 3px;
@@ -10025,6 +10026,39 @@ details:not([open]) > .tree-children {
   white-space: nowrap;
 }
 
+.notebook-pipeline-priority-button {
+  display: inline-flex;
+  align-items: center;
+  max-width: 260px;
+  min-height: 30px;
+  border: 1px solid var(--border-strong);
+  padding: 0 10px;
+  background: #fff;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.notebook-pipeline-priority-button:hover,
+.notebook-pipeline-priority-button:focus-visible {
+  border-color: #8ea8ba;
+  background: #f8fbfd;
+  outline: none;
+}
+
+.notebook-pipeline-priority-button:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.notebook-pipeline-priority-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .notebook-pipeline-graph-band {
   min-height: 168px;
   overflow-x: auto;
@@ -10072,6 +10106,17 @@ details:not([open]) > .tree-children {
   vector-effect: non-scaling-stroke;
 }
 
+.pipeline-node-glow {
+  fill: none;
+  stroke: #36b8dc;
+  stroke-width: 5;
+  opacity: 0;
+  rx: 5;
+  ry: 5;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
 .pipeline-node.is-selected .pipeline-node-rect {
   stroke: var(--accent);
   stroke-width: 2;
@@ -10079,10 +10124,11 @@ details:not([open]) > .tree-children {
 
 .pipeline-node-running .pipeline-node-rect {
   stroke: #1f6f8b;
+  stroke-width: 2;
 }
 
-.pipeline-node-running .pipeline-node-rect {
-  animation: pipeline-node-computing-glow 2.8s ease-in-out infinite;
+.pipeline-node-running .pipeline-node-glow {
+  animation: pipeline-node-computing-glow 4.2s ease-in-out infinite;
 }
 
 .pipeline-node-queued .pipeline-node-rect {
@@ -10105,7 +10151,7 @@ details:not([open]) > .tree-children {
   align-content: space-between;
   position: relative;
   width: 100%;
-  min-width: 320px;
+  min-width: 350px;
   height: 100%;
   min-height: 88px;
   padding: 13px 14px 12px 13px;
@@ -10138,6 +10184,13 @@ details:not([open]) > .tree-children {
   font-weight: 700;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.pipeline-table-stage-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
 }
 
 .pipeline-node-alias,
@@ -10241,6 +10294,34 @@ details:not([open]) > .tree-children {
   background: #f3f8fb;
 }
 
+.pipeline-priority-rank-badge {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 20px;
+  border: 1px solid #9db1bf;
+  border-radius: 3px;
+  padding: 0 6px;
+  background: #f8fbfd;
+  color: #354a5d;
+  font-size: 0.68rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.pipeline-priority-rank-badge-node {
+  min-width: 26px;
+  height: 22px;
+}
+
+.pipeline-priority-rank-badge-table {
+  height: 18px;
+  min-width: 24px;
+  font-size: 0.64rem;
+}
+
 .pipeline-published-icon {
   color: #1d7a53;
 }
@@ -10283,23 +10364,35 @@ details:not([open]) > .tree-children {
 @keyframes pipeline-node-computing-glow {
   0%,
   100% {
-    filter:
-      drop-shadow(0 0 2px rgba(31, 111, 139, 0.1))
-      drop-shadow(0 0 0 rgba(31, 111, 139, 0));
-    stroke-opacity: 0.82;
+    opacity: 0.18;
+    stroke: #1f6f8b;
+    stroke-width: 4;
+  }
+
+  28% {
+    opacity: 0.42;
+    stroke: #2589a8;
+    stroke-width: 5.75;
   }
 
   50% {
-    filter:
-      drop-shadow(0 0 5px rgba(31, 111, 139, 0.26))
-      drop-shadow(0 0 10px rgba(31, 111, 139, 0.12));
-    stroke-opacity: 0.96;
+    opacity: 0.76;
+    stroke: #39c4ec;
+    stroke-width: 8;
+  }
+
+  72% {
+    opacity: 0.42;
+    stroke: #2589a8;
+    stroke-width: 5.75;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .pipeline-node-running .pipeline-node-rect {
+  .pipeline-node-running .pipeline-node-glow {
     animation: none;
+    opacity: 0.62;
+    stroke-width: 7;
   }
 }
 
@@ -10672,6 +10765,115 @@ details:not([open]) > .tree-children {
 .pipeline-stage-action-button-graph .pipeline-menu-icon {
   width: 14px;
   height: 14px;
+}
+
+.pipeline-priority-popover {
+  position: fixed;
+  z-index: 240;
+  width: min(380px, calc(100vw - 24px));
+  padding: 12px;
+}
+
+.pipeline-priority-popover-heading {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 10px;
+}
+
+.pipeline-priority-popover-heading strong {
+  color: var(--text);
+  font-size: 0.86rem;
+}
+
+.pipeline-priority-popover-heading span {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.pipeline-priority-list {
+  display: grid;
+  gap: 8px;
+}
+
+.pipeline-priority-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: #fbfcfd;
+}
+
+.pipeline-priority-label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.pipeline-priority-label span,
+.pipeline-priority-row small {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pipeline-priority-label input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  padding: 5px 7px;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+}
+
+.pipeline-priority-label input:focus {
+  border-color: #7d9db4;
+  outline: 2px solid rgba(125, 157, 180, 0.18);
+}
+
+.pipeline-priority-row-actions {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.pipeline-priority-row-actions button,
+.pipeline-priority-footer button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  min-height: 26px;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  background: #fff;
+  color: var(--text);
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.pipeline-priority-row-actions button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.pipeline-priority-row-actions .pipeline-menu-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.pipeline-priority-footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
 }
 
 .pipeline-table-duration {

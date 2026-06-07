@@ -95,6 +95,11 @@ class SharedNotebookUpsertPayload(BaseModel):
         validation_alias="pipelineMode",
         serialization_alias="pipelineMode",
     )
+    pipeline_paths: list[dict[str, object]] = Field(
+        default_factory=list,
+        validation_alias="pipelinePaths",
+        serialization_alias="pipelinePaths",
+    )
     created_at: str | None = Field(default=None, validation_alias="createdAt", serialization_alias="createdAt")
     cells: list[NotebookCellPayload] = Field(default_factory=list)
     versions: list[NotebookVersionPayload] = Field(default_factory=list)
@@ -123,6 +128,11 @@ class NotebookStagePipelinePayload(BaseModel):
     notebook_id: str = Field(validation_alias="notebookId", serialization_alias="notebookId")
     notebook_title: str = Field(default="", validation_alias="notebookTitle", serialization_alias="notebookTitle")
     start_stage_id: str = Field(default="", validation_alias="startStageId", serialization_alias="startStageId")
+    pipeline_paths: list[dict[str, object]] = Field(
+        default_factory=list,
+        validation_alias="pipelinePaths",
+        serialization_alias="pipelinePaths",
+    )
     cells: list[dict[str, object]] = Field(default_factory=list)
 
 
@@ -1743,6 +1753,7 @@ def upsert_shared_notebook(
             tree_path=list(payload.tree_path),
             linked_generator_id=payload.linked_generator_id,
             pipeline_mode=payload.pipeline_mode,
+            pipeline_paths=list(payload.pipeline_paths),
             created_at=payload.created_at,
             cells=[cell.model_dump(by_alias=True) for cell in payload.cells],
             versions=[version.model_dump(by_alias=True) for version in payload.versions],
@@ -1838,6 +1849,7 @@ def materialized_stage_graph(
             notebook_id=payload.notebook_id,
             notebook_title=payload.notebook_title,
             cells=payload.cells,
+            pipeline_paths=payload.pipeline_paths,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1855,6 +1867,7 @@ def run_materialized_pipeline(
             notebook_title=payload.notebook_title,
             start_stage_id=payload.start_stage_id,
             cells=payload.cells,
+            pipeline_paths=payload.pipeline_paths,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1883,6 +1896,7 @@ def run_materialized_stage(
             notebook_id=payload.notebook_id,
             notebook_title=payload.notebook_title,
             cells=payload.cells,
+            pipeline_paths=payload.pipeline_paths,
             stage_id=stage_id,
         )
     except KeyError as exc:

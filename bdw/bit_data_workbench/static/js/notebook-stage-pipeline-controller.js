@@ -9,12 +9,14 @@ export function createNotebookStagePipelineController(helpers) {
     normalizeCellLanguage,
     normalizeCellStage,
     normalizeNotebookPipelineMode,
+    normalizePipelinePaths,
     openPublishDialogForSource,
     refreshSidebar,
     requestCellRun,
     revealDataSourceSidebarBrowser,
     setCellStage,
     setNotebookCells,
+    setNotebookPipelinePaths,
     setNotebookPipelineMode,
     showConfirmDialog,
     showMessageDialog,
@@ -24,6 +26,7 @@ export function createNotebookStagePipelineController(helpers) {
   const graphByNotebookId = new Map();
   const selectedStageByNotebookId = new Map();
   let contextMenu = null;
+  let priorityPopover = null;
   let modeChangeVersion = 0;
   let materializedOutputSignature = "";
   const passThroughCellRuns = new Set();
@@ -101,6 +104,7 @@ export function createNotebookStagePipelineController(helpers) {
     const payload = {
       notebookId,
       notebookTitle: metadata.title || "Notebook",
+      pipelinePaths: normalizePipelinePaths(metadata.pipelinePaths),
       cells: (metadata.cells || []).map((cell) => ({
         cellId: cell.cellId,
         language: normalizeCellLanguage(cell.language),
@@ -142,6 +146,88 @@ export function createNotebookStagePipelineController(helpers) {
       return "";
     }
     return `aria-label="${escapeHtml(copy)}" data-pipeline-tooltip="${escapeHtml(copy)}"`;
+  }
+
+  function graphPaths(graph) {
+    return Array.isArray(graph?.paths)
+      ? graph.paths
+          .filter((path) => path && typeof path === "object")
+          .map((path, index) => ({
+            pathId: String(path.pathId || path.path_id || "").trim(),
+            terminalStageId: String(path.terminalStageId || path.terminal_stage_id || "").trim(),
+            terminalStageTitle: String(path.terminalStageTitle || path.terminal_stage_title || "").trim(),
+            label: String(path.label || path.name || path.terminalStageTitle || path.terminal_stage_title || "").trim(),
+            stageIds: Array.isArray(path.stageIds) ? path.stageIds.map((item) => String(item || "").trim()).filter(Boolean) : [],
+            priority: Number.parseInt(path.priority || path.rank || index + 1, 10) || index + 1,
+          }))
+          .filter((path) => path.pathId || path.terminalStageId)
+          .sort((left, right) => left.priority - right.priority)
+      : [];
+  }
+
+  function priorityPathPayload(paths) {
+    return normalizePipelinePaths(
+      (paths || []).map((path, index) => ({
+        pathId: path.pathId || (path.terminalStageId ? `path-${path.terminalStageId}` : ""),
+        terminalStageId: path.terminalStageId,
+        label: path.label || path.terminalStageTitle || "",
+        priority: index + 1,
+      }))
+    );
+  }
+
+  function terminalPathForStage(graph, stageId) {
+    const normalizedStageId = String(stageId || "").trim();
+    if (!normalizedStageId) {
+      return null;
+    }
+    return graphPaths(graph).find((path) => String(path.terminalStageId || "") === normalizedStageId) || null;
+  }
+
+  function priorityRankBadge(path, variant = "node", pathCount = 0) {
+    if (!path || pathCount <= 1) {
+      return "";
+    }
+    const rank = Number.parseInt(path.priority || 0, 10);
+    if (!Number.isFinite(rank) || rank <= 0) {
+      return "";
+    }
+    const label = path.label || path.terminalStageTitle || "Priority path";
+    return `
+      <span
+        class="pipeline-priority-rank-badge pipeline-priority-rank-badge-${escapeHtml(variant)}"
+        ${pipelineTooltipAttributes(`Priority path ${rank}: ${label}`)}
+      >P${escapeHtml(String(rank))}</span>
+    `;
+  }
+
+  function prioritySummaryCopy(paths) {
+    if (!paths.length) {
+      return "Priority paths";
+    }
+    if (paths.length === 1) {
+      return "Priority: single path";
+    }
+    return `Priority: ${paths[0].label || paths[0].terminalStageTitle || "path"} first`;
+  }
+
+  function renderPrioritySummary(workspaceRoot, graph) {
+    const button = workspaceRoot?.querySelector("[data-pipeline-priority-paths]");
+    if (!button) {
+      return;
+    }
+    const paths = graphPaths(graph);
+    const summary = button.querySelector("[data-pipeline-priority-summary]");
+    if (summary) {
+      summary.textContent = prioritySummaryCopy(paths);
+    }
+    const disabled = paths.length <= 1;
+    button.disabled = disabled;
+    button.classList.toggle("is-disabled", disabled);
+    button.dataset.pipelineTooltip = disabled
+      ? "This pipeline has one terminal path, so no path priority is needed."
+      : "Rank terminal paths; priority is used only when branches are ready to run.";
+    button.setAttribute("aria-expanded", priorityPopover?.dataset?.notebookId === String(graph?.notebookId || "") ? "true" : "false");
   }
 
   function formatStageDuration(durationMs) {
@@ -563,6 +649,8 @@ export function createNotebookStagePipelineController(helpers) {
       run: '<path d="M8 5v14l11-7z"></path>',
       runFrom: '<path d="M6 5v14l9-7z"></path><path d="M15 7h3v10h-3"></path><path d="M18 12h3"></path>',
       stop: '<rect x="7" y="7" width="10" height="10"></rect>',
+      up: '<path d="M12 5v14"></path><path d="M6 11l6-6 6 6"></path>',
+      down: '<path d="M12 19V5"></path><path d="M6 13l6 6 6-6"></path>',
       delete: '<path d="M4 7h16"></path><path d="M9 7V4h6v3"></path><path d="M7 7l1 13h8l1-13"></path><path d="M10 11v5"></path><path d="M14 11v5"></path>',
     };
     return `
@@ -596,7 +684,7 @@ export function createNotebookStagePipelineController(helpers) {
       layers.set(layer, entries);
     });
     const positions = new Map();
-    const nodeMinWidth = 320;
+    const nodeMinWidth = 350;
     const nodeMinHeight = 88;
     const nodeWidth = nodeMinWidth;
     const nodeHeight = nodeMinHeight;
@@ -637,6 +725,7 @@ export function createNotebookStagePipelineController(helpers) {
     }
     const { positions, width, height } = graphLayout(graph);
     const selectedStageId = selectedStageByNotebookId.get(graph.notebookId) || graph.defaultSelectedStageId || "";
+    const paths = graphPaths(graph);
     const edgesMarkup = (graph.edges || [])
       .map((edge) => {
         const from = positions.get(String(edge.fromStageId || ""));
@@ -648,6 +737,7 @@ export function createNotebookStagePipelineController(helpers) {
         return `<path class="pipeline-edge pipeline-edge-${statusClass(targetNode?.status)}" d="${connectorPath(from, to)}" marker-end="url(#pipeline-arrowhead)"></path>`;
       })
       .join("");
+    const glowFilterId = `pipeline-node-running-glow-${String(graph.notebookId || "default").replace(/[^A-Za-z0-9_-]/g, "_")}`;
     const nodesMarkup = (graph.nodes || [])
       .map((node) => {
         const box = positions.get(String(node.stageId));
@@ -657,6 +747,7 @@ export function createNotebookStagePipelineController(helpers) {
         const selected = String(node.stageId) === selectedStageId;
         const description = nodeDescription(node);
         const tooltip = description || node.title || node.alias || "Stage";
+        const priorityPath = terminalPathForStage(graph, node.stageId);
         return `
           <g
             class="pipeline-node pipeline-node-${statusClass(node.status)}${selected ? " is-selected" : ""}"
@@ -664,6 +755,7 @@ export function createNotebookStagePipelineController(helpers) {
             transform="translate(${box.x} ${box.y})"
             tabindex="0"
           >
+            <rect class="pipeline-node-glow" x="-2" y="-2" width="${box.width + 4}" height="${box.height + 4}" filter="url(#${escapeHtml(glowFilterId)})"></rect>
             <rect class="pipeline-node-rect" width="${box.width}" height="${box.height}"></rect>
             <foreignObject x="0" y="0" width="${box.width}" height="${box.height}">
               <div class="pipeline-node-body">
@@ -672,6 +764,7 @@ export function createNotebookStagePipelineController(helpers) {
                   <span class="pipeline-node-title" ${pipelineTooltipAttributes(tooltip)}>${escapeHtml(node.title || node.alias || "Stage")}</span>
                   ${publishedIcon(node)}
                   ${obsoleteIcon(node)}
+                  ${priorityRankBadge(priorityPath, "node", paths.length)}
                   ${stageActionButtons(node, "graph")}
                   ${nodeStatusMarker(node)}
                 </div>
@@ -687,6 +780,19 @@ export function createNotebookStagePipelineController(helpers) {
     graphRoot.innerHTML = `
       <svg class="notebook-pipeline-svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Notebook pipeline graph">
         <defs>
+          <filter id="${escapeHtml(glowFilterId)}" x="-40%" y="-40%" width="180%" height="180%">
+            <feGaussianBlur in="SourceGraphic" stdDeviation="4" result="pipelineNodeGlowBlur"></feGaussianBlur>
+            <feColorMatrix
+              in="pipelineNodeGlowBlur"
+              type="matrix"
+              values="0 0 0 0 0.12  0 0 0 0 0.48  0 0 0 0 0.62  0 0 0 0.95 0"
+              result="pipelineNodeGlowColor"
+            ></feColorMatrix>
+            <feMerge>
+              <feMergeNode in="pipelineNodeGlowColor"></feMergeNode>
+              <feMergeNode in="SourceGraphic"></feMergeNode>
+            </feMerge>
+          </filter>
           <marker id="pipeline-arrowhead" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto">
             <path d="M0 0 L8 4 L0 8 Z" class="pipeline-arrowhead"></path>
           </marker>
@@ -711,27 +817,34 @@ export function createNotebookStagePipelineController(helpers) {
       return;
     }
     const selectedStageId = selectedStageByNotebookId.get(graph.notebookId) || graph.defaultSelectedStageId || "";
+    const paths = graphPaths(graph);
     tableRoot.innerHTML = (graph.nodes || [])
-      .map((node) => `
-        <tr
-          class="pipeline-stage-row${String(node.stageId) === selectedStageId ? " is-selected" : ""}"
-          data-pipeline-stage-row="${escapeHtml(node.stageId)}"
-        >
-          <td ${pipelineTooltipAttributes(nodeDescription(node))}>
-            <span class="pipeline-table-stage-title">${escapeHtml(node.title || node.alias || "Stage")}</span>
-            <span class="pipeline-table-stage-alias">${escapeHtml(stageQueryReference(node))}</span>
-          </td>
-          <td class="pipeline-table-run-cell">${stageActionButtons(node, "table")}</td>
-          <td><span class="pipeline-table-status" ${pipelineTooltipAttributes(statusLabel(node.status))}>${statusIcon(node)}</span></td>
-          <td>${escapeHtml(dependencyCopy(node, graph))}</td>
-          <td><span class="pipeline-table-duration">${escapeHtml(stageDurationCopy(node))}</span></td>
-          <td>${node.latestRevision ? escapeHtml(String(node.latestRevision.rowCount ?? 0)) : "-"}</td>
-          <td>
-            ${publishedIcon(node)}
-            <button type="button" class="pipeline-row-menu-button" data-pipeline-stage-menu="${escapeHtml(node.stageId)}" ${pipelineTooltipAttributes("Stage actions")}>...</button>
-          </td>
-        </tr>
-      `)
+      .map((node) => {
+        const priorityPath = terminalPathForStage(graph, node.stageId);
+        return `
+          <tr
+            class="pipeline-stage-row${String(node.stageId) === selectedStageId ? " is-selected" : ""}"
+            data-pipeline-stage-row="${escapeHtml(node.stageId)}"
+          >
+            <td ${pipelineTooltipAttributes(nodeDescription(node))}>
+              <span class="pipeline-table-stage-title-row">
+                <span class="pipeline-table-stage-title">${escapeHtml(node.title || node.alias || "Stage")}</span>
+                ${priorityRankBadge(priorityPath, "table", paths.length)}
+              </span>
+              <span class="pipeline-table-stage-alias">${escapeHtml(stageQueryReference(node))}</span>
+            </td>
+            <td class="pipeline-table-run-cell">${stageActionButtons(node, "table")}</td>
+            <td><span class="pipeline-table-status" ${pipelineTooltipAttributes(statusLabel(node.status))}>${statusIcon(node)}</span></td>
+            <td>${escapeHtml(dependencyCopy(node, graph))}</td>
+            <td><span class="pipeline-table-duration">${escapeHtml(stageDurationCopy(node))}</span></td>
+            <td>${node.latestRevision ? escapeHtml(String(node.latestRevision.rowCount ?? 0)) : "-"}</td>
+            <td>
+              ${publishedIcon(node)}
+              <button type="button" class="pipeline-row-menu-button" data-pipeline-stage-menu="${escapeHtml(node.stageId)}" ${pipelineTooltipAttributes("Stage actions")}>...</button>
+            </td>
+          </tr>
+        `;
+      })
       .join("");
     const tableTotalRoot = workspaceRoot?.querySelector("[data-notebook-pipeline-table-duration-total]");
     if (tableTotalRoot) {
@@ -818,6 +931,7 @@ export function createNotebookStagePipelineController(helpers) {
       selectedStageByNotebookId.set(graph.notebookId, graph.defaultSelectedStageId || "");
     }
     renderStatus(workspaceRoot, graph);
+    renderPrioritySummary(workspaceRoot, graph);
     renderGraph(workspaceRoot, graph);
     renderTable(workspaceRoot, graph);
     renderCellStageState(workspaceRoot, graph);
@@ -955,6 +1069,202 @@ export function createNotebookStagePipelineController(helpers) {
   function closeContextMenu() {
     contextMenu?.remove();
     contextMenu = null;
+  }
+
+  function closePriorityPopover() {
+    const notebookId = priorityPopover?.dataset?.notebookId || "";
+    priorityPopover?.remove();
+    priorityPopover = null;
+    if (notebookId) {
+      document
+        .querySelectorAll(`[data-workspace-notebook][data-notebook-id="${CSS.escape(notebookId)}"] [data-pipeline-priority-paths]`)
+        .forEach((button) => button.setAttribute("aria-expanded", "false"));
+    }
+  }
+
+  function priorityButtonForNotebook(notebookId) {
+    return document.querySelector(
+      `[data-workspace-notebook][data-notebook-id="${CSS.escape(String(notebookId || ""))}"] [data-pipeline-priority-paths]`
+    );
+  }
+
+  function positionPriorityPopover(popover, target) {
+    const rect = target?.getBoundingClientRect?.();
+    if (!rect) {
+      return;
+    }
+    const popoverWidth = popover.offsetWidth || 360;
+    const popoverHeight = popover.offsetHeight || 280;
+    const left = Math.max(8, Math.min(rect.right - popoverWidth, window.innerWidth - popoverWidth - 8));
+    const top = Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - popoverHeight - 8));
+    popover.style.left = `${left}px`;
+    popover.style.top = `${top}px`;
+  }
+
+  function renderPriorityPopoverContent(popover, graph) {
+    const paths = graphPaths(graph);
+    if (paths.length <= 1) {
+      popover.innerHTML = `
+        <div class="pipeline-priority-popover-heading">
+          <strong>Priority paths</strong>
+          <span>This pipeline has one terminal path.</span>
+        </div>
+      `;
+      return;
+    }
+    popover.innerHTML = `
+      <div class="pipeline-priority-popover-heading">
+        <strong>Priority paths</strong>
+        <span>Priority applies only when branches are ready.</span>
+      </div>
+      <div class="pipeline-priority-list">
+        ${paths
+          .map((path, index) => {
+            const stageCount = Array.isArray(path.stageIds) ? path.stageIds.length : 0;
+            return `
+              <div
+                class="pipeline-priority-row"
+                data-pipeline-priority-row
+                data-pipeline-path-id="${escapeHtml(path.pathId)}"
+                data-pipeline-terminal-stage-id="${escapeHtml(path.terminalStageId)}"
+              >
+                <span class="pipeline-priority-rank-badge">${escapeHtml(String(index + 1))}</span>
+                <label class="pipeline-priority-label">
+                  <span>${escapeHtml(path.terminalStageTitle || "Terminal path")}</span>
+                  <input
+                    type="text"
+                    value="${escapeHtml(path.label || path.terminalStageTitle || "")}"
+                    data-pipeline-path-label-input
+                    data-pipeline-path-id="${escapeHtml(path.pathId)}"
+                  >
+                </label>
+                <div class="pipeline-priority-row-actions">
+                  <button type="button" data-pipeline-path-move="up" data-pipeline-path-id="${escapeHtml(path.pathId)}" ${index === 0 ? "disabled" : ""} ${pipelineTooltipAttributes("Move path earlier")}>${menuIcon("up")}</button>
+                  <button type="button" data-pipeline-path-move="down" data-pipeline-path-id="${escapeHtml(path.pathId)}" ${index === paths.length - 1 ? "disabled" : ""} ${pipelineTooltipAttributes("Move path later")}>${menuIcon("down")}</button>
+                </div>
+                <small>${escapeHtml(`${stageCount} ${stageCount === 1 ? "stage" : "stages"}`)}</small>
+              </div>
+            `;
+          })
+          .join("")}
+      </div>
+      <div class="pipeline-priority-footer">
+        <button type="button" data-pipeline-priority-reset>Reset</button>
+      </div>
+    `;
+  }
+
+  function openPriorityPopover(target) {
+    const notebookId = getCurrentNotebookId();
+    const graph = graphByNotebookId.get(notebookId);
+    if (!notebookId || !graph || graphPaths(graph).length <= 1 || target?.disabled) {
+      return;
+    }
+    if (priorityPopover?.dataset?.notebookId === notebookId) {
+      closePriorityPopover();
+      return;
+    }
+    closeContextMenu();
+    closePriorityPopover();
+    priorityPopover = document.createElement("div");
+    priorityPopover.className = "pipeline-priority-popover workspace-action-menu-panel";
+    priorityPopover.dataset.pipelinePriorityPopover = "";
+    priorityPopover.dataset.notebookId = notebookId;
+    renderPriorityPopoverContent(priorityPopover, graph);
+    document.body.appendChild(priorityPopover);
+    positionPriorityPopover(priorityPopover, target);
+    target.setAttribute("aria-expanded", "true");
+  }
+
+  function priorityPathsFromPopover(popover) {
+    const notebookId = popover?.dataset?.notebookId || "";
+    const graph = graphByNotebookId.get(notebookId);
+    const pathsById = new Map(graphPaths(graph).map((path) => [String(path.pathId || ""), path]));
+    return Array.from(popover?.querySelectorAll("[data-pipeline-priority-row]") || []).map((row, index) => {
+      const pathId = String(row.dataset.pipelinePathId || "").trim();
+      const original = pathsById.get(pathId) || {};
+      const input = row.querySelector("[data-pipeline-path-label-input]");
+      const terminalStageId = String(row.dataset.pipelineTerminalStageId || original.terminalStageId || "").trim();
+      const terminalStageTitle = String(original.terminalStageTitle || "").trim();
+      return {
+        ...original,
+        pathId,
+        terminalStageId,
+        terminalStageTitle,
+        label: String(input?.value || terminalStageTitle || "").trim(),
+        priority: index + 1,
+      };
+    });
+  }
+
+  function updatePriorityLabelsFromInput(input) {
+    const popover = input?.closest?.("[data-pipeline-priority-popover]");
+    const notebookId = popover?.dataset?.notebookId || "";
+    if (!popover || !notebookId) {
+      return false;
+    }
+    const nextPaths = priorityPathsFromPopover(popover);
+    setNotebookPipelinePaths(notebookId, priorityPathPayload(nextPaths), { silent: true });
+    const graph = graphByNotebookId.get(notebookId);
+    if (graph) {
+      const nextGraph = { ...graph, paths: nextPaths };
+      graphByNotebookId.set(notebookId, nextGraph);
+      const workspaceRoot = document.querySelector(
+        `[data-workspace-notebook][data-notebook-id="${CSS.escape(notebookId)}"]`
+      );
+      renderPrioritySummary(workspaceRoot, nextGraph);
+    }
+    return true;
+  }
+
+  async function persistPriorityPathsFromPopover(popover) {
+    const notebookId = popover?.dataset?.notebookId || "";
+    if (!notebookId) {
+      return;
+    }
+    const nextPaths = priorityPathsFromPopover(popover);
+    setNotebookPipelinePaths(notebookId, priorityPathPayload(nextPaths), { silent: true, syncNow: true });
+    const graph = await refreshGraph(notebookId);
+    if (priorityPopover === popover && graph) {
+      renderPriorityPopoverContent(popover, graph);
+      positionPriorityPopover(popover, priorityButtonForNotebook(notebookId));
+    }
+  }
+
+  async function movePriorityPath(button) {
+    const popover = button?.closest?.("[data-pipeline-priority-popover]");
+    if (!popover || button.disabled) {
+      return;
+    }
+    const direction = button.dataset.pipelinePathMove;
+    const pathId = String(button.dataset.pipelinePathId || "").trim();
+    const paths = priorityPathsFromPopover(popover);
+    const index = paths.findIndex((path) => String(path.pathId || "") === pathId);
+    const targetIndex = direction === "up" ? index - 1 : index + 1;
+    if (index < 0 || targetIndex < 0 || targetIndex >= paths.length) {
+      return;
+    }
+    [paths[index], paths[targetIndex]] = [paths[targetIndex], paths[index]];
+    setNotebookPipelinePaths(popover.dataset.notebookId || "", priorityPathPayload(paths), { silent: true, syncNow: true });
+    const graph = await refreshGraph(popover.dataset.notebookId || "");
+    if (priorityPopover === popover && graph) {
+      renderPriorityPopoverContent(popover, graph);
+      positionPriorityPopover(popover, priorityButtonForNotebook(popover.dataset.notebookId || ""));
+    }
+  }
+
+  async function resetPriorityPaths(button) {
+    const popover = button?.closest?.("[data-pipeline-priority-popover]");
+    const notebookId = popover?.dataset?.notebookId || "";
+    if (!popover || !notebookId) {
+      return;
+    }
+    setNotebookPipelinePaths(notebookId, [], { silent: true, syncNow: true });
+    const graph = await refreshGraph(notebookId);
+    if (priorityPopover === popover && graph) {
+      renderPriorityPopoverContent(popover, graph);
+      positionPriorityPopover(popover, priorityButtonForNotebook(notebookId));
+    }
   }
 
   function selectedNodeForMenu(button) {
@@ -1116,8 +1426,10 @@ export function createNotebookStagePipelineController(helpers) {
 
   async function waitForNotebookRunsIdle(notebookId, timeoutMs = 60000) {
     const deadline = Date.now() + timeoutMs;
+    let latestSnapshot = null;
     while (Date.now() < deadline) {
       const snapshot = await materializedStageState();
+      latestSnapshot = snapshot;
       applyRealtimeState(snapshot);
       const active = activeRunsForGraph(snapshot).some(
         (run) => String(run?.notebookId || "") === String(notebookId || "")
@@ -1127,7 +1439,7 @@ export function createNotebookStagePipelineController(helpers) {
       }
       await sleep(450);
     }
-    throw new Error("Pipeline run is still running. The graph will keep updating from live events.");
+    return latestSnapshot;
   }
 
   async function waitForStageTerminal(notebookId, stageId, timeoutMs = 60000) {
@@ -1155,7 +1467,7 @@ export function createNotebookStagePipelineController(helpers) {
       }
       await sleep(450);
     }
-    throw new Error("Stage run is still running. The graph will keep updating from live events.");
+    return latestNode;
   }
 
   async function runPipeline(notebookId = getCurrentNotebookId(), startStageId = "") {
@@ -1163,6 +1475,7 @@ export function createNotebookStagePipelineController(helpers) {
       return;
     }
     const normalizedStartStageId = String(startStageId || "").trim();
+    let keepRunningControls = false;
     setPipelineRunButtonBusy(notebookId, true);
     try {
       await fetchJsonOrThrow("/api/materialized-stages/pipeline/run", {
@@ -1174,12 +1487,16 @@ export function createNotebookStagePipelineController(helpers) {
         body: JSON.stringify(pipelinePayload(notebookId, { startStageId: normalizedStartStageId })),
       });
       await refreshGraph(notebookId);
-      await waitForNotebookRunsIdle(notebookId);
-      await refreshGraph(notebookId);
+      const snapshot = await waitForNotebookRunsIdle(notebookId);
+      keepRunningControls = activeRunsForGraph(snapshot).some(
+        (run) => String(run?.notebookId || "") === String(notebookId || "")
+      );
+      const graph = await refreshGraph(notebookId);
+      keepRunningControls = graph ? graphHasActiveRun(graph) : keepRunningControls;
     } catch (error) {
       await reportPipelineError(notebookId, "Pipeline run failed", error);
     } finally {
-      setPipelineRunButtonBusy(notebookId, false);
+      setPipelineRunControls(notebookId, { running: keepRunningControls, cancelling: false });
     }
   }
 
@@ -1470,6 +1787,14 @@ export function createNotebookStagePipelineController(helpers) {
   }
 
   async function handleClick(event) {
+    const clickedPrioritySurface = Boolean(
+      event.target.closest("[data-pipeline-priority-popover]") ||
+        event.target.closest("[data-pipeline-priority-paths]")
+    );
+    if (priorityPopover && !clickedPrioritySurface) {
+      closePriorityPopover();
+    }
+
     const modeToggle = event.target.closest("[data-notebook-mode-toggle]");
     const modeButton = event.target.closest("[data-set-notebook-mode]");
     if (modeToggle || modeButton) {
@@ -1500,6 +1825,29 @@ export function createNotebookStagePipelineController(helpers) {
           applyModeDom(workspaceRoot, pipelineEnabled(notebookId) ? "pipeline" : "exploration");
         }
       }
+      return true;
+    }
+
+    const priorityButton = event.target.closest("[data-pipeline-priority-paths]");
+    if (priorityButton) {
+      event.preventDefault();
+      openPriorityPopover(priorityButton);
+      return true;
+    }
+
+    const priorityMoveButton = event.target.closest("[data-pipeline-path-move]");
+    if (priorityMoveButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      await movePriorityPath(priorityMoveButton);
+      return true;
+    }
+
+    const priorityResetButton = event.target.closest("[data-pipeline-priority-reset]");
+    if (priorityResetButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      await resetPriorityPaths(priorityResetButton);
       return true;
     }
 
@@ -1586,6 +1934,13 @@ export function createNotebookStagePipelineController(helpers) {
     if (contextMenu && !event.target.closest("[data-pipeline-context-menu]")) {
       closeContextMenu();
     }
+    if (
+      priorityPopover &&
+      !event.target.closest("[data-pipeline-priority-popover]") &&
+      !event.target.closest("[data-pipeline-priority-paths]")
+    ) {
+      closePriorityPopover();
+    }
     return false;
   }
 
@@ -1595,11 +1950,17 @@ export function createNotebookStagePipelineController(helpers) {
       return false;
     }
     event.preventDefault();
+    closePriorityPopover();
     openContextMenu(node, event);
     return true;
   }
 
   function handleInput(event) {
+    const priorityLabelInput = event.target.closest("[data-pipeline-path-label-input]");
+    if (priorityLabelInput) {
+      return updatePriorityLabelsFromInput(priorityLabelInput);
+    }
+
     const titleInput = event.target.closest("[data-cell-stage-title-input]");
     const descriptionInput = event.target.closest("[data-cell-stage-description-input]");
     if (!titleInput && !descriptionInput) {

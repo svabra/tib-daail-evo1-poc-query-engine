@@ -409,7 +409,11 @@ export function createNotebookTreeState(helpers) {
       },
       {
         notebookId: "mwa-abrechnung-s3-parquet-pipeline",
-        folderPath: ["PoC Tests", "Performance Evaluation", "MWA Abrechnung (3.2)"],
+        folderPath: ["PoC Tests", "Performance Evaluation", "Data Pipelines"],
+      },
+      {
+        notebookId: "kostenbelege-3-1-s3-parquet-pipeline",
+        folderPath: ["PoC Tests", "Performance Evaluation", "Data Pipelines"],
       },
       {
         notebookId: "mwa-abrechnung-s3-csv",

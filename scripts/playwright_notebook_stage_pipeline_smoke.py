@@ -6,12 +6,19 @@ import json
 import re
 from urllib.parse import urljoin
 
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
 
 NOTEBOOK_METADATA_STORAGE_KEY = "bdw.notebookMeta.v1"
 NOTEBOOK_LAST_STORAGE_KEY = "bdw.lastNotebook.v1"
 FRESH_NOTEBOOK_ID = "local-notebook-pipeline-smoke"
+DATA_PIPELINES_TREE_PATH = ["PoC Tests", "Performance Evaluation", "Data Pipelines"]
+DATA_PIPELINE_NOTEBOOK_IDS = [
+    "mwa-abrechnung-s3-parquet-pipeline",
+    "kostenbelege-3-1-s3-parquet-pipeline",
+]
+STAGE_REFERENCE_RE = re.compile(r"(?<![A-Za-z0-9_$])stage\.([A-Za-z_][A-Za-z0-9_$]*)", re.IGNORECASE)
 
 
 def parse_args() -> argparse.Namespace:
@@ -25,18 +32,216 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def graph_payload(cells: list[dict[str, object]], statuses: dict[str, str], revision_suffix: str) -> dict[str, object]:
+def stage_alias(value: object, fallback: object = "stage") -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(value or fallback or "stage").strip().lower())
+    normalized = re.sub(r"_+", "_", normalized).strip("_")
+    return normalized or "stage"
+
+
+def normalize_pipeline_paths(value: object) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        return []
+    normalized = []
+    seen = set()
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            continue
+        terminal_stage_id = str(item.get("terminalStageId") or item.get("terminal_stage_id") or "").strip()
+        path_id = str(item.get("pathId") or item.get("path_id") or "").strip()
+        if not terminal_stage_id and path_id.startswith("path-"):
+            terminal_stage_id = path_id[5:]
+        if not path_id and terminal_stage_id:
+            path_id = f"path-{terminal_stage_id}"
+        if not terminal_stage_id and not path_id:
+            continue
+        key = terminal_stage_id or path_id
+        if key in seen:
+            continue
+        seen.add(key)
+        priority = item.get("priority") or item.get("rank") or index + 1
+        try:
+            priority = max(1, int(priority))
+        except (TypeError, ValueError):
+            priority = index + 1
+        normalized.append(
+            {
+                "pathId": path_id,
+                "terminalStageId": terminal_stage_id,
+                "label": str(item.get("label") or item.get("name") or "").strip(),
+                "priority": priority,
+                "_index": index,
+            }
+        )
+    normalized.sort(key=lambda item: (item["priority"], item["_index"]))
+    return [
+        {
+            "pathId": item["pathId"],
+            "terminalStageId": item["terminalStageId"],
+            "label": item["label"],
+            "priority": index + 1,
+        }
+        for index, item in enumerate(normalized)
+    ]
+
+
+def topo_order(
+    stage_ids: list[str],
+    predecessors_by_id: dict[str, list[str]],
+    cell_index_by_id: dict[str, int],
+    priority_by_id: dict[str, int] | None = None,
+) -> list[str]:
+    priority_by_id = priority_by_id or {}
+    successors = {stage_id: [] for stage_id in stage_ids}
+    indegree = {stage_id: 0 for stage_id in stage_ids}
+    known_stage_ids = set(stage_ids)
+    for stage_id, predecessors in predecessors_by_id.items():
+        for predecessor_id in predecessors:
+            if predecessor_id not in known_stage_ids:
+                continue
+            indegree[stage_id] += 1
+            successors[predecessor_id].append(stage_id)
+
+    def sort_key(stage_id: str) -> tuple[int, int, str]:
+        return (
+            priority_by_id.get(stage_id, 1_000_000),
+            cell_index_by_id.get(stage_id, 1_000_000),
+            stage_id,
+        )
+
+    ready = sorted([stage_id for stage_id, degree in indegree.items() if degree == 0], key=sort_key)
+    ordered = []
+    while ready:
+        stage_id = ready.pop(0)
+        ordered.append(stage_id)
+        for successor_id in sorted(successors.get(stage_id, []), key=sort_key):
+            indegree[successor_id] -= 1
+            if indegree[successor_id] == 0:
+                ready.append(successor_id)
+        ready.sort(key=sort_key)
+    ordered.extend(stage_id for stage_id in stage_ids if stage_id not in ordered)
+    return ordered
+
+
+def descendant_stage_ids(stage_id: str, edges: list[dict[str, str]]) -> set[str]:
+    successors: dict[str, list[str]] = {}
+    for edge in edges:
+        successors.setdefault(str(edge["fromStageId"]), []).append(str(edge["toStageId"]))
+    required = {stage_id}
+    queue = list(successors.get(stage_id, []))
+    while queue:
+        current = queue.pop(0)
+        if current in required:
+            continue
+        required.add(current)
+        queue.extend(successors.get(current, []))
+    return required
+
+
+def graph_payload(
+    cells: list[dict[str, object]],
+    statuses: dict[str, str],
+    revision_suffix: str,
+    pipeline_paths: object | None = None,
+) -> dict[str, object]:
     stage_cells = [cell for cell in cells if cell.get("language", "sql") == "sql"]
     nodes = []
     by_id = {}
+    by_alias = {}
+    cell_index_by_id = {}
     for index, cell in enumerate(stage_cells):
         stage = cell.get("stage") or {}
         stage_id = str(stage.get("stageId") or f"stage-{index + 1}")
-        predecessors = [str(item) for item in stage.get("predecessorStageIds") or []]
-        if "stage.raw" in str(cell.get("sql") or "") and "stage-raw" not in predecessors and stage_id != "stage-raw":
-            predecessors.append("stage-raw")
-        if "stage.scope" in str(cell.get("sql") or "") and "stage-scope" not in predecessors and stage_id != "stage-scope":
-            predecessors.append("stage-scope")
+        alias = stage.get("alias") or f"stage_{index + 1}"
+        by_alias[stage_alias(alias)] = stage_id
+        cell_index_by_id[stage_id] = index
+    predecessors_by_id = {}
+    for index, cell in enumerate(stage_cells):
+        stage = cell.get("stage") or {}
+        stage_id = str(stage.get("stageId") or f"stage-{index + 1}")
+        predecessors = []
+        for item in stage.get("predecessorStageIds") or []:
+            predecessor_id = str(item).strip()
+            if predecessor_id and predecessor_id not in predecessors:
+                predecessors.append(predecessor_id)
+        for match in STAGE_REFERENCE_RE.finditer(str(cell.get("sql") or "")):
+            predecessor_id = by_alias.get(stage_alias(match.group(1)))
+            if predecessor_id and predecessor_id != stage_id and predecessor_id not in predecessors:
+                predecessors.append(predecessor_id)
+        predecessors_by_id[stage_id] = predecessors
+
+    stage_ids = list(cell_index_by_id)
+    fallback_order = topo_order(stage_ids, predecessors_by_id, cell_index_by_id)
+    fallback_index = {stage_id: index for index, stage_id in enumerate(fallback_order)}
+    successors_by_id = {stage_id: [] for stage_id in stage_ids}
+    edges = []
+    for stage_id, predecessors in predecessors_by_id.items():
+        for predecessor in predecessors:
+            edges.append({"fromStageId": predecessor, "toStageId": stage_id})
+            if predecessor in successors_by_id:
+                successors_by_id[predecessor].append(stage_id)
+    terminal_stage_ids = [
+        stage_id for stage_id in fallback_order if not [successor for successor in successors_by_id.get(stage_id, []) if successor in by_alias.values()]
+    ]
+    metadata_by_terminal = {}
+    prioritized_terminal_ids = []
+    for path in normalize_pipeline_paths(pipeline_paths):
+        terminal_stage_id = str(path.get("terminalStageId") or "").strip()
+        if terminal_stage_id in terminal_stage_ids and terminal_stage_id not in metadata_by_terminal:
+            metadata_by_terminal[terminal_stage_id] = path
+            prioritized_terminal_ids.append(terminal_stage_id)
+    ordered_terminal_ids = [
+        *prioritized_terminal_ids,
+        *[stage_id for stage_id in terminal_stage_ids if stage_id not in metadata_by_terminal],
+    ]
+    title_by_stage_id = {
+        str((cell.get("stage") or {}).get("stageId") or f"stage-{index + 1}"):
+        str((cell.get("stage") or {}).get("title") or (cell.get("stage") or {}).get("alias") or f"Stage {index + 1}")
+        for index, cell in enumerate(stage_cells)
+    }
+    paths = []
+    for index, terminal_stage_id in enumerate(ordered_terminal_ids):
+        required = {terminal_stage_id}
+        queue = list(predecessors_by_id.get(terminal_stage_id, []))
+        while queue:
+            predecessor_id = queue.pop(0)
+            if predecessor_id in required:
+                continue
+            required.add(predecessor_id)
+            queue.extend(predecessors_by_id.get(predecessor_id, []))
+        path_stage_ids = [stage_id for stage_id in fallback_order if stage_id in required]
+        metadata = metadata_by_terminal.get(terminal_stage_id, {})
+        terminal_title = title_by_stage_id.get(terminal_stage_id, terminal_stage_id)
+        paths.append(
+            {
+                "pathId": metadata.get("pathId") or f"path-{terminal_stage_id}",
+                "label": metadata.get("label") or terminal_title,
+                "terminalStageId": terminal_stage_id,
+                "terminalStageTitle": terminal_title,
+                "stageIds": path_stage_ids,
+                "priority": index + 1,
+            }
+        )
+    priority_by_id = {}
+    for path in paths:
+        for stage_id in path["stageIds"]:
+            priority_by_id.setdefault(stage_id, int(path["priority"]))
+    order = topo_order(stage_ids, predecessors_by_id, cell_index_by_id, priority_by_id)
+
+    layer_by_id = {}
+    for stage_id in order:
+        layer_by_id[stage_id] = max(
+            [layer_by_id.get(predecessor_id, 0) + 1 for predecessor_id in predecessors_by_id.get(stage_id, [])]
+            or [0]
+        )
+
+    cells_by_stage_id = {
+        str((cell.get("stage") or {}).get("stageId") or f"stage-{index + 1}"): (index, cell)
+        for index, cell in enumerate(stage_cells)
+    }
+    for order_index, stage_id in enumerate(order):
+        index, cell = cells_by_stage_id[stage_id]
+        stage = cell.get("stage") or {}
+        predecessors = predecessors_by_id.get(stage_id, [])
         node = {
             "stageId": stage_id,
             "cellId": cell.get("cellId"),
@@ -51,8 +256,8 @@ def graph_payload(cells: list[dict[str, object]], statuses: dict[str, str], revi
             "sql": cell.get("sql") or "",
             "dataSources": [],
             "status": statuses.get(stage_id, "planned"),
-            "order": index,
-            "layer": len(predecessors),
+            "order": order_index,
+            "layer": layer_by_id.get(stage_id, 0),
             "published": stage_id == "stage-final" and statuses.get(stage_id) == "valid",
             "publishedDataProducts": [],
             "obsoleteReason": "A predecessor was re-materialized with changed results." if statuses.get(stage_id) == "obsolete" else "",
@@ -63,7 +268,13 @@ def graph_payload(cells: list[dict[str, object]], statuses: dict[str, str], revi
                 "stageId": stage_id,
                 "status": "completed",
                 "revisionId": revision_suffix,
-                "rowCount": 3,
+                "rowCount": {
+                    "stage-raw": 12,
+                    "stage-scope": 9,
+                    "stage-final": 4,
+                    "stage-audit-candidates": 6,
+                    "stage-audit-backlog": 2,
+                }.get(stage_id, 3),
                 "outputBucket": "stage-bucket",
                 "outputKey": key,
                 "outputPath": f"s3://stage-bucket/{key}",
@@ -91,12 +302,8 @@ def graph_payload(cells: list[dict[str, object]], statuses: dict[str, str], revi
             node["outputSource"] = {}
         by_id[stage_id] = node
         nodes.append(node)
-    edges = []
     for node in nodes:
-        for predecessor in node["predecessorStageIds"]:
-            edges.append({"fromStageId": predecessor, "toStageId": node["stageId"]})
-            if predecessor in by_id:
-                by_id[predecessor]["successorStageIds"].append(node["stageId"])
+        node["successorStageIds"] = successors_by_id.get(str(node["stageId"]), [])
     default_stage = next((node["stageId"] for node in nodes if node["status"] == "obsolete"), nodes[0]["stageId"])
     return {
         "notebookId": "mock-notebook",
@@ -106,7 +313,8 @@ def graph_payload(cells: list[dict[str, object]], statuses: dict[str, str], revi
         "sourceNodes": [],
         "edges": edges,
         "diagnostics": [],
-        "order": [node["stageId"] for node in nodes],
+        "order": order,
+        "paths": paths,
         "defaultSelectedStageId": default_stage,
     }
 
@@ -121,9 +329,23 @@ async def open_query_workbench(page, args: argparse.Namespace) -> None:
         "[data-workspace-notebook], [data-query-workbench-entry-page] [data-create-notebook]:visible",
         timeout=args.timeout_ms,
     )
-    if not await page.locator("[data-workspace-notebook]:visible").count():
-        await page.locator("[data-query-workbench-entry-page] [data-create-notebook]:visible").first.click()
-    await page.locator("[data-workspace-notebook]").wait_for(state="visible", timeout=args.timeout_ms)
+    deadline = asyncio.get_running_loop().time() + (args.timeout_ms / 1000)
+    while asyncio.get_running_loop().time() < deadline:
+        if await page.locator("[data-workspace-notebook]:visible").count():
+            return
+        create_button = page.locator("[data-query-workbench-entry-page] [data-create-notebook]:visible").first
+        if await create_button.count():
+            try:
+                await create_button.click(timeout=5000)
+            except PlaywrightTimeoutError:
+                await page.wait_for_timeout(250)
+                continue
+        try:
+            await page.locator("[data-workspace-notebook]").wait_for(state="visible", timeout=3000)
+            return
+        except PlaywrightTimeoutError:
+            await page.wait_for_timeout(250)
+    await page.locator("[data-workspace-notebook]").wait_for(state="visible", timeout=1000)
 
 
 async def install_fresh_notebook_seed(context) -> None:
@@ -166,7 +388,7 @@ async def install_fresh_notebook_seed(context) -> None:
     await context.add_init_script(script)
 
 
-async def seed_three_stage_notebook(page, timeout_ms: int) -> str:
+async def seed_forked_stage_notebook(page, timeout_ms: int) -> str:
     notebook_id = await page.locator("[data-notebook-meta]").first.get_attribute("data-notebook-id")
     if not notebook_id:
         raise RuntimeError("No active notebook id found.")
@@ -214,11 +436,45 @@ async def seed_three_stage_notebook(page, timeout_ms: int) -> str:
             "stage": {
                 "enabled": True,
                 "stageId": "stage-final",
-                "alias": "final_product",
-                "title": "Final Product",
-                "description": "Final published data product",
+                "alias": "status_pressure",
+                "title": "Status Pressure",
+                "description": "Status pressure branch",
                 "kind": "final",
                 "predecessorStageIds": ["stage-scope"],
+                "materialize": True,
+            },
+        },
+        {
+            "cellId": "cell-audit-candidates",
+            "language": "sql",
+            "sql": "SELECT * FROM stage.scope WHERE label = 'audit';",
+            "dataSources": [],
+            "queryOptions": {},
+            "stage": {
+                "enabled": True,
+                "stageId": "stage-audit-candidates",
+                "alias": "audit_candidates",
+                "title": "Audit Candidates",
+                "description": "Audit branch candidates",
+                "kind": "intermediate",
+                "predecessorStageIds": ["stage-scope"],
+                "materialize": True,
+            },
+        },
+        {
+            "cellId": "cell-audit-backlog",
+            "language": "sql",
+            "sql": "SELECT * FROM stage.audit_candidates;",
+            "dataSources": [],
+            "queryOptions": {},
+            "stage": {
+                "enabled": True,
+                "stageId": "stage-audit-backlog",
+                "alias": "audit_backlog",
+                "title": "Audit Backlog",
+                "description": "Prioritized audit backlog branch",
+                "kind": "final",
+                "predecessorStageIds": ["stage-audit-candidates"],
                 "materialize": True,
             },
         },
@@ -252,6 +508,37 @@ async def seed_three_stage_notebook(page, timeout_ms: int) -> str:
     await page.reload(wait_until="domcontentloaded", timeout=timeout_ms)
     await page.locator("[data-workspace-notebook]").wait_for(state="visible", timeout=timeout_ms)
     return notebook_id
+
+
+async def assert_data_pipeline_seed_links_if_present(page) -> None:
+    seed_links = [
+        page.locator(f'[data-notebook-id="{notebook_id}"]').first
+        for notebook_id in DATA_PIPELINE_NOTEBOOK_IDS
+    ]
+    counts = [await link.count() for link in seed_links]
+    if not all(counts):
+        return
+    for notebook_id, link in zip(DATA_PIPELINE_NOTEBOOK_IDS, seed_links):
+        labels = await link.evaluate(
+            """
+            (link) => {
+              const labels = [];
+              let folder = link.closest("[data-tree-folder]");
+              while (folder) {
+                const label = folder.querySelector(":scope > summary .tree-folder-label")?.textContent?.trim();
+                if (label) {
+                  labels.unshift(label);
+                }
+                folder = folder.parentElement?.closest("[data-tree-folder]") || null;
+              }
+              return labels;
+            }
+            """
+        )
+        if labels[-len(DATA_PIPELINES_TREE_PATH) :] != DATA_PIPELINES_TREE_PATH:
+            raise RuntimeError(
+                f"Seeded pipeline notebook {notebook_id} was not under Data Pipelines: {labels}"
+            )
 
 
 async def pipeline_stage_title_positions(page) -> list[dict[str, object]]:
@@ -398,6 +685,8 @@ async def main() -> None:
         "stage-raw": "planned",
         "stage-scope": "planned",
         "stage-final": "planned",
+        "stage-audit-candidates": "planned",
+        "stage-audit-backlog": "planned",
     }
     revision_suffix = "rev-a"
     last_cells: list[dict[str, object]] = []
@@ -422,7 +711,12 @@ async def main() -> None:
             request = route.request
             payload = json.loads(request.post_data or "{}")
             last_cells = payload.get("cells") or last_cells
-            graph = graph_payload(last_cells, statuses, revision_suffix)
+            graph = graph_payload(
+                last_cells,
+                statuses,
+                revision_suffix,
+                payload.get("pipelinePaths") or [],
+            )
             graph["notebookId"] = payload.get("notebookId") or "mock-notebook"
             graph["notebookTitle"] = payload.get("notebookTitle") or "Pipeline smoke"
             if pipeline_active:
@@ -430,7 +724,8 @@ async def main() -> None:
                     {
                         "runId": "pipeline-run-active",
                         "notebookId": graph["notebookId"],
-                        "stageIds": active_pipeline_stage_ids or ["stage-raw", "stage-scope", "stage-final"],
+                        "stageIds": active_pipeline_stage_ids
+                        or ["stage-raw", "stage-scope", "stage-final", "stage-audit-candidates", "stage-audit-backlog"],
                         "status": "running",
                         "cancelRequested": False,
                     }
@@ -446,15 +741,25 @@ async def main() -> None:
             nonlocal pipeline_run_start_stage_id, pipeline_state_poll_count
             payload = json.loads(route.request.post_data or "{}")
             active_pipeline_notebook_id = str(payload.get("notebookId") or "mock-notebook")
-            ordered_stage_ids = [
-                str((cell.get("stage") or {}).get("stageId") or "")
-                for cell in payload.get("cells") or []
-                if (cell.get("stage") or {}).get("stageId")
-            ]
+            graph = graph_payload(
+                payload.get("cells") or [],
+                statuses,
+                revision_suffix,
+                payload.get("pipelinePaths") or [],
+            )
+            ordered_stage_ids = [str(stage_id) for stage_id in graph.get("order") or []]
             pipeline_run_start_stage_id = str(payload.get("startStageId") or "")
             if pipeline_run_start_stage_id and pipeline_run_start_stage_id in ordered_stage_ids:
-                start_index = ordered_stage_ids.index(pipeline_run_start_stage_id)
-                active_pipeline_stage_ids = ordered_stage_ids[start_index:]
+                required_stage_ids = descendant_stage_ids(
+                    pipeline_run_start_stage_id,
+                    [
+                        {"fromStageId": str(edge.get("fromStageId") or ""), "toStageId": str(edge.get("toStageId") or "")}
+                        for edge in graph.get("edges") or []
+                    ],
+                )
+                active_pipeline_stage_ids = [
+                    stage_id for stage_id in ordered_stage_ids if stage_id in required_stage_ids
+                ]
             else:
                 active_pipeline_stage_ids = ordered_stage_ids
             pipeline_run_payload_stage_ids = list(active_pipeline_stage_ids)
@@ -490,6 +795,8 @@ async def main() -> None:
                     "stage-raw": "valid",
                     "stage-scope": "obsolete",
                     "stage-final": "obsolete",
+                    "stage-audit-candidates": "obsolete",
+                    "stage-audit-backlog": "obsolete",
                 }
             )
             await route.fulfill(
@@ -506,6 +813,8 @@ async def main() -> None:
                     "stage-raw": "valid",
                     "stage-scope": "valid",
                     "stage-final": "planned",
+                    "stage-audit-candidates": "planned",
+                    "stage-audit-backlog": "planned",
                 }
             )
             await route.fulfill(
@@ -595,6 +904,23 @@ async def main() -> None:
                 <aside class="sidebar" data-sidebar data-sidebar-mode="notebook">
                   <details data-notebook-section open>
                     <summary>Notebooks</summary>
+                    <details class="tree-folder" data-tree-folder open>
+                      <summary class="tree-folder-summary"><span class="tree-folder-label">PoC Tests</span></summary>
+                      <div class="tree-children" data-tree-children>
+                        <details class="tree-folder" data-tree-folder open>
+                          <summary class="tree-folder-summary"><span class="tree-folder-label">Performance Evaluation</span></summary>
+                          <div class="tree-children" data-tree-children>
+                            <details class="tree-folder" data-tree-folder open>
+                              <summary class="tree-folder-summary"><span class="tree-folder-label">Data Pipelines</span></summary>
+                              <div class="tree-children" data-tree-children>
+                                <a class="notebook-link notebook-tree-leaf" data-notebook-id="mwa-abrechnung-s3-parquet-pipeline">MWA Abrechnung (3.2) S3 Parquet Pipeline</a>
+                                <a class="notebook-link notebook-tree-leaf" data-notebook-id="kostenbelege-3-1-s3-parquet-pipeline">Kostenbelege (3.1) S3 Parquet Pipeline</a>
+                              </div>
+                            </details>
+                          </div>
+                        </details>
+                      </div>
+                    </details>
                   </details>
                   <details data-data-sources-section open>
                     <summary>Data Sources</summary>
@@ -637,6 +963,7 @@ async def main() -> None:
 
         try:
             await open_query_workbench(page, args)
+            await assert_data_pipeline_seed_links_if_present(page)
 
             if await page.locator("[data-notebook-pipeline-panel]").is_visible():
                 raise RuntimeError("Exploration mode should hide the pipeline panel on a fresh notebook.")
@@ -733,7 +1060,7 @@ async def main() -> None:
             if await page.locator("[data-cell-stage-strip]:visible").count():
                 raise RuntimeError("Exploration mode should hide stage strips after switching back.")
 
-            notebook_id = await seed_three_stage_notebook(page, args.timeout_ms)
+            notebook_id = await seed_forked_stage_notebook(page, args.timeout_ms)
 
             if await page.locator("[data-notebook-pipeline-panel]").is_visible():
                 raise RuntimeError("Exploration mode should hide the pipeline panel.")
@@ -744,15 +1071,15 @@ async def main() -> None:
                 timeout=args.timeout_ms,
             )
             await page.wait_for_function(
-                "() => document.querySelectorAll('[data-notebook-pipeline-graph] .pipeline-node').length >= 3",
+                "() => document.querySelectorAll('[data-notebook-pipeline-graph] .pipeline-node').length >= 5",
                 timeout=args.timeout_ms,
             )
             node_width = await page.locator("[data-notebook-pipeline-graph] .pipeline-node").first.evaluate(
                 "(node) => node.getBoundingClientRect().width"
             )
-            if node_width < 320:
+            if node_width < 350:
                 raise RuntimeError(f"Pipeline graph node rendered below its minimum width: {node_width}px")
-            if node_width > 340:
+            if node_width > 380:
                 raise RuntimeError(f"Pipeline graph node rendered too large: {node_width}px")
             node_height = await page.locator("[data-notebook-pipeline-graph] .pipeline-node").first.evaluate(
                 "(node) => node.getBoundingClientRect().height"
@@ -868,7 +1195,7 @@ async def main() -> None:
             if node_icon_width < 38:
                 raise RuntimeError(f"Pipeline table icon rendered too small: {node_icon_width}px")
             node_state_count = await page.locator("[data-notebook-pipeline-graph] .pipeline-node-state").count()
-            if node_state_count < 3:
+            if node_state_count < 5:
                 raise RuntimeError(f"Pipeline graph rendered too few node state circles: {node_state_count}")
             graph_action_alignment = await page.locator(
                 "[data-notebook-pipeline-graph] .pipeline-node-body"
@@ -915,14 +1242,14 @@ async def main() -> None:
                 )
             graph_stage_run_count = await page.locator("[data-notebook-pipeline-graph] [data-run-pipeline-stage]").count()
             table_stage_run_count = await page.locator("[data-notebook-pipeline-table] [data-run-pipeline-stage]").count()
-            if graph_stage_run_count < 3 or table_stage_run_count < 3:
+            if graph_stage_run_count < 5 or table_stage_run_count < 5:
                 raise RuntimeError(
                     "Pipeline stage run actions did not render in both graph and table: "
                     f"graph={graph_stage_run_count}, table={table_stage_run_count}"
                 )
             graph_run_from_count = await page.locator("[data-notebook-pipeline-graph] [data-run-pipeline-from-stage]").count()
             table_run_from_count = await page.locator("[data-notebook-pipeline-table] [data-run-pipeline-from-stage]").count()
-            if graph_run_from_count < 3 or table_run_from_count < 3:
+            if graph_run_from_count < 5 or table_run_from_count < 5:
                 raise RuntimeError(
                     "Pipeline-from-stage actions did not render in both graph and table: "
                     f"graph={graph_run_from_count}, table={table_run_from_count}"
@@ -1002,6 +1329,78 @@ async def main() -> None:
                 or float(table_end_geometry.get("actionRightPadding") or 0) > 18
             ):
                 raise RuntimeError(f"Pipeline stage table left an oversized trailing action gap: {table_end_geometry}")
+
+            priority_button = page.locator("[data-pipeline-priority-paths]").first
+            await priority_button.wait_for(state="visible", timeout=args.timeout_ms)
+            priority_summary = (await priority_button.inner_text()).strip()
+            if "Status Pressure first" not in priority_summary:
+                raise RuntimeError(f"Priority paths should default to graph/cell order: {priority_summary}")
+            await priority_button.click()
+            priority_popover = page.locator("[data-pipeline-priority-popover]").first
+            await priority_popover.wait_for(state="visible", timeout=args.timeout_ms)
+            if await priority_popover.locator("[data-pipeline-priority-row]").count() != 2:
+                raise RuntimeError("Priority paths popover did not show the two terminal paths.")
+            audit_row = priority_popover.locator('[data-pipeline-terminal-stage-id="stage-audit-backlog"]').first
+            await audit_row.locator('[data-pipeline-path-move="up"]').click()
+            await page.wait_for_function(
+                """
+                () => {
+                  const summary = document.querySelector('[data-pipeline-priority-summary]')?.textContent || '';
+                  return summary.includes('Audit Backlog first');
+                }
+                """,
+                timeout=args.timeout_ms,
+            )
+            stored_priority_paths = await page.evaluate(
+                """
+                ({ storageKey, notebookId }) => {
+                  const state = JSON.parse(window.localStorage.getItem(storageKey) || "{}");
+                  return state[notebookId]?.pipelinePaths || [];
+                }
+                """,
+                {
+                    "storageKey": NOTEBOOK_METADATA_STORAGE_KEY,
+                    "notebookId": notebook_id,
+                },
+            )
+            if (
+                len(stored_priority_paths) != 2
+                or stored_priority_paths[0].get("terminalStageId") != "stage-audit-backlog"
+                or stored_priority_paths[1].get("terminalStageId") != "stage-final"
+            ):
+                raise RuntimeError(f"Priority path reorder was not persisted: {stored_priority_paths}")
+            await page.reload(wait_until="domcontentloaded", timeout=args.timeout_ms)
+            await page.locator("[data-notebook-pipeline-graph] .pipeline-node").first.wait_for(
+                state="visible",
+                timeout=args.timeout_ms,
+            )
+            await page.wait_for_function(
+                """
+                () => {
+                  const summary = document.querySelector('[data-pipeline-priority-summary]')?.textContent || '';
+                  return summary.includes('Audit Backlog first') &&
+                    document.querySelectorAll('[data-notebook-pipeline-graph] .pipeline-node').length >= 5;
+                }
+                """,
+                timeout=args.timeout_ms,
+            )
+            priority_badges = await page.evaluate(
+                """
+                () => ({
+                  auditGraph: document.querySelector('[data-pipeline-stage-node="stage-audit-backlog"] .pipeline-priority-rank-badge')?.textContent?.trim() || '',
+                  auditTable: document.querySelector('[data-pipeline-stage-row="stage-audit-backlog"] .pipeline-priority-rank-badge')?.textContent?.trim() || '',
+                  statusGraph: document.querySelector('[data-pipeline-stage-node="stage-final"] .pipeline-priority-rank-badge')?.textContent?.trim() || '',
+                  statusTable: document.querySelector('[data-pipeline-stage-row="stage-final"] .pipeline-priority-rank-badge')?.textContent?.trim() || '',
+                })
+                """
+            )
+            if priority_badges != {
+                "auditGraph": "P1",
+                "auditTable": "P1",
+                "statusGraph": "P2",
+                "statusTable": "P2",
+            }:
+                raise RuntimeError(f"Priority rank badges were not shown on terminal stages: {priority_badges}")
             alias_state_before_hover = await page.locator(
                 '[data-pipeline-stage-node="stage-raw"] .pipeline-node-alias'
             ).first.evaluate(
@@ -1303,7 +1702,7 @@ async def main() -> None:
                     f"{glow_shift_violations}"
                 )
             await page.wait_for_function(
-                "() => document.querySelectorAll('[data-notebook-pipeline-graph] .pipeline-node-state-ok').length >= 3",
+                "() => document.querySelectorAll('[data-notebook-pipeline-graph] .pipeline-node-state-ok').length >= 5",
                 timeout=args.timeout_ms,
             )
             row_text_after_pipeline = await page.locator('[data-pipeline-stage-row="stage-raw"]').first.inner_text()
@@ -1316,18 +1715,18 @@ async def main() -> None:
             header_total_duration = (
                 await page.locator("[data-notebook-pipeline-total-duration]").first.inner_text()
             )
-            if "3s 600 ms" not in header_total_duration:
+            if "6s" not in header_total_duration:
                 raise RuntimeError(
                     f"Pipeline header did not show the summed stage duration: {header_total_duration}"
                 )
             footer_total_duration = (
                 await page.locator("[data-notebook-pipeline-table-duration-total]").first.inner_text()
             )
-            if footer_total_duration.strip() != "3s 600 ms":
+            if footer_total_duration.strip() != "6s 0 ms":
                 raise RuntimeError(
                     f"Pipeline table footer did not show the summed stage duration: {footer_total_duration}"
                 )
-            if await page.locator("[data-notebook-pipeline-graph] .pipeline-node-state-ok").count() < 3:
+            if await page.locator("[data-notebook-pipeline-graph] .pipeline-node-state-ok").count() < 5:
                 raise RuntimeError("Completed pipeline stages did not show green OK state circles.")
             await page.locator("[data-run-notebook-pipeline]").first.wait_for(
                 state="visible",
@@ -1335,7 +1734,13 @@ async def main() -> None:
             )
             if await page.locator("[data-cancel-notebook-pipeline]").first.is_visible():
                 raise RuntimeError("Pipeline cancel button stayed visible after all stages completed.")
-            expected_pipeline_stage_ids = ["stage-raw", "stage-scope", "stage-final"]
+            expected_pipeline_stage_ids = [
+                "stage-raw",
+                "stage-scope",
+                "stage-audit-candidates",
+                "stage-audit-backlog",
+                "stage-final",
+            ]
             if pipeline_run_payload_stage_ids != expected_pipeline_stage_ids:
                 raise RuntimeError(
                     "Run pipeline did not submit the full dependency-ordered stage set: "
@@ -1346,7 +1751,7 @@ async def main() -> None:
                     "Run pipeline did not remain active through the full mocked stage sequence: "
                     f"{pipeline_active_stage_timeline}"
                 )
-            if pipeline_state_poll_count < 4:
+            if pipeline_state_poll_count < 6:
                 raise RuntimeError(
                     "Run pipeline returned to idle before Playwright observed the active run complete: "
                     f"{pipeline_state_poll_count} state polls"
@@ -1369,7 +1774,12 @@ async def main() -> None:
                 state="visible",
                 timeout=args.timeout_ms,
             )
-            expected_from_stage_ids = ["stage-scope", "stage-final"]
+            expected_from_stage_ids = [
+                "stage-scope",
+                "stage-audit-candidates",
+                "stage-audit-backlog",
+                "stage-final",
+            ]
             if pipeline_run_start_stage_id != "stage-scope":
                 raise RuntimeError(
                     "Run pipeline from a stage did not submit the selected start stage: "
@@ -1385,9 +1795,9 @@ async def main() -> None:
                     "Run pipeline from a stage did not process selected and downstream stages in order: "
                     f"{pipeline_active_stage_timeline}"
                 )
-            if pipeline_state_poll_count < 3:
+            if pipeline_state_poll_count < 5:
                 raise RuntimeError(
-                    "Run pipeline from a stage returned to idle before both downstream stages completed: "
+                    "Run pipeline from a stage returned to idle before all downstream stages completed: "
                     f"{pipeline_state_poll_count} state polls"
                 )
             if await page.locator("[data-notebook-pipeline-graph] .pipeline-status-pill").count():
@@ -1500,7 +1910,7 @@ async def main() -> None:
             await page.locator('[data-pipeline-stage-menu="stage-raw"]').first.click()
             await page.locator('[data-pipeline-menu-action="derive"]').first.click()
             await page.wait_for_function(
-                "() => document.querySelectorAll('[data-query-cell]').length >= 4",
+                "() => document.querySelectorAll('[data-query-cell]').length >= 6",
                 timeout=args.timeout_ms,
             )
             derived_sql = await page.evaluate(
@@ -1524,7 +1934,7 @@ async def main() -> None:
             await page.locator('[data-pipeline-stage-menu="stage-raw"]').first.click()
             await page.locator('[data-pipeline-menu-action="fork"]').first.click()
             await page.wait_for_function(
-                "() => document.querySelectorAll('[data-query-cell]').length >= 5",
+                "() => document.querySelectorAll('[data-query-cell]').length >= 7",
                 timeout=args.timeout_ms,
             )
             fork_sql = await page.evaluate(

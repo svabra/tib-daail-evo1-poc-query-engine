@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from io import BytesIO
+import json
 from pathlib import Path
 import sys
 import threading
@@ -80,6 +82,58 @@ class InMemorySharedNotebookStore:
             version=1 if existing is None else existing.version + 1,
         )
         return self.upsert_folder(folder)
+
+
+class FakeS3MissingObject(Exception):
+    response = {"Error": {"Code": "NoSuchKey"}}
+
+
+class FakeSharedNotebookS3Client:
+    def __init__(self):
+        self.objects: dict[tuple[str, str], bytes] = {}
+
+    def put_object(self, *, Bucket, Key, Body, ContentType=None):
+        self.objects[(Bucket, Key)] = bytes(Body)
+        return {}
+
+    def get_object(self, *, Bucket, Key):
+        try:
+            payload = self.objects[(Bucket, Key)]
+        except KeyError as exc:
+            raise FakeS3MissingObject() from exc
+        return {"Body": BytesIO(payload)}
+
+    def head_object(self, *, Bucket, Key):
+        if (Bucket, Key) not in self.objects:
+            raise FakeS3MissingObject()
+        return {}
+
+    def delete_object(self, *, Bucket, Key):
+        self.objects.pop((Bucket, Key), None)
+        return {}
+
+    def list_objects_v2(self, *, Bucket, Prefix="", MaxKeys=1000, ContinuationToken=None):
+        keys = sorted(
+            key
+            for bucket, key in self.objects
+            if bucket == Bucket and key.startswith(Prefix)
+        )
+        return {
+            "Contents": [{"Key": key} for key in keys[:MaxKeys]],
+            "IsTruncated": False,
+        }
+
+
+class FakeSharedNotebookS3Settings:
+    s3_bucket = "workspace"
+    shared_notebooks_bucket = "shared-notebooks"
+    s3_endpoint = "http://127.0.0.1:9000"
+
+    def current_s3_access_key_id(self):
+        return "access-key"
+
+    def current_s3_secret_access_key(self):
+        return "secret-key"
 
 
 def build_shared_notebook_service(existing_notebooks=None, existing_folders=None):
@@ -324,6 +378,112 @@ class SharedNotebookServiceTests(unittest.TestCase):
         )
         self.assertEqual(appended_events[1]["origin_client_id"], "client-2")
 
+    def test_shared_notebook_serialization_round_trips_pipeline_paths(self) -> None:
+        _, notebook_cell_type, notebook_type, _, _, _ = import_shared_notebook_components()
+        from bit_data_workbench.backend.shared_notebooks import (
+            deserialize_notebook,
+            serialize_notebook,
+        )
+
+        notebook = notebook_type(
+            notebook_id="shared-notebook-priority",
+            title="Priority pipeline",
+            summary="Forked priority paths",
+            cells=[notebook_cell_type(cell_id="cell-a", sql="select 1")],
+            pipeline_mode="pipeline",
+            pipeline_paths=[
+                {
+                    "pathId": "path-stage-status_pressure",
+                    "terminalStageId": "stage-status_pressure",
+                    "label": "Status Pressure",
+                    "priority": 2,
+                },
+                {
+                    "path_id": "path-stage-audit_backlog",
+                    "terminal_stage_id": "stage-audit_backlog",
+                    "name": "Audit Backlog",
+                    "rank": 1,
+                },
+            ],
+            shared=True,
+        )
+
+        serialized = serialize_notebook(notebook)
+        restored = deserialize_notebook(serialized)
+
+        self.assertEqual(
+            serialized["pipelinePaths"],
+            [
+                {
+                    "pathId": "path-stage-audit_backlog",
+                    "terminalStageId": "stage-audit_backlog",
+                    "label": "Audit Backlog",
+                    "priority": 1,
+                },
+                {
+                    "pathId": "path-stage-status_pressure",
+                    "terminalStageId": "stage-status_pressure",
+                    "label": "Status Pressure",
+                    "priority": 2,
+                },
+            ],
+        )
+        self.assertIsNotNone(restored)
+        self.assertEqual(restored.pipeline_paths, serialized["pipelinePaths"])
+
+    def test_s3_shared_notebook_store_round_trips_pipeline_paths(self) -> None:
+        _, notebook_cell_type, notebook_type, _, _, _ = import_shared_notebook_components()
+        from bit_data_workbench.backend.shared_notebooks import S3SharedNotebookStore
+
+        fake_s3 = FakeSharedNotebookS3Client()
+        store = S3SharedNotebookStore(
+            FakeSharedNotebookS3Settings(),
+            s3_client_factory=lambda _settings: fake_s3,
+            ensure_bucket=lambda _settings, _bucket: None,
+        )
+        store.initialize()
+
+        notebook = notebook_type(
+            notebook_id="shared-notebook-s3-priority",
+            title="S3 priority pipeline",
+            summary="Pipeline path metadata in S3",
+            cells=[notebook_cell_type(cell_id="cell-a", sql="select 1")],
+            pipeline_mode="pipeline",
+            pipeline_paths=[
+                {
+                    "pathId": "path-stage-audit",
+                    "terminalStageId": "stage-audit",
+                    "label": "Audit first",
+                    "priority": 1,
+                },
+                {
+                    "pathId": "path-stage-status",
+                    "terminalStageId": "stage-status",
+                    "label": "Status second",
+                    "priority": 2,
+                },
+            ],
+            shared=True,
+        )
+
+        refreshed, action = store.upsert_notebook(notebook)
+        stored_notebook_payloads = [
+            json.loads(payload.decode("utf-8"))
+            for (_bucket, key), payload in fake_s3.objects.items()
+            if key.startswith("notebooks/")
+        ]
+        restored = store.list_notebooks()
+
+        self.assertEqual(action, "created")
+        self.assertEqual(refreshed.pipeline_paths, notebook.pipeline_paths)
+        self.assertEqual(len(stored_notebook_payloads), 1)
+        self.assertEqual(
+            stored_notebook_payloads[0]["pipelinePaths"],
+            notebook.pipeline_paths,
+        )
+        self.assertEqual(len(restored), 1)
+        self.assertEqual(restored[0].pipeline_paths, notebook.pipeline_paths)
+
     def test_startup_seed_reestablishes_editable_mwa_parquet_pipeline(
         self,
     ) -> None:
@@ -348,6 +508,26 @@ class SharedNotebookServiceTests(unittest.TestCase):
                 "MWA Abrechnung (3.2)",
             ),
             pipeline_mode="pipeline",
+            pipeline_paths=[
+                {
+                    "pathId": "path-stage-mwa-audit-backlog",
+                    "terminalStageId": "stage-mwa-audit-backlog",
+                    "label": "Audit first",
+                    "priority": 1,
+                },
+                {
+                    "pathId": "path-stage-deleted-terminal",
+                    "terminalStageId": "stage-deleted-terminal",
+                    "label": "Deleted terminal",
+                    "priority": 2,
+                },
+                {
+                    "pathId": "path-stage-mwa-status-pressure",
+                    "terminalStageId": "stage-mwa-status-pressure",
+                    "label": "Status second",
+                    "priority": 3,
+                },
+            ],
             can_edit=True,
             can_delete=True,
             shared=True,
@@ -396,6 +576,27 @@ class SharedNotebookServiceTests(unittest.TestCase):
         self.assertTrue(seeded.can_delete)
         self.assertTrue(seeded.shared)
         self.assertEqual(seeded.pipeline_mode, "pipeline")
+        self.assertEqual(
+            seeded.tree_path,
+            ("PoC Tests", "Performance Evaluation", "Data Pipelines"),
+        )
+        self.assertEqual(
+            seeded.pipeline_paths,
+            [
+                {
+                    "pathId": "path-stage-mwa-audit-backlog",
+                    "terminalStageId": "stage-mwa-audit-backlog",
+                    "label": "Audit first",
+                    "priority": 1,
+                },
+                {
+                    "pathId": "path-stage-mwa-status-pressure",
+                    "terminalStageId": "stage-mwa-status-pressure",
+                    "label": "Status second",
+                    "priority": 2,
+                },
+            ],
+        )
         self.assertEqual(len(seeded.cells), 5)
         all_sql = "\n".join(cell.sql for cell in seeded.cells)
         self.assertNotIn("user_edit", all_sql)

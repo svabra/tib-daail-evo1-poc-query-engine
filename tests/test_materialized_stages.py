@@ -51,6 +51,16 @@ def stage_cell(cell_id, alias, sql, predecessors=None):
     }
 
 
+def forked_priority_cells():
+    return [
+        stage_cell("cell-1", "source", "select 1"),
+        stage_cell("cell-2", "normalized", "select * from stage.source"),
+        stage_cell("cell-3", "status_pressure", "select * from stage.normalized"),
+        stage_cell("cell-4", "audit_candidates", "select * from stage.normalized"),
+        stage_cell("cell-5", "audit_backlog", "select * from stage.audit_candidates"),
+    ]
+
+
 class FakeStageManager(import_stage_components()[0]):
     def __init__(self, store, fingerprints, sql_rewriter=None):
         MaterializedStageManager, _, _, _, _, _ = import_stage_components()
@@ -165,6 +175,112 @@ class NotebookStagePipelineTests(unittest.TestCase):
             ],
         )
         self.assertTrue(any(item["code"] == "cycle" for item in cycle["diagnostics"]))
+
+    def test_graph_detects_terminal_priority_paths_in_forked_dag(self) -> None:
+        _, _, _, build_graph, _, _ = import_stage_components()
+
+        graph = build_graph(notebook_id="nb-1", cells=forked_priority_cells())
+
+        self.assertEqual(
+            [(path["terminalStageId"], path["label"], path["priority"]) for path in graph["paths"]],
+            [
+                ("stage-status_pressure", "Status Pressure", 1),
+                ("stage-audit_backlog", "Audit Backlog", 2),
+            ],
+        )
+        self.assertEqual(
+            graph["paths"][0]["stageIds"],
+            ["stage-source", "stage-normalized", "stage-status_pressure"],
+        )
+        self.assertEqual(
+            graph["paths"][1]["stageIds"],
+            [
+                "stage-source",
+                "stage-normalized",
+                "stage-audit_candidates",
+                "stage-audit_backlog",
+            ],
+        )
+
+    def test_priority_paths_reorder_ready_siblings_without_skipping_stages(self) -> None:
+        _, Store, _, _, _, _ = import_stage_components()
+        cells = forked_priority_cells()
+        priority_paths = [
+            {
+                "pathId": "path-stage-audit_backlog",
+                "terminalStageId": "stage-audit_backlog",
+                "label": "Audit first",
+                "priority": 1,
+            },
+            {
+                "pathId": "path-stage-status_pressure",
+                "terminalStageId": "stage-status_pressure",
+                "label": "Status second",
+                "priority": 2,
+            },
+        ]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = FakeStageManager(
+                Store(Path(temp_dir) / "materialized-stages.json"),
+                {
+                    "stage-source": "source-v1",
+                    "stage-normalized": "normalized-v1",
+                    "stage-status_pressure": "status-v1",
+                    "stage-audit_candidates": "audit-candidates-v1",
+                    "stage-audit_backlog": "audit-backlog-v1",
+                },
+            )
+
+            graph = manager.graph_payload(
+                notebook_id="nb-1",
+                cells=cells,
+                pipeline_paths=priority_paths,
+            )
+            self.assertEqual(
+                graph["order"],
+                [
+                    "stage-source",
+                    "stage-normalized",
+                    "stage-audit_candidates",
+                    "stage-audit_backlog",
+                    "stage-status_pressure",
+                ],
+            )
+
+            manager.run_pipeline(
+                notebook_id="nb-1",
+                cells=cells,
+                pipeline_paths=priority_paths,
+            )
+            manager.wait_for_idle()
+
+            self.assertEqual(manager.execution_order, graph["order"])
+            self.assertEqual(len(manager.execution_order), len(set(manager.execution_order)))
+            self.assertEqual(set(manager.execution_order), set(graph["order"]))
+
+    def test_stale_priority_path_metadata_is_ignored_when_terminal_disappears(self) -> None:
+        _, _, _, build_graph, _, _ = import_stage_components()
+        cells = [
+            stage_cell("cell-1", "source", "select 1"),
+            stage_cell("cell-2", "status_pressure", "select * from stage.source"),
+        ]
+
+        graph = build_graph(
+            notebook_id="nb-1",
+            cells=cells,
+            pipeline_paths=[
+                {
+                    "pathId": "path-stage-audit_backlog",
+                    "terminalStageId": "stage-audit_backlog",
+                    "label": "Deleted terminal",
+                    "priority": 1,
+                }
+            ],
+        )
+
+        self.assertEqual(len(graph["paths"]), 1)
+        self.assertEqual(graph["paths"][0]["terminalStageId"], "stage-status_pressure")
+        self.assertEqual(graph["paths"][0]["label"], "Status Pressure")
 
     def test_pipeline_run_order_and_fingerprint_obsolete_cascade(self) -> None:
         _, Store, _, _, _, _ = import_stage_components()
