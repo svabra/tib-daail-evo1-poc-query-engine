@@ -1576,10 +1576,13 @@ class WorkbenchService:
     ) -> dict[str, object]:
         backend_prepare_started = time.perf_counter()
         normalized_query_options = normalize_query_options(query_options)
-        user_sql = str(display_sql or sql or "")
+        display_query_sql = str(display_sql or "")
+        submitted_query_sql = str(sql or "")
+        user_sql = display_query_sql or submitted_query_sql
+        routing_sql = submitted_query_sql or user_sql
         relation_index = self._query_source_relation_index(local_relation_map=local_relation_map)
         source_validation = self.validate_query_sources(
-            sql=user_sql,
+            sql=routing_sql,
             data_sources=data_sources,
             local_relation_map=local_relation_map,
             relation_index=relation_index,
@@ -1589,8 +1592,12 @@ class WorkbenchService:
                 str(source_validation.get("message") or "Referenced source(s) were not found.")
             )
 
-        execution_sql = self._rewrite_query_source_aliases(user_sql, relation_index, local_relation_map)
-        query_analysis = self._analyze_query(user_sql, relation_index=relation_index)
+        execution_sql = self._rewrite_query_source_aliases(
+            routing_sql,
+            relation_index,
+            local_relation_map,
+        )
+        query_analysis = self._analyze_query(routing_sql, relation_index=relation_index)
         source_summaries = self._query_source_summaries(
             query_analysis.touched_relations,
             local_relation_map=local_relation_map,
@@ -1626,10 +1633,13 @@ class WorkbenchService:
         query_options: dict[str, object] | None = None,
     ) -> dict[str, object]:
         normalized_query_options = normalize_query_options(query_options)
-        user_sql = str(display_sql or sql or "")
+        display_query_sql = str(display_sql or "")
+        submitted_query_sql = str(sql or "")
+        user_sql = display_query_sql or submitted_query_sql
+        routing_sql = submitted_query_sql or user_sql
         relation_index = self._query_source_relation_index(local_relation_map=local_relation_map)
         source_validation = self.validate_query_sources(
-            sql=user_sql,
+            sql=routing_sql,
             data_sources=data_sources,
             local_relation_map=local_relation_map,
             relation_index=relation_index,
@@ -1639,12 +1649,16 @@ class WorkbenchService:
                 str(source_validation.get("message") or "Referenced source(s) were not found.")
             )
 
-        execution_sql = self._rewrite_query_source_aliases(user_sql, relation_index, local_relation_map)
+        execution_sql = self._rewrite_query_source_aliases(
+            routing_sql,
+            relation_index,
+            local_relation_map,
+        )
         execution_mode = classify_query_execution(execution_sql, data_sources)
         if execution_mode == QUERY_EXECUTION_POSTGRES_NATIVE:
             raise ValueError("Explain is available for DuckDB-backed SQL cells only.")
 
-        query_analysis = self._analyze_query(user_sql, relation_index=relation_index)
+        query_analysis = self._analyze_query(routing_sql, relation_index=relation_index)
         source_summaries = self._query_source_summaries(
             query_analysis.touched_relations,
             local_relation_map=local_relation_map,

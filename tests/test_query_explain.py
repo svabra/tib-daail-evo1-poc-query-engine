@@ -161,6 +161,20 @@ class QueryExplainServiceTests(unittest.TestCase):
         self.assertEqual(payload["status"], "completed")
         self.assertIn("client_browser_abc.entry_1", payload["touchedRelations"])
 
+    def test_display_sql_does_not_override_runnable_sql_for_explain(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            service = make_service(make_settings(Path(tmp)))
+            payload = service.explain_query(
+                sql="select * from range(3)",
+                display_sql="select * from stage.mwa_joined_abrechnungen",
+                notebook_id="notebook",
+                notebook_title="Notebook",
+                cell_id="cell-1",
+                data_sources=[],
+            )
+
+        self.assertEqual(payload["status"], "completed")
+
     def test_native_postgres_sources_are_rejected(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             service = make_service(make_settings(Path(tmp)))

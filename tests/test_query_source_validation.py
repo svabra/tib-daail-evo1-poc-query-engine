@@ -341,6 +341,39 @@ class QuerySourceValidationTests(unittest.TestCase):
             ],
         )
 
+    def test_start_query_job_uses_submitted_sql_for_validation_and_routing(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = sample_catalogs()
+        captured: dict[str, object] = {}
+
+        def record_start(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(payload={"jobId": "query-display-sql-routing"})
+
+        service._query_jobs = SimpleNamespace(start_job=record_start)
+
+        snapshot = service.start_query_job(
+            sql="select * from s3.test.generated.vat_smoke.part_00001.parquet",
+            display_sql="select * from stage.mwa_joined_abrechnungen",
+            notebook_id="notebook",
+            notebook_title="Notebook",
+            cell_id="cell-1",
+            data_sources=["workspace.s3"],
+        )
+
+        self.assertEqual(snapshot["jobId"], "query-display-sql-routing")
+        self.assertEqual(captured["sql"], "select * from stage.mwa_joined_abrechnungen")
+        self.assertEqual(
+            captured["execution_sql"],
+            "select * from read_parquet('s3://test/generated/vat_smoke/part_00001.parquet')",
+        )
+        self.assertEqual(captured["touched_relations"], ["test.vat_smoke_part_00001"])
+        self.assertEqual(captured["touched_buckets"], ["test"])
+        self.assertEqual(len(captured["source_summaries"]), 1)
+        self.assertEqual(captured["source_summaries"][0]["relation"], "test.vat_smoke_part_00001")
+        self.assertEqual(captured["source_summaries"][0]["bucket"], "test")
+
     def test_start_query_job_applies_parquet_hive_option_to_s3_source_summary(
         self,
     ) -> None:
