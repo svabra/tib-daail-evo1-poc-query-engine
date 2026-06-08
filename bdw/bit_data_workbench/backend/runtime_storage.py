@@ -96,6 +96,74 @@ def directory_size(path: Path) -> int:
     return total
 
 
+def _managed_query_spill_directory(
+    spill_root: Path | str | None,
+    spill_temp_directory: Path | str | None,
+) -> Path | None:
+    if spill_root is None or spill_temp_directory is None:
+        return None
+    try:
+        root = Path(spill_root).resolve()
+        target = Path(spill_temp_directory).resolve()
+    except Exception:
+        return None
+    if target == root or target.parent != root:
+        return None
+    if not target.name.startswith("query-"):
+        return None
+    if not target.is_dir():
+        return None
+    return target
+
+
+def delete_query_spill_directory(
+    spill_root: Path | str | None,
+    spill_temp_directory: Path | str | None,
+) -> tuple[bool, int]:
+    target = _managed_query_spill_directory(spill_root, spill_temp_directory)
+    if target is None or not target.is_dir():
+        return False, 0
+    reclaimed_bytes = directory_size(target)
+    shutil.rmtree(target, ignore_errors=True)
+    deleted = not target.exists()
+    return deleted, reclaimed_bytes if deleted else 0
+
+
+def cleanup_stale_query_spill_directories(
+    spill_root: Path | str | None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "root": "",
+        "inspectedCount": 0,
+        "deletedCount": 0,
+        "failedCount": 0,
+        "reclaimedBytes": 0,
+        "skippedCount": 0,
+    }
+    if spill_root is None:
+        return payload
+    try:
+        root = Path(spill_root).resolve()
+    except Exception:
+        return payload
+    payload["root"] = root.as_posix()
+    if not root.exists() or not root.is_dir():
+        return payload
+    for child in root.iterdir():
+        payload["inspectedCount"] = int(payload["inspectedCount"]) + 1
+        candidate = _managed_query_spill_directory(root, child)
+        if candidate is None:
+            payload["skippedCount"] = int(payload["skippedCount"]) + 1
+            continue
+        deleted, reclaimed_bytes = delete_query_spill_directory(root, child)
+        if deleted:
+            payload["deletedCount"] = int(payload["deletedCount"]) + 1
+            payload["reclaimedBytes"] = int(payload["reclaimedBytes"]) + reclaimed_bytes
+        else:
+            payload["failedCount"] = int(payload["failedCount"]) + 1
+    return payload
+
+
 def _format_mb(size_bytes: int) -> float:
     return round(max(0, int(size_bytes)) / (1024 * 1024), 2)
 

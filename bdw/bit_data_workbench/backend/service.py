@@ -119,7 +119,11 @@ from .runtime_connections import (
     normalize_postgres_host,
     open_postgres_native_connection,
 )
-from .runtime_storage import delete_runtime_query_cache, runtime_storage_snapshot
+from .runtime_storage import (
+    cleanup_stale_query_spill_directories,
+    delete_runtime_query_cache,
+    runtime_storage_snapshot,
+)
 from .notebooks import (
     build_completion_schema,
     build_generator_notebook_links,
@@ -489,6 +493,10 @@ class WorkbenchService:
         self._log_startup_section("Ensure DuckDB directories exist")
         self.settings.duckdb_database.parent.mkdir(parents=True, exist_ok=True)
         self.settings.duckdb_extension_directory.mkdir(parents=True, exist_ok=True)
+        if self.settings.duckdb_temp_directory is not None:
+            self.settings.duckdb_temp_directory.mkdir(parents=True, exist_ok=True)
+        self._log_startup_section("Clean stale DuckDB spill directories")
+        self._cleanup_startup_duckdb_spill()
         self._log_startup_section("Initialize shared notebook storage")
         self._initialize_shared_notebook_store()
         self._log_startup_section("Open startup DuckDB connection")
@@ -577,6 +585,40 @@ class WorkbenchService:
             self._log_startup("Startup step complete: service consumption monitor started")
         self._log_startup("Workbench startup completed in %.2fs", time.perf_counter() - started)
         self._log_startup(STARTUP_DIVIDER)
+
+    def _cleanup_startup_duckdb_spill(self) -> None:
+        spill_root = getattr(self.settings, "duckdb_temp_directory", None)
+        try:
+            payload = cleanup_stale_query_spill_directories(spill_root)
+        except Exception as exc:
+            self._log_startup(
+                "Startup DuckDB spill cleanup failed for %s: %s",
+                spill_root,
+                exc,
+                level=logging.WARNING,
+                exc_info=True,
+            )
+            return
+
+        root = str(payload.get("root") or "")
+        if not root:
+            self._log_startup("Startup DuckDB spill cleanup skipped: no spill root configured")
+            return
+
+        failed_count = int(payload.get("failedCount") or 0)
+        self._log_startup(
+            (
+                "Startup DuckDB spill cleanup: root=%s inspected=%d deleted=%d "
+                "reclaimed_bytes=%d skipped=%d failed=%d"
+            ),
+            root,
+            int(payload.get("inspectedCount") or 0),
+            int(payload.get("deletedCount") or 0),
+            int(payload.get("reclaimedBytes") or 0),
+            int(payload.get("skippedCount") or 0),
+            failed_count,
+            level=logging.WARNING if failed_count else logging.INFO,
+        )
 
     def stop(self) -> None:
         self._log_startup_section("Shutdown workbench service")

@@ -29,7 +29,11 @@ from ..models import QueryJobDefinition, QueryJobMetricPoint, QueryResourceSampl
 from .query_cache import hydrate_cache
 from .query_options import cache_hydration_enabled
 from .runtime_connections import create_duckdb_worker_connection, open_postgres_native_connection
-from .runtime_storage import directory_size, parse_storage_size_bytes
+from .runtime_storage import (
+    delete_query_spill_directory,
+    directory_size,
+    parse_storage_size_bytes,
+)
 from .sql_utils import qualified_name
 
 
@@ -2216,13 +2220,7 @@ class QueryJobManager:
         if spill_temp_directory is None or self._settings.duckdb_temp_directory is None:
             return
         try:
-            spill_root = Path(self._settings.duckdb_temp_directory).resolve()
-            target = Path(spill_temp_directory).resolve()
-            if target == spill_root or spill_root not in target.parents:
-                return
-            if not target.name.startswith("query-"):
-                return
-            shutil.rmtree(target, ignore_errors=True)
+            delete_query_spill_directory(self._settings.duckdb_temp_directory, spill_temp_directory)
         except Exception:
             logger.debug(
                 "Failed to clean query spill directory %s",
