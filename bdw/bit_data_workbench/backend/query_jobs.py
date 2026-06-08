@@ -5,6 +5,7 @@ import logging
 import multiprocessing as mp
 import os
 import queue
+import re
 import shutil
 import tempfile
 import threading
@@ -834,13 +835,99 @@ def _relation_parts(relation: object) -> tuple[str, ...]:
     return tuple(parts)
 
 
+def _split_relation_parts_quoted(relation: object) -> tuple[str, ...]:
+    text = str(relation or "")
+    if not text:
+        return ()
+
+    parts: list[str] = []
+    token: list[str] = []
+    quote_char: str | None = None
+
+    index = 0
+    while index < len(text):
+        char = text[index]
+        next_char = text[index + 1] if index + 1 < len(text) else ""
+
+        if quote_char is None:
+            if char == "[":
+                quote_char = "]"
+                token.append(char)
+                index += 1
+                continue
+            if char in {"'", '"', "`"}:
+                quote_char = char
+                token.append(char)
+                index += 1
+                continue
+            if char == ".":
+                part = "".join(token).strip()
+                if part:
+                    parts.append(part)
+                token = []
+                index += 1
+                continue
+            token.append(char)
+            index += 1
+            continue
+
+        token.append(char)
+        if char == quote_char:
+            if quote_char in {"'", '"', "`"} and next_char == quote_char:
+                token.append(next_char)
+                index += 2
+                continue
+            quote_char = None
+        elif quote_char == "]" and char == "]":
+            quote_char = None
+        index += 1
+
+    if token:
+        part = "".join(token).strip()
+        if part:
+            parts.append(part)
+    return tuple(part for part in parts if part)
+
+
+def _normalize_relation_segment(value: object) -> str:
+    return str(value).strip().strip('"').strip("'").strip("`").strip("[]")
+
+
+def _is_s3_file_pattern_relation(relation: str) -> bool:
+    normalized = str(relation or "").strip()
+    if not normalized.lower().startswith("s3."):
+        return False
+
+    parts = [
+        _normalize_relation_segment(part)
+        for part in _split_relation_parts_quoted(normalized)
+    ]
+    if len(parts) < 3 or parts[0].lower() != "s3":
+        return False
+
+    relation_path = ".".join(parts[2:])
+    if not relation_path:
+        return False
+
+    if "*" in relation_path or "?" in relation_path:
+        return True
+    if "/" in relation_path or "\\" in relation_path:
+        return True
+
+    filename = relation_path.rsplit("/", 1)[-1]
+    filename = filename.rsplit("\\", 1)[-1]
+    return bool(re.search(r"\.[a-z0-9_]{1,12}$", filename.lower()))
+
+
 def _normalize_relation_key(value: object) -> str:
     return ".".join(part.lower() for part in _relation_parts(value))
 
 
 def _is_direct_file_relation(value: object) -> bool:
     normalized = str(value or "").strip().lower()
-    return normalized.startswith(("s3://", "http://", "https://", "file://"))
+    return normalized.startswith(("s3://", "http://", "https://", "file://")) or _is_s3_file_pattern_relation(
+        normalized
+    )
 
 
 def _source_summary_has_query_sql(summary: dict[str, object]) -> bool:
