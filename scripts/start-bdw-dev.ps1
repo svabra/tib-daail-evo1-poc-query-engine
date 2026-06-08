@@ -9,6 +9,7 @@ $python = Join-Path $repoRoot ".venv\Scripts\python.exe"
 $logConfigPath = Join-Path $repoRoot "bdw\logging.json"
 $logsRoot = Join-Path $repoRoot "logs"
 $bdwLogDir = Join-Path $logsRoot "bdw"
+$requirementsPath = Join-Path $repoRoot "bdw\requirements.txt"
 
 function Get-ListeningProcessIds {
     param(
@@ -75,9 +76,50 @@ function Resolve-PortConflicts {
     }
 }
 
-if (-not (Test-Path $python)) {
-    throw "Virtual environment Python not found at '$python'. Create .venv first."
+function Ensure-VirtualEnvironment {
+    param(
+        [string]$RepoRoot,
+        [string]$PythonPath,
+        [string]$RequirementsPath
+    )
+
+    if (Test-Path $PythonPath) {
+        return $PythonPath
+    }
+
+    Write-Host "Creating .venv at '$RepoRoot\\.venv'..."
+    $venvRoot = Split-Path -Parent $PythonPath
+
+    $pythonLauncher = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $pythonLauncher) {
+        $pythonLauncher = Get-Command py -ErrorAction SilentlyContinue
+        if (-not $pythonLauncher) {
+            throw "Python was not found in PATH. Install Python and retry."
+        }
+
+        & $pythonLauncher.Source -3 -m venv $venvRoot
+    } else {
+        & $pythonLauncher.Source -m venv $venvRoot
+    }
+
+    if (-not (Test-Path $PythonPath)) {
+        throw "Failed to create .venv at '$venvRoot'."
+    }
+
+    if (-not (Test-Path $RequirementsPath)) {
+        throw "Requirements file not found at '$RequirementsPath'."
+    }
+
+    Write-Host "Installing dependencies into .venv from '$RequirementsPath'..."
+    & $PythonPath -m pip install -r $RequirementsPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "Dependency install failed. Ensure network access and requirements are valid."
+    }
+
+    return $PythonPath
 }
+
+$python = Ensure-VirtualEnvironment -RepoRoot $repoRoot -PythonPath $python -RequirementsPath $requirementsPath
 
 & (Join-Path $PSScriptRoot "cleanup-logs.ps1")
 

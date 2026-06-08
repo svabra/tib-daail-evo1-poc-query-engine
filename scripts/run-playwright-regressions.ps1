@@ -11,10 +11,52 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $python = Join-Path $repoRoot ".venv\Scripts\python.exe"
 $manifestPath = Join-Path $PSScriptRoot "playwright-smokes.json"
+$requirementsPath = Join-Path $repoRoot "bdw\requirements.txt"
 
-if (-not (Test-Path $python)) {
-    throw "Python virtual environment not found at $python"
+function Ensure-VirtualEnvironment {
+    param(
+        [string]$RepoRoot,
+        [string]$PythonPath,
+        [string]$RequirementsPath
+    )
+
+    if (Test-Path $PythonPath) {
+        return $PythonPath
+    }
+
+    Write-Host "Creating .venv at '$RepoRoot\\.venv'..."
+    $venvRoot = Split-Path -Parent $PythonPath
+
+    $pythonLauncher = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $pythonLauncher) {
+        $pythonLauncher = Get-Command py -ErrorAction SilentlyContinue
+        if (-not $pythonLauncher) {
+            throw "Python was not found in PATH. Install Python and retry."
+        }
+
+        & $pythonLauncher.Source -3 -m venv $venvRoot
+    } else {
+        & $pythonLauncher.Source -m venv $venvRoot
+    }
+
+    if (-not (Test-Path $PythonPath)) {
+        throw "Failed to create .venv at '$venvRoot'."
+    }
+
+    if (-not (Test-Path $RequirementsPath)) {
+        throw "Requirements file not found at '$RequirementsPath'."
+    }
+
+    Write-Host "Installing dependencies into .venv from '$RequirementsPath'..."
+    & $PythonPath -m pip install -r $RequirementsPath
+    if ($LASTEXITCODE -ne 0) {
+        throw "Dependency install failed. Ensure network access and requirements are valid."
+    }
+
+    return $PythonPath
 }
+
+$python = Ensure-VirtualEnvironment -RepoRoot $repoRoot -PythonPath $python -RequirementsPath $requirementsPath
 
 if (-not (Test-Path $manifestPath)) {
     throw "Playwright smoke manifest not found at $manifestPath"

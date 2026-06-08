@@ -90,12 +90,16 @@ The browser now uses one multiplexed SSE connection instead of opening separate 
 
 ## Local Development
 
-Create the virtual environment:
+Create or bootstrap the virtual environment:
 
 ```bash
-python -m venv .venv
+if (-not (Test-Path .venv\Scripts\python.exe)) {
+    python -m venv .venv
+}
 .\.venv\Scripts\python -m pip install -r bdw\requirements.txt
 ```
+
+`start-bdw-dev.ps1` and `run-playwright-regressions.ps1` now auto-create `.venv` if it is missing, install `bdw/requirements.txt`, and run code from the `.venv` interpreter.
 
 For local commit checks, install the development tooling and register the pre-commit hooks:
 
