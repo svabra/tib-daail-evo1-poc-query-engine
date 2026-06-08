@@ -10154,7 +10154,7 @@ details:not([open]) > .tree-children {
 }
 
 .pipeline-node-running .pipeline-node-glow {
-  animation: pipeline-node-computing-glow 1.5s ease-in-out infinite;
+  animation: pipeline-node-computing-glow 3s ease-in-out infinite;
 }
 
 .pipeline-node-queued .pipeline-node-rect {
@@ -10747,7 +10747,7 @@ details:not([open]) > .tree-children {
   position: relative;
   background-color: rgba(57, 196, 236, 0.05);
   background-clip: padding-box;
-  animation: pipeline-stage-row-computing-glow 1.5s ease-in-out infinite;
+  animation: pipeline-stage-row-computing-glow 3s ease-in-out infinite;
 }
 
 .pipeline-stage-row-running > td:first-child::after,
@@ -10761,7 +10761,7 @@ details:not([open]) > .tree-children {
   background: rgba(31, 111, 139, 0.36);
   opacity: 0.45;
   pointer-events: none;
-  animation: pipeline-stage-row-edge-glow 1.5s ease-in-out infinite;
+  animation: pipeline-stage-row-edge-glow 3s ease-in-out infinite;
 }
 
 .pipeline-stage-row-running > td:first-child::after {

@@ -1672,7 +1672,7 @@ async def main() -> None:
             row_glow_before = await running_row_handle.evaluate(row_glow_measurement_script)
             if "pipeline-stage-row-computing-glow" not in str(row_glow_before.get("glowAnimation") or ""):
                 raise RuntimeError(f"Running pipeline stage row was not glowing: {row_glow_before}")
-            if "1.5s" not in str(row_glow_before.get("glowDuration") or ""):
+            if "3s" not in str(row_glow_before.get("glowDuration") or ""):
                 raise RuntimeError(f"Running pipeline stage row glow had the wrong duration: {row_glow_before}")
             if row_glow_before.get("glowingCellCount") != row_glow_before.get("cellCount"):
                 raise RuntimeError(f"Running pipeline stage row glow did not cover the full row: {row_glow_before}")
