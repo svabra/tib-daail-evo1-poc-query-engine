@@ -11,6 +11,11 @@
       "enabledByDefault": true
     },
     {
+      "id": "query-mwa-no-file-lock-delay",
+      "script": "playwright_query_mwa_no_file_lock_wait_smoke.py",
+      "enabledByDefault": false
+    },
+    {
       "id": "query-timing-monotonic",
       "script": "playwright_query_timing_monotonic_smoke.py",
       "enabledByDefault": true
