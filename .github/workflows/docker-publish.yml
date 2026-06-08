@@ -21,15 +21,6 @@ jobs:
       fail-fast: false
       matrix:
         image:
-          - image_name: tib-daail-evo1-poc-query-engine
-            image_repository: docker.io/svabra/tib-daail-evo1-poc-query-engine
-            dockerfile: ./Dockerfile
-            build_context: .
-            image_archive: /tmp/tib-daail-evo1-poc-query-engine.tar
-            artifact_name: duckdb-image
-            include_latest: true
-            include_ref_tag: true
-            include_sha: true
           - image_name: bit-data-workbench
             image_repository: docker.io/svabra/bit-data-workbench
             dockerfile: ./bdw/Dockerfile
@@ -150,9 +141,6 @@ jobs:
       fail-fast: false
       matrix:
         image:
-          - image_name: tib-daail-evo1-poc-query-engine
-            image_archive_name: tib-daail-evo1-poc-query-engine.tar
-            artifact_name: duckdb-image
           - image_name: bit-data-workbench
             image_archive_name: bit-data-workbench.tar
             artifact_name: bit-data-workbench-image
