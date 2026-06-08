@@ -74,6 +74,7 @@ export function createS3DataSourceExplorer(helpers) {
       s3FileFormat: selectedEntry.fileFormat,
       s3Downloadable: true,
       sizeBytes: selectedEntry.sizeBytes,
+      s3PartCount: selectedEntry.s3PartCount,
     });
   }
 
@@ -221,6 +222,7 @@ export function createS3DataSourceExplorer(helpers) {
           "data-s3-file-format": entry.fileFormat || "",
           "data-s3-downloadable": "true",
           "data-s3-size-bytes": entry.sizeBytes || 0,
+          "data-s3-part-count": entry.s3PartCount || 0,
           "data-data-source-explorer-s3-file": entry.prefix || "",
           "data-bucket": entry.bucket || "",
           "data-prefix": entry.prefix || "",

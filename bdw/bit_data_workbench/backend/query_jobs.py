@@ -895,17 +895,27 @@ def _normalize_relation_segment(value: object) -> str:
 
 def _is_s3_file_pattern_relation(relation: str) -> bool:
     normalized = str(relation or "").strip()
-    if not normalized.lower().startswith("s3."):
+    normalized_lower = normalized.lower()
+    if not (
+        normalized_lower.startswith("s3.")
+        or normalized_lower.startswith("workspace.s3.")
+    ):
         return False
 
     parts = [
         _normalize_relation_segment(part)
         for part in _split_relation_parts_quoted(normalized)
     ]
-    if len(parts) < 3 or parts[0].lower() != "s3":
+    if normalized_lower.startswith("s3."):
+        s3_index = 0
+    elif normalized_lower.startswith("workspace.s3."):
+        s3_index = 1
+    else:
+        return False
+    if len(parts) < s3_index + 3:
         return False
 
-    relation_path = ".".join(parts[2:])
+    relation_path = ".".join(parts[s3_index + 2 :])
     if not relation_path:
         return False
 

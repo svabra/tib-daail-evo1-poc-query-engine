@@ -21,6 +21,7 @@ if str(BDW_ROOT) not in sys.path:
 
 from bit_data_workbench.backend import query_jobs as query_jobs_module  # noqa: E402
 from bit_data_workbench.backend.query_jobs import (  # noqa: E402
+    _is_direct_file_relation,
     DUCKDB_EXECUTION_PATH_SHARED_FILE_READ,
     QUERY_EXECUTION_DUCKDB_READ,
     QUERY_EXECUTION_DUCKDB_WRITE,
@@ -119,6 +120,17 @@ class QueryJobClassifierTests(TestCase):
         self.assertEqual(
             classify_query_execution("select 1", ["pg_oltp_native"]),
             QUERY_EXECUTION_POSTGRES_NATIVE,
+        )
+
+    def test_identifies_workspace_s3_glob_relations_as_direct_file_relations(self) -> None:
+        self.assertTrue(
+            _is_direct_file_relation('workspace.s3."bucket"."path/to/file.parquet"')
+        )
+        self.assertTrue(
+            _is_direct_file_relation('workspace.s3."bucket"."path/to/*.parquet"')
+        )
+        self.assertFalse(
+            _is_direct_file_relation("workspace.s3.test")
         )
 
 
@@ -982,6 +994,59 @@ class ProcessQueryJobManagerTests(TestCase):
         self.assertEqual(completed.duckdb_execution_path, "isolated-read")
         self.assertEqual(completed.timings.get("engineAccessWaitMs"), 0.0)
         self.assertNotIn("engine_waiting", [event.get("event") for event in completed.progress_events])
+        self.assertEqual(len(completed.rows), 3)
+
+    def test_workspace_prefixed_mwa_s3_glob_join_isolated_read_skips_duckdb_file_lock(self) -> None:
+        entities_directory, ziffern_directory = self._create_mwa_parquet_join_fixture()
+        entities_pattern = entities_directory / "*.parquet"
+        ziffern_pattern = ziffern_directory / "*.parquet"
+        query = (
+            "SELECT ENTI.*, ZIFF.* "
+            f"FROM read_parquet('{entities_pattern.as_posix()}') AS ENTI "
+            f"JOIN read_parquet('{ziffern_pattern.as_posix()}') AS ZIFF "
+            "ON ZIFF.abrechnung_refer = ENTI.id_"
+        )
+        touched_relations = [
+            'workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"."generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet"',
+            'workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"."generated/mwa_abrechnung/parquet/mwa_abrechnungs_ziffern_entities/*.parquet"',
+        ]
+
+        self.assertTrue(
+            self.manager._access_coordinator.acquire(
+                QUERY_EXECUTION_DUCKDB_WRITE,
+                lambda: False,
+                owner_job_id="writer-job",
+            )
+        )
+        try:
+            job = self.manager.start_job(
+                sql=query,
+                notebook_id="nb",
+                notebook_title="Notebook",
+                cell_id="cell-mwa-glob-workspace",
+                data_sources=["workspace.s3"],
+                touched_relations=touched_relations,
+                touched_buckets=["poc-tests-performance-evaluation-mwa-abrechnung-3-2"],
+            )
+            completed = wait_until(
+                lambda: self.manager.snapshot(job.job_id)
+                if self.manager.snapshot(job.job_id).status == "completed"
+                else None,
+                timeout=20,
+            )
+        finally:
+            self.manager._access_coordinator.release(
+                QUERY_EXECUTION_DUCKDB_WRITE,
+                owner_job_id="writer-job",
+            )
+
+        self.assertIsNotNone(completed)
+        self.assertEqual(completed.duckdb_execution_path, "isolated-read")
+        self.assertEqual(completed.timings.get("engineAccessWaitMs"), 0.0)
+        self.assertNotIn(
+            "engine_waiting",
+            [event.get("event") for event in completed.progress_events],
+        )
         self.assertEqual(len(completed.rows), 3)
 
     def test_isolated_s3_csv_and_parquet_reads_skip_duckdb_file_lock(self) -> None:

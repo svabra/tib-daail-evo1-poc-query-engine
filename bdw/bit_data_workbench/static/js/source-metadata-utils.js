@@ -429,6 +429,40 @@ export function sourceQuerySql(relation, fields = []) {
   ].join("\n");
 }
 
+function s3RelationPrefixFromIdentifier(value) {
+  const relation = String(value || "").trim();
+  const lower = relation.toLowerCase();
+  if (lower.startsWith("workspace.s3.")) {
+    return "workspace.s3";
+  }
+  if (lower.startsWith("s3.")) {
+    return "s3";
+  }
+  return "";
+}
+
+function s3RelationWithSingleFileFallback(sourceObjectRoot, relation) {
+  const relationText = String(relation || "").trim();
+  if (!relationText.includes("*") && !relationText.includes("?")) {
+    return relationText;
+  }
+
+  const partCountValue = String(sourceObjectRoot.dataset.s3PartCount || "").trim();
+  const partCount = Number(partCountValue);
+  if (!Number.isFinite(partCount) || partCount !== 1) {
+    return relationText;
+  }
+
+  const bucket = String(sourceObjectRoot.dataset.s3Bucket || "").trim();
+  const key = String(sourceObjectRoot.dataset.s3Key || "").trim();
+  const relationPrefix = s3RelationPrefixFromIdentifier(relationText);
+  if (!bucket || !key || !relationPrefix) {
+    return relationText;
+  }
+
+  return `${relationPrefix}.${sqlQueryIdentifier(bucket)}.${sqlQueryIdentifier(key)}`;
+}
+
 export function sourceQueryDescriptor(sourceObjectRoot) {
   if (!(sourceObjectRoot instanceof Element)) {
     return null;
@@ -437,7 +471,10 @@ export function sourceQueryDescriptor(sourceObjectRoot) {
   const physicalRelation = sourceObjectRoot.dataset.sourceObjectRelation?.trim() || "";
   const queryAlias = sourceObjectRoot.dataset.sourceObjectQueryAlias?.trim() || "";
   const queryReference = sourceObjectRoot.dataset.sourceObjectQueryReference?.trim() || "";
-  const relation = queryReference || queryAlias || physicalRelation;
+  const relation = s3RelationWithSingleFileFallback(
+    sourceObjectRoot,
+    queryReference || queryAlias || physicalRelation
+  );
   if (!relation) {
     return null;
   }
