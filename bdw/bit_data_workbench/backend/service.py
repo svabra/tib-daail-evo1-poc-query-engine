@@ -161,6 +161,10 @@ SUPPORTED_S3_VIEW_FORMATS = {"parquet", "csv", "json"}
 logger = logging.getLogger(__name__)
 STARTUP_DIVIDER = "-------------------------------"
 S3_BOOTSTRAP_SAMPLE_KEY = "startup/vat_context_bootstrap.csv"
+STARTUP_SEED_S3_BUCKETS = (
+    "poc-tests-performance-evaluation-mwa-abrechnung-3-2",
+    "poc-tests-performance-evaluation-kostenbelege-3-1",
+)
 MAX_NOTEBOOK_EVENT_HISTORY = 40
 REALTIME_TOPIC_ORDER = (
     "query-jobs",
@@ -3466,6 +3470,15 @@ class WorkbenchService:
                 pass
 
     def _sync_startup_seed_data_sources(self) -> None:
+        sync_s3_buckets = getattr(self._data_source_discovery, "sync_s3_buckets", None)
+        if callable(sync_s3_buckets):
+            self._log_startup(
+                "Bounded startup S3 discovery for seed bucket(s): %s",
+                ", ".join(STARTUP_SEED_S3_BUCKETS),
+            )
+            sync_s3_buckets(STARTUP_SEED_S3_BUCKETS, emit_event=False)
+            return
+
         sync_source = getattr(self._data_source_discovery, "sync_source", None)
         if not callable(sync_source):
             return

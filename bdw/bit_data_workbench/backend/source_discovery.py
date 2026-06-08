@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 from urllib.parse import urlparse
 
 import duckdb
@@ -589,13 +589,115 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                     ),
                 )
 
+        return self._sync_bucket_specs(
+            connection,
+            client,
+            current_buckets,
+            replace_all_buckets=True,
+        )
+
+    def sync_buckets(
+        self,
+        connection: duckdb.DuckDBPyConnection,
+        buckets: Sequence[str],
+    ) -> DataSourceDiscoveryResult | None:
+        with self._lock:
+            enabled = self._enabled
+        if not enabled:
+            return DataSourceDiscoveryResult(
+                source_type=self.source_type,
+                source_id=self.source_id,
+                source_label=self.source_label,
+                added_relations=[],
+                removed_relations=[],
+                updated_relations=[],
+                message=f"{self.source_label} discovery is disconnected.",
+                connection_status=self._disconnected_status("MinIO / S3 live discovery is disconnected."),
+            )
+
+        if not self._is_configured():
+            return DataSourceDiscoveryResult(
+                source_type=self.source_type,
+                source_id=self.source_id,
+                source_label=self.source_label,
+                added_relations=[],
+                removed_relations=[],
+                updated_relations=[],
+                message=f"{self.source_label} is not configured.",
+                connection_status=self._disconnected_status("MinIO / S3 is not configured."),
+            )
+
+        requested_buckets = self._visible_s3_buckets(
+            {str(bucket or "").strip() for bucket in buckets if str(bucket or "").strip()}
+        )
+        if not requested_buckets:
+            return DataSourceDiscoveryResult(
+                source_type=self.source_type,
+                source_id=self.source_id,
+                source_label=self.source_label,
+                added_relations=[],
+                removed_relations=[],
+                updated_relations=[],
+                message=f"{self.source_label} connection checked.",
+                connection_status=self._connected_status(f"{self.source_label} is connected."),
+            )
+
+        client = s3_client(self._settings)
+        current_buckets: set[str] = set()
+        for bucket in sorted(requested_buckets):
+            try:
+                client.head_bucket(Bucket=bucket)
+                current_buckets.add(bucket)
+            except Exception as head_exc:
+                try:
+                    client.list_objects_v2(Bucket=bucket, MaxKeys=1)
+                    current_buckets.add(bucket)
+                    logger.info(
+                        "S3 discovery included startup seed bucket %r via list_objects_v2 after head_bucket failed: %s",
+                        bucket,
+                        head_exc,
+                    )
+                except Exception as list_exc:
+                    logger.warning(
+                        "Skipping startup seed S3 bucket %r during bounded discovery: head_bucket=%s; list_objects_v2=%s",
+                        bucket,
+                        head_exc,
+                        list_exc,
+                    )
+
+        return self._sync_bucket_specs(
+            connection,
+            client,
+            current_buckets,
+            replace_all_buckets=False,
+        )
+
+    def _sync_bucket_specs(
+        self,
+        connection: duckdb.DuckDBPyConnection,
+        client,
+        current_buckets: set[str],
+        *,
+        replace_all_buckets: bool,
+    ) -> DataSourceDiscoveryResult | None:
         if not self._current_specs:
             self._current_specs = self._load_existing_specs(connection)
         if not self._current_buckets:
             self._current_buckets = set(current_buckets)
 
         desired_specs = self._build_desired_specs(client, current_buckets)
-        removed_names = [name for name in self._current_specs if name not in desired_specs]
+        if replace_all_buckets:
+            removed_names = [name for name in self._current_specs if name not in desired_specs]
+        else:
+            targeted_schema_names = {
+                s3_bucket_schema_name(bucket)
+                for bucket in current_buckets
+            }
+            removed_names = [
+                name
+                for name, spec in self._current_specs.items()
+                if spec.schema_name in targeted_schema_names and name not in desired_specs
+            ]
         added_names = [name for name in desired_specs if name not in self._current_specs]
         updated_names = [
             name
@@ -603,7 +705,7 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
             if name in self._current_specs and self._current_specs[name] != spec
         ]
         added_buckets = sorted(current_buckets - self._current_buckets)
-        removed_buckets = sorted(self._current_buckets - current_buckets)
+        removed_buckets = sorted(self._current_buckets - current_buckets) if replace_all_buckets else []
         if not removed_names and not added_names and not updated_names and not added_buckets and not removed_buckets:
             return DataSourceDiscoveryResult(
                 source_type=self.source_type,
@@ -699,7 +801,7 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
             )
 
         self._current_specs = next_specs
-        self._current_buckets = set(current_buckets)
+        self._current_buckets = set(current_buckets) if replace_all_buckets else (self._current_buckets | current_buckets)
         return DataSourceDiscoveryResult(
             source_type=self.source_type,
             source_id=self.source_id,
@@ -1325,6 +1427,39 @@ class DataSourceDiscoveryManager:
         if discoverer is None:
             raise KeyError(f"Unknown data source: {source_id}")
         self._sync_discoverer(discoverer, emit_event=emit_event)
+        return self.state_payload()
+
+    def sync_s3_buckets(
+        self,
+        buckets: Sequence[str],
+        *,
+        emit_event: bool = True,
+    ) -> dict[str, Any]:
+        discoverer = self._discoverers_by_source_id.get("workspace.s3")
+        if not isinstance(discoverer, S3DataSourceDiscoverer):
+            raise KeyError("Unknown data source: workspace.s3")
+
+        connection: duckdb.DuckDBPyConnection | None = None
+        with self._sync_lock:
+            try:
+                connection = self._connection_factory()
+                result = discoverer.sync_buckets(connection, buckets)
+            except Exception as exc:
+                logger.warning(
+                    "Bounded S3 data source discovery failed for buckets %s: %s",
+                    list(buckets),
+                    exc,
+                )
+                return self.state_payload()
+            finally:
+                if connection is not None:
+                    try:
+                        connection.close()
+                    except Exception:
+                        pass
+
+        if result is not None and result.has_changes:
+            self._apply_result(result, emit_event=emit_event)
         return self.state_payload()
 
     def s3_relation_spec(self, relation_id: str) -> DiscoveredRelationSpec | None:

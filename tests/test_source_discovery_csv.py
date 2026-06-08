@@ -6,6 +6,7 @@ import sys
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import TestCase
+from unittest.mock import patch
 
 import duckdb
 from openpyxl import Workbook
@@ -17,7 +18,8 @@ if str(BDW_ROOT) not in sys.path:
     sys.path.insert(0, str(BDW_ROOT))
 
 
-from bit_data_workbench.backend.service import WorkbenchService  # noqa: E402
+from bit_data_workbench.backend.service import STARTUP_SEED_S3_BUCKETS, WorkbenchService  # noqa: E402
+from bit_data_workbench.backend.s3_storage import s3_bucket_schema_name  # noqa: E402
 from bit_data_workbench.backend.source_discovery import S3DataSourceDiscoverer  # noqa: E402
 from bit_data_workbench.backend.source_discovery import build_s3_query  # noqa: E402
 from bit_data_workbench.backend.source_discovery import drop_discovered_relation_object  # noqa: E402
@@ -209,6 +211,41 @@ class PartitionedParquetS3Client:
         }
 
 
+class StartupSeedBucketS3Client:
+    bucket = "poc-tests-performance-evaluation-mwa-abrechnung-3-2"
+    key = "generated/mwa_abrechnung_3_2/parquet/mwa_abrechnung_entities/part-00001.parquet"
+
+    def __init__(self) -> None:
+        self.head_bucket_requests: list[str] = []
+        self.list_object_buckets: list[str] = []
+
+    def head_bucket(self, **kwargs):
+        bucket = kwargs["Bucket"]
+        self.head_bucket_requests.append(bucket)
+        if bucket != self.bucket:
+            raise AssertionError(f"Unexpected startup seed bucket probe: {bucket}")
+        return {}
+
+    def list_objects_v2(self, **kwargs):
+        bucket = kwargs["Bucket"]
+        self.list_object_buckets.append(bucket)
+        if bucket != self.bucket:
+            raise AssertionError(f"Unexpected startup seed bucket listing: {bucket}")
+        return {
+            "Contents": [{"Key": self.key}],
+            "IsTruncated": False,
+        }
+
+    def head_object(self, **kwargs):
+        if kwargs["Bucket"] != self.bucket or kwargs["Key"] != self.key:
+            raise AssertionError(f"Unexpected startup seed object head request: {kwargs}")
+        return {
+            "ETag": '"seed-etag"',
+            "ContentLength": 512,
+            "Metadata": {},
+        }
+
+
 class CsvS3DiscoveryTests(TestCase):
     def test_drop_discovered_relation_object_handles_stale_table(self) -> None:
         connection = duckdb.connect(":memory:")
@@ -300,6 +337,69 @@ class CsvS3DiscoveryTests(TestCase):
             "s3.vat_smoke_test.incoming.april.vat_smoke.parquet",
         )
         self.assertNotIn("vat_smoke.vat_smoke", item["query_alias"])
+
+    def test_bounded_s3_sync_only_scans_requested_startup_seed_buckets(self) -> None:
+        client = StartupSeedBucketS3Client()
+        with TemporaryDirectory() as temp_dir:
+            connection = duckdb.connect(":memory:")
+            try:
+                connection.execute("CREATE SCHEMA other_bucket")
+                connection.execute("CREATE VIEW other_bucket.keep_me AS SELECT 1 AS value")
+                discoverer = S3DataSourceDiscoverer(
+                    make_temp_settings(Path(temp_dir) / "workspace.duckdb")
+                )
+
+                with (
+                    patch(
+                        "bit_data_workbench.backend.source_discovery.s3_client",
+                        return_value=client,
+                    ),
+                    patch(
+                        "bit_data_workbench.backend.source_discovery.list_s3_buckets",
+                        side_effect=AssertionError("bounded startup discovery must not list every S3 bucket"),
+                    ),
+                    patch(
+                        "bit_data_workbench.backend.source_discovery.build_s3_query",
+                        return_value="SELECT 1 AS value",
+                    ),
+                ):
+                    result = discoverer.sync_buckets(connection, [client.bucket])
+
+                self.assertIsNotNone(result)
+                self.assertEqual(client.head_bucket_requests, [client.bucket])
+                self.assertEqual(client.list_object_buckets, [client.bucket])
+                seed_schema = s3_bucket_schema_name(client.bucket)
+                discovered = {
+                    tuple(row)
+                    for row in connection.execute(
+                        """
+                        SELECT table_schema, table_name
+                        FROM information_schema.tables
+                        WHERE table_schema IN (?, 'other_bucket')
+                        ORDER BY table_schema, table_name
+                        """,
+                        [seed_schema],
+                    ).fetchall()
+                }
+                self.assertIn(("other_bucket", "keep_me"), discovered)
+                self.assertIn((seed_schema, "mwa_abrechnung_entities_parquet"), discovered)
+            finally:
+                connection.close()
+
+    def test_startup_seed_source_sync_uses_bounded_s3_buckets(self) -> None:
+        calls: list[tuple[tuple[str, ...], bool]] = []
+        service = object.__new__(WorkbenchService)
+        service._log_startup = lambda *_args, **_kwargs: None
+        service._data_source_discovery = SimpleNamespace(
+            sync_s3_buckets=lambda buckets, *, emit_event=True: calls.append((tuple(buckets), emit_event)),
+            sync_source=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("startup must not run full S3 source discovery")
+            ),
+        )
+
+        WorkbenchService._sync_startup_seed_data_sources(service)
+
+        self.assertEqual(calls, [(STARTUP_SEED_S3_BUCKETS, False)])
 
     def test_build_s3_parquet_query_accepts_runtime_hive_option(self) -> None:
         self.assertEqual(
