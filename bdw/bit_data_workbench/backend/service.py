@@ -97,7 +97,13 @@ from .query_aliases import (
     s3_query_alias,
     unique_query_aliases,
 )
-from .source_references import pg_source_reference, s3_source_reference, s3_table_function_sql
+from .source_references import (
+    pg_source_reference,
+    s3_source_reference,
+    infer_s3_reference_format,
+    s3_table_function_sql,
+    split_qualified_reference,
+)
 from .query_source_validation import QUERY_SOURCE_INVALID, validate_query_sources
 from .query_cache import cache_preview, delete_cache, expire_cache, hydrate_cache
 from .query_options import normalize_query_options, parquet_hive_partitioning_option
@@ -1622,7 +1628,10 @@ class WorkbenchService:
         submitted_query_sql = str(sql or "")
         user_sql = display_query_sql or submitted_query_sql
         routing_sql = submitted_query_sql or user_sql
-        relation_index = self._query_source_relation_index(local_relation_map=local_relation_map)
+        relation_index = self._query_source_relation_index(
+            local_relation_map=local_relation_map,
+            sql=routing_sql,
+        )
         source_validation = self.validate_query_sources(
             sql=routing_sql,
             data_sources=data_sources,
@@ -1642,6 +1651,7 @@ class WorkbenchService:
         query_analysis = self._analyze_query(routing_sql, relation_index=relation_index)
         source_summaries = self._query_source_summaries(
             query_analysis.touched_relations,
+            relation_index=relation_index,
             local_relation_map=local_relation_map,
             query_options=normalized_query_options,
         )
@@ -1679,7 +1689,10 @@ class WorkbenchService:
         submitted_query_sql = str(sql or "")
         user_sql = display_query_sql or submitted_query_sql
         routing_sql = submitted_query_sql or user_sql
-        relation_index = self._query_source_relation_index(local_relation_map=local_relation_map)
+        relation_index = self._query_source_relation_index(
+            local_relation_map=local_relation_map,
+            sql=routing_sql,
+        )
         source_validation = self.validate_query_sources(
             sql=routing_sql,
             data_sources=data_sources,
@@ -1703,6 +1716,7 @@ class WorkbenchService:
         query_analysis = self._analyze_query(routing_sql, relation_index=relation_index)
         source_summaries = self._query_source_summaries(
             query_analysis.touched_relations,
+            relation_index=relation_index,
             local_relation_map=local_relation_map,
             query_options=normalized_query_options,
         )
@@ -1867,7 +1881,10 @@ class WorkbenchService:
         local_relation_map: dict[str, str] | None,
         query_options: dict[str, object],
     ) -> list[dict[str, object]]:
-        relation_index = self._query_source_relation_index(local_relation_map=local_relation_map)
+        relation_index = self._query_source_relation_index(
+            local_relation_map=local_relation_map,
+            sql=sql,
+        )
         source_validation = self.validate_query_sources(
             sql=sql,
             data_sources=data_sources,
@@ -1881,6 +1898,7 @@ class WorkbenchService:
         query_analysis = self._analyze_query(sql, relation_index=relation_index)
         return self._query_source_summaries(
             query_analysis.touched_relations,
+            relation_index=relation_index,
             local_relation_map=local_relation_map,
             query_options=query_options,
         )
@@ -1891,7 +1909,10 @@ class WorkbenchService:
         data_sources: list[str],
         query_options: dict[str, object],
     ) -> list[dict[str, object]]:
-        relation_index = self._query_source_relation_index(local_relation_map=None)
+        relation_index = self._query_source_relation_index(
+            local_relation_map=None,
+            sql=sql,
+        )
         for stage_alias in sql_stage_alias_references(sql):
             relation = f"stage.{stage_alias}"
             relation_index[normalize_query_alias_key(relation)] = KnownRelationReference(
@@ -1910,6 +1931,7 @@ class WorkbenchService:
         query_analysis = self._analyze_query(sql, relation_index=relation_index)
         return self._query_source_summaries(
             query_analysis.touched_relations,
+            relation_index=relation_index,
             local_relation_map=None,
             query_options=query_options,
         )
@@ -1920,7 +1942,10 @@ class WorkbenchService:
         data_sources: list[str],
         query_options: dict[str, object],
     ) -> str:
-        relation_index = self._query_source_relation_index(local_relation_map=None)
+        relation_index = self._query_source_relation_index(
+            local_relation_map=None,
+            sql=sql,
+        )
         for stage_alias in sql_stage_alias_references(sql):
             relation = f"stage.{stage_alias}"
             relation_index[normalize_query_alias_key(relation)] = KnownRelationReference(
@@ -1937,7 +1962,10 @@ class WorkbenchService:
         relation_index: dict[str, KnownRelationReference] | None = None,
     ) -> dict[str, object]:
         if relation_index is None:
-            relation_index = self._query_source_relation_index(local_relation_map=local_relation_map)
+            relation_index = self._query_source_relation_index(
+                local_relation_map=local_relation_map,
+                sql=sql,
+            )
         else:
             relation_index = dict(relation_index)
             self._add_local_relation_aliases(relation_index, local_relation_map)
@@ -1951,12 +1979,152 @@ class WorkbenchService:
         self,
         *,
         local_relation_map: dict[str, str] | None = None,
+        sql: str | None = None,
     ) -> dict[str, KnownRelationReference]:
         with self._lock:
             relation_index = build_relation_index(self._catalogs)
-        self._add_s3_discovery_relation_aliases(relation_index)
         self._add_local_relation_aliases(relation_index, local_relation_map)
+        self._add_sql_s3_relation_aliases(relation_index, sql=sql)
+        if not self._needs_s3_discovery_aliases(
+            sql=sql,
+            relation_index=relation_index,
+        ):
+            return relation_index
+        self._add_s3_discovery_relation_aliases(relation_index)
         return relation_index
+
+    @staticmethod
+    def _normalized_s3_relation_reference(
+        relation: str,
+    ) -> tuple[str, str] | None:
+        normalized_relation = str(relation or "").strip()
+        if not normalized_relation:
+            return None
+
+        parts = split_qualified_reference(normalized_relation)
+        if not parts:
+            return None
+        cleaned_parts = [str(part).strip() for part in parts if str(part).strip()]
+        if not cleaned_parts:
+            return None
+
+        first = cleaned_parts[0].lower()
+        if first == "workspace":
+            if len(cleaned_parts) < 4 or cleaned_parts[1].lower() != "s3":
+                return None
+            bucket = cleaned_parts[2]
+            object_key = ".".join(cleaned_parts[3:]).strip().lstrip("/")
+        elif first == "s3":
+            if len(cleaned_parts) < 3:
+                return None
+            bucket = cleaned_parts[1]
+            object_key = ".".join(cleaned_parts[2:]).strip().lstrip("/")
+        else:
+            return None
+
+        if not bucket or not object_key:
+            return None
+        return str(bucket), str(object_key)
+
+    @staticmethod
+    def _is_direct_s3_relation(
+        *,
+        bucket: str,
+        object_key: str,
+    ) -> bool:
+        normalized_key = str(object_key or "").strip()
+        if not normalized_key or not str(bucket or "").strip():
+            return False
+
+        lowered_key = normalized_key.lower()
+        if "*" in normalized_key or "?" in normalized_key:
+            return True
+        if "/" in normalized_key or "\\" in normalized_key:
+            return True
+        return lowered_key.endswith(
+            (
+                ".parquet",
+                ".csv",
+                ".tsv",
+                ".json",
+                ".jsonl",
+                ".ndjson",
+                ".xml",
+                ".xls",
+                ".xlsx",
+                ".xlsxm",
+            )
+        )
+
+    def _needs_s3_discovery_aliases(
+        self,
+        *,
+        sql: str | None,
+        relation_index: dict[str, KnownRelationReference],
+    ) -> bool:
+        relation_queries = analyze_query_touches(sql or "").touched_relations
+        if not relation_queries:
+            return True
+
+        for relation in relation_queries:
+            parsed = self._normalized_s3_relation_reference(relation)
+            if not parsed:
+                continue
+            bucket, object_key = parsed
+            if not self._is_direct_s3_relation(
+                bucket=bucket,
+                object_key=object_key,
+            ):
+                return True
+            normalized_relation = normalize_relation_key(relation)
+            if not (
+                normalized_relation.startswith("s3.")
+                or normalized_relation.startswith("workspace.s3.")
+            ):
+                return True
+            manifest_reference = relation_index.get(normalized_relation)
+            if normalized_relation and (
+                manifest_reference is None
+                or not (
+                    manifest_reference.query_sql or manifest_reference.relation
+                )
+            ):
+                return True
+        return False
+
+    def _add_sql_s3_relation_aliases(
+        self,
+        relation_index: dict[str, KnownRelationReference],
+        *,
+        sql: str | None,
+    ) -> None:
+        if not sql:
+            return
+        for relation in analyze_query_touches(sql).touched_relations:
+            parsed = self._normalized_s3_relation_reference(relation)
+            if not parsed:
+                continue
+            bucket, object_key = parsed
+            if not self._is_direct_s3_relation(
+                bucket=bucket,
+                object_key=object_key,
+            ):
+                continue
+            normalized_relation = normalize_relation_key(relation)
+            if not normalized_relation:
+                continue
+            relation_entry = KnownRelationReference(
+                relation=str(relation).strip(),
+                bucket=str(bucket).strip(),
+                query_sql=s3_table_function_sql(bucket=bucket, key=object_key),
+            )
+            relation_index.setdefault(normalized_relation, relation_entry)
+
+            if normalized_relation.startswith("workspace.s3."):
+                normalized_s3_relation = normalize_relation_key(
+                    f"s3.{bucket}.{object_key}"
+                )
+                relation_index.setdefault(normalized_s3_relation, relation_entry)
 
     def _add_s3_discovery_relation_aliases(
         self,
@@ -2023,15 +2191,21 @@ class WorkbenchService:
         relation_index: dict[str, KnownRelationReference],
         local_relation_map: dict[str, str] | None = None,
     ) -> str:
-        alias_map = {
-            key: (value.query_sql if key.startswith("s3.") and value.query_sql else value.relation)
-            for key, value in relation_index.items()
-            if (
+        alias_map = {}
+        for key, value in relation_index.items():
+            if not (
                 key.startswith("s3.")
+                or key.startswith("workspace.s3.")
                 or key.startswith("pg.")
+            ):
+                continue
+            replacement = (
+                value.query_sql
+                if key.startswith("s3.") or key.startswith("workspace.s3.")
+                else value.relation
             )
-            and str((value.query_sql if key.startswith("s3.") else value.relation) or "").strip()
-        }
+            if str(replacement or "").strip():
+                alias_map[key] = replacement
         for logical_relation, physical_relation in (local_relation_map or {}).items():
             normalized_alias = normalize_query_alias_key(logical_relation)
             normalized_physical = str(physical_relation or "").strip()
@@ -2043,6 +2217,7 @@ class WorkbenchService:
         self,
         touched_relations: list[str] | None,
         *,
+        relation_index: dict[str, KnownRelationReference] | None = None,
         local_relation_map: dict[str, str] | None = None,
         query_options: dict[str, object] | None = None,
     ) -> list[dict[str, object]]:
@@ -2056,6 +2231,68 @@ class WorkbenchService:
             return []
         summaries: list[dict[str, object]] = []
         summarized_keys: set[str] = set()
+
+        for relation in touched_relations or []:
+            normalized_relation = normalize_query_alias_key(relation)
+            if normalized_relation in summarized_keys:
+                continue
+            reference = (relation_index or {}).get(normalized_relation)
+            if reference is None or not reference.query_sql:
+                continue
+            if not (
+                normalized_relation.startswith("s3.")
+                or normalized_relation.startswith("workspace.s3.")
+            ):
+                continue
+            relation_key = str(reference.relation or "").strip()
+            if (
+                not relation_key
+                or (
+                    not normalized_relation.startswith("s3.")
+                    and not normalized_relation.startswith("workspace.s3.")
+                )
+            ):
+                continue
+            normalized_bucket_key = self._normalized_s3_relation_reference(relation_key)
+            bucket_name = ""
+            object_key = ""
+            if normalized_bucket_key:
+                bucket_name, object_key = normalized_bucket_key
+            else:
+                parsed = self._normalized_s3_relation_reference(relation)
+                if parsed:
+                    bucket_name, object_key = parsed
+            normalized_format = infer_s3_reference_format(key=object_key)
+            summaries.append(
+                {
+                    "relation": relation_key,
+                    "query_alias": "",
+                    "query_reference": "",
+                    "bucket": bucket_name,
+                    "key": object_key,
+                    "path": f"s3://{bucket_name}/{object_key}" if bucket_name and object_key else "",
+                    "format": normalized_format or "parquet",
+                    "size_bytes": 0,
+                    "object_revision": "",
+                    "display_name": (
+                        normalize_query_alias_key(relation_key).rsplit(".", 1)[-1]
+                        if relation_key
+                        else relation
+                    ),
+                    "query_sql": reference.query_sql,
+                }
+            )
+            summarized_keys.add(normalized_relation)
+
+        if summarized_keys == touched_keys:
+            summaries.extend(
+                self._local_workspace_source_summaries(
+                    touched_keys,
+                    local_relation_map=local_relation_map,
+                )
+            )
+            return summaries
+
         discovery = getattr(self, "_data_source_discovery", None)
         s3_relation_specs = getattr(discovery, "s3_relation_specs", None)
         specs = s3_relation_specs() if callable(s3_relation_specs) else {}

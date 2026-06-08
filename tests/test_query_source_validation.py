@@ -374,6 +374,233 @@ class QuerySourceValidationTests(unittest.TestCase):
         self.assertEqual(captured["source_summaries"][0]["relation"], "test.vat_smoke_part_00001")
         self.assertEqual(captured["source_summaries"][0]["bucket"], "test")
 
+    def test_validate_workspace_s3_virtual_glob_without_discovery_metadata(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
+        service._data_source_discovery = SimpleNamespace(s3_relation_specs=lambda: {})
+
+        result = service.validate_query_sources(
+            sql=(
+                'SELECT ENTI.*, ZIFF.* '
+                'FROM workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                '."generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet" AS ENTI '
+                'JOIN workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                '."generated/mwa_abrechnung/parquet/mwa_abrechnungs_ziffern_entities/*.parquet" AS ZIFF '
+                "ON ZIFF.abrechnung_refer = ENTI.id_"
+            ),
+            data_sources=["workspace.s3"],
+        )
+
+        self.assertEqual(result["status"], QUERY_SOURCE_VALID)
+        self.assertEqual(result["missingReferences"], [])
+        self.assertIn("workspace.s3.", result["references"][0])
+
+    def test_validate_plain_s3_virtual_glob_without_discovery_metadata(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
+        service._data_source_discovery = SimpleNamespace(s3_relation_specs=lambda: {})
+
+        result = service.validate_query_sources(
+            sql=(
+                'SELECT ENTI.*, ZIFF.* '
+                'FROM s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                '."generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet" AS ENTI '
+                'JOIN s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                '."generated/mwa_abrechnung/parquet/mwa_abrechnungs_ziffern_entities/*.parquet" AS ZIFF '
+                "ON ZIFF.abrechnung_refer = ENTI.id_"
+            ),
+            data_sources=["workspace.s3"],
+        )
+
+        self.assertEqual(result["status"], QUERY_SOURCE_VALID)
+        self.assertEqual(result["missingReferences"], [])
+        self.assertEqual(len(result["references"]), 2)
+
+    def test_start_query_job_rewrites_plain_s3_virtual_glob_relations_without_discovery(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
+        service._data_source_discovery = SimpleNamespace(s3_relation_specs=lambda: {})
+        captured: dict[str, object] = {}
+
+        def record_start(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(payload={"jobId": "query-s3-plain-virtual-direct"})
+
+        service._query_jobs = SimpleNamespace(start_job=record_start)
+        service._analyze_query = lambda _sql, **_kwargs: SimpleNamespace(
+            touched_relations=[
+                's3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                '."generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet"',
+                's3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                '."generated/mwa_abrechnung/parquet/mwa_abrechnungs_ziffern_entities/*.parquet"',
+            ],
+            touched_buckets=[
+                "poc-tests-performance-evaluation-mwa-abrechnung-3-2",
+            ],
+        )
+
+        snapshot = service.start_query_job(
+            sql=(
+                'SELECT ENTI.*, ZIFF.* '
+                'FROM s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                '."generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet" AS ENTI '
+                'JOIN s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                '."generated/mwa_abrechnung/parquet/mwa_abrechnungs_ziffern_entities/*.parquet" AS ZIFF '
+                "ON ZIFF.abrechnung_refer = ENTI.id_"
+            ),
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-mwa-virtual-plain",
+            data_sources=["workspace.s3"],
+        )
+
+        self.assertEqual(snapshot["jobId"], "query-s3-plain-virtual-direct")
+        self.assertIn(
+            "read_parquet('s3://poc-tests-performance-evaluation-mwa-abrechnung-3-2/generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet')",
+            captured["execution_sql"],
+        )
+        self.assertIn(
+            "read_parquet('s3://poc-tests-performance-evaluation-mwa-abrechnung-3-2/generated/mwa_abrechnung/parquet/mwa_abrechnungs_ziffern_entities/*.parquet')",
+            captured["execution_sql"],
+        )
+
+    def test_start_query_job_uses_plain_s3_glob_relation_without_discovery_call(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
+        discovery_calls = {"count": 0}
+
+        def s3_relation_specs() -> dict:
+            discovery_calls["count"] += 1
+            return {}
+
+        service._data_source_discovery = SimpleNamespace(s3_relation_specs=s3_relation_specs)
+        captured: dict[str, object] = {}
+
+        def record_start(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(payload={"jobId": "query-s3-plain-virtual-no-discovery"})
+
+        service._query_jobs = SimpleNamespace(start_job=record_start)
+        service._analyze_query = lambda _sql, **_kwargs: SimpleNamespace(
+            touched_relations=[
+                's3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                '."generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet"',
+            ],
+            touched_buckets=[
+                "poc-tests-performance-evaluation-mwa-abrechnung-3-2",
+            ],
+        )
+
+        snapshot = service.start_query_job(
+            sql=(
+                'SELECT * '
+                'FROM s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                '."generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet"'
+            ),
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-mwa-virtual-plain-2",
+            data_sources=["workspace.s3"],
+        )
+
+        self.assertEqual(snapshot["jobId"], "query-s3-plain-virtual-no-discovery")
+        self.assertEqual(discovery_calls["count"], 0)
+        self.assertIn(
+            "read_parquet('s3://poc-tests-performance-evaluation-mwa-abrechnung-3-2/generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet')",
+            captured["execution_sql"],
+        )
+
+    def test_start_query_job_rewrites_workspace_s3_virtual_glob_relations_without_discovery(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
+        service._data_source_discovery = SimpleNamespace(s3_relation_specs=lambda: {})
+        captured: dict[str, object] = {}
+
+        def record_start(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(payload={"jobId": "query-s3-virtual-direct"})
+
+        service._query_jobs = SimpleNamespace(start_job=record_start)
+        service._analyze_query = lambda _sql, **_kwargs: SimpleNamespace(
+            touched_relations=[
+                'workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                '."generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet"',
+                'workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                '."generated/mwa_abrechnung/parquet/mwa_abrechnungs_ziffern_entities/*.parquet"',
+            ],
+            touched_buckets=[
+                "poc-tests-performance-evaluation-mwa-abrechnung-3-2",
+            ],
+        )
+
+        snapshot = service.start_query_job(
+            sql=(
+                'SELECT ENTI.*, ZIFF.* '
+                'FROM workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                '."generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet" AS ENTI '
+                'JOIN workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                '."generated/mwa_abrechnung/parquet/mwa_abrechnungs_ziffern_entities/*.parquet" AS ZIFF '
+                "ON ZIFF.abrechnung_refer = ENTI.id_"
+            ),
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-mwa-virtual",
+            data_sources=["workspace.s3"],
+        )
+
+        self.assertEqual(snapshot["jobId"], "query-s3-virtual-direct")
+        self.assertIn("read_parquet('s3://poc-tests-performance-evaluation-mwa-abrechnung-3-2/generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet')", captured["execution_sql"])
+        self.assertIn("read_parquet('s3://poc-tests-performance-evaluation-mwa-abrechnung-3-2/generated/mwa_abrechnung/parquet/mwa_abrechnungs_ziffern_entities/*.parquet')", captured["execution_sql"])
+
+    def test_start_query_job_uses_workspace_s3_glob_relation_without_discovery_call(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
+        discovery_calls = {"count": 0}
+
+        def s3_relation_specs() -> dict:
+            discovery_calls["count"] += 1
+            return {}
+
+        service._data_source_discovery = SimpleNamespace(s3_relation_specs=s3_relation_specs)
+        captured: dict[str, object] = {}
+
+        def record_start(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(payload={"jobId": "query-s3-virtual-direct-nodisco"})
+
+        service._query_jobs = SimpleNamespace(start_job=record_start)
+        service._analyze_query = lambda _sql, **_kwargs: SimpleNamespace(
+            touched_relations=[
+                'workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                '."generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet"',
+            ],
+            touched_buckets=[
+                "poc-tests-performance-evaluation-mwa-abrechnung-3-2",
+            ],
+        )
+
+        snapshot = service.start_query_job(
+            sql=(
+                'SELECT * '
+                'FROM workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                '."generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet"'
+            ),
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-mwa-virtual-2",
+            data_sources=["workspace.s3"],
+        )
+
+        self.assertEqual(snapshot["jobId"], "query-s3-virtual-direct-nodisco")
+        self.assertEqual(discovery_calls["count"], 0)
+        self.assertIn("read_parquet('s3://poc-tests-performance-evaluation-mwa-abrechnung-3-2/generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet')", captured["execution_sql"])
+
     def test_start_query_job_applies_parquet_hive_option_to_s3_source_summary(
         self,
     ) -> None:
