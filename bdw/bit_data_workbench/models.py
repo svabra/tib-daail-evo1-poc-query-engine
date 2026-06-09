@@ -608,6 +608,7 @@ class QueryJobDefinition:
     status: str
     started_at: str
     updated_at: str
+    execution_sql: str = ""
     completed_at: str | None = None
     duration_ms: float = 0.0
     progress: float | None = None
@@ -670,6 +671,7 @@ class QueryJobDefinition:
             "notebookTitle": self.notebook_title,
             "cellId": self.cell_id,
             "sql": self.sql,
+            "executionSql": self.execution_sql,
             "status": self.status,
             "startedAt": self.started_at,
             "updatedAt": self.updated_at,

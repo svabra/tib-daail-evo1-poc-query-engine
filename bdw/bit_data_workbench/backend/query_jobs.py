@@ -446,16 +446,59 @@ def _first_keyword(sql: str) -> str:
     return "".join(token)
 
 
-def _contains_mutating_keyword(sql: str) -> bool:
+def _sql_code_tokens(sql: str):
     token: list[str] = []
-    for char in str(sql or ""):
+    quote: str | None = None
+    index = 0
+    text = str(sql or "")
+    while index < len(text):
+        char = text[index]
+        next_char = text[index + 1] if index + 1 < len(text) else ""
+        if quote is not None:
+            if char == quote:
+                if quote in {"'", '"'} and next_char == quote:
+                    index += 2
+                    continue
+                quote = None
+            index += 1
+            continue
+        if char == "-" and next_char == "-":
+            if token:
+                yield "".join(token)
+                token = []
+            while index < len(text) and text[index] not in "\r\n":
+                index += 1
+            continue
+        if char == "/" and next_char == "*":
+            if token:
+                yield "".join(token)
+                token = []
+            index += 2
+            while index + 1 < len(text) and not (text[index] == "*" and text[index + 1] == "/"):
+                index += 1
+            index += 2 if index + 1 < len(text) else 0
+            continue
+        if char in {"'", '"', "`"}:
+            if token:
+                yield "".join(token)
+                token = []
+            quote = char
+            index += 1
+            continue
         if char.isalnum() or char == "_":
             token.append(char.lower())
+            index += 1
             continue
-        if token and "".join(token) in MUTATING_KEYWORDS:
-            return True
+        if token:
+            yield "".join(token)
         token = []
-    return bool(token and "".join(token) in MUTATING_KEYWORDS)
+        index += 1
+    if token:
+        yield "".join(token)
+
+
+def _contains_mutating_keyword(sql: str) -> bool:
+    return any(token in MUTATING_KEYWORDS for token in _sql_code_tokens(sql))
 
 
 def classify_query_execution(sql: str, data_sources: list[str] | None = None) -> str:
@@ -947,6 +990,16 @@ def _source_summary_has_query_sql(summary: dict[str, object]) -> bool:
     )
 
 
+def _source_summary_view_sql(query_sql: str) -> str:
+    normalized_sql = str(query_sql or "").strip()
+    if not normalized_sql:
+        return ""
+    first_token = normalized_sql.split(None, 1)[0].lower()
+    if first_token in {"select", "with", "values"}:
+        return normalized_sql
+    return f"SELECT * FROM {normalized_sql}"
+
+
 def _bootstrap_duckdb_source_views(
     connection: duckdb.DuckDBPyConnection,
     source_summaries: list[dict[str, object]],
@@ -955,7 +1008,7 @@ def _bootstrap_duckdb_source_views(
         if not isinstance(summary, dict):
             continue
         relation_parts = _relation_parts(summary.get("relation"))
-        query_sql = str(summary.get("query_sql") or "").strip()
+        query_sql = _source_summary_view_sql(str(summary.get("query_sql") or ""))
         if not relation_parts or not query_sql:
             continue
         if len(relation_parts) > 1:
@@ -1536,6 +1589,7 @@ class QueryJobManager:
             notebook_title=resolved_title,
             cell_id=cell_id.strip(),
             sql=sql,
+            execution_sql=normalized_execution_sql,
             status="queued",
             started_at=now,
             updated_at=now,

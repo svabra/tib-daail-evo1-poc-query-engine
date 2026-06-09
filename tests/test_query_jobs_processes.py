@@ -104,6 +104,8 @@ class QueryJobClassifierTests(TestCase):
             "with sample as (select 1 as value) select * from sample",
             "explain select * from range(10)",
             "describe select * from range(10)",
+            "-- Call 1\nselect 1",
+            "/* insert into t values (1) */\nselect 'create table t as select 1' as note",
         ):
             self.assertEqual(classify_query_execution(sql, []), QUERY_EXECUTION_DUCKDB_READ)
 
@@ -387,6 +389,25 @@ class ProcessQueryJobManagerTests(TestCase):
             )
 
         return entities_directory, ziffern_directory
+
+    def _create_stage_parquet_fixture(self) -> Path:
+        stage_file = self.root / "materialized-stage" / "data.parquet"
+        stage_file.parent.mkdir(parents=True, exist_ok=True)
+        with duckdb.connect(":memory:") as connection:
+            connection.execute(
+                """
+                CREATE TABLE stage_output AS
+                SELECT * FROM (
+                    VALUES
+                        (1, 'A'),
+                        (2, 'B')
+                ) AS t(id_, code)
+                """
+            )
+            connection.execute(
+                f"COPY stage_output TO '{stage_file.as_posix()}' (FORMAT PARQUET)"
+            )
+        return stage_file
 
     def test_process_metrics_sample_once_per_second(self) -> None:
         self.assertEqual(QUERY_METRICS_SAMPLE_SECONDS, 1.0)
@@ -954,6 +975,56 @@ class ProcessQueryJobManagerTests(TestCase):
         self.assertIn("duckdb_coordinator_active_write", waiting_events[-1])
         self.assertEqual(waiting_events[-1]["duckdb_lock_owner_job_id"], "writer-job")
         self.assertEqual(completed.duckdb_execution_path, "shared-file-read")
+
+    def test_materialized_stage_s3_parquet_summary_isolated_read_skips_duckdb_file_lock(self) -> None:
+        stage_file = self._create_stage_parquet_fixture()
+        query_sql = f"read_parquet('{stage_file.as_posix()}')"
+        query = f"SELECT * FROM {query_sql}"
+
+        self.assertTrue(
+            self.manager._access_coordinator.acquire(
+                QUERY_EXECUTION_DUCKDB_WRITE,
+                lambda: False,
+                owner_job_id="writer-job",
+            )
+        )
+        try:
+            job = self.manager.start_job(
+                sql="SELECT * FROM stage.mwa_joined_abrechnungen",
+                execution_sql=query,
+                notebook_id="nb",
+                notebook_title="Notebook",
+                cell_id="cell-stage-read",
+                data_sources=["workspace.s3"],
+                touched_relations=["stage.mwa_joined_abrechnungen"],
+                touched_buckets=["vat-smoke-test"],
+                source_summaries=[
+                    {
+                        "relation": "stage.mwa_joined_abrechnungen",
+                        "bucket": "vat-smoke-test",
+                        "path": "s3://vat-smoke-test/_bdw_stages/notebook/stage/data.parquet",
+                        "format": "parquet",
+                        "query_sql": query_sql,
+                    }
+                ],
+            )
+            completed = wait_until(
+                lambda: self.manager.snapshot(job.job_id)
+                if self.manager.snapshot(job.job_id).status == "completed"
+                else None,
+                timeout=20,
+            )
+        finally:
+            self.manager._access_coordinator.release(
+                QUERY_EXECUTION_DUCKDB_WRITE,
+                owner_job_id="writer-job",
+            )
+
+        self.assertIsNotNone(completed)
+        self.assertEqual(completed.duckdb_execution_path, "isolated-read")
+        self.assertEqual(completed.timings.get("engineAccessWaitMs"), 0.0)
+        self.assertNotIn("engine_waiting", [event.get("event") for event in completed.progress_events])
+        self.assertEqual(completed.rows, [(1, "A"), (2, "B")])
 
     def test_mwa_s3_glob_join_isolated_read_skips_duckdb_file_lock(self) -> None:
         entities_directory, ziffern_directory = self._create_mwa_parquet_join_fixture()

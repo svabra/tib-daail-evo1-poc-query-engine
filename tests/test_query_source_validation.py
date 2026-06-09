@@ -115,6 +115,32 @@ def sample_catalogs() -> list[SourceCatalog]:
     ]
 
 
+def completed_stage_record(
+    *,
+    notebook_id: str = "notebook",
+    stage_alias: str = "mwa_joined_abrechnungen",
+    output_bucket: str = "vat-smoke-test",
+    output_key: str = "_bdw_stages/notebook/stage-mwa-joined/rev-1/data.parquet",
+) -> dict[str, object]:
+    return {
+        "runId": "run-stage-1",
+        "notebookId": notebook_id,
+        "stageId": "stage-mwa-joined",
+        "cellId": "cell-stage",
+        "stageAlias": stage_alias,
+        "stageTitle": "MWA joined Abrechnungen",
+        "status": "completed",
+        "revisionId": "rev-1",
+        "outputBucket": output_bucket,
+        "outputKey": output_key,
+        "outputPath": f"s3://{output_bucket}/{output_key}",
+        "queryReference": f's3.{output_bucket}."{output_key}"',
+        "querySql": f"read_parquet('s3://{output_bucket}/{output_key}')",
+        "completedAt": "2026-06-09T10:00:00Z",
+        "updatedAt": "2026-06-09T10:00:00Z",
+    }
+
+
 def validate(sql: str):
     return validate_query_sources(
         sql,
@@ -373,6 +399,96 @@ class QuerySourceValidationTests(unittest.TestCase):
         self.assertEqual(len(captured["source_summaries"]), 1)
         self.assertEqual(captured["source_summaries"][0]["relation"], "test.vat_smoke_part_00001")
         self.assertEqual(captured["source_summaries"][0]["bucket"], "test")
+
+    def test_validate_query_sources_allows_completed_stage_output_for_notebook(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
+        service._materialized_stage_store = SimpleNamespace(
+            read_state=lambda: {"version": 1, "records": [completed_stage_record()]}
+        )
+
+        result = service.validate_query_sources(
+            sql="select * from stage.mwa_joined_abrechnungen",
+            notebook_id="notebook",
+            data_sources=["workspace.s3"],
+        )
+
+        self.assertEqual(result["status"], QUERY_SOURCE_VALID)
+        self.assertEqual(result["matchedReferences"][0]["matchedRelation"], "stage.mwa_joined_abrechnungen")
+
+    def test_validate_query_sources_keeps_missing_stage_output_invalid(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
+        service._materialized_stage_store = SimpleNamespace(
+            read_state=lambda: {"version": 1, "records": []}
+        )
+
+        result = service.validate_query_sources(
+            sql="select * from stage.mwa_joined_abrechnungen",
+            notebook_id="notebook",
+            data_sources=["workspace.s3"],
+        )
+
+        self.assertEqual(result["status"], QUERY_SOURCE_INVALID)
+        self.assertEqual(result["missingReferences"], ["stage.mwa_joined_abrechnungen"])
+
+    def test_prepare_query_sql_rewrites_completed_stage_to_s3_parquet_isolated_read(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
+        service._materialized_stage_store = SimpleNamespace(
+            read_state=lambda: {"version": 1, "records": [completed_stage_record()]}
+        )
+
+        payload = service.prepare_query_sql(
+            sql="select * from stage.mwa_joined_abrechnungen",
+            display_sql="select * from stage.mwa_joined_abrechnungen",
+            notebook_id="notebook",
+            data_sources=["workspace.s3"],
+        )
+
+        self.assertEqual(
+            payload["executionSql"],
+            "select * from read_parquet('s3://vat-smoke-test/_bdw_stages/notebook/stage-mwa-joined/rev-1/data.parquet')",
+        )
+        self.assertEqual(payload["touchedRelations"], ["stage.mwa_joined_abrechnungen"])
+        self.assertEqual(payload["touchedBuckets"], ["vat-smoke-test"])
+        self.assertEqual(payload["duckdbExecutionPath"], "isolated-read")
+
+    def test_start_query_job_rewrites_completed_stage_but_keeps_virtual_display_sql(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
+        service._materialized_stage_store = SimpleNamespace(
+            read_state=lambda: {"version": 1, "records": [completed_stage_record()]}
+        )
+        captured: dict[str, object] = {}
+
+        def record_start(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(payload={"jobId": "query-stage-read"})
+
+        service._query_jobs = SimpleNamespace(start_job=record_start)
+
+        snapshot = service.start_query_job(
+            sql="select * from stage.mwa_joined_abrechnungen",
+            notebook_id="notebook",
+            notebook_title="Notebook",
+            cell_id="cell-4",
+            data_sources=["workspace.s3"],
+        )
+
+        self.assertEqual(snapshot["jobId"], "query-stage-read")
+        self.assertEqual(captured["sql"], "select * from stage.mwa_joined_abrechnungen")
+        self.assertEqual(
+            captured["execution_sql"],
+            "select * from read_parquet('s3://vat-smoke-test/_bdw_stages/notebook/stage-mwa-joined/rev-1/data.parquet')",
+        )
+        self.assertEqual(captured["touched_relations"], ["stage.mwa_joined_abrechnungen"])
+        self.assertEqual(captured["source_summaries"][0]["relation"], "stage.mwa_joined_abrechnungen")
+        self.assertEqual(captured["source_summaries"][0]["query_sql"], completed_stage_record()["querySql"])
 
     def test_validate_workspace_s3_virtual_glob_without_discovery_metadata(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)
@@ -756,7 +872,9 @@ class QuerySourceValidationApiTests(unittest.TestCase):
                 sql: str,
                 data_sources: list[str] | None = None,
                 local_relation_map: dict[str, str] | None = None,
+                notebook_id: str = "",
             ):
+                del notebook_id
                 relation_index = build_relation_index(sample_catalogs())
                 for logical_relation, physical_relation in (local_relation_map or {}).items():
                     entry = KnownRelationReference(relation=physical_relation)

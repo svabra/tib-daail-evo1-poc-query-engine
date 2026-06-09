@@ -18,7 +18,9 @@ if str(BDW_ROOT) not in sys.path:
 
 from bit_data_workbench.api.router import (  # noqa: E402
     QueryExplainPayload,
+    QuerySqlPreparePayload,
     explain_query as explain_query_route,
+    prepare_query_sql as prepare_query_sql_route,
 )
 from bit_data_workbench.backend.query_explain import summarize_explain_plans  # noqa: E402
 from bit_data_workbench.backend.query_jobs import DuckDBQueryAccessCoordinator  # noqa: E402
@@ -253,6 +255,42 @@ class QueryExplainApiTests(unittest.TestCase):
             captured["query_options"]["duckdb"]["parquetHivePartitioning"],
             "on",
         )
+
+    def test_prepare_route_delegates_to_service(self) -> None:
+        captured: dict[str, object] = {}
+
+        class FakeWorkbenchService:
+            def prepare_query_sql(self, **kwargs):
+                captured.update(kwargs)
+                return {
+                    "displaySql": "select * from stage.mwa_joined_abrechnungen",
+                    "executionSql": "select * from read_parquet('s3://bucket/stage.parquet')",
+                    "duckdbExecutionPath": "isolated-read",
+                }
+
+        response = prepare_query_sql_route(
+            payload=QuerySqlPreparePayload.model_validate(
+                {
+                    "sql": "select * from stage.mwa_joined_abrechnungen",
+                    "displaySql": "select * from stage.mwa_joined_abrechnungen",
+                    "notebookId": "notebook",
+                    "notebookTitle": "Notebook",
+                    "cellId": "cell-4",
+                    "dataSources": ["workspace.s3"],
+                    "localRelations": {"local.alias": "physical.alias"},
+                    "queryOptions": {
+                        "duckdb": {"parquetHivePartitioning": "auto"},
+                    },
+                }
+            ),
+            service=FakeWorkbenchService(),
+        )
+
+        payload = json.loads(response.body.decode("utf-8"))
+        self.assertEqual(payload["duckdbExecutionPath"], "isolated-read")
+        self.assertEqual(captured["notebook_id"], "notebook")
+        self.assertEqual(captured["cell_id"], "cell-4")
+        self.assertEqual(captured["local_relation_map"], {"local.alias": "physical.alias"})
 
 
 if __name__ == "__main__":

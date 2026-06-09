@@ -607,6 +607,7 @@ const { pythonResultPanelMarkup } = createPythonUi({
 });
 
 let notebookStagePipelineController = null;
+const preparedSqlViewCache = new WeakMap();
 
 const querySourceValidationController = createQuerySourceValidationController({
   cellLanguageForCellRoot,
@@ -3790,6 +3791,185 @@ async function writeTextToClipboard(text, { trim = true, emptyMessage = "There i
   }
 }
 
+function sqlViewModeForEditor(editorRoot) {
+  return editorRoot?.classList?.contains("is-duckdb-sql-view") ? "duckdb" : "virtual";
+}
+
+function syncSqlViewToggle(editorRoot, mode = sqlViewModeForEditor(editorRoot)) {
+  if (!(editorRoot instanceof Element)) {
+    return;
+  }
+  editorRoot.querySelectorAll("[data-editor-sql-view]").forEach((button) => {
+    const active = button.dataset.editorSqlView === mode;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
+function invalidatePreparedSqlViewForCell(cellRoot) {
+  if (!(cellRoot instanceof Element)) {
+    return;
+  }
+  preparedSqlViewCache.delete(cellRoot);
+  const editorRoot = cellRoot.querySelector("[data-editor-root]");
+  if (sqlViewModeForEditor(editorRoot) === "duckdb") {
+    return;
+  }
+  const panel = cellRoot.querySelector("[data-duckdb-sql-panel]");
+  if (panel) {
+    panel.textContent = "";
+    delete panel.dataset.sql;
+    panel.classList.remove("is-error");
+    panel.removeAttribute("aria-busy");
+  }
+}
+
+async function prepareSqlSubmissionForCell(cellRoot, originalSql) {
+  const executionSql = String(originalSql ?? "");
+  const localRelationMap = {};
+  const preparedQuery = await prepareLocalWorkspaceQuerySql(executionSql);
+  (preparedQuery.synchronizedSources || []).forEach((source) => {
+    const logicalRelation = String(source?.logicalRelation || "").trim();
+    const physicalRelation = String(source?.relation || "").trim();
+    if (logicalRelation && physicalRelation) {
+      localRelationMap[logicalRelation] = physicalRelation;
+    }
+  });
+  return {
+    originalSql: executionSql,
+    executionSql: preparedQuery.sql ?? executionSql,
+    localRelationMap,
+    dataSources: selectedDataSourcesForCell(cellRoot),
+    queryOptions: queryOptionsForCellRoot(cellRoot),
+  };
+}
+
+function sqlPreparationCacheKey(cellRoot, preparedSubmission) {
+  return JSON.stringify({
+    sql: preparedSubmission.originalSql,
+    executionSql: preparedSubmission.executionSql,
+    dataSources: preparedSubmission.dataSources,
+    localRelations: preparedSubmission.localRelationMap,
+    queryOptions: preparedSubmission.queryOptions,
+    materializedStagesVersion:
+      notebookStagePipelineController?.getMaterializedStagesVersion?.() ?? null,
+  });
+}
+
+async function prepareDuckdbSqlForCell(cellRoot) {
+  if (!(cellRoot instanceof Element)) {
+    throw new Error("The SQL cell could not be found.");
+  }
+  const editorRoot = cellRoot.querySelector("[data-editor-root]");
+  const workspaceRoot = cellRoot.closest("[data-workspace-notebook]");
+  const notebookId = workspaceNotebookId(workspaceRoot);
+  const cellId = cellRoot.dataset.cellId;
+  if (!editorRoot || !workspaceRoot || !notebookId || !cellId) {
+    throw new Error("The SQL cell is missing notebook context.");
+  }
+
+  const originalSql = currentEditorSql(editorRoot);
+  const preparedSubmission = await prepareSqlSubmissionForCell(cellRoot, originalSql);
+  const cacheKey = sqlPreparationCacheKey(cellRoot, preparedSubmission);
+  const cached = preparedSqlViewCache.get(cellRoot);
+  if (cached?.key === cacheKey && cached.payload) {
+    return cached.payload;
+  }
+
+  const response = await window.fetch("/api/query-sql/prepare", {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      sql: preparedSubmission.executionSql,
+      displaySql: preparedSubmission.originalSql,
+      notebookId,
+      notebookTitle: currentWorkspaceNotebookTitle(workspaceRoot),
+      cellId,
+      dataSources: preparedSubmission.dataSources,
+      localRelations: preparedSubmission.localRelationMap,
+      queryOptions: preparedSubmission.queryOptions,
+    }),
+  });
+
+  if (!response.ok) {
+    let message = "The DuckDB SQL could not be prepared.";
+    try {
+      const payload = await response.json();
+      message = payload?.detail || message;
+    } catch (_error) {
+      // Ignore invalid JSON bodies.
+    }
+    throw new Error(message);
+  }
+
+  const payload = await response.json();
+  preparedSqlViewCache.set(cellRoot, { key: cacheKey, payload });
+  return payload;
+}
+
+function renderDuckdbSqlPanel(editorRoot, { sql = "", error = "" } = {}) {
+  const panel = editorRoot?.querySelector?.("[data-duckdb-sql-panel]");
+  if (!panel) {
+    return;
+  }
+  const text = error || sql || "";
+  panel.hidden = false;
+  panel.textContent = text;
+  panel.dataset.sql = text;
+  panel.classList.toggle("is-error", Boolean(error));
+  panel.removeAttribute("aria-busy");
+}
+
+async function setEditorSqlViewMode(editorRoot, mode) {
+  if (!(editorRoot instanceof Element)) {
+    return;
+  }
+  const normalizedMode = mode === "duckdb" ? "duckdb" : "virtual";
+  const cellRoot = editorRoot.closest("[data-query-cell]");
+  if (normalizedMode === "virtual") {
+    editorRoot.classList.remove("is-duckdb-sql-view");
+    const panel = editorRoot.querySelector("[data-duckdb-sql-panel]");
+    if (panel) {
+      panel.hidden = true;
+      panel.removeAttribute("aria-busy");
+    }
+    syncSqlViewToggle(editorRoot, "virtual");
+    return;
+  }
+
+  const panel = editorRoot.querySelector("[data-duckdb-sql-panel]");
+  if (panel) {
+    panel.hidden = false;
+    panel.classList.remove("is-error");
+    panel.setAttribute("aria-busy", "true");
+    panel.textContent = "Preparing DuckDB SQL...";
+  }
+  editorRoot.classList.add("is-duckdb-sql-view");
+  syncSqlViewToggle(editorRoot, "duckdb");
+
+  try {
+    const payload = await prepareDuckdbSqlForCell(cellRoot);
+    renderDuckdbSqlPanel(editorRoot, {
+      sql: String(payload?.executionSql || payload?.submittedSql || ""),
+    });
+  } catch (error) {
+    renderDuckdbSqlPanel(editorRoot, {
+      error: error instanceof Error ? error.message : "The DuckDB SQL could not be prepared.",
+    });
+  }
+}
+
+function currentVisibleEditorSql(editorRoot) {
+  if (sqlViewModeForEditor(editorRoot) === "duckdb") {
+    const panel = editorRoot?.querySelector?.("[data-duckdb-sql-panel]");
+    return panel?.dataset?.sql ?? panel?.textContent ?? "";
+  }
+  return currentEditorSql(editorRoot);
+}
+
 async function copySourceQueryPath(sourceObjectRoot) {
   const descriptor = sourceQueryDescriptor(sourceObjectRoot);
   if (!descriptor?.relation) {
@@ -3812,13 +3992,14 @@ async function copyEditorSql(editorRoot, triggerButton = null) {
   if (!(editorRoot instanceof Element)) {
     return false;
   }
-  const sqlText = currentEditorSql(editorRoot);
+  const copyingDuckdbSql = sqlViewModeForEditor(editorRoot) === "duckdb";
+  const sqlText = currentVisibleEditorSql(editorRoot);
   await writeTextToClipboard(sqlText, {
     trim: false,
     emptyMessage: "There is no SQL to copy.",
   });
   const textarea = editorRoot.querySelector("[data-editor-source]");
-  if (textarea && textarea.value !== sqlText) {
+  if (!copyingDuckdbSql && textarea && textarea.value !== sqlText) {
     textarea.value = sqlText;
   }
   if (triggerButton instanceof HTMLButtonElement) {
@@ -5286,6 +5467,7 @@ function createEditor(root) {
         EditorView.updateListener.of((update) => {
           if (update.docChanged) {
             textarea.value = update.state.doc.toString();
+            invalidatePreparedSqlViewForCell(root.closest("[data-query-cell]"));
             if (!applyingNotebookState) {
               markEditorInteracted(root);
             }
@@ -5328,6 +5510,7 @@ function createEditor(root) {
 function initializeEditors(root = document) {
   root.querySelectorAll("[data-editor-root]").forEach((editorRoot) => {
     syncEditorExpandButton(editorRoot);
+    syncSqlViewToggle(editorRoot);
     createEditor(editorRoot);
     querySourceValidationController.refreshCell(editorRoot.closest("[data-query-cell]"));
   });
@@ -7507,21 +7690,9 @@ async function startQueryJobForForm(form) {
     return;
   }
 
-  let executionSql = originalSql;
-  const localRelationMap = {};
+  let preparedSubmission = null;
   try {
-    const preparedQuery = await prepareLocalWorkspaceQuerySql(originalSql);
-    executionSql = preparedQuery.sql;
-    (preparedQuery.synchronizedSources || []).forEach((source) => {
-      const logicalRelation = String(source?.logicalRelation || "").trim();
-      const physicalRelation = String(source?.relation || "").trim();
-      if (logicalRelation && physicalRelation) {
-        localRelationMap[logicalRelation] = physicalRelation;
-      }
-    });
-    executionSql =
-      notebookStagePipelineController?.prepareQuerySqlForCell?.(cellRoot, executionSql) ||
-      executionSql;
+    preparedSubmission = await prepareSqlSubmissionForCell(cellRoot, originalSql);
   } catch (error) {
     renderLocalQueryFailure(cellRoot, {
       cellId,
@@ -7535,14 +7706,14 @@ async function startQueryJobForForm(form) {
     });
     return;
   }
-  formData.set("sql", executionSql);
+  formData.set("sql", preparedSubmission.executionSql);
   formData.set("displaySql", originalSql);
   formData.set("notebook_id", notebookId);
   formData.set("cell_id", cellId);
   formData.set("notebook_title", currentWorkspaceNotebookTitle(workspaceRoot));
-  formData.set("data_sources", selectedDataSourcesForCell(cellRoot).join("||"));
-  formData.set("localRelations", JSON.stringify(localRelationMap));
-  formData.set("queryOptions", JSON.stringify(queryOptionsForCellRoot(cellRoot)));
+  formData.set("data_sources", preparedSubmission.dataSources.join("||"));
+  formData.set("localRelations", JSON.stringify(preparedSubmission.localRelationMap));
+  formData.set("queryOptions", JSON.stringify(preparedSubmission.queryOptions));
   formData.set("clientRunStartedAt", String(clientRunStartedAt));
   formData.set("clientPreSubmitMs", String(Math.max(0, performance.now() - clientRunStartedPerf)));
   if (cellCacheHydrationEnabled(cellRoot)) {
@@ -7591,6 +7762,25 @@ async function startQueryJobForForm(form) {
     });
   }
   const displaySnapshot = normalizeQueryJobForDisplay(snapshot) || snapshot;
+  if (displaySnapshot.executionSql) {
+    const preparedPayload = {
+      displaySql: originalSql,
+      submittedSql: preparedSubmission.executionSql,
+      executionSql: displaySnapshot.executionSql,
+      touchedRelations: displaySnapshot.touchedRelations || [],
+      touchedBuckets: displaySnapshot.touchedBuckets || [],
+      executionMode: displaySnapshot.executionMode || "",
+      duckdbExecutionPath: displaySnapshot.duckdbExecutionPath || "",
+    };
+    preparedSqlViewCache.set(cellRoot, {
+      key: sqlPreparationCacheKey(cellRoot, preparedSubmission),
+      payload: preparedPayload,
+    });
+    const editorRoot = cellRoot.querySelector("[data-editor-root]");
+    if (sqlViewModeForEditor(editorRoot) === "duckdb") {
+      renderDuckdbSqlPanel(editorRoot, { sql: displaySnapshot.executionSql });
+    }
+  }
   recordNotebookActivity(notebookId, "run");
   applyOptimisticQueryJobSnapshot({
     snapshot: displaySnapshot,
@@ -7644,18 +7834,9 @@ async function startQueryExplainForForm(form) {
     return;
   }
 
-  let executionSql = originalSql;
-  const localRelationMap = {};
+  let preparedSubmission = null;
   try {
-    const preparedQuery = await prepareLocalWorkspaceQuerySql(originalSql);
-    executionSql = preparedQuery.sql;
-    (preparedQuery.synchronizedSources || []).forEach((source) => {
-      const logicalRelation = String(source?.logicalRelation || "").trim();
-      const physicalRelation = String(source?.relation || "").trim();
-      if (logicalRelation && physicalRelation) {
-        localRelationMap[logicalRelation] = physicalRelation;
-      }
-    });
+    preparedSubmission = await prepareSqlSubmissionForCell(cellRoot, originalSql);
   } catch (error) {
     await showMessageDialog({
       title: "Explain failed",
@@ -7676,14 +7857,14 @@ async function startQueryExplainForForm(form) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        sql: executionSql,
+        sql: preparedSubmission.executionSql,
         displaySql: originalSql,
         notebookId,
         notebookTitle: currentWorkspaceNotebookTitle(workspaceRoot),
         cellId,
         dataSources: selectedSources,
-        localRelations: localRelationMap,
-        queryOptions: queryOptionsForCellRoot(cellRoot),
+        localRelations: preparedSubmission.localRelationMap,
+        queryOptions: preparedSubmission.queryOptions,
       }),
     });
 
@@ -9813,6 +9994,17 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const editorSqlViewButton = event.target.closest("[data-editor-sql-view]");
+  if (editorSqlViewButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    await setEditorSqlViewMode(
+      editorSqlViewButton.closest("[data-editor-root]"),
+      editorSqlViewButton.dataset.editorSqlView
+    );
+    return;
+  }
+
   const resultCollapseButton = event.target.closest("[data-query-result-toggle]");
   if (resultCollapseButton) {
     event.preventDefault();
@@ -10016,6 +10208,7 @@ document.body.addEventListener("input", (event) => {
 
   const queryEditorSource = event.target.closest("[data-editor-source]");
   if (queryEditorSource) {
+    invalidatePreparedSqlViewForCell(queryEditorSource.closest("[data-query-cell]"));
     querySourceValidationController.handleTextareaInput(queryEditorSource);
   }
 
@@ -10149,6 +10342,12 @@ document.body.addEventListener("change", async (event) => {
   }
 
   const changedCellSourceOption = event.target.closest("[data-cell-source-option]");
+  const changedCellQueryOption = event.target.closest("[data-cell-query-option]");
+  if (changedCellSourceOption || changedCellQueryOption) {
+    invalidatePreparedSqlViewForCell(
+      (changedCellSourceOption || changedCellQueryOption).closest("[data-query-cell]")
+    );
+  }
   if (handleNotebookWorkspaceChange(event)) {
     if (changedCellSourceOption) {
       querySourceValidationController.scheduleValidationForCell(

@@ -167,6 +167,7 @@ class QueryResultDownloadExportPayload(BaseModel):
 
 class QuerySourceValidationPayload(BaseModel):
     sql: str = ""
+    notebook_id: str = Field(default="", validation_alias="notebookId", serialization_alias="notebookId")
     data_sources: list[str] = Field(
         default_factory=list,
         validation_alias="dataSources",
@@ -200,6 +201,10 @@ class QueryExplainPayload(BaseModel):
         validation_alias="queryOptions",
         serialization_alias="queryOptions",
     )
+
+
+class QuerySqlPreparePayload(QueryExplainPayload):
+    pass
 
 
 class QueryCachePayload(BaseModel):
@@ -1390,6 +1395,7 @@ def validate_query_sources(
             service.validate_query_sources(
                 sql=payload.sql,
                 data_sources=payload.data_sources,
+                notebook_id=payload.notebook_id,
                 local_relation_map={
                     str(key): str(value)
                     for key, value in payload.local_relations.items()
@@ -1407,6 +1413,32 @@ def explain_query(
 ) -> JSONResponse:
     try:
         result = service.explain_query(
+            sql=payload.sql,
+            display_sql=payload.display_sql,
+            notebook_id=payload.notebook_id,
+            notebook_title=payload.notebook_title,
+            cell_id=payload.cell_id,
+            data_sources=payload.data_sources,
+            local_relation_map={
+                str(key): str(value)
+                for key, value in payload.local_relations.items()
+                if str(key).strip() and str(value).strip()
+            },
+            query_options=payload.query_options,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(result))
+
+
+@router.post("/api/query-sql/prepare")
+def prepare_query_sql(
+    payload: QuerySqlPreparePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        result = service.prepare_query_sql(
             sql=payload.sql,
             display_sql=payload.display_sql,
             notebook_id=payload.notebook_id,

@@ -444,6 +444,9 @@ export function createQuerySourceValidationController(helpers) {
         },
         body: JSON.stringify({
           sql,
+          notebookId: String(
+            cellRoot?.closest?.("[data-workspace-notebook]")?.dataset?.notebookId || ""
+          ),
           dataSources: selectedDataSourcesForCell(cellRoot),
           localRelations: combinedValidation.localRelations,
         }),

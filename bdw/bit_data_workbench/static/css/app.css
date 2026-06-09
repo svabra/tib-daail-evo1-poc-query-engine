@@ -8589,10 +8589,18 @@ details:not([open]) > .tree-children {
 }
 
 .editor-copy-button,
-.editor-expand-button {
+.editor-expand-button,
+.editor-sql-view-toggle {
   position: absolute;
   top: 8px;
   z-index: 3;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.14s ease, background 0.14s ease, border-color 0.14s ease;
+}
+
+.editor-copy-button,
+.editor-expand-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -8603,9 +8611,6 @@ details:not([open]) > .tree-children {
   background: rgba(255, 255, 255, 0.94);
   color: var(--accent-strong);
   cursor: pointer;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.14s ease, background 0.14s ease, border-color 0.14s ease;
 }
 
 .editor-copy-button {
@@ -8616,6 +8621,41 @@ details:not([open]) > .tree-children {
   right: 44px;
   padding: 0;
   font: 800 1rem/1 var(--font-sans);
+}
+
+.editor-sql-view-toggle {
+  right: 80px;
+  display: inline-grid;
+  grid-template-columns: minmax(54px, auto) minmax(54px, auto);
+  overflow: hidden;
+  border: 1px solid rgba(192, 202, 212, 0.9);
+  border-radius: var(--radius-control);
+  background: rgba(255, 255, 255, 0.94);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.editor-sql-view-button {
+  min-width: 54px;
+  height: 30px;
+  padding: 0 8px;
+  border: 0;
+  border-right: 1px solid rgba(192, 202, 212, 0.72);
+  background: transparent;
+  color: var(--text-muted);
+  font: 700 0.72rem/1 var(--font-sans);
+  cursor: pointer;
+}
+
+.editor-sql-view-button:last-child {
+  border-right: 0;
+}
+
+.editor-sql-view-button:hover,
+.editor-sql-view-button:focus-visible,
+.editor-sql-view-button.is-active {
+  background: rgba(236, 245, 252, 0.98);
+  color: var(--accent-strong);
 }
 
 .editor-copy-button svg {
@@ -8630,8 +8670,11 @@ details:not([open]) > .tree-children {
 
 .editor-frame:hover .editor-copy-button,
 .editor-frame:hover .editor-expand-button,
+.editor-frame:hover .editor-sql-view-toggle,
+.editor-frame.is-duckdb-sql-view .editor-sql-view-toggle,
 .editor-copy-button:focus-visible,
 .editor-expand-button:focus-visible,
+.editor-sql-view-toggle:focus-within,
 .editor-expand-button[aria-pressed="true"] {
   opacity: 1;
   pointer-events: auto;
@@ -8642,13 +8685,16 @@ details:not([open]) > .tree-children {
 .editor-copy-button.is-copied,
 .editor-expand-button:hover,
 .editor-expand-button:focus-visible,
+.editor-sql-view-toggle:hover,
+.editor-sql-view-toggle:focus-within,
 .editor-expand-button[aria-pressed="true"] {
   border-color: rgba(11, 68, 121, 0.24);
   background: rgba(236, 245, 252, 0.98);
 }
 
 .editor-frame[data-editor-language="python"] .editor-copy-button,
-.editor-frame[data-editor-language="python"] .editor-expand-button {
+.editor-frame[data-editor-language="python"] .editor-expand-button,
+.editor-frame[data-editor-language="python"] .editor-sql-view-toggle {
   display: none;
 }
 
@@ -8665,8 +8711,17 @@ details:not([open]) > .tree-children {
   background: transparent;
 }
 
+.editor-frame[data-editor-language="sql"] textarea {
+  padding-top: 48px;
+}
+
 .editor-frame.editor-ready textarea {
   display: none;
+}
+
+.editor-frame[data-editor-language="sql"] .editor-shell .cm-editor {
+  box-sizing: border-box;
+  padding-top: 38px;
 }
 
 .editor-shell .cm-editor {
@@ -8686,6 +8741,35 @@ details:not([open]) > .tree-children {
 .editor-shell .cm-scroller {
   height: 100%;
   overflow: auto;
+}
+
+.editor-duckdb-sql-panel {
+  display: none;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 136px;
+  height: 100%;
+  margin: 0;
+  padding: 48px 12px 12px;
+  overflow: auto;
+  color: var(--text);
+  background: transparent;
+  font: 0.95rem/1.5 var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.editor-duckdb-sql-panel.is-error {
+  color: #aa2514;
+}
+
+.editor-frame.is-duckdb-sql-view textarea,
+.editor-frame.is-duckdb-sql-view .editor-shell {
+  display: none;
+}
+
+.editor-frame.is-duckdb-sql-view .editor-duckdb-sql-panel {
+  display: block;
 }
 
 .query-source-validation {

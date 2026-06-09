@@ -31,6 +31,31 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn('classList.contains("is-editor-expanded")', autosize_source)
         self.assertIn(".editor-expand-button", css_source)
 
+    def test_sql_view_toggle_has_markup_runtime_wiring_and_styles(self) -> None:
+        markup_source = (
+            STATIC_ROOT / "js" / "notebook-workspace-markup.js"
+        ).read_text(encoding="utf-8")
+        app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
+        validation_source = (
+            STATIC_ROOT / "js" / "query-source-validation-controller.js"
+        ).read_text(encoding="utf-8")
+        css_source = (STATIC_ROOT / "css" / "app.css").read_text(encoding="utf-8")
+        workspace_template = (
+            REPO_ROOT / "bdw" / "bit_data_workbench" / "templates" / "partials" / "workspace.html"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("data-editor-sql-view-toggle", markup_source)
+        self.assertIn('data-editor-sql-view="duckdb"', markup_source)
+        self.assertIn("data-duckdb-sql-panel", markup_source)
+        self.assertIn("data-editor-sql-view-toggle", workspace_template)
+        self.assertIn("/api/query-sql/prepare", app_source)
+        self.assertIn("prepareDuckdbSqlForCell", app_source)
+        self.assertIn("currentVisibleEditorSql", app_source)
+        self.assertIn("invalidatePreparedSqlViewForCell", app_source)
+        self.assertIn("notebookId", validation_source)
+        self.assertIn(".editor-sql-view-toggle", css_source)
+        self.assertIn(".editor-duckdb-sql-panel", css_source)
+
     def test_duckdb_parquet_hive_query_option_has_markup_and_payload_wiring(self) -> None:
         markup_source = (
             STATIC_ROOT / "js" / "notebook-workspace-markup.js"
@@ -163,7 +188,7 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("normalizeNotebookPipelineMode", model_source)
         self.assertIn("createNotebookStagePipelineController", app_source)
         self.assertIn("validatePipelineStageAliases", app_source)
-        self.assertIn("prepareQuerySqlForCell", app_source)
+        self.assertIn("/api/query-sql/prepare", app_source)
         self.assertIn("handleRunCellButton", app_source)
         self.assertIn("handleQueryFormSubmit", app_source)
         self.assertIn('case "materialized-stages"', app_source)

@@ -35,30 +35,18 @@ def parse_args() -> argparse.Namespace:
 
 async def ensure_query_notebook(page, base_url: str, timeout_ms: int) -> None:
     await page.goto(
-        f"{base_url.rstrip('/')}/query-workbench",
+        f"{base_url.rstrip('/')}/notebooks/mwa-abrechnung-s3-parquet",
         wait_until="domcontentloaded",
         timeout=timeout_ms,
     )
     query_cells = page.locator("[data-query-cell]:visible")
-    if await query_cells.count():
-        await query_cells.first.wait_for(state="visible", timeout=timeout_ms)
-        return
-
-    create_button = page.locator(
-        "[data-query-workbench-entry-page] [data-create-notebook]"
-    )
-    await create_button.wait_for(state="visible", timeout=timeout_ms)
-    await create_button.click(force=True)
     await query_cells.first.wait_for(state="visible", timeout=timeout_ms)
 
 
 async def write_sql(page, cell, sql: str, timeout_ms: int) -> None:
     editor_content = cell.locator(".cm-content").first
     if await editor_content.count():
-        await editor_content.click()
-        control_key = "Meta+A" if sys.platform == "darwin" else "Control+A"
-        await page.keyboard.press(control_key)
-        await page.keyboard.type(sql)
+        await editor_content.fill(sql)
         cell_handle = await cell.element_handle()
         await page.wait_for_function(
             """
@@ -117,6 +105,37 @@ async def submit_query_and_extract_job_id(page, cell):
     )
 
 
+async def assert_sql_view_toggle(page, cell, expected_virtual_sql: str, timeout_ms: int) -> None:
+    duckdb_button = cell.locator('[data-editor-sql-view="duckdb"]').first
+    virtual_button = cell.locator('[data-editor-sql-view="virtual"]').first
+    panel = cell.locator("[data-duckdb-sql-panel]").first
+
+    await cell.locator("[data-editor-root]").first.hover()
+    await duckdb_button.click(force=True)
+    await panel.wait_for(state="visible", timeout=timeout_ms)
+    deadline = time.monotonic() + (timeout_ms / 1000)
+    panel_text = ""
+    while time.monotonic() < deadline:
+        panel_text = await panel.text_content() or ""
+        if "read_parquet(" in panel_text:
+            break
+        await asyncio.sleep(0.25)
+    else:
+        raise RuntimeError(
+            "DuckDB SQL view did not show the prepared read_parquet SQL. "
+            f"Panel text: {panel_text!r}"
+        )
+
+    await virtual_button.click(force=True)
+    await panel.wait_for(state="hidden", timeout=timeout_ms)
+    textarea_value = await cell.locator("[data-editor-source]").input_value()
+    if textarea_value != expected_virtual_sql:
+        raise RuntimeError(
+            "Virtual SQL was not preserved after toggling back from DuckDB view. "
+            f"Expected {expected_virtual_sql!r}, got {textarea_value!r}."
+        )
+
+
 def _normalize_progress_entry(value) -> str:
     return str(value or "").strip().lower()
 
@@ -134,7 +153,19 @@ def assert_no_duckdb_file_wait(job_id: str, payload: dict[str, object]) -> None:
             f" {json.dumps(payload, default=str)}"
         )
 
+    progress_events = payload.get("progressEvents")
+    if not isinstance(progress_events, list):
+        raise RuntimeError(
+            f"Query {job_id} payload is missing progress events."
+            f" Payload: {json.dumps(payload, default=str)}"
+        )
+
     duckdb_execution_path = str(payload.get("duckdbExecutionPath") or "").strip()
+    if not duckdb_execution_path:
+        for event in reversed(progress_events):
+            if isinstance(event, dict) and str(event.get("duckdb_execution_path") or "").strip():
+                duckdb_execution_path = str(event.get("duckdb_execution_path") or "").strip()
+                break
     if duckdb_execution_path != "isolated-read":
         raise RuntimeError(
             f"Query {job_id} expected isolated-read but got {duckdb_execution_path!r}."
@@ -152,13 +183,6 @@ def assert_no_duckdb_file_wait(job_id: str, payload: dict[str, object]) -> None:
     if engine_access_wait_ms > 0.5:
         raise RuntimeError(
             f"Query {job_id} has unexpected file-lock wait: {engine_access_wait_ms} ms."
-            f" Payload: {json.dumps(payload, default=str)}"
-        )
-
-    progress_events = payload.get("progressEvents")
-    if not isinstance(progress_events, list):
-        raise RuntimeError(
-            f"Query {job_id} payload is missing progress events."
             f" Payload: {json.dumps(payload, default=str)}"
         )
 
@@ -239,6 +263,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
             cell = page.locator("[data-query-cell]:visible").first
             await cell.wait_for(state="visible", timeout=args.timeout_ms)
             await write_sql(page, cell, MWA_JOIN_SQL, args.timeout_ms)
+            await assert_sql_view_toggle(page, cell, MWA_JOIN_SQL, args.timeout_ms)
             job_id = await submit_query_and_extract_job_id(page, cell)
             if not job_id:
                 raise RuntimeError(f"Did not receive a job id. Responses: {responses!r}")

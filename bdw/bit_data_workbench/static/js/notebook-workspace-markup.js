@@ -316,7 +316,24 @@ export function createNotebookWorkspaceMarkup(helpers) {
               aria-pressed="false"
               title="Expand SQL editor"
             >+</button>
+            <div class="editor-sql-view-toggle" data-editor-sql-view-toggle role="group" aria-label="SQL view">
+              <button
+                type="button"
+                class="editor-sql-view-button is-active"
+                data-editor-sql-view="virtual"
+                aria-pressed="true"
+                title="Show the editable virtual SQL"
+              >Virtual</button>
+              <button
+                type="button"
+                class="editor-sql-view-button"
+                data-editor-sql-view="duckdb"
+                aria-pressed="false"
+                title="Show the final SQL sent to DuckDB"
+              >DuckDB</button>
+            </div>
             <textarea name="sql" data-editor-source data-default-sql="${escapeHtml(cell.sql)}" data-editor-language="${escapeHtml(cellLanguage)}" rows="${preferredSqlEditorRows(cell.sql)}" spellcheck="false">${escapeHtml(cell.sql)}</textarea>
+            <pre class="editor-duckdb-sql-panel" data-duckdb-sql-panel hidden></pre>
           </div>
           <div class="query-source-validation" data-query-source-validation data-query-source-validation-status="unchecked" aria-live="polite" ${cellLanguage === "python" ? "hidden" : ""}>
             <span data-query-source-validation-message>No source references found. Sources will be checked before execution.</span>

@@ -70,6 +70,7 @@ def generate_duckdb_explain(
         "notebookTitle": notebook_title,
         "cellId": cell_id,
         "sql": display_sql or execution_sql,
+        "executionSql": execution_sql,
         "dataSources": list(data_sources or []),
         "touchedRelations": list(touched_relations or []),
         "touchedBuckets": list(touched_buckets or []),

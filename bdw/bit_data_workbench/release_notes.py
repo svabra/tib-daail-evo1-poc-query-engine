@@ -1,22 +1,29 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.9.40. Keep entries concise and
+# Derived from git history through version 0.10.0. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
     {
-        "version": "0.9.40",
-        "releasedAt": "2026-06-04T18:25:00+02:00",
+        "version": "0.10.0",
+        "releasedAt": "2026-06-09T08:30:00+02:00",
         "features": [
             (
-                "The RHOS deployment now gives each DuckDB query worker an "
-                "eight-thread execution limit, increasing parallel CPU headroom "
-                "for query plans that DuckDB can run concurrently."
+                "Exploration notebook cells now resolve completed stage outputs "
+                "and direct S3 Parquet aliases to isolated DuckDB "
+                "read_parquet reads, avoiding shared DuckDB file-lock waits for "
+                "read-only S3 queries."
             ),
             (
-                "Query monitoring now shows worker process thread count, "
-                "DuckDB thread limit, derived active core usage, and the number "
-                "of active query worker processes."
+                "Query cells now include a Virtual/DuckDB SQL toggle that shows "
+                "either the user-facing SQL or the final SQL submitted to DuckDB "
+                "without mutating the editable cell SQL."
+            ),
+            (
+                "DuckDB execution classification now ignores SQL comments and "
+                "quoted strings while scanning for mutating keywords, so comments "
+                "such as '-- Call 1' no longer route read-only SELECT queries "
+                "through the shared write path."
             ),
         ],
     },

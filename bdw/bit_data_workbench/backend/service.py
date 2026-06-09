@@ -5,7 +5,7 @@ import time
 import threading
 import uuid
 from contextlib import contextmanager
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
@@ -81,6 +81,7 @@ from .local_workspace_transfers import LocalWorkspaceTransferManager
 from .materialized_stages import (
     MaterializedStageManager,
     MaterializedStageStore,
+    StageRecord,
     sql_stage_alias_references,
 )
 from .python_execution import KernelSessionManager, PythonJobManager
@@ -108,6 +109,7 @@ from .query_source_validation import QUERY_SOURCE_INVALID, validate_query_source
 from .query_cache import cache_preview, delete_cache, expire_cache, hydrate_cache
 from .query_options import normalize_query_options, parquet_hive_partitioning_option
 from .query_jobs import (
+    DUCKDB_EXECUTION_PATH_ISOLATED_READ,
     DuckDBQueryAccessCoordinator,
     QUERY_EXECUTION_DUCKDB_READ,
     QUERY_EXECUTION_DUCKDB_WRITE,
@@ -202,6 +204,34 @@ CHE-100.000.010,Lucerne Trade AG,LU,2025-12-31,TX-10010,142200.00,9600.00,0.00,f
 CHE-100.000.011,St. Gallen Medical AG,SG,2025-12-31,TX-10011,156300.00,0.00,7100.00,refund,health
 CHE-100.000.012,Valais Hydro SA,VS,2025-12-31,TX-10012,301400.00,25400.00,0.00,assessed,energy
 """
+
+
+@dataclass(slots=True)
+class PreparedQuery:
+    display_sql: str
+    submitted_sql: str
+    execution_sql: str
+    data_sources: list[str]
+    query_options: dict[str, object]
+    touched_relations: list[str]
+    touched_buckets: list[str]
+    source_summaries: list[dict[str, object]]
+    execution_mode: str
+    duckdb_execution_path: str
+
+    @property
+    def payload(self) -> dict[str, object]:
+        return {
+            "displaySql": self.display_sql,
+            "submittedSql": self.submitted_sql,
+            "executionSql": self.execution_sql,
+            "dataSources": list(self.data_sources),
+            "queryOptions": dict(self.query_options),
+            "touchedRelations": list(self.touched_relations),
+            "touchedBuckets": list(self.touched_buckets),
+            "executionMode": self.execution_mode,
+            "duckdbExecutionPath": self.duckdb_execution_path,
+        }
 
 
 def normalize_port(value: str, variable_name: str) -> str:
@@ -1609,6 +1639,28 @@ class WorkbenchService:
     def disconnect_data_source(self, source_id: str) -> dict[str, object]:
         return self._data_source_discovery.disconnect_source(source_id)
 
+    def prepare_query_sql(
+        self,
+        *,
+        sql: str,
+        display_sql: str = "",
+        notebook_id: str = "",
+        notebook_title: str = "",
+        cell_id: str = "",
+        data_sources: list[str] | None = None,
+        local_relation_map: dict[str, str] | None = None,
+        query_options: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        del notebook_title, cell_id
+        return self._prepare_exploration_query(
+            sql=sql,
+            display_sql=display_sql,
+            notebook_id=notebook_id,
+            data_sources=data_sources,
+            local_relation_map=local_relation_map,
+            query_options=query_options,
+        ).payload
+
     def start_query_job(
         self,
         *,
@@ -1623,50 +1675,26 @@ class WorkbenchService:
         client_pre_submit_ms: float | None = None,
     ) -> dict[str, object]:
         backend_prepare_started = time.perf_counter()
-        normalized_query_options = normalize_query_options(query_options)
-        display_query_sql = str(display_sql or "")
-        submitted_query_sql = str(sql or "")
-        user_sql = display_query_sql or submitted_query_sql
-        routing_sql = submitted_query_sql or user_sql
-        relation_index = self._query_source_relation_index(
-            local_relation_map=local_relation_map,
-            sql=routing_sql,
-        )
-        source_validation = self.validate_query_sources(
-            sql=routing_sql,
+        prepared = self._prepare_exploration_query(
+            sql=sql,
+            display_sql=display_sql,
+            notebook_id=notebook_id,
             data_sources=data_sources,
             local_relation_map=local_relation_map,
-            relation_index=relation_index,
-        )
-        if source_validation.get("status") == QUERY_SOURCE_INVALID:
-            raise ValueError(
-                str(source_validation.get("message") or "Referenced source(s) were not found.")
-            )
-
-        execution_sql = self._rewrite_query_source_aliases(
-            routing_sql,
-            relation_index,
-            local_relation_map,
-        )
-        query_analysis = self._analyze_query(routing_sql, relation_index=relation_index)
-        source_summaries = self._query_source_summaries(
-            query_analysis.touched_relations,
-            relation_index=relation_index,
-            local_relation_map=local_relation_map,
-            query_options=normalized_query_options,
+            query_options=query_options,
         )
         backend_prepare_ms = (time.perf_counter() - backend_prepare_started) * 1000
         snapshot = self._query_jobs.start_job(
-            sql=user_sql,
-            execution_sql=execution_sql,
+            sql=prepared.display_sql,
+            execution_sql=prepared.execution_sql,
             notebook_id=notebook_id,
             notebook_title=notebook_title,
             cell_id=cell_id,
-            data_sources=data_sources,
-            touched_relations=query_analysis.touched_relations,
-            touched_buckets=query_analysis.touched_buckets,
-            source_summaries=source_summaries,
-            query_options=normalized_query_options,
+            data_sources=prepared.data_sources,
+            touched_relations=prepared.touched_relations,
+            touched_buckets=prepared.touched_buckets,
+            source_summaries=prepared.source_summaries,
+            query_options=prepared.query_options,
             client_pre_submit_ms=client_pre_submit_ms,
             backend_prepare_ms=backend_prepare_ms,
         )
@@ -1684,19 +1712,89 @@ class WorkbenchService:
         local_relation_map: dict[str, str] | None = None,
         query_options: dict[str, object] | None = None,
     ) -> dict[str, object]:
+        prepared = self._prepare_exploration_query(
+            sql=sql,
+            display_sql=display_sql,
+            notebook_id=notebook_id,
+            data_sources=data_sources,
+            local_relation_map=local_relation_map,
+            query_options=query_options,
+        )
+        if prepared.execution_mode == QUERY_EXECUTION_POSTGRES_NATIVE:
+            raise ValueError("Explain is available for DuckDB-backed SQL cells only.")
+
+        requires_duckdb_file_access = (
+            prepared.duckdb_execution_path != DUCKDB_EXECUTION_PATH_ISOLATED_READ
+        )
+        if requires_duckdb_file_access:
+            acquired = self._duckdb_query_access.acquire(prepared.execution_mode, lambda: False)
+            if not acquired:
+                raise RuntimeError("DuckDB connection acquisition cancelled.")
+
+        connection = None
+        try:
+            connection = create_duckdb_worker_connection(
+                self.settings,
+                database_path=(
+                    ":memory:"
+                    if prepared.duckdb_execution_path == DUCKDB_EXECUTION_PATH_ISOLATED_READ
+                    else None
+                ),
+                read_only=(
+                    not prepared.source_summaries
+                    and prepared.execution_mode == QUERY_EXECUTION_DUCKDB_READ
+                    and self.settings.duckdb_database.exists()
+                ),
+            )
+            if prepared.execution_mode != QUERY_EXECUTION_POSTGRES_NATIVE and prepared.source_summaries:
+                self._bootstrap_duckdb_source_views(connection, prepared.source_summaries)
+            return generate_duckdb_explain(
+                connection=connection,
+                execution_sql=prepared.execution_sql,
+                display_sql=prepared.display_sql,
+                notebook_id=notebook_id,
+                notebook_title=notebook_title,
+                cell_id=cell_id,
+                data_sources=prepared.data_sources,
+                touched_relations=prepared.touched_relations,
+                touched_buckets=prepared.touched_buckets,
+            )
+        finally:
+            if connection is not None:
+                connection.close()
+            if requires_duckdb_file_access:
+                self._duckdb_query_access.release(prepared.execution_mode)
+
+    def _prepare_exploration_query(
+        self,
+        *,
+        sql: str,
+        display_sql: str = "",
+        notebook_id: str = "",
+        data_sources: list[str] | None = None,
+        local_relation_map: dict[str, str] | None = None,
+        query_options: dict[str, object] | None = None,
+    ) -> PreparedQuery:
         normalized_query_options = normalize_query_options(query_options)
+        normalized_data_sources = [
+            source_id
+            for source_id in (str(value).strip() for value in (data_sources or []))
+            if source_id
+        ]
         display_query_sql = str(display_sql or "")
         submitted_query_sql = str(sql or "")
         user_sql = display_query_sql or submitted_query_sql
         routing_sql = submitted_query_sql or user_sql
         relation_index = self._query_source_relation_index(
             local_relation_map=local_relation_map,
+            notebook_id=notebook_id,
             sql=routing_sql,
         )
         source_validation = self.validate_query_sources(
             sql=routing_sql,
-            data_sources=data_sources,
+            data_sources=normalized_data_sources,
             local_relation_map=local_relation_map,
+            notebook_id=notebook_id,
             relation_index=relation_index,
         )
         if source_validation.get("status") == QUERY_SOURCE_INVALID:
@@ -1709,10 +1807,7 @@ class WorkbenchService:
             relation_index,
             local_relation_map,
         )
-        execution_mode = classify_query_execution(execution_sql, data_sources)
-        if execution_mode == QUERY_EXECUTION_POSTGRES_NATIVE:
-            raise ValueError("Explain is available for DuckDB-backed SQL cells only.")
-
+        execution_mode = classify_query_execution(execution_sql, normalized_data_sources)
         query_analysis = self._analyze_query(routing_sql, relation_index=relation_index)
         source_summaries = self._query_source_summaries(
             query_analysis.touched_relations,
@@ -1720,38 +1815,25 @@ class WorkbenchService:
             local_relation_map=local_relation_map,
             query_options=normalized_query_options,
         )
-        acquired = self._duckdb_query_access.acquire(execution_mode, lambda: False)
-        if not acquired:
-            raise RuntimeError("DuckDB connection acquisition cancelled.")
-
-        connection = None
-        try:
-            connection = create_duckdb_worker_connection(
-                self.settings,
-                database_path=":memory:" if source_summaries else None,
-                read_only=(
-                    not source_summaries
-                    and execution_mode == QUERY_EXECUTION_DUCKDB_READ
-                    and self.settings.duckdb_database.exists()
-                ),
-            )
-            if execution_mode != QUERY_EXECUTION_POSTGRES_NATIVE and source_summaries:
-                self._bootstrap_duckdb_source_views(connection, source_summaries)
-            return generate_duckdb_explain(
-                connection=connection,
-                execution_sql=execution_sql,
-                display_sql=user_sql,
-                notebook_id=notebook_id,
-                notebook_title=notebook_title,
-                cell_id=cell_id,
-                data_sources=data_sources or [],
-                touched_relations=query_analysis.touched_relations,
-                touched_buckets=query_analysis.touched_buckets,
-            )
-        finally:
-            if connection is not None:
-                connection.close()
-            self._duckdb_query_access.release(execution_mode)
+        duckdb_execution_path = QueryJobManager._duckdb_execution_path(
+            execution_mode=execution_mode,
+            source_ids=normalized_data_sources,
+            touched_relations=query_analysis.touched_relations,
+            touched_buckets=query_analysis.touched_buckets,
+            source_summaries=source_summaries,
+        )
+        return PreparedQuery(
+            display_sql=user_sql,
+            submitted_sql=routing_sql,
+            execution_sql=execution_sql,
+            data_sources=normalized_data_sources,
+            query_options=normalized_query_options,
+            touched_relations=list(query_analysis.touched_relations),
+            touched_buckets=list(query_analysis.touched_buckets),
+            source_summaries=source_summaries,
+            execution_mode=execution_mode,
+            duckdb_execution_path=duckdb_execution_path,
+        )
 
     def query_cache_preview(
         self,
@@ -1959,16 +2041,23 @@ class WorkbenchService:
         sql: str,
         data_sources: list[str] | None = None,
         local_relation_map: dict[str, str] | None = None,
+        notebook_id: str = "",
         relation_index: dict[str, KnownRelationReference] | None = None,
     ) -> dict[str, object]:
         if relation_index is None:
             relation_index = self._query_source_relation_index(
                 local_relation_map=local_relation_map,
+                notebook_id=notebook_id,
                 sql=sql,
             )
         else:
             relation_index = dict(relation_index)
             self._add_local_relation_aliases(relation_index, local_relation_map)
+            self._add_completed_stage_relation_aliases(
+                relation_index,
+                notebook_id=notebook_id,
+                sql=sql,
+            )
         return validate_query_sources(
             sql,
             relation_index=relation_index,
@@ -1979,11 +2068,17 @@ class WorkbenchService:
         self,
         *,
         local_relation_map: dict[str, str] | None = None,
+        notebook_id: str = "",
         sql: str | None = None,
     ) -> dict[str, KnownRelationReference]:
         with self._lock:
             relation_index = build_relation_index(self._catalogs)
         self._add_local_relation_aliases(relation_index, local_relation_map)
+        self._add_completed_stage_relation_aliases(
+            relation_index,
+            notebook_id=notebook_id,
+            sql=sql,
+        )
         self._add_sql_s3_relation_aliases(relation_index, sql=sql)
         if not self._needs_s3_discovery_aliases(
             sql=sql,
@@ -1992,6 +2087,72 @@ class WorkbenchService:
             return relation_index
         self._add_s3_discovery_relation_aliases(relation_index)
         return relation_index
+
+    def _completed_stage_records_by_alias(self, notebook_id: str) -> dict[str, StageRecord]:
+        normalized_notebook_id = str(notebook_id or "").strip()
+        if not normalized_notebook_id:
+            return {}
+        store = getattr(self, "_materialized_stage_store", None)
+        read_state = getattr(store, "read_state", None)
+        if not callable(read_state):
+            return {}
+
+        state = read_state()
+        records = state.get("records", []) if isinstance(state, dict) else []
+        latest: dict[str, StageRecord] = {}
+        for item in records or []:
+            record = StageRecord.from_payload(item)
+            if record is None:
+                continue
+            if record.notebook_id != normalized_notebook_id or record.status != "completed":
+                continue
+            alias = str(record.stage_alias or "").strip()
+            if not alias or not str(record.query_sql or "").strip():
+                continue
+            normalized_alias = alias.lower()
+            current = latest.get(normalized_alias)
+            record_time = record.completed_at or record.updated_at or record.started_at
+            current_time = (
+                current.completed_at or current.updated_at or current.started_at
+                if current is not None
+                else ""
+            )
+            if current is None or record_time > current_time:
+                latest[normalized_alias] = record
+        return latest
+
+    def _add_completed_stage_relation_aliases(
+        self,
+        relation_index: dict[str, KnownRelationReference],
+        *,
+        notebook_id: str,
+        sql: str | None,
+    ) -> None:
+        aliases = sql_stage_alias_references(sql or "")
+        if not aliases:
+            return
+        records_by_alias = self._completed_stage_records_by_alias(notebook_id)
+        if not records_by_alias:
+            return
+
+        for alias in aliases:
+            record = records_by_alias.get(str(alias or "").strip().lower())
+            if record is None:
+                continue
+            query_sql = str(record.query_sql or "").strip()
+            if not query_sql:
+                continue
+            stage_alias = str(record.stage_alias or alias).strip()
+            relation = f"stage.{stage_alias}"
+            entry = KnownRelationReference(
+                relation=relation,
+                bucket=str(record.output_bucket or "").strip(),
+                query_sql=query_sql,
+            )
+            for candidate in {relation, f"stage.{alias}"}:
+                normalized_alias = normalize_query_alias_key(candidate)
+                if normalized_alias:
+                    relation_index[normalized_alias] = entry
 
     @staticmethod
     def _normalized_s3_relation_reference(
@@ -2075,6 +2236,8 @@ class WorkbenchService:
                 bucket=bucket,
                 object_key=object_key,
             ):
+                return True
+            if "*" not in object_key and "?" not in object_key:
                 return True
             normalized_relation = normalize_relation_key(relation)
             if not (
@@ -2168,7 +2331,7 @@ class WorkbenchService:
             for alias in aliases:
                 normalized_alias = normalize_query_alias_key(alias)
                 if normalized_alias:
-                    relation_index.setdefault(normalized_alias, entry)
+                    relation_index[normalized_alias] = entry
 
     @staticmethod
     def _add_local_relation_aliases(
@@ -2197,11 +2360,16 @@ class WorkbenchService:
                 key.startswith("s3.")
                 or key.startswith("workspace.s3.")
                 or key.startswith("pg.")
+                or key.startswith("stage.")
             ):
                 continue
             replacement = (
                 value.query_sql
-                if key.startswith("s3.") or key.startswith("workspace.s3.")
+                if (
+                    key.startswith("s3.")
+                    or key.startswith("workspace.s3.")
+                    or key.startswith("stage.")
+                )
                 else value.relation
             )
             if str(replacement or "").strip():
@@ -2242,16 +2410,11 @@ class WorkbenchService:
             if not (
                 normalized_relation.startswith("s3.")
                 or normalized_relation.startswith("workspace.s3.")
+                or normalized_relation.startswith("stage.")
             ):
                 continue
             relation_key = str(reference.relation or "").strip()
-            if (
-                not relation_key
-                or (
-                    not normalized_relation.startswith("s3.")
-                    and not normalized_relation.startswith("workspace.s3.")
-                )
-            ):
+            if not relation_key:
                 continue
             normalized_bucket_key = self._normalized_s3_relation_reference(relation_key)
             bucket_name = ""
@@ -2262,6 +2425,8 @@ class WorkbenchService:
                 parsed = self._normalized_s3_relation_reference(relation)
                 if parsed:
                     bucket_name, object_key = parsed
+            if normalized_relation.startswith("stage."):
+                bucket_name = str(reference.bucket or bucket_name or "").strip()
             normalized_format = infer_s3_reference_format(key=object_key)
             summaries.append(
                 {
@@ -2431,6 +2596,16 @@ class WorkbenchService:
         }
 
     @staticmethod
+    def _source_summary_view_sql(query_sql: str) -> str:
+        normalized_sql = str(query_sql or "").strip()
+        if not normalized_sql:
+            return ""
+        first_token = normalized_sql.split(None, 1)[0].lower()
+        if first_token in {"select", "with", "values"}:
+            return normalized_sql
+        return f"SELECT * FROM {normalized_sql}"
+
+    @staticmethod
     def _bootstrap_duckdb_source_views(
         connection,
         source_summaries: list[dict[str, object]],
@@ -2443,7 +2618,9 @@ class WorkbenchService:
                 for part in str(summary.get("relation") or "").split(".")
                 if part.strip()
             ]
-            query_sql = str(summary.get("query_sql") or "").strip()
+            query_sql = WorkbenchService._source_summary_view_sql(
+                str(summary.get("query_sql") or "")
+            )
             if not relation_parts or not query_sql:
                 continue
             if len(relation_parts) > 1:
