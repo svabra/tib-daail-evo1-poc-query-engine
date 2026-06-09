@@ -186,6 +186,7 @@ let queryJobsSummary = { runningCount: 0, totalCount: 0 };
 let queryPerformanceState = { recent: [], stats: {} };
 const collapsedQueryResultKeys = new Set();
 const visibleQueryResultChartKeys = new Set();
+const visibleQueryTimingDetailKeys = new Set();
 let pythonJobsStateVersion = null;
 let pythonJobsSnapshot = [];
 let pythonJobsSummary = { runningCount: 0, totalCount: 0 };
@@ -592,6 +593,7 @@ const {
   formatQueryTimestamp,
   isQueryResultCollapsed,
   isQueryResultChartsVisible,
+  isQueryTimingDetailsVisible,
   queryJobElapsedMs,
   queryJobEventDateTimeCopy,
   queryJobIsRunning,
@@ -612,6 +614,7 @@ const preparedSqlViewCache = new WeakMap();
 const querySourceValidationController = createQuerySourceValidationController({
   cellLanguageForCellRoot,
   selectedDataSourcesForCell,
+  sourceExistenceValidationEnabledForCell: cellSourceExistenceValidationEnabled,
   validatePipelineStageAliases: (cellRoot, sql) =>
     notebookStagePipelineController?.validateStageAliasesForCell?.(cellRoot, sql) ?? {
       aliases: [],
@@ -1117,6 +1120,9 @@ const {
   applyCellCacheHydrationToggle,
   queryOptionsForCellRoot,
   refreshCellCacheHydrationStatus,
+  refreshQuerySourceValidationForCell: (cellRoot) => {
+    querySourceValidationController.scheduleValidationForCell(cellRoot);
+  },
   renameNotebook,
   restartPythonKernel,
   revealNotebookLink,
@@ -2474,8 +2480,11 @@ function queryOptionsForCellRoot(cellRoot) {
   }
   const select = cellRoot.querySelector('[data-cell-query-option="duckdb.parquetHivePartitioning"]');
   const cacheToggle = cellRoot.querySelector('[data-cell-query-option="duckdb.cacheHydration.mode"]');
+  const sourceCheckToggle = cellRoot.querySelector('[data-cell-query-option="validation.sourceExistence"]');
   const cacheEnabled =
     cacheToggle?.checked === true || cacheToggle?.getAttribute?.("aria-checked") === "true";
+  const sourceCheckEnabled =
+    sourceCheckToggle?.checked === true || sourceCheckToggle?.getAttribute?.("aria-checked") === "true";
   return normalizeCellQueryOptions({
     duckdb: {
       parquetHivePartitioning: select?.value || "auto",
@@ -2485,7 +2494,15 @@ function queryOptionsForCellRoot(cellRoot) {
         indexPolicy: "autoPredicates",
       },
     },
+    validation: {
+      sourceExistence: sourceCheckEnabled ? "on" : "off",
+    },
   });
+}
+
+function cellSourceExistenceValidationEnabled(cellRoot) {
+  const toggle = cellRoot?.querySelector?.('[data-cell-query-option="validation.sourceExistence"]');
+  return toggle?.checked === true || toggle?.getAttribute?.("aria-checked") === "true";
 }
 
 const cacheHydrationToggleRequests = new WeakMap();
@@ -4125,6 +4142,37 @@ function toggleQueryResultCharts(button) {
   return true;
 }
 
+function syncQueryTimingDetailsToggle(button, visible) {
+  if (!(button instanceof HTMLButtonElement)) {
+    return;
+  }
+  button.setAttribute("aria-expanded", visible ? "true" : "false");
+}
+
+function toggleQueryTimingDetails(button) {
+  if (!(button instanceof HTMLButtonElement)) {
+    return false;
+  }
+  const resultRoot = button.closest("[data-cell-result]");
+  const panel = resultRoot?.querySelector("[data-query-duration-details-panel]");
+  if (!(resultRoot instanceof Element) || !(panel instanceof Element)) {
+    return false;
+  }
+  const nextVisible = button.getAttribute("aria-expanded") !== "true";
+  const key = String(resultRoot.dataset.queryTimingDetailsKey || resultRoot.dataset.queryJobId || "").trim();
+  if (key) {
+    if (nextVisible) {
+      visibleQueryTimingDetailKeys.add(key);
+    } else {
+      visibleQueryTimingDetailKeys.delete(key);
+    }
+  }
+  panel.hidden = !nextVisible;
+  resultRoot.dataset.queryTimingDetailsVisible = nextVisible ? "true" : "false";
+  syncQueryTimingDetailsToggle(button, nextVisible);
+  return true;
+}
+
 
 function defaultLocalNotebookTitle() {
   const localNotebookCount = Object.keys(readStoredNotebookMetadata()).filter((key) =>
@@ -5407,6 +5455,15 @@ function isQueryResultChartsVisible(cellId, job = null) {
   return Boolean(key && visibleQueryResultChartKeys.has(key));
 }
 
+function queryTimingDetailsKey(cellId, job = null) {
+  return String(job?.jobId || cellId || "").trim();
+}
+
+function isQueryTimingDetailsVisible(cellId, job = null) {
+  const key = queryTimingDetailsKey(cellId, job);
+  return Boolean(key && visibleQueryTimingDetailKeys.has(key));
+}
+
 function editorExtensionsForLanguage(language, schema) {
   const normalizedLanguage = normalizeCellLanguage(language);
   if (normalizedLanguage === "python") {
@@ -6134,17 +6191,20 @@ function applyWorkspaceCellState(workspaceRoot, cell, index, editable, totalCell
   const cacheHydrationToggle = cellRoot.querySelector(
     '[data-cell-query-option="duckdb.cacheHydration.mode"]'
   );
+  const sourceCheckToggle = cellRoot.querySelector(
+    '[data-cell-query-option="validation.sourceExistence"]'
+  );
+  const normalizedQueryOptions = normalizeCellQueryOptions(cell.queryOptions);
   if (duckdbOptionsRoot) {
     duckdbOptionsRoot.hidden = cellLanguage !== "sql";
   }
   if (parquetHiveSelect) {
     parquetHiveSelect.disabled = !editable || cellLanguage !== "sql";
-    parquetHiveSelect.value = normalizeCellQueryOptions(cell.queryOptions).duckdb.parquetHivePartitioning;
+    parquetHiveSelect.value = normalizedQueryOptions.duckdb.parquetHivePartitioning;
   }
   if (cacheHydrationToggle) {
     cacheHydrationToggle.disabled = !editable || cellLanguage !== "sql";
-    const cacheEnabled =
-      normalizeCellQueryOptions(cell.queryOptions).duckdb.cacheHydration.mode === "on";
+    const cacheEnabled = normalizedQueryOptions.duckdb.cacheHydration.mode === "on";
     if (cacheHydrationToggle instanceof HTMLButtonElement) {
       cacheHydrationToggle.setAttribute("aria-checked", cacheEnabled ? "true" : "false");
     } else {
@@ -6156,6 +6216,19 @@ function applyWorkspaceCellState(workspaceRoot, cell, index, editable, totalCell
         statusLabel: "Off",
         statusReason: "Hydrate cache is off for this SQL cell.",
       });
+    }
+  }
+  if (sourceCheckToggle) {
+    sourceCheckToggle.disabled = !editable || cellLanguage !== "sql";
+    const sourceCheckEnabled = normalizedQueryOptions.validation.sourceExistence !== "off";
+    if (sourceCheckToggle instanceof HTMLButtonElement) {
+      sourceCheckToggle.setAttribute("aria-checked", sourceCheckEnabled ? "true" : "false");
+    } else {
+      sourceCheckToggle.checked = sourceCheckEnabled;
+    }
+    const label = sourceCheckToggle.querySelector?.("[data-source-check-state-label]");
+    if (label) {
+      label.textContent = sourceCheckEnabled ? "On" : "Off";
     }
   }
 
@@ -10018,6 +10091,14 @@ document.body.addEventListener("click", async (event) => {
     event.preventDefault();
     event.stopPropagation();
     toggleQueryResultCharts(resultChartsToggle);
+    return;
+  }
+
+  const timingDetailsToggle = event.target.closest("[data-query-duration-details-toggle]");
+  if (timingDetailsToggle) {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleQueryTimingDetails(timingDetailsToggle);
     return;
   }
 

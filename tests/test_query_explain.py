@@ -127,6 +127,7 @@ class QueryExplainServiceTests(unittest.TestCase):
                 service.explain_query(
                     sql="select * from missing.schema_table",
                     data_sources=["workspace.s3"],
+                    query_options={"validation": {"sourceExistence": "on"}},
                 )
 
         self.assertIn("Referenced source(s) were not found", str(exc.exception))

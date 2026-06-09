@@ -90,6 +90,44 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn(".cell-duckdb-option", css_source)
         self.assertIn('data-cell-query-option="duckdb.parquetHivePartitioning"', workspace_template)
 
+    def test_source_existence_validation_option_has_markup_and_skip_wiring(self) -> None:
+        markup_source = (
+            STATIC_ROOT / "js" / "notebook-workspace-markup.js"
+        ).read_text(encoding="utf-8")
+        controller_source = (
+            STATIC_ROOT / "js" / "notebook-workspace-controller.js"
+        ).read_text(encoding="utf-8")
+        model_source = (STATIC_ROOT / "js" / "notebook-model.js").read_text(
+            encoding="utf-8"
+        )
+        app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
+        validation_source = (
+            STATIC_ROOT / "js" / "query-source-validation-controller.js"
+        ).read_text(encoding="utf-8")
+        css_source = (STATIC_ROOT / "css" / "app.css").read_text(encoding="utf-8")
+        workspace_template = (
+            REPO_ROOT / "bdw" / "bit_data_workbench" / "templates" / "partials" / "workspace.html"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('data-cell-query-option="validation.sourceExistence"', markup_source)
+        self.assertIn("data-source-check-switch", markup_source)
+        self.assertIn("Check sources", markup_source)
+        self.assertIn('data-cell-query-option="validation.sourceExistence"', workspace_template)
+        self.assertIn("data-source-check-switch", workspace_template)
+        self.assertIn("normalizeSourceExistenceValidationOption", model_source)
+        self.assertIn('return normalized === "on" ? "on" : "off";', model_source)
+        self.assertIn("sourceExistence", model_source)
+        self.assertIn("sourceExistenceValidationEnabledForCell", app_source)
+        self.assertIn("sourceExistenceValidationEnabledForCell = () => false", validation_source)
+        self.assertIn("cellSourceExistenceValidationEnabled", app_source)
+        self.assertIn("refreshQuerySourceValidationForCell", controller_source)
+        self.assertIn("data-source-check-state-label", controller_source)
+        self.assertIn("skippedValidationResult", validation_source)
+        self.assertIn("Source existence check skipped", validation_source)
+        self.assertIn("!sourceExistenceValidationEnabled(cellRoot)", validation_source)
+        self.assertIn(".cell-source-check-switch", css_source)
+        self.assertIn(".query-source-validation.is-skipped", css_source)
+
     def test_cache_hydration_option_has_markup_tooltips_modal_and_status_styles(self) -> None:
         markup_source = (
             STATIC_ROOT / "js" / "notebook-workspace-markup.js"
@@ -203,6 +241,12 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("/api/materialized-stages/state", controller_source)
         self.assertIn("validateStageAliasesForCell", controller_source)
         self.assertIn("prepareQuerySqlForCell", controller_source)
+        self.assertIn("renderGraphPlaceholder", controller_source)
+        self.assertIn("graphHasRenderedContent", controller_source)
+        self.assertIn("setGraphRefreshPending", controller_source)
+        self.assertIn("renderGraphRefreshError", controller_source)
+        self.assertIn("Loading pipeline graph...", controller_source)
+        self.assertIn("Failed to initialize notebook pipeline graph.", controller_source)
         self.assertIn("materializeCellStageThenRun", controller_source)
         self.assertIn("Abort pipeline", controller_source)
         self.assertIn("Aborting", controller_source)
@@ -295,6 +339,7 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertNotIn('title="Abort the active pipeline run"', markup_source)
         self.assertNotIn('title="Abort the active pipeline run"', workspace_template)
         self.assertIn(".notebook-pipeline-graph-band", css_source)
+        self.assertIn(".pipeline-graph-placeholder", css_source)
         self.assertIn(".notebook-pipeline-table", css_source)
         self.assertIn(".notebook-pipeline-title-row", css_source)
         self.assertIn(".notebook-pipeline-running-indicator", css_source)
@@ -330,7 +375,7 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("pipeline-node-running-glow", controller_source)
         self.assertIn("<feGaussianBlur", controller_source)
         self.assertIn(".pipeline-node-running .pipeline-node-glow", css_source)
-        self.assertIn("animation: pipeline-node-computing-glow 3s ease-in-out infinite;", css_source)
+        self.assertIn("animation: pipeline-node-computing-glow 6s ease-in-out infinite;", css_source)
         self.assertIn("stroke-width: 8;", css_source)
         self.assertIn("box-shadow: inset 4px 0 0 var(--accent);", css_source)
         self.assertIn(".pipeline-stage-row-running > td", css_source)
@@ -338,7 +383,8 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn(".pipeline-stage-row-running > td:last-child::after", css_source)
         self.assertIn("@keyframes pipeline-stage-row-computing-glow", css_source)
         self.assertIn("@keyframes pipeline-stage-row-edge-glow", css_source)
-        self.assertIn("animation: pipeline-stage-row-computing-glow 3s ease-in-out infinite;", css_source)
+        self.assertIn("animation: pipeline-stage-row-computing-glow 6s ease-in-out infinite;", css_source)
+        self.assertIn("animation: pipeline-stage-row-edge-glow 6s ease-in-out infinite;", css_source)
         self.assertIn(".pipeline-col-actions", css_source)
         self.assertIn("<colgroup>", markup_source)
         self.assertIn("<colgroup>", workspace_template)
@@ -415,6 +461,7 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         query_state_source = (STATIC_ROOT / "js" / "query-job-state.js").read_text(
             encoding="utf-8"
         )
+        app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
         realtime_source = (STATIC_ROOT / "js" / "realtime-controller.js").read_text(
             encoding="utf-8"
         )
@@ -426,8 +473,12 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("Total elapsed", query_ui_source)
         self.assertIn("Running elapsed", query_ui_source)
         self.assertIn("result-duration-help", query_ui_source)
+        self.assertIn("data-query-duration-details-toggle", query_ui_source)
+        self.assertIn("queryTimingDetailsTableMarkup", query_ui_source)
+        self.assertIn("data-query-duration-total", query_ui_source)
+        self.assertIn("Same value shown by Total elapsed", query_ui_source)
         self.assertIn('title="${escapeHtml(tooltip)}"', query_ui_source)
-        self.assertIn('aria-label="${escapeHtml(`${label}: ${duration}. ${tooltip}`)}"', query_ui_source)
+        self.assertIn("Click to show recorded timestamps and total elapsed time", query_ui_source)
         self.assertIn("from the Run Cell click until the completed, failed, or cancelled job update reaches this browser", query_ui_source)
         self.assertIn("the same elapsed clock as Total elapsed", query_ui_source)
         self.assertIn("query-resource-sparkline-help", query_ui_source)
@@ -447,8 +498,13 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("clientObservedMs", insights_source)
         self.assertIn("Query is DuckDB execution time only", insights_source)
         self.assertIn("overhead", insights_source)
+        self.assertIn("visibleQueryTimingDetailKeys", app_source)
+        self.assertIn("toggleQueryTimingDetails", app_source)
+        self.assertIn("[data-query-duration-total]", realtime_source)
         self.assertIn(".result-duration-group", css_source)
+        self.assertIn(".result-duration-toggle", css_source)
         self.assertIn(".result-duration-help", css_source)
+        self.assertIn(".query-timing-table", css_source)
         self.assertIn(".query-resource-sparkline-help", css_source)
 
     def test_sql_completion_uses_simple_s3_and_pg_source_references(self) -> None:

@@ -283,9 +283,66 @@ class QuerySourceValidationTests(unittest.TestCase):
                 notebook_title="Notebook",
                 cell_id="cell-1",
                 data_sources=[],
+                query_options={"validation": {"sourceExistence": "on"}},
             )
 
         self.assertFalse(fake_query_jobs.called)
+
+    def test_prepare_query_sql_skips_source_validation_when_option_off(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = sample_catalogs()
+        service.validate_query_sources = lambda **_kwargs: self.fail(
+            "source validation should be skipped"
+        )
+        service._analyze_query = lambda _sql, **_kwargs: SimpleNamespace(
+            touched_relations=["missing.schema_table"],
+            touched_buckets=[],
+        )
+
+        payload = service.prepare_query_sql(
+            sql="select * from missing.schema_table",
+            notebook_id="notebook",
+            data_sources=[],
+            query_options={"validation": {"sourceExistence": "off"}},
+        )
+
+        self.assertEqual(payload["executionSql"], "select * from missing.schema_table")
+        self.assertEqual(payload["queryOptions"]["validation"]["sourceExistence"], "off")
+
+    def test_start_query_job_skips_source_validation_when_option_off(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = sample_catalogs()
+        service.validate_query_sources = lambda **_kwargs: self.fail(
+            "source validation should be skipped"
+        )
+        service._analyze_query = lambda _sql, **_kwargs: SimpleNamespace(
+            touched_relations=["missing.schema_table"],
+            touched_buckets=[],
+        )
+        captured: dict[str, object] = {}
+
+        def record_start(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(payload={"jobId": "query-skip-source-check"})
+
+        service._query_jobs = SimpleNamespace(start_job=record_start)
+
+        snapshot = service.start_query_job(
+            sql="select * from missing.schema_table",
+            notebook_id="notebook",
+            notebook_title="Notebook",
+            cell_id="cell-1",
+            data_sources=[],
+            query_options={"validation": {"sourceExistence": "off"}},
+        )
+
+        self.assertEqual(snapshot["jobId"], "query-skip-source-check")
+        self.assertEqual(
+            captured["query_options"]["validation"]["sourceExistence"],
+            "off",
+        )
 
     def test_start_query_job_allows_synced_local_workspace_relation_map(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)

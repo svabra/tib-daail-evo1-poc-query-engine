@@ -19,6 +19,7 @@ export function createNotebookWorkspaceController(helpers) {
     openCacheHydrationDialog,
     queryOptionsForCellRoot,
     refreshCellCacheHydrationStatus,
+    refreshQuerySourceValidationForCell = () => {},
     renameNotebook,
     revealNotebookLink,
     saveNotebookVersion,
@@ -307,6 +308,29 @@ export function createNotebookWorkspaceController(helpers) {
       cacheHydrationSwitch.setAttribute("aria-checked", enabled ? "true" : "false");
       setCellQueryOptions(notebookId, cellId, queryOptionsForCellRoot(cellRoot));
       await applyCellCacheHydrationToggle(cellRoot, enabled);
+      return true;
+    }
+
+    const sourceCheckSwitch = event.target.closest("[data-source-check-switch]");
+    if (sourceCheckSwitch) {
+      event.preventDefault();
+      if (sourceCheckSwitch.disabled) {
+        return true;
+      }
+      const { notebookId, cellId } = notebookCellContext(sourceCheckSwitch);
+      const cellRoot = sourceCheckSwitch.closest("[data-query-cell]");
+      const metaRoot = sourceCheckSwitch.closest("[data-notebook-meta]");
+      if (!notebookId || !cellId || !cellRoot || metaRoot?.dataset.canEdit === "false") {
+        return true;
+      }
+      const enabled = sourceCheckSwitch.getAttribute("aria-checked") !== "true";
+      sourceCheckSwitch.setAttribute("aria-checked", enabled ? "true" : "false");
+      const stateLabel = sourceCheckSwitch.querySelector("[data-source-check-state-label]");
+      if (stateLabel) {
+        stateLabel.textContent = enabled ? "On" : "Off";
+      }
+      setCellQueryOptions(notebookId, cellId, queryOptionsForCellRoot(cellRoot));
+      refreshQuerySourceValidationForCell(cellRoot);
       return true;
     }
 

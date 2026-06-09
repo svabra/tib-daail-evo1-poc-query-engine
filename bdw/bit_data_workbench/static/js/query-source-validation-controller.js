@@ -9,6 +9,7 @@ const runTooltips = {
   failed: "Run this SQL cell again. The last query failed.",
   cancelled: "Run this SQL cell again. The last query was cancelled.",
   valid: "Run this SQL cell. Referenced sources were found.",
+  skipped: "Run this SQL cell. Source existence preflight is disabled for this cell.",
 };
 
 const explainTooltips = {
@@ -19,6 +20,7 @@ const explainTooltips = {
   failed: "Explain this SQL cell. The last query failed.",
   cancelled: "Explain this SQL cell. The last query was cancelled.",
   valid: "Explain this SQL cell without running it.",
+  skipped: "Explain this SQL cell without source existence preflight.",
   native: "Explain is available for DuckDB-backed SQL cells only.",
   python: "Explain is available for SQL cells only.",
 };
@@ -34,6 +36,7 @@ function normalizedStatus(status) {
     "completed",
     "failed",
     "cancelled",
+    "skipped",
   ].includes(value)
     ? value
     : "unchecked";
@@ -66,6 +69,9 @@ function validationMessageFor(result, runtimePhase = "") {
   if (status === "valid") {
     return "Sources checked: all referenced sources exist.";
   }
+  if (status === "skipped") {
+    return "Source existence check skipped. Query will run without preflight validation.";
+  }
   if (status === "invalid") {
     const missing = Array.isArray(result?.missingReferences)
       ? result.missingReferences.filter(Boolean).join(", ")
@@ -97,6 +103,9 @@ function runTooltipFor(result, runtimePhase = "") {
   if (status === "valid") {
     return runTooltips.valid;
   }
+  if (status === "skipped") {
+    return runTooltips.skipped;
+  }
   if (status === "invalid") {
     const missing = Array.isArray(result?.missingReferences)
       ? result.missingReferences.filter(Boolean).join(", ")
@@ -127,6 +136,9 @@ function explainTooltipFor(result, runtimePhase = "") {
   }
   if (status === "valid") {
     return explainTooltips.valid;
+  }
+  if (status === "skipped") {
+    return explainTooltips.skipped;
   }
   if (status === "invalid") {
     const missing = Array.isArray(result?.missingReferences)
@@ -213,6 +225,7 @@ export function createQuerySourceValidationController(helpers) {
     cellLanguageForCellRoot,
     fetchImpl = (...args) => window.fetch(...args),
     selectedDataSourcesForCell,
+    sourceExistenceValidationEnabledForCell = () => false,
     validatePipelineStageAliases = async () => ({
       aliases: [],
       localRelations: {},
@@ -254,6 +267,17 @@ export function createQuerySourceValidationController(helpers) {
     return selectedDataSourcesForCell(cellRoot).some((sourceId) =>
       String(sourceId || "").trim().toLowerCase().endsWith("_native")
     );
+  }
+
+  function sourceExistenceValidationEnabled(cellRoot) {
+    return sourceExistenceValidationEnabledForCell(cellRoot) !== false;
+  }
+
+  function skippedValidationResult() {
+    return normalizeValidationPayload({
+      status: "skipped",
+      message: "Source existence check skipped.",
+    });
   }
 
   function validationRootForCell(cellRoot) {
@@ -351,6 +375,7 @@ export function createQuerySourceValidationController(helpers) {
       root.classList.toggle("is-completed", status === "completed");
       root.classList.toggle("is-failed", status === "failed");
       root.classList.toggle("is-cancelled", status === "cancelled");
+      root.classList.toggle("is-skipped", status === "skipped");
       root.classList.toggle("is-unchecked", status === "unchecked");
       const messageRoot = root.querySelector("[data-query-source-validation-message]");
       if (messageRoot) {
@@ -505,6 +530,13 @@ export function createQuerySourceValidationController(helpers) {
       return;
     }
 
+    if (!sourceExistenceValidationEnabled(cellRoot)) {
+      const result = skippedValidationResult();
+      state.result = result;
+      renderCellState(cellRoot, result);
+      return;
+    }
+
     if (!sourceReferencesNeedValidation(sql)) {
       const result = normalizeValidationPayload({ status: "unchecked" });
       state.result = result;
@@ -527,6 +559,17 @@ export function createQuerySourceValidationController(helpers) {
       return normalizeValidationPayload({ status: "unchecked" });
     }
 
+    if (!sourceExistenceValidationEnabled(cellRoot)) {
+      const state = stateForCell(cellRoot);
+      clearScheduledValidation(state);
+      abortPendingRequest(state);
+      clearTerminalTimer(state);
+      const result = skippedValidationResult();
+      state.result = result;
+      renderCellState(cellRoot, result);
+      return result;
+    }
+
     if (!sourceReferencesNeedValidation(sql)) {
       const result = normalizeValidationPayload({ status: "unchecked" });
       const state = stateForCell(cellRoot);
@@ -543,6 +586,17 @@ export function createQuerySourceValidationController(helpers) {
   async function validateBeforeExplain(cellRoot, sql = currentSqlForCell(cellRoot)) {
     if (!(cellRoot instanceof Element) || cellLanguageForCellRoot(cellRoot) !== "sql") {
       return normalizeValidationPayload({ status: "unchecked" });
+    }
+
+    if (!sourceExistenceValidationEnabled(cellRoot)) {
+      const state = stateForCell(cellRoot);
+      clearScheduledValidation(state);
+      abortPendingRequest(state);
+      clearTerminalTimer(state);
+      const result = skippedValidationResult();
+      state.result = result;
+      renderCellState(cellRoot, result);
+      return result;
     }
 
     if (!sourceReferencesNeedValidation(sql)) {

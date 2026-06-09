@@ -5727,7 +5727,8 @@ details:not([open]) > .tree-children {
 }
 
 .cell-duckdb-option,
-.cell-cache-hydration-option {
+.cell-cache-hydration-option,
+.cell-source-check-option {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -5792,17 +5793,45 @@ details:not([open]) > .tree-children {
   cursor: pointer;
 }
 
-.cell-cache-hydration-switch[aria-checked="true"] {
+.cell-source-check-option {
+  cursor: help;
+}
+
+.cell-cache-hydration-switch[aria-checked="true"],
+.cell-source-check-switch[aria-checked="true"] {
   border-color: rgba(11, 68, 121, 0.42);
   background: rgba(11, 68, 121, 0.06);
 }
 
-.cell-cache-hydration-switch:disabled {
+.cell-source-check-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  border: 1px solid rgba(192, 202, 212, 0.9);
+  border-radius: var(--radius-control);
+  padding: 3px 8px 3px 4px;
+  background: #fff;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.cell-source-check-switch[aria-checked="false"] {
+  border-color: rgba(183, 119, 0, 0.48);
+  background: rgba(255, 190, 77, 0.13);
+}
+
+.cell-cache-hydration-switch:disabled,
+.cell-source-check-switch:disabled {
   opacity: 0.62;
   cursor: not-allowed;
 }
 
 .cell-cache-hydration-switch:focus-visible,
+.cell-source-check-switch:focus-visible,
 .cell-cache-hydration-details:focus-visible {
   outline: 2px solid rgba(11, 68, 121, 0.32);
   outline-offset: 2px;
@@ -5830,11 +5859,13 @@ details:not([open]) > .tree-children {
   transition: transform 0.15s ease;
 }
 
-.cell-cache-hydration-switch[aria-checked="true"] .cell-cache-hydration-switch-track {
+.cell-cache-hydration-switch[aria-checked="true"] .cell-cache-hydration-switch-track,
+.cell-source-check-switch[aria-checked="true"] .cell-cache-hydration-switch-track {
   background: rgba(11, 68, 121, 0.78);
 }
 
-.cell-cache-hydration-switch[aria-checked="true"] .cell-cache-hydration-switch-thumb {
+.cell-cache-hydration-switch[aria-checked="true"] .cell-cache-hydration-switch-thumb,
+.cell-source-check-switch[aria-checked="true"] .cell-cache-hydration-switch-thumb {
   transform: translateX(13px);
 }
 
@@ -8797,6 +8828,12 @@ details:not([open]) > .tree-children {
   color: #246c42;
 }
 
+.query-source-validation.is-skipped {
+  border-color: rgba(183, 119, 0, 0.34);
+  background: rgba(255, 248, 232, 0.96);
+  color: #7b5200;
+}
+
 .query-source-validation.is-invalid {
   border-color: rgba(170, 37, 20, 0.24);
   background: rgba(255, 242, 240, 0.96);
@@ -8902,6 +8939,23 @@ details:not([open]) > .tree-children {
   font-weight: 800;
 }
 
+.result-duration-toggle {
+  border: 0;
+  border-radius: var(--radius-control);
+  padding: 2px 5px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.result-duration-toggle:hover,
+.result-duration-toggle:focus-visible,
+.result-duration-toggle[aria-expanded="true"] {
+  background: rgba(11, 68, 121, 0.08);
+  color: var(--accent-strong);
+  outline: none;
+}
+
 .result-meta {
   margin: 0;
   min-width: 0;
@@ -8931,6 +8985,59 @@ details:not([open]) > .tree-children {
   border-color: rgba(11, 68, 121, 0.38);
   color: var(--accent-strong);
   background: rgba(236, 245, 252, 0.96);
+}
+
+.query-timing-details {
+  margin: 0 0 12px;
+  overflow: auto;
+  border: 1px solid rgba(192, 202, 212, 0.74);
+  border-radius: var(--radius-control);
+  background: rgba(248, 251, 253, 0.96);
+}
+
+.query-timing-table {
+  width: 100%;
+  min-width: 680px;
+  border-collapse: collapse;
+  font-size: 0.78rem;
+}
+
+.query-timing-table th,
+.query-timing-table td {
+  border-bottom: 1px solid rgba(205, 216, 226, 0.78);
+  padding: 7px 9px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.query-timing-table thead th {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.query-timing-table tbody th {
+  color: var(--text);
+  font-weight: 800;
+}
+
+.query-timing-table td:nth-child(2),
+.query-timing-table td:nth-child(3) {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.query-timing-table tr:last-child th,
+.query-timing-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.query-timing-table tr.is-total th,
+.query-timing-table tr.is-total td {
+  background: rgba(11, 68, 121, 0.06);
+  color: var(--accent-strong);
+  font-weight: 850;
 }
 
 [data-query-monitor-duration] {
@@ -10169,6 +10276,30 @@ details:not([open]) > .tree-children {
   background: #eaf3f8;
 }
 
+.notebook-pipeline-graph-band.is-loading,
+.notebook-pipeline-graph-band.is-error {
+  display: grid;
+  place-items: center;
+}
+
+.pipeline-graph-placeholder {
+  max-width: 520px;
+  padding: 12px 16px;
+  border: 1px solid rgba(192, 202, 212, 0.9);
+  border-radius: var(--radius-control);
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  font-weight: 750;
+  text-align: center;
+}
+
+.pipeline-graph-placeholder-error {
+  border-color: rgba(170, 37, 20, 0.24);
+  background: rgba(255, 242, 240, 0.96);
+  color: #8f1f11;
+}
+
 .notebook-pipeline-svg {
   display: block;
   width: auto;
@@ -10230,7 +10361,7 @@ details:not([open]) > .tree-children {
 }
 
 .pipeline-node-running .pipeline-node-glow {
-  animation: pipeline-node-computing-glow 3s ease-in-out infinite;
+  animation: pipeline-node-computing-glow 6s ease-in-out infinite;
 }
 
 .pipeline-node-queued .pipeline-node-rect {
@@ -10823,7 +10954,7 @@ details:not([open]) > .tree-children {
   position: relative;
   background-color: rgba(57, 196, 236, 0.05);
   background-clip: padding-box;
-  animation: pipeline-stage-row-computing-glow 3s ease-in-out infinite;
+  animation: pipeline-stage-row-computing-glow 6s ease-in-out infinite;
 }
 
 .pipeline-stage-row-running > td:first-child::after,
@@ -10837,7 +10968,7 @@ details:not([open]) > .tree-children {
   background: rgba(31, 111, 139, 0.36);
   opacity: 0.45;
   pointer-events: none;
-  animation: pipeline-stage-row-edge-glow 3s ease-in-out infinite;
+  animation: pipeline-stage-row-edge-glow 6s ease-in-out infinite;
 }
 
 .pipeline-stage-row-running > td:first-child::after {

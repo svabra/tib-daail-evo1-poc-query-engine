@@ -109,6 +109,11 @@ export function createNotebookModel(helpers) {
     };
   }
 
+  function normalizeSourceExistenceValidationOption(value) {
+    const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+    return normalized === "on" ? "on" : "off";
+  }
+
   function normalizeCellQueryOptions(value, fallback = {}) {
     const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
     const fallbackSource =
@@ -123,6 +128,16 @@ export function createNotebookModel(helpers) {
       !Array.isArray(fallbackSource.duckdb)
         ? fallbackSource.duckdb
         : {};
+    const validation =
+      source.validation && typeof source.validation === "object" && !Array.isArray(source.validation)
+        ? source.validation
+        : {};
+    const fallbackValidation =
+      fallbackSource.validation &&
+      typeof fallbackSource.validation === "object" &&
+      !Array.isArray(fallbackSource.validation)
+        ? fallbackSource.validation
+        : {};
     return {
       duckdb: {
         parquetHivePartitioning: normalizeParquetHivePartitioningOption(
@@ -131,6 +146,11 @@ export function createNotebookModel(helpers) {
         cacheHydration: normalizeCacheHydrationOptions(
           duckdb.cacheHydration,
           fallbackDuckdb.cacheHydration
+        ),
+      },
+      validation: {
+        sourceExistence: normalizeSourceExistenceValidationOption(
+          validation.sourceExistence ?? fallbackValidation.sourceExistence
         ),
       },
     };

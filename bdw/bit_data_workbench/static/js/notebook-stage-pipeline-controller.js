@@ -748,6 +748,8 @@ export function createNotebookStagePipelineController(helpers) {
     if (!graphRoot) {
       return;
     }
+    graphRoot.removeAttribute("aria-busy");
+    graphRoot.classList.remove("is-loading", "is-error", "is-refreshing");
     const { positions, width, height } = graphLayout(graph);
     const selectedStageId = selectedStageByNotebookId.get(graph.notebookId) || graph.defaultSelectedStageId || "";
     const paths = graphPaths(graph);
@@ -826,6 +828,72 @@ export function createNotebookStagePipelineController(helpers) {
         <g class="pipeline-nodes">${nodesMarkup}</g>
       </svg>
     `;
+  }
+
+  function renderGraphPlaceholder(workspaceRoot, { status = "", tone = "loading", message = "" } = {}) {
+    const graphRoot = workspaceRoot?.querySelector("[data-notebook-pipeline-graph]");
+    const statusRoot = workspaceRoot?.querySelector("[data-notebook-pipeline-status]");
+    const tableRoot = workspaceRoot?.querySelector("[data-notebook-pipeline-table]");
+    const totalDurationRoot = workspaceRoot?.querySelector("[data-notebook-pipeline-total-duration]");
+    const tableTotalRoot = workspaceRoot?.querySelector("[data-notebook-pipeline-table-duration-total]");
+    const normalizedTone = tone === "error" ? "error" : "loading";
+    if (statusRoot) {
+      statusRoot.textContent = status || (normalizedTone === "error" ? "Pipeline graph could not be built." : "Loading pipeline graph...");
+      statusRoot.classList.toggle("is-error", normalizedTone === "error");
+    }
+    if (totalDurationRoot) {
+      totalDurationRoot.textContent = "Total duration -";
+    }
+    if (tableRoot) {
+      tableRoot.innerHTML = "";
+    }
+    if (tableTotalRoot) {
+      tableTotalRoot.textContent = "-";
+    }
+    if (!graphRoot) {
+      return;
+    }
+    graphRoot.setAttribute("aria-busy", normalizedTone === "loading" ? "true" : "false");
+    graphRoot.classList.toggle("is-loading", normalizedTone === "loading");
+    graphRoot.classList.toggle("is-error", normalizedTone === "error");
+    graphRoot.classList.remove("is-refreshing");
+    const copy = message || (normalizedTone === "error" ? "The graph request failed. Check the browser console or retry." : "Preparing stages and dependencies...");
+    graphRoot.innerHTML = `
+      <div class="pipeline-graph-placeholder pipeline-graph-placeholder-${normalizedTone}" data-pipeline-graph-placeholder>
+        ${escapeHtml(copy)}
+      </div>
+    `;
+  }
+
+  function graphHasRenderedContent(workspaceRoot) {
+    const graphRoot = workspaceRoot?.querySelector("[data-notebook-pipeline-graph]");
+    const tableRoot = workspaceRoot?.querySelector("[data-notebook-pipeline-table]");
+    return Boolean(
+      graphRoot?.querySelector(".notebook-pipeline-svg, .pipeline-node") ||
+      tableRoot?.querySelector(".pipeline-stage-row")
+    );
+  }
+
+  function setGraphRefreshPending(workspaceRoot, pending) {
+    const graphRoot = workspaceRoot?.querySelector("[data-notebook-pipeline-graph]");
+    if (!graphRoot) {
+      return;
+    }
+    if (pending) {
+      graphRoot.setAttribute("aria-busy", "true");
+    } else {
+      graphRoot.removeAttribute("aria-busy");
+    }
+    graphRoot.classList.toggle("is-refreshing", Boolean(pending));
+  }
+
+  function renderGraphRefreshError(workspaceRoot, message) {
+    setGraphRefreshPending(workspaceRoot, false);
+    const statusRoot = workspaceRoot?.querySelector("[data-notebook-pipeline-status]");
+    if (statusRoot) {
+      statusRoot.textContent = message || "Pipeline graph could not be built.";
+      statusRoot.classList.add("is-error");
+    }
   }
 
   function dependencyCopy(node, graph) {
@@ -1045,15 +1113,37 @@ export function createNotebookStagePipelineController(helpers) {
     if (!workspaceRoot) {
       return null;
     }
-    const graph = await fetchJsonOrThrow("/api/materialized-stages/graph", {
-      method: "POST",
-      headers: {
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(pipelinePayload(notebookId)),
-    });
+    const preserveExistingGraph = graphHasRenderedContent(workspaceRoot);
+    if (preserveExistingGraph) {
+      setGraphRefreshPending(workspaceRoot, true);
+    } else {
+      renderGraphPlaceholder(workspaceRoot, { tone: "loading" });
+    }
+    let graph = null;
+    try {
+      graph = await fetchJsonOrThrow("/api/materialized-stages/graph", {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(pipelinePayload(notebookId)),
+      });
+    } catch (error) {
+      const message = errorMessage(error, "Pipeline graph could not be built.");
+      if (preserveExistingGraph) {
+        renderGraphRefreshError(workspaceRoot, message);
+      } else {
+        renderGraphPlaceholder(workspaceRoot, {
+          tone: "error",
+          status: message,
+          message,
+        });
+      }
+      throw error;
+    }
     if (!pipelineEnabled(notebookId)) {
+      setGraphRefreshPending(workspaceRoot, false);
       return null;
     }
     graphByNotebookId.set(notebookId, graph);
@@ -1071,7 +1161,11 @@ export function createNotebookStagePipelineController(helpers) {
     const enabled = pipelineEnabled(notebookId);
     applyModeDom(workspaceRoot, enabled ? "pipeline" : "exploration");
     if (enabled) {
-      await refreshGraph(notebookId);
+      try {
+        await refreshGraph(notebookId);
+      } catch (error) {
+        console.error("Failed to initialize notebook pipeline graph.", error);
+      }
       if (version !== modeChangeVersion || !pipelineEnabled(notebookId)) {
         applyModeDom(workspaceRoot, pipelineEnabled(notebookId) ? "pipeline" : "exploration");
       }
@@ -1912,7 +2006,11 @@ export function createNotebookStagePipelineController(helpers) {
       const workspaceRoot = currentWorkspaceRoot();
       applyModeDom(workspaceRoot, nextMode);
       if (nextMode === "pipeline") {
-        await refreshGraph(notebookId);
+        try {
+          await refreshGraph(notebookId);
+        } catch (error) {
+          console.error("Failed to refresh notebook pipeline after mode change.", error);
+        }
         if (version !== modeChangeVersion || !pipelineEnabled(notebookId)) {
           applyModeDom(workspaceRoot, pipelineEnabled(notebookId) ? "pipeline" : "exploration");
         }

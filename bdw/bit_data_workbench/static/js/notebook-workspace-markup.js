@@ -70,15 +70,25 @@ export function createNotebookWorkspaceMarkup(helpers) {
     return value === "on";
   }
 
+  function sourceExistenceValidationEnabled(cell) {
+    const value = String(cell?.queryOptions?.validation?.sourceExistence || "off")
+      .trim()
+      .toLowerCase();
+    return value === "on";
+  }
+
   function duckdbOptionsMarkup(cell, canEdit, cellLanguage) {
     const selected = parquetHivePartitioningOption(cell);
     const hydrateCache = cacheHydrationEnabled(cell);
+    const checkSources = sourceExistenceValidationEnabled(cell);
     const hidden = cellLanguage === "sql" ? "" : " hidden";
     const disabled = canEdit && cellLanguage === "sql" ? "" : " disabled";
     const hiveTitle =
       "DuckDB Parquet Hive partitioning controls how read_parquet interprets partition folders for known S3 Parquet query sources. Auto uses source discovery defaults; On forces hive_partitioning=true; Off forces hive_partitioning=false.";
     const cacheTitle =
       "Copies the S3 Parquet data referenced by this cell into a temporary local DuckDB table before the query runs. DuckDB can then reuse the local table and optional ART indexes for repeated filters and lookups. This cache lives in temporary compute storage and can disappear after a pod restart.";
+    const sourceCheckTitle =
+      "Checks whether referenced sources exist before running or explaining this cell. Turn off for proven queries to skip the preflight check and let DuckDB fail only if a source is actually missing.";
     return `
       <span class="cell-duckdb-options"${hidden} data-cell-duckdb-options>
         <label class="cell-duckdb-option" title="${escapeHtml(hiveTitle)}">
@@ -110,6 +120,26 @@ export function createNotebookWorkspaceMarkup(helpers) {
           </button>
           <span class="cell-cache-hydration-badge" data-cache-hydration-badge hidden>Unknown</span>
           <button type="button" class="cell-cache-hydration-details" data-cache-hydration-details title="Open the Cache hydration plan. It explains what will be cached, source size, cache size, ART indexes, cache freshness, and what happens on the next run." ${cellLanguage === "sql" ? "" : "hidden"}>Details</button>
+        </span>
+        <span class="cell-source-check-option" title="${escapeHtml(sourceCheckTitle)}">
+          <button
+            type="button"
+            class="cell-source-check-switch"
+            role="switch"
+            aria-checked="${checkSources ? "true" : "false"}"
+            data-cell-query-option="validation.sourceExistence"
+            data-source-check-switch
+            title="${escapeHtml(sourceCheckTitle)}"
+            ${disabled}
+          >
+            <span class="cell-cache-hydration-switch-track" aria-hidden="true">
+              <span class="cell-cache-hydration-switch-thumb"></span>
+            </span>
+            <span class="cell-cache-hydration-switch-copy">
+              <span>Check sources</span>
+              <strong data-source-check-state-label>${checkSources ? "On" : "Off"}</strong>
+            </span>
+          </button>
         </span>
       </span>
     `;

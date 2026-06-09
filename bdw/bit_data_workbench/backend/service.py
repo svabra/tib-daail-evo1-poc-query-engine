@@ -107,7 +107,11 @@ from .source_references import (
 )
 from .query_source_validation import QUERY_SOURCE_INVALID, validate_query_sources
 from .query_cache import cache_preview, delete_cache, expire_cache, hydrate_cache
-from .query_options import normalize_query_options, parquet_hive_partitioning_option
+from .query_options import (
+    normalize_query_options,
+    parquet_hive_partitioning_option,
+    source_existence_validation_enabled,
+)
 from .query_jobs import (
     DUCKDB_EXECUTION_PATH_ISOLATED_READ,
     DuckDBQueryAccessCoordinator,
@@ -1790,17 +1794,18 @@ class WorkbenchService:
             notebook_id=notebook_id,
             sql=routing_sql,
         )
-        source_validation = self.validate_query_sources(
-            sql=routing_sql,
-            data_sources=normalized_data_sources,
-            local_relation_map=local_relation_map,
-            notebook_id=notebook_id,
-            relation_index=relation_index,
-        )
-        if source_validation.get("status") == QUERY_SOURCE_INVALID:
-            raise ValueError(
-                str(source_validation.get("message") or "Referenced source(s) were not found.")
+        if source_existence_validation_enabled(normalized_query_options):
+            source_validation = self.validate_query_sources(
+                sql=routing_sql,
+                data_sources=normalized_data_sources,
+                local_relation_map=local_relation_map,
+                notebook_id=notebook_id,
+                relation_index=relation_index,
             )
+            if source_validation.get("status") == QUERY_SOURCE_INVALID:
+                raise ValueError(
+                    str(source_validation.get("message") or "Referenced source(s) were not found.")
+                )
 
         execution_sql = self._rewrite_query_source_aliases(
             routing_sql,

@@ -382,6 +382,8 @@
               {% endif %}
               {% set cache_hydration = cell.query_options.get('duckdb', {}).get('cacheHydration', {}) if cell.query_options else {} %}
               {% set cache_hydration_mode = cache_hydration.get('mode', 'off') if cache_hydration else 'off' %}
+              {% set validation_options = cell.query_options.get('validation', {}) if cell.query_options else {} %}
+              {% set source_existence_validation = validation_options.get('sourceExistence', 'off') if validation_options else 'off' %}
               <span
                 class="cell-duckdb-options"
                 data-cell-duckdb-options
@@ -433,6 +435,29 @@
                     title="Open the Cache hydration plan. It explains what will be cached, source size, cache size, ART indexes, cache freshness, and what happens on the next run."
                     {% if cell_language != 'sql' %}hidden{% endif %}
                   >Details</button>
+                </span>
+                <span
+                  class="cell-source-check-option"
+                  title="Checks whether referenced sources exist before running or explaining this cell. Turn off for proven queries to skip the preflight check and let DuckDB fail only if a source is actually missing."
+                >
+                  <button
+                    type="button"
+                    class="cell-source-check-switch"
+                    role="switch"
+                    aria-checked="{{ 'false' if source_existence_validation == 'off' else 'true' }}"
+                    data-cell-query-option="validation.sourceExistence"
+                    data-source-check-switch
+                    title="Checks whether referenced sources exist before running or explaining this cell."
+                    {% if not active_notebook.can_edit or cell_language != 'sql' %}disabled{% endif %}
+                  >
+                    <span class="cell-cache-hydration-switch-track" aria-hidden="true">
+                      <span class="cell-cache-hydration-switch-thumb"></span>
+                    </span>
+                    <span class="cell-cache-hydration-switch-copy">
+                      <span>Check sources</span>
+                      <strong data-source-check-state-label>{{ 'Off' if source_existence_validation == 'off' else 'On' }}</strong>
+                    </span>
+                  </button>
                 </span>
               </span>
               <details class="cell-source-picker" data-cell-source-picker>

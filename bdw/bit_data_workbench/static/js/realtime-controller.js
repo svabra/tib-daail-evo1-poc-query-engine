@@ -197,6 +197,14 @@ export function createRealtimeController(helpers) {
       node.textContent = formatQueryDuration(queryJobElapsedMs(job));
     });
 
+    document.querySelectorAll("[data-query-duration-total]").forEach((node) => {
+      const job = jobsById.get(node.dataset.jobId || "");
+      if (!job) {
+        return;
+      }
+      node.textContent = formatQueryDuration(queryJobElapsedMs(job));
+    });
+
     document.querySelectorAll("[data-query-monitor-duration]").forEach((node) => {
       const job = jobsById.get(node.dataset.jobId || "");
       if (!job) {

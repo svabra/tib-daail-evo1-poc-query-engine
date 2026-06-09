@@ -16,6 +16,7 @@ from bit_data_workbench.backend.query_options import (  # noqa: E402
     cache_hydration_options,
     normalize_query_options,
     parquet_hive_partitioning_option,
+    source_existence_validation_enabled,
 )
 
 
@@ -33,7 +34,9 @@ class QueryOptionsTests(unittest.TestCase):
                 "indexPolicy": "autoPredicates",
             },
         )
+        self.assertEqual(options["validation"]["sourceExistence"], "off")
         self.assertFalse(cache_hydration_enabled(options))
+        self.assertFalse(source_existence_validation_enabled(options))
 
     def test_accepts_on_and_off_values(self) -> None:
         self.assertEqual(
@@ -71,6 +74,27 @@ class QueryOptionsTests(unittest.TestCase):
         self.assertTrue(cache_hydration_enabled(options))
         self.assertEqual(cache_hydration_options(options)["mode"], "on")
 
+    def test_accepts_source_existence_validation_options(self) -> None:
+        off_options = normalize_query_options(
+            {
+                "validation": {
+                    "sourceExistence": "OFF",
+                }
+            }
+        )
+        on_options = normalize_query_options(
+            {
+                "validation": {
+                    "sourceExistence": "ON",
+                }
+            }
+        )
+
+        self.assertEqual(off_options["validation"]["sourceExistence"], "off")
+        self.assertFalse(source_existence_validation_enabled(off_options))
+        self.assertEqual(on_options["validation"]["sourceExistence"], "on")
+        self.assertTrue(source_existence_validation_enabled(on_options))
+
     def test_rejects_invalid_cache_hydration_values(self) -> None:
         with self.assertRaisesRegex(ValueError, "cacheHydration.mode"):
             normalize_query_options({"duckdb": {"cacheHydration": {"mode": "always"}}})
@@ -94,6 +118,10 @@ class QueryOptionsTests(unittest.TestCase):
                     }
                 }
             )
+
+    def test_rejects_invalid_source_existence_validation_value(self) -> None:
+        with self.assertRaisesRegex(ValueError, "validation.sourceExistence"):
+            normalize_query_options({"validation": {"sourceExistence": "sometimes"}})
 
 
 if __name__ == "__main__":

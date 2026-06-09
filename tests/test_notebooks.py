@@ -952,6 +952,14 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             cells=notebook.cells_payload,
         )
         self.assertEqual(graph["diagnostics"], [])
+        self.assertEqual(len(graph["nodes"]), 9)
+        self.assertEqual(len(graph["edges"]), 12)
+        self.assertTrue(
+            all(
+                node["queryOptions"]["validation"]["sourceExistence"] == "off"
+                for node in graph["nodes"]
+            )
+        )
         self.assertEqual(
             graph["order"],
             [

@@ -1,9 +1,29 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.0. Keep entries concise and
+# Derived from git history through version 0.10.1. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.1",
+        "releasedAt": "2026-06-09T11:28:31+02:00",
+        "features": [
+            (
+                "Query result timing can now expand Total elapsed into the "
+                "recorded timestamp checkpoints and the computed total."
+            ),
+            (
+                "Notebook cells now include a Check sources toggle that is off "
+                "by default, allowing proven queries to skip expensive source "
+                "existence preflight validation."
+            ),
+            (
+                "Pipeline graph refreshes preserve the rendered chart and table "
+                "while a run is starting, and running stage box and row glows now "
+                "animate at half speed for calmer progress feedback."
+            ),
+        ],
+    },
     {
         "version": "0.10.0",
         "releasedAt": "2026-06-09T08:30:00+02:00",

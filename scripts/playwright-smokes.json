@@ -191,6 +191,11 @@
       "enabledByDefault": false
     },
     {
+      "id": "pipeline-sample-graph",
+      "script": "playwright_pipeline_sample_graph_regression.py",
+      "enabledByDefault": false
+    },
+    {
       "id": "local-workspace-move-file",
       "script": "playwright_local_workspace_move_file.py",
       "enabledByDefault": false

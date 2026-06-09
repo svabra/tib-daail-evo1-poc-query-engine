@@ -18,6 +18,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from ..config import Settings
 from .query_aliases import normalize_query_alias_segment
+from .query_options import normalize_query_options
 from .source_references import s3_source_reference, s3_table_function_sql
 from .s3_storage import s3_client
 from .sql_utils import qualified_name, sql_literal
@@ -344,9 +345,9 @@ def normalize_stage_cells(cells: Iterable[dict[str, object]]) -> list[dict[str, 
                     if str(item).strip()
                 ],
                 "queryOptions": (
-                    dict(raw_cell.get("queryOptions") or {})
+                    normalize_query_options(raw_cell.get("queryOptions") or {})
                     if isinstance(raw_cell.get("queryOptions"), dict)
-                    else {}
+                    else normalize_query_options({})
                 ),
             }
         )

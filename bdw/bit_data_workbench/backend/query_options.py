@@ -7,6 +7,7 @@ PARQUET_HIVE_PARTITIONING_OPTIONS = {"auto", "on", "off"}
 CACHE_HYDRATION_MODES = {"off", "on"}
 CACHE_HYDRATION_SCOPES = {"referencedS3Parquet"}
 CACHE_HYDRATION_INDEX_POLICIES = {"autoPredicates"}
+SOURCE_EXISTENCE_VALIDATION_OPTIONS = {"off", "on"}
 DEFAULT_QUERY_OPTIONS = {
     "duckdb": {
         "parquetHivePartitioning": "auto",
@@ -15,6 +16,9 @@ DEFAULT_QUERY_OPTIONS = {
             "scope": "referencedS3Parquet",
             "indexPolicy": "autoPredicates",
         },
+    },
+    "validation": {
+        "sourceExistence": "off",
     },
 }
 
@@ -28,6 +32,9 @@ def default_query_options() -> dict[str, dict[str, object]]:
                 "scope": "referencedS3Parquet",
                 "indexPolicy": "autoPredicates",
             },
+        },
+        "validation": {
+            "sourceExistence": "off",
         },
     }
 
@@ -45,6 +52,12 @@ def normalize_query_options(value: Any) -> dict[str, dict[str, object]]:
         duckdb_options = {}
     if not isinstance(duckdb_options, dict):
         raise ValueError("queryOptions.duckdb must be an object.")
+
+    validation_options = value.get("validation")
+    if validation_options is None:
+        validation_options = {}
+    if not isinstance(validation_options, dict):
+        raise ValueError("queryOptions.validation must be an object.")
 
     parquet_hive_partitioning = str(
         duckdb_options.get("parquetHivePartitioning") or "auto"
@@ -74,6 +87,14 @@ def normalize_query_options(value: Any) -> dict[str, dict[str, object]]:
             "queryOptions.duckdb.cacheHydration.indexPolicy must be autoPredicates."
         )
 
+    source_existence = (
+        str(validation_options.get("sourceExistence") or "off").strip().lower()
+    )
+    if source_existence not in SOURCE_EXISTENCE_VALIDATION_OPTIONS:
+        raise ValueError(
+            "queryOptions.validation.sourceExistence must be one of: off, on."
+        )
+
     return {
         "duckdb": {
             "parquetHivePartitioning": parquet_hive_partitioning,
@@ -82,6 +103,9 @@ def normalize_query_options(value: Any) -> dict[str, dict[str, object]]:
                 "scope": scope,
                 "indexPolicy": index_policy,
             },
+        },
+        "validation": {
+            "sourceExistence": source_existence,
         },
     }
 
@@ -101,3 +125,7 @@ def cache_hydration_options(query_options: Any) -> dict[str, str]:
 
 def cache_hydration_enabled(query_options: Any) -> bool:
     return cache_hydration_options(query_options)["mode"] == "on"
+
+
+def source_existence_validation_enabled(query_options: Any) -> bool:
+    return normalize_query_options(query_options)["validation"]["sourceExistence"] == "on"

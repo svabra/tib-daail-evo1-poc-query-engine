@@ -9,6 +9,7 @@ export function createQueryUi(helpers) {
     queryJobStatusCopy,
     isQueryResultCollapsed = () => false,
     isQueryResultChartsVisible = () => false,
+    isQueryTimingDetailsVisible = () => false,
   } = helpers;
 
   const bytesPerMegabyte = 1024 * 1024;
@@ -54,7 +55,7 @@ export function createQueryUi(helpers) {
     `;
   }
 
-  function resultDurationMarkup(job) {
+  function resultDurationMarkup(job, { detailsId = "", detailsVisible = false } = {}) {
     const running = Boolean(job && queryJobIsRunning(job));
     const duration = job ? formatQueryDuration(queryJobElapsedMs(job)) : "0 ms";
     const label = running ? "Running elapsed" : "Total elapsed";
@@ -70,18 +71,173 @@ export function createQueryUi(helpers) {
           + "The timing pill next to it shows backend phase measurements. Those sub-times are diagnostics and can differ slightly because they are measured on different clocks and rounded."
         );
     const jobId = job?.jobId || "";
-    return `
-      <span class="result-duration-group">
-        <span class="result-duration-label">${escapeHtml(label)}</span>
+    const durationControl = job
+      ? `
+        <button
+          type="button"
+          class="result-meta result-duration-toggle"
+          data-query-duration
+          data-query-duration-details-toggle
+          data-job-id="${escapeHtml(jobId)}"
+          aria-expanded="${detailsVisible ? "true" : "false"}"
+          aria-controls="${escapeHtml(detailsId)}"
+          title="${escapeHtml(tooltip)}"
+          aria-label="${escapeHtml(`${label}: ${duration}. Click to show recorded timestamps and total elapsed time. ${tooltip}`)}"
+        >${escapeHtml(duration)}</button>
+      `
+      : `
         <strong
           class="result-meta"
           data-query-duration
-          data-job-id="${escapeHtml(jobId)}"
+          data-job-id=""
           title="${escapeHtml(tooltip)}"
           aria-label="${escapeHtml(`${label}: ${duration}. ${tooltip}`)}"
         >${escapeHtml(duration)}</strong>
+      `;
+    return `
+      <span class="result-duration-group">
+        <span class="result-duration-label">${escapeHtml(label)}</span>
+        ${durationControl}
         <span class="result-duration-help" title="${escapeHtml(tooltip)}" aria-label="${escapeHtml(tooltip)}">?</span>
       </span>
+    `;
+  }
+
+  function timingEventLabel(event) {
+    const phase = String(event?.phase || "").trim();
+    if (phase) {
+      return phase.replace(/\s*\.\.\.$/, "");
+    }
+    const message = String(event?.message || "").trim();
+    if (message) {
+      return message;
+    }
+    const rawEvent = String(event?.event || "").trim();
+    return rawEvent
+      ? rawEvent
+          .split("_")
+          .filter(Boolean)
+          .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+          .join(" ")
+      : "Progress event";
+  }
+
+  function queryTimingDetailsRows(job) {
+    if (!job) {
+      return [];
+    }
+
+    const rows = [];
+    const seenKeys = new Set();
+    const pushRow = ({ label, timestamp = "", elapsedMs = null, note = "", tone = "" }) => {
+      const normalizedLabel = String(label || "").trim();
+      const normalizedTimestamp = String(timestamp || "").trim();
+      const numericElapsed = Number(elapsedMs);
+      const hasElapsed = Number.isFinite(numericElapsed) && numericElapsed >= 0;
+      const key = `${normalizedLabel}::${normalizedTimestamp}::${hasElapsed ? Math.round(numericElapsed) : ""}`;
+      if (!normalizedLabel || seenKeys.has(key)) {
+        return;
+      }
+      seenKeys.add(key);
+      rows.push({
+        label: normalizedLabel,
+        timestamp: normalizedTimestamp,
+        elapsedMs: hasElapsed ? numericElapsed : null,
+        note: String(note || "").trim(),
+        tone: String(tone || "").trim(),
+      });
+    };
+
+    pushRow({
+      label: "Submitted",
+      timestamp: job.startedAt || "",
+      elapsedMs: 0,
+      note: "Cell run accepted by the backend.",
+    });
+
+    (Array.isArray(job.progressEvents) ? job.progressEvents : []).forEach((event) => {
+      pushRow({
+        label: timingEventLabel(event),
+        timestamp: event?.occurredAt || "",
+        elapsedMs: event?.durationMs,
+        note: event?.event || "",
+      });
+    });
+
+    const terminalTimestamp = job.completedAt || job.updatedAt || "";
+    if (!queryJobIsRunning(job) && terminalTimestamp) {
+      pushRow({
+        label: queryJobStatusCopy(job),
+        timestamp: terminalTimestamp,
+        elapsedMs: job.durationMs,
+        note: "Terminal job update.",
+      });
+    }
+
+    pushRow({
+      label: "Total",
+      timestamp: queryJobIsRunning(job) ? "Now" : terminalTimestamp || job.updatedAt || "",
+      elapsedMs: queryJobElapsedMs(job),
+      note: "Same value shown by Total elapsed.",
+      tone: "total",
+    });
+
+    return rows;
+  }
+
+  function queryTimingDetailsTableMarkup(job, { panelId = "", visible = false } = {}) {
+    if (!job) {
+      return "";
+    }
+
+    const rows = queryTimingDetailsRows(job);
+    if (!rows.length) {
+      return "";
+    }
+
+    return `
+      <div
+        id="${escapeHtml(panelId)}"
+        class="query-timing-details"
+        data-query-duration-details-panel
+        data-job-id="${escapeHtml(job.jobId || "")}"
+        ${visible ? "" : "hidden"}
+      >
+        <table class="query-timing-table">
+          <thead>
+            <tr>
+              <th>Event</th>
+              <th>Timestamp</th>
+              <th>Elapsed</th>
+              <th>Note</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows
+              .map((row) => {
+                const timestamp = row.timestamp === "Now"
+                  ? "Now"
+                  : formatQueryTimestamp(row.timestamp) || row.timestamp || "-";
+                const elapsed = row.elapsedMs === null ? "-" : formatQueryDuration(row.elapsedMs);
+                const totalAttributes = row.tone === "total"
+                  ? ` class="is-total" data-query-duration-total-row`
+                  : "";
+                const elapsedAttributes = row.tone === "total"
+                  ? ` data-query-duration-total data-job-id="${escapeHtml(job.jobId || "")}"`
+                  : "";
+                return `
+                  <tr${totalAttributes}>
+                    <th scope="row">${escapeHtml(row.label)}</th>
+                    <td>${escapeHtml(timestamp)}</td>
+                    <td${elapsedAttributes}>${escapeHtml(elapsed)}</td>
+                    <td>${escapeHtml(row.note || "-")}</td>
+                  </tr>
+                `;
+              })
+              .join("")}
+          </tbody>
+        </table>
+      </div>
     `;
   }
 
@@ -704,6 +860,8 @@ export function createQueryUi(helpers) {
     const collapsed = Boolean(isQueryResultCollapsed(cellId, job));
     const chartsVisible = Boolean(isQueryResultChartsVisible(cellId, job));
     const resultBodyId = `query-result-body-${cellId}`;
+    const timingDetailsId = `query-timing-details-${cellId}`;
+    const timingDetailsVisible = Boolean(isQueryTimingDetailsVisible(cellId, job));
     const showExportActions = job.status === "completed" && job.columns.length > 0;
     const rowsBadge = queryRowsShownLabel(job);
     const showRowsBadge = queryJobIsRunning(job) || Number(job.rowsShown || 0) > 0 || Boolean(job.truncated);
@@ -764,7 +922,7 @@ export function createQueryUi(helpers) {
           <div class="result-header-copy">
             <h3>Result</h3>
             <div class="result-meta-row">
-              ${resultDurationMarkup(job)}
+              ${resultDurationMarkup(job, { detailsId: timingDetailsId, detailsVisible: timingDetailsVisible })}
               ${resultMetricStripMarkup(job)}
             </div>
           </div>
@@ -785,6 +943,7 @@ export function createQueryUi(helpers) {
             ${resultExportMenuMarkup(showExportActions, job.jobId || "")}
           </div>
         </header>
+        ${queryTimingDetailsTableMarkup(job, { panelId: timingDetailsId, visible: timingDetailsVisible })}
         <div id="${escapeHtml(resultBodyId)}" class="result-body" data-query-result-body ${collapsed ? "hidden" : ""}>
           ${resultBody}
         </div>
