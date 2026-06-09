@@ -8621,6 +8621,7 @@ details:not([open]) > .tree-children {
 
 .editor-copy-button,
 .editor-expand-button,
+.editor-source-nav-button,
 .editor-sql-view-toggle {
   position: absolute;
   top: 8px;
@@ -8631,7 +8632,8 @@ details:not([open]) > .tree-children {
 }
 
 .editor-copy-button,
-.editor-expand-button {
+.editor-expand-button,
+.editor-source-nav-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -8654,8 +8656,12 @@ details:not([open]) > .tree-children {
   font: 800 1rem/1 var(--font-sans);
 }
 
-.editor-sql-view-toggle {
+.editor-source-nav-button {
   right: 80px;
+}
+
+.editor-sql-view-toggle {
+  right: 116px;
   display: inline-grid;
   grid-template-columns: minmax(54px, auto) minmax(54px, auto);
   overflow: hidden;
@@ -8687,7 +8693,8 @@ details:not([open]) > .tree-children {
   color: var(--accent-strong);
 }
 
-.editor-copy-button svg {
+.editor-copy-button svg,
+.editor-source-nav-button svg {
   width: 16px;
   height: 16px;
   fill: none;
@@ -8699,9 +8706,11 @@ details:not([open]) > .tree-children {
 
 .workspace-cell:hover .editor-copy-button,
 .workspace-cell:hover .editor-expand-button,
+.workspace-cell:hover .editor-source-nav-button,
 .workspace-cell:hover .editor-sql-view-toggle,
 .editor-copy-button:focus-visible,
 .editor-expand-button:focus-visible,
+.editor-source-nav-button:focus-visible,
 .editor-sql-view-toggle:focus-within,
 .editor-expand-button[aria-pressed="true"] {
   opacity: 1;
@@ -8713,6 +8722,9 @@ details:not([open]) > .tree-children {
 .editor-copy-button.is-copied,
 .editor-expand-button:hover,
 .editor-expand-button:focus-visible,
+.editor-source-nav-button:hover,
+.editor-source-nav-button:focus-visible,
+.editor-source-nav-button.is-loading,
 .editor-sql-view-toggle:hover,
 .editor-sql-view-toggle:focus-within,
 .editor-expand-button[aria-pressed="true"] {
@@ -8722,8 +8734,40 @@ details:not([open]) > .tree-children {
 
 .editor-frame[data-editor-language="python"] .editor-copy-button,
 .editor-frame[data-editor-language="python"] .editor-expand-button,
+.editor-frame[data-editor-language="python"] .editor-source-nav-button,
 .editor-frame[data-editor-language="python"] .editor-sql-view-toggle {
   display: none;
+}
+
+.cell-source-navigation-menu {
+  position: fixed;
+  z-index: 90;
+  min-width: 260px;
+  max-width: min(360px, calc(100vw - 24px));
+  padding: 6px;
+}
+
+.cell-source-navigation-item {
+  align-items: flex-start;
+  gap: 8px;
+  min-height: 38px;
+  white-space: normal;
+}
+
+.cell-source-navigation-item strong {
+  display: block;
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.2;
+}
+
+.cell-source-navigation-item small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  line-height: 1.25;
+  word-break: break-word;
 }
 
 .editor-frame textarea {

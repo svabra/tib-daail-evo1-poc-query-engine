@@ -106,6 +106,7 @@ from .source_references import (
     split_qualified_reference,
 )
 from .query_source_validation import QUERY_SOURCE_INVALID, validate_query_sources
+from .query_source_navigation import query_source_objects
 from .query_cache import cache_preview, delete_cache, expire_cache, hydrate_cache
 from .query_options import (
     normalize_query_options,
@@ -220,6 +221,7 @@ class PreparedQuery:
     touched_relations: list[str]
     touched_buckets: list[str]
     source_summaries: list[dict[str, object]]
+    source_objects: list[dict[str, object]]
     execution_mode: str
     duckdb_execution_path: str
 
@@ -233,6 +235,7 @@ class PreparedQuery:
             "queryOptions": dict(self.query_options),
             "touchedRelations": list(self.touched_relations),
             "touchedBuckets": list(self.touched_buckets),
+            "sourceObjects": [dict(item) for item in self.source_objects],
             "executionMode": self.execution_mode,
             "duckdbExecutionPath": self.duckdb_execution_path,
         }
@@ -1820,6 +1823,14 @@ class WorkbenchService:
             local_relation_map=local_relation_map,
             query_options=normalized_query_options,
         )
+        with self._lock:
+            catalogs = list(self._catalogs)
+        source_objects = query_source_objects(
+            query_analysis.touched_relations,
+            relation_index=relation_index,
+            source_summaries=source_summaries,
+            catalogs=catalogs,
+        )
         duckdb_execution_path = QueryJobManager._duckdb_execution_path(
             execution_mode=execution_mode,
             source_ids=normalized_data_sources,
@@ -1836,6 +1847,7 @@ class WorkbenchService:
             touched_relations=list(query_analysis.touched_relations),
             touched_buckets=list(query_analysis.touched_buckets),
             source_summaries=source_summaries,
+            source_objects=source_objects,
             execution_mode=execution_mode,
             duckdb_execution_path=duckdb_execution_path,
         )

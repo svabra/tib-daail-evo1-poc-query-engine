@@ -310,6 +310,35 @@ class QuerySourceValidationTests(unittest.TestCase):
         self.assertEqual(payload["executionSql"], "select * from missing.schema_table")
         self.assertEqual(payload["queryOptions"]["validation"]["sourceExistence"], "off")
 
+    def test_prepare_query_sql_returns_postgres_source_object_for_navigation(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = sample_catalogs()
+
+        payload = service.prepare_query_sql(
+            sql="select * from pg_oltp.public.sales_orders",
+            notebook_id="notebook",
+            data_sources=["pg_oltp"],
+        )
+
+        self.assertEqual(
+            payload["sourceObjects"],
+            [
+                {
+                    "label": "sales_orders",
+                    "kind": "table",
+                    "sourceId": "pg_oltp",
+                    "relation": "pg_oltp.public.sales_orders",
+                    "queryAlias": "",
+                    "queryReference": "",
+                    "bucket": "",
+                    "key": "",
+                    "path": "",
+                    "format": "",
+                }
+            ],
+        )
+
     def test_start_query_job_skips_source_validation_when_option_off(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)
         service._lock = threading.RLock()
@@ -424,6 +453,39 @@ class QuerySourceValidationTests(unittest.TestCase):
             ],
         )
 
+    def test_prepare_query_sql_returns_s3_source_object_for_navigation(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = sample_catalogs()
+        service._analyze_query = lambda _sql, **_kwargs: SimpleNamespace(
+            touched_relations=["test.federal_tax_data_10gb"],
+            touched_buckets=["test"],
+        )
+
+        payload = service.prepare_query_sql(
+            sql="select * from s3.test.federal_tax_data_10gb.csv",
+            notebook_id="notebook",
+            data_sources=["workspace.s3"],
+        )
+
+        self.assertEqual(
+            payload["sourceObjects"],
+            [
+                {
+                    "label": "federal_tax_data_10gb",
+                    "kind": "s3-object",
+                    "sourceId": "workspace.s3",
+                    "relation": "test.federal_tax_data_10gb",
+                    "queryAlias": "s3.test.federal_tax_data_10gb.csv",
+                    "queryReference": 's3.test."federal_tax_data_10gb.csv"',
+                    "bucket": "test",
+                    "key": "federal_tax_data_10gb.csv",
+                    "path": "s3://test/federal_tax_data_10gb.csv",
+                    "format": "csv",
+                }
+            ],
+        )
+
     def test_start_query_job_uses_submitted_sql_for_validation_and_routing(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)
         service._lock = threading.RLock()
@@ -513,6 +575,26 @@ class QuerySourceValidationTests(unittest.TestCase):
         self.assertEqual(payload["touchedRelations"], ["stage.mwa_joined_abrechnungen"])
         self.assertEqual(payload["touchedBuckets"], ["vat-smoke-test"])
         self.assertEqual(payload["duckdbExecutionPath"], "isolated-read")
+        self.assertEqual(
+            payload["sourceObjects"],
+            [
+                {
+                    "label": "mwa_joined_abrechnungen",
+                    "kind": "s3-object",
+                    "sourceId": "workspace.s3",
+                    "relation": "stage.mwa_joined_abrechnungen",
+                    "queryAlias": "",
+                    "queryReference": "",
+                    "bucket": "vat-smoke-test",
+                    "key": "_bdw_stages/notebook/stage-mwa-joined/rev-1/data.parquet",
+                    "path": (
+                        "s3://vat-smoke-test/_bdw_stages/notebook/"
+                        "stage-mwa-joined/rev-1/data.parquet"
+                    ),
+                    "format": "parquet",
+                }
+            ],
+        )
 
     def test_start_query_job_rewrites_completed_stage_but_keeps_virtual_display_sql(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)

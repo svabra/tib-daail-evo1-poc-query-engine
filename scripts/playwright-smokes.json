@@ -181,6 +181,11 @@
       "enabledByDefault": true
     },
     {
+      "id": "cell-source-navigation",
+      "script": "playwright_cell_source_navigation_smoke.py",
+      "enabledByDefault": false
+    },
+    {
       "id": "notebook-workspace-metadata",
       "script": "playwright_notebook_workspace_metadata_smoke.py",
       "enabledByDefault": true

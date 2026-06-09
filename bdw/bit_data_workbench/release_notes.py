@@ -1,9 +1,26 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.1. Keep entries concise and
+# Derived from git history through version 0.10.2. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.2",
+        "releasedAt": "2026-06-09T22:33:38+02:00",
+        "features": [
+            (
+                "SQL notebook cells now include a Navigate to source object "
+                "button that opens the Data Sources navigation, expands the "
+                "referenced table or S3 object, and flashes the matching row."
+            ),
+            (
+                "Prepared query SQL now returns source-object metadata for "
+                "PostgreSQL relations, direct S3 objects, and completed "
+                "stage-backed S3 Parquet outputs so inspection controls can "
+                "resolve the real source behind a cell."
+            ),
+        ],
+    },
     {
         "version": "0.10.1",
         "releasedAt": "2026-06-09T11:28:31+02:00",

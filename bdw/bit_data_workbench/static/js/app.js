@@ -610,6 +610,8 @@ const { pythonResultPanelMarkup } = createPythonUi({
 
 let notebookStagePipelineController = null;
 const preparedSqlViewCache = new WeakMap();
+let cellSourceNavigationMenu = null;
+let cellSourceNavigationChoices = [];
 
 const querySourceValidationController = createQuerySourceValidationController({
   cellLanguageForCellRoot,
@@ -3925,6 +3927,241 @@ async function prepareDuckdbSqlForCell(cellRoot) {
   const payload = await response.json();
   preparedSqlViewCache.set(cellRoot, { key: cacheKey, payload });
   return payload;
+}
+
+function normalizeSourceNavigationObjects(items) {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+  const seen = new Set();
+  const normalized = [];
+  for (const item of items) {
+    const source = {
+      label: String(item?.label || item?.displayName || item?.relation || item?.key || "Source object").trim(),
+      kind: String(item?.kind || "").trim(),
+      sourceId: String(item?.sourceId || "").trim(),
+      relation: String(item?.relation || "").trim(),
+      queryAlias: String(item?.queryAlias || "").trim(),
+      queryReference: String(item?.queryReference || "").trim(),
+      bucket: String(item?.bucket || "").trim(),
+      key: String(item?.key || "").trim(),
+      path: String(item?.path || "").trim(),
+      format: String(item?.format || "").trim(),
+    };
+    if (!source.relation && !(source.bucket && source.key)) {
+      continue;
+    }
+    const dedupeKey = [
+      source.sourceId.toLowerCase(),
+      source.relation.toLowerCase(),
+      source.bucket,
+      source.key,
+    ].join("||");
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+    seen.add(dedupeKey);
+    normalized.push(source);
+  }
+  return normalized;
+}
+
+function sourceNavigationReferenceKeys(source) {
+  return [
+    source?.relation,
+    source?.queryReference,
+    source?.queryAlias,
+    source?.path,
+  ]
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function sourceObjectReferenceKeys(sourceObjectRoot) {
+  return [
+    sourceObjectRoot?.dataset?.sourceObjectRelation,
+    sourceObjectRoot?.dataset?.sourceObjectQueryReference,
+    sourceObjectRoot?.dataset?.sourceObjectQueryAlias,
+    sourceObjectRoot?.dataset?.s3Path,
+  ]
+    .map((value) => String(value || "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function sourceNavigationDisplayDetail(source) {
+  if (source?.bucket && source?.key) {
+    return `s3://${source.bucket}/${source.key}`;
+  }
+  return source?.queryReference || source?.queryAlias || source?.relation || "";
+}
+
+function closeCellSourceNavigationMenu() {
+  cellSourceNavigationMenu?.remove();
+  cellSourceNavigationMenu = null;
+  cellSourceNavigationChoices = [];
+}
+
+function cellSourceNavigationMenuItemMarkup(source, index) {
+  const detail = sourceNavigationDisplayDetail(source);
+  return `
+    <button
+      type="button"
+      class="workspace-action-menu-item cell-source-navigation-item"
+      data-navigate-cell-source-choice="${index}"
+      title="${escapeHtml(detail || source.label)}"
+    >
+      <span aria-hidden="true">&rarr;</span>
+      <span>
+        <strong>${escapeHtml(source.label || "Source object")}</strong>
+        ${detail ? `<small>${escapeHtml(detail)}</small>` : ""}
+      </span>
+    </button>
+  `;
+}
+
+function openCellSourceNavigationMenu(triggerButton, sources) {
+  closeCellSourceNavigationMenu();
+  if (!(triggerButton instanceof Element) || !sources.length) {
+    return;
+  }
+  cellSourceNavigationChoices = [...sources];
+  const menu = document.createElement("div");
+  menu.className = "workspace-action-menu-panel cell-source-navigation-menu";
+  menu.dataset.cellSourceNavigationMenu = "";
+  menu.innerHTML = sources
+    .map((source, index) => cellSourceNavigationMenuItemMarkup(source, index))
+    .join("");
+  document.body.appendChild(menu);
+  const rect = triggerButton.getBoundingClientRect();
+  const menuWidth = menu.offsetWidth || 280;
+  const menuHeight = menu.offsetHeight || 160;
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - menuWidth - 8));
+  const top = Math.max(8, Math.min(rect.bottom + 6, window.innerHeight - menuHeight - 8));
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  cellSourceNavigationMenu = menu;
+}
+
+function sourceObjectNodeForNavigation(source) {
+  const bucket = String(source?.bucket || "").trim();
+  const key = String(source?.key || "").trim();
+  if (bucket && key) {
+    const exactS3Object = document.querySelector(
+      `[data-source-object][data-s3-bucket="${CSS.escape(bucket)}"][data-s3-key="${CSS.escape(key)}"]`
+    );
+    if (exactS3Object) {
+      return exactS3Object;
+    }
+  }
+
+  const desiredKeys = new Set(sourceNavigationReferenceKeys(source));
+  if (!desiredKeys.size) {
+    return null;
+  }
+  return Array.from(document.querySelectorAll("[data-source-object]")).find((node) =>
+    sourceObjectReferenceKeys(node).some((candidate) => desiredKeys.has(candidate))
+  ) || null;
+}
+
+function openSidebarSourceObjectAncestors(target) {
+  const sourcesRoot = dataSourcesSection();
+  if (sourcesRoot instanceof HTMLDetailsElement) {
+    sourcesRoot.open = true;
+  }
+  const catalog = target?.closest?.("[data-source-catalog]");
+  if (catalog instanceof HTMLDetailsElement) {
+    catalog.open = true;
+  }
+  const schema = target?.closest?.("[data-source-schema]");
+  if (schema instanceof HTMLDetailsElement) {
+    schema.open = true;
+  }
+}
+
+function closeNotebookSidebarSection() {
+  const section = notebookSection();
+  if (section instanceof HTMLDetailsElement) {
+    section.open = false;
+  }
+}
+
+function flashSourceNavigationTarget(target) {
+  if (!(target instanceof Element)) {
+    return;
+  }
+  const label = target.querySelector(".source-node-label > span:last-child") || target.querySelector(".source-node-label");
+  target.classList.remove("is-pipeline-inspect-flash");
+  label?.classList?.remove("is-pipeline-target-text-flash");
+  void target.offsetWidth;
+  target.classList.add("is-pipeline-inspect-flash");
+  label?.classList?.add("is-pipeline-target-text-flash");
+  window.setTimeout(() => {
+    target.classList.remove("is-pipeline-inspect-flash");
+    label?.classList?.remove("is-pipeline-target-text-flash");
+  }, 3200);
+}
+
+async function navigateToPreparedSourceObject(source) {
+  const sourceId = source?.sourceId || (source?.bucket && source?.key ? "workspace.s3" : "");
+  await revealDataSourceSidebarBrowser(sourceId);
+  await refreshSidebar("notebook");
+  closeNotebookSidebarSection();
+  const target = sourceObjectNodeForNavigation(source);
+  if (target) {
+    openSidebarSourceObjectAncestors(target);
+    target.scrollIntoView({ block: "center" });
+    flashSourceNavigationTarget(target);
+    setSidebarSourceOperationStatus(
+      {
+        tone: "success",
+        title: "Source object located",
+        copy: sourceNavigationDisplayDetail(source) || source.label,
+      },
+      { autoClearMs: 2500 }
+    );
+    return true;
+  }
+
+  await showMessageDialog({
+    title: "Source object not visible",
+    copy: "The cell references a source object, but it is not currently visible in the Data Sources navigation. Refresh the data sources and try again.",
+  });
+  return false;
+}
+
+async function navigateCellSourceObject(triggerButton) {
+  const cellRoot = triggerButton?.closest?.("[data-query-cell]");
+  if (!(cellRoot instanceof Element)) {
+    return;
+  }
+  triggerButton.classList.add("is-loading");
+  triggerButton.setAttribute("aria-busy", "true");
+  try {
+    const payload = await prepareDuckdbSqlForCell(cellRoot);
+    const sources = normalizeSourceNavigationObjects(payload?.sourceObjects || []);
+    if (!sources.length) {
+      await showMessageDialog({
+        title: "No source object found",
+        copy: "This cell does not reference a known table or S3 object in the Data Sources navigation.",
+      });
+      return;
+    }
+    if (sources.length === 1) {
+      closeCellSourceNavigationMenu();
+      await navigateToPreparedSourceObject(sources[0]);
+      return;
+    }
+    openCellSourceNavigationMenu(triggerButton, sources);
+  } catch (error) {
+    console.error("Failed to navigate to the cell source object.", error);
+    await showMessageDialog({
+      title: "Source navigation failed",
+      copy: error instanceof Error ? error.message : "The source object could not be resolved.",
+    });
+  } finally {
+    triggerButton.classList.remove("is-loading");
+    triggerButton.removeAttribute("aria-busy");
+  }
 }
 
 function renderDuckdbSqlPanel(editorRoot, { sql = "", error = "" } = {}) {
@@ -10035,11 +10272,38 @@ document.addEventListener(
 document.body.addEventListener("click", async (event) => {
   setActiveCell(event.target.closest("[data-query-cell]"));
   closePopupMenusForTarget(event.target);
+  if (
+    !event.target.closest("[data-cell-source-navigation-menu]")
+    && !event.target.closest("[data-navigate-cell-source]")
+  ) {
+    closeCellSourceNavigationMenu();
+  }
 
   const modalCancelButton = event.target.closest("[data-modal-cancel]");
   if (modalCancelButton) {
     event.preventDefault();
     closeDialog(modalCancelButton.closest("dialog"), "cancel");
+    return;
+  }
+
+  const cellSourceNavigationChoice = event.target.closest("[data-navigate-cell-source-choice]");
+  if (cellSourceNavigationChoice) {
+    event.preventDefault();
+    event.stopPropagation();
+    const index = Number(cellSourceNavigationChoice.dataset.navigateCellSourceChoice || -1);
+    const source = Number.isInteger(index) ? cellSourceNavigationChoices[index] : null;
+    closeCellSourceNavigationMenu();
+    if (source) {
+      await navigateToPreparedSourceObject(source);
+    }
+    return;
+  }
+
+  const cellSourceNavigationButton = event.target.closest("[data-navigate-cell-source]");
+  if (cellSourceNavigationButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    await navigateCellSourceObject(cellSourceNavigationButton);
     return;
   }
 
