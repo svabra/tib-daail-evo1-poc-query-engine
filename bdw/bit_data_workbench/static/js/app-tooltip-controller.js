@@ -123,6 +123,15 @@ export function createAppTooltipController() {
     });
     document.addEventListener("pointerout", (event) => {
       const target = tooltipTarget(event);
+      const leavingActiveTarget =
+        activeTarget &&
+        event.target instanceof Node &&
+        activeTarget.contains(event.target) &&
+        !(event.relatedTarget instanceof Node && activeTarget.contains(event.relatedTarget));
+      if (leavingActiveTarget) {
+        hideTooltip();
+        return;
+      }
       if (target && !target.contains(event.relatedTarget)) {
         hideTooltip();
       }
@@ -130,6 +139,15 @@ export function createAppTooltipController() {
     document.addEventListener("pointermove", (event) => {
       const target = tooltipTarget(event);
       const tooltip = document.querySelector("[data-app-floating-tooltip]");
+      if (
+        !target &&
+        activeTarget &&
+        event.target instanceof Node &&
+        !activeTarget.contains(event.target)
+      ) {
+        hideTooltip();
+        return;
+      }
       if (target && tooltip && !tooltip.hidden) {
         lastPointer = { x: event.clientX, y: event.clientY };
         positionTooltip(target, tooltip, lastPointer);

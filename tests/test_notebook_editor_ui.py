@@ -54,7 +54,11 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("invalidatePreparedSqlViewForCell", app_source)
         self.assertIn("notebookId", validation_source)
         self.assertIn(".editor-sql-view-toggle", css_source)
+        self.assertIn(".workspace-cell:hover .editor-sql-view-toggle", css_source)
+        self.assertNotIn(".editor-frame.is-duckdb-sql-view .editor-sql-view-toggle", css_source)
+        self.assertNotIn(".editor-frame[data-editor-language=\"sql\"] textarea", css_source)
         self.assertIn(".editor-duckdb-sql-panel", css_source)
+        self.assertIn("padding: 10px 12px;", css_source)
 
     def test_duckdb_parquet_hive_query_option_has_markup_and_payload_wiring(self) -> None:
         markup_source = (
@@ -235,6 +239,8 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn('[data-app-tooltip], [data-pipeline-tooltip], [title]', app_tooltip_source)
         self.assertIn("suppressNativeTitle", app_tooltip_source)
         self.assertIn("restoreNativeTitle", app_tooltip_source)
+        self.assertIn("leavingActiveTarget", app_tooltip_source)
+        self.assertIn("activeTarget.contains(event.target)", app_tooltip_source)
         self.assertIn('data-pipeline-tooltip="${escapeHtml(copy)}"', controller_source)
         self.assertIn(
             'data-pipeline-tooltip="Runs all stages in dependency order; priority paths run first when branches fork."',

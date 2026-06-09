@@ -8631,8 +8631,6 @@ details:not([open]) > .tree-children {
   border: 1px solid rgba(192, 202, 212, 0.9);
   border-radius: var(--radius-control);
   background: rgba(255, 255, 255, 0.94);
-  opacity: 1;
-  pointer-events: auto;
 }
 
 .editor-sql-view-button {
@@ -8668,10 +8666,9 @@ details:not([open]) > .tree-children {
   stroke-linejoin: round;
 }
 
-.editor-frame:hover .editor-copy-button,
-.editor-frame:hover .editor-expand-button,
-.editor-frame:hover .editor-sql-view-toggle,
-.editor-frame.is-duckdb-sql-view .editor-sql-view-toggle,
+.workspace-cell:hover .editor-copy-button,
+.workspace-cell:hover .editor-expand-button,
+.workspace-cell:hover .editor-sql-view-toggle,
 .editor-copy-button:focus-visible,
 .editor-expand-button:focus-visible,
 .editor-sql-view-toggle:focus-within,
@@ -8711,17 +8708,12 @@ details:not([open]) > .tree-children {
   background: transparent;
 }
 
-.editor-frame[data-editor-language="sql"] textarea {
-  padding-top: 48px;
-}
-
 .editor-frame.editor-ready textarea {
   display: none;
 }
 
 .editor-frame[data-editor-language="sql"] .editor-shell .cm-editor {
   box-sizing: border-box;
-  padding-top: 38px;
 }
 
 .editor-shell .cm-editor {
@@ -8750,7 +8742,7 @@ details:not([open]) > .tree-children {
   min-height: 136px;
   height: 100%;
   margin: 0;
-  padding: 48px 12px 12px;
+  padding: 10px 12px;
   overflow: auto;
   color: var(--text);
   background: transparent;
