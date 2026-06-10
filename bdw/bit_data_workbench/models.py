@@ -201,6 +201,8 @@ class NotebookCellDefinition:
     cell_id: str
     sql: str
     language: str = "sql"
+    processing_hints: str = ""
+    result_expectations: str = ""
     data_sources: list[str] = field(default_factory=list)
     query_options: dict[str, Any] = field(default_factory=dict)
     stage: dict[str, Any] = field(default_factory=dict)
@@ -221,6 +223,8 @@ class NotebookCellDefinition:
             "cellId": self.cell_id,
             "sql": self.sql,
             "language": self.language,
+            "processingHints": self.processing_hints,
+            "resultExpectations": self.result_expectations,
             "dataSources": list(self.data_sources),
             "queryOptions": dict(self.query_options),
             "stage": dict(self.stage),
@@ -615,6 +619,7 @@ class QueryJobDefinition:
     progress_label: str = "Queued"
     message: str | None = None
     error: str | None = None
+    warnings: list[str] = field(default_factory=list)
     columns: list[str] = field(default_factory=list)
     rows: list[tuple[Any, ...]] = field(default_factory=list)
     row_count: int = 0
@@ -681,6 +686,7 @@ class QueryJobDefinition:
             "progressLabel": self.progress_label,
             "message": self.message,
             "error": self.error,
+            "warnings": list(self.warnings),
             "columns": list(self.columns),
             "rows": [list(row) for row in self.rows],
             "rowCount": self.row_count,

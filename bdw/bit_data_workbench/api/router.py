@@ -49,6 +49,16 @@ class NotebookCellPayload(BaseModel):
     cell_id: str = Field(validation_alias="cellId", serialization_alias="cellId")
     sql: str = ""
     language: str = "sql"
+    processing_hints: str = Field(
+        default="",
+        validation_alias="processingHints",
+        serialization_alias="processingHints",
+    )
+    result_expectations: str = Field(
+        default="",
+        validation_alias="resultExpectations",
+        serialization_alias="resultExpectations",
+    )
     data_sources: list[str] = Field(
         default_factory=list,
         validation_alias="dataSources",

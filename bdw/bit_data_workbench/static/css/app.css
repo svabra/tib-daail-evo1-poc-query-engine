@@ -5719,6 +5719,60 @@ details:not([open]) > .tree-children {
   opacity: 0.72;
 }
 
+.cell-descriptor-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.cell-descriptor-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.cell-descriptor-input,
+.cell-descriptor-readonly {
+  width: 100%;
+  min-height: 62px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+  padding: 9px 10px;
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.cell-descriptor-input {
+  resize: vertical;
+}
+
+.cell-descriptor-input:disabled,
+.cell-descriptor-readonly {
+  background: rgba(247, 249, 251, 0.9);
+  color: var(--text-muted);
+}
+
+@media (max-width: 760px) {
+  .cell-descriptor-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .notebook-share-actions {
+    justify-content: stretch;
+  }
+
+  .notebook-share-actions .modal-button {
+    flex: 1 1 100%;
+  }
+}
+
 .cell-duckdb-options {
   display: inline-flex;
   align-items: center;
@@ -6440,6 +6494,47 @@ details:not([open]) > .tree-children {
   padding: 12px 14px;
   font: inherit;
   background: #fff;
+}
+
+.modal-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.modal-field-label {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.modal-status {
+  min-height: 1.3em;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.modal-status[data-tone="success"] {
+  color: #276044;
+}
+
+.modal-status[data-tone="error"] {
+  color: var(--danger);
+}
+
+.notebook-share-dialog-card {
+  width: min(100%, 560px);
+}
+
+.notebook-share-reference-input:disabled {
+  color: var(--text-muted);
+  background: rgba(228, 233, 239, 0.32);
+}
+
+.notebook-share-actions {
+  flex-wrap: wrap;
 }
 
 .modal-actions {
@@ -9114,6 +9209,27 @@ details:not([open]) > .tree-children {
 .result-action-menu-panel {
   min-width: 320px;
   max-width: min(360px, calc(100vw - 64px));
+}
+
+.result-warning-list {
+  display: grid;
+  gap: 8px;
+  padding: 14px 16px;
+  border: 1px solid #efd38b;
+  border-radius: var(--radius-md);
+  background: #fff8e5;
+  color: #5d4810;
+}
+
+.result-warning-list strong {
+  color: #4c3a0d;
+}
+
+.result-warning-list ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
 }
 
 .result-error {

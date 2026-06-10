@@ -199,6 +199,8 @@ class SharedNotebookServiceTests(unittest.TestCase):
             cells=[
                 {
                     "sql": "select 1",
+                    "processingHints": "Read VAT staging tables.",
+                    "resultExpectations": "One smoke-test row.",
                     "dataSources": [
                         " pg_oltp.public.tax_assessment ",
                         "",
@@ -225,6 +227,8 @@ class SharedNotebookServiceTests(unittest.TestCase):
                     "cells": [
                         {
                             "sql": "select 2",
+                            "processingHints": "Replay saved VAT staging tables.",
+                            "resultExpectations": "One saved smoke-test row.",
                             "dataSources": [" workspace.s3.vat_smoke ", ""],
                             "queryOptions": {
                                 "duckdb": {"parquetHivePartitioning": "off"},
@@ -267,6 +271,8 @@ class SharedNotebookServiceTests(unittest.TestCase):
             "off",
         )
         self.assertEqual(notebook["cells"][0]["language"], "sql")
+        self.assertEqual(notebook["cells"][0]["processingHints"], "Read VAT staging tables.")
+        self.assertEqual(notebook["cells"][0]["resultExpectations"], "One smoke-test row.")
         self.assertEqual(notebook["cells"][0]["stage"]["stageId"], "stage-raw")
         self.assertEqual(notebook["cells"][0]["stage"]["alias"], "raw")
         self.assertTrue(
@@ -296,6 +302,14 @@ class SharedNotebookServiceTests(unittest.TestCase):
         )
         self.assertEqual(notebook["versions"][0]["cells"][0]["language"], "sql")
         self.assertEqual(
+            notebook["versions"][0]["cells"][0]["processingHints"],
+            "Replay saved VAT staging tables.",
+        )
+        self.assertEqual(
+            notebook["versions"][0]["cells"][0]["resultExpectations"],
+            "One saved smoke-test row.",
+        )
+        self.assertEqual(
             notebook["versions"][0]["cells"][0]["stage"]["predecessorStageIds"],
             ["stage-raw"],
         )
@@ -322,7 +336,14 @@ class SharedNotebookServiceTests(unittest.TestCase):
             notebook_id="shared-notebook-a",
             title="Original Title",
             summary="Original Summary",
-            cells=[notebook_cell_type(cell_id="cell-a", sql="select 1")],
+            cells=[
+                notebook_cell_type(
+                    cell_id="cell-a",
+                    sql="select 1",
+                    processing_hints="Keep this cell cheap.",
+                    result_expectations="A single row is returned.",
+                )
+            ],
             tree_path=("Pinned", "Team A"),
             shared=True,
             created_at="2025-01-01T00:00:00+00:00",
@@ -389,7 +410,14 @@ class SharedNotebookServiceTests(unittest.TestCase):
             notebook_id="shared-notebook-priority",
             title="Priority pipeline",
             summary="Forked priority paths",
-            cells=[notebook_cell_type(cell_id="cell-a", sql="select 1")],
+            cells=[
+                notebook_cell_type(
+                    cell_id="cell-a",
+                    sql="select 1",
+                    processing_hints="Keep this cell cheap.",
+                    result_expectations="A single row is returned.",
+                )
+            ],
             pipeline_mode="pipeline",
             pipeline_paths=[
                 {
@@ -411,6 +439,8 @@ class SharedNotebookServiceTests(unittest.TestCase):
         serialized = serialize_notebook(notebook)
         restored = deserialize_notebook(serialized)
 
+        self.assertEqual(serialized["cells"][0]["processingHints"], "Keep this cell cheap.")
+        self.assertEqual(serialized["cells"][0]["resultExpectations"], "A single row is returned.")
         self.assertEqual(
             serialized["pipelinePaths"],
             [
@@ -429,6 +459,8 @@ class SharedNotebookServiceTests(unittest.TestCase):
             ],
         )
         self.assertIsNotNone(restored)
+        self.assertEqual(restored.cells[0].processing_hints, "Keep this cell cheap.")
+        self.assertEqual(restored.cells[0].result_expectations, "A single row is returned.")
         self.assertEqual(restored.pipeline_paths, serialized["pipelinePaths"])
 
     def test_s3_shared_notebook_store_round_trips_pipeline_paths(self) -> None:
@@ -741,6 +773,50 @@ class SharedNotebookServiceTests(unittest.TestCase):
         self.assertIn(query_reference, migrated.saved_versions[0].cells[0]["sql"])
         self.assertEqual(rebuild_calls, ["rebuild"])
 
+    def test_shared_notebook_source_reference_migration_rewrites_kostenbelege_loader_aliases(
+        self,
+    ) -> None:
+        from bit_data_workbench.models import NotebookVersionDefinition
+
+        _, notebook_cell_type, notebook_type, _, _, _ = import_shared_notebook_components()
+        legacy_alias = "s3_3_1_imports_a08e7385.kbpo_2019"
+        canonical_reference = (
+            's3."poc-tests-performance-evaluation-kostenbelege-3-1".'
+            '"generated/kostenbelege_3_1/parquet/kbpo_2019/*.parquet"'
+        )
+        notebook = notebook_type(
+            notebook_id="test-3-1-problem-solving",
+            title="Test 3.1 - Problem Solving",
+            summary="Legacy problem notebook",
+            cells=[
+                notebook_cell_type(
+                    cell_id="cell-1",
+                    sql=f"select * from {legacy_alias}",
+                )
+            ],
+            saved_versions=[
+                NotebookVersionDefinition(
+                    version_id="version-1",
+                    created_at="2026-06-10T00:00:00+00:00",
+                    title="Legacy",
+                    summary="Legacy",
+                    cells=[{"cellId": "cell-1", "sql": f"select * from {legacy_alias}"}],
+                )
+            ],
+        )
+        service, rebuild_calls, _ = build_shared_notebook_service([notebook])
+        service._catalogs = []
+
+        migrated_count = service._migrate_shared_notebook_source_references()
+
+        self.assertEqual(migrated_count, 1)
+        self.assertEqual(rebuild_calls, ["rebuild"])
+        migrated = service._shared_notebook_store.list_notebooks()[0]
+        self.assertIn(canonical_reference, migrated.cells[0].sql)
+        self.assertNotIn(legacy_alias, migrated.cells[0].sql)
+        self.assertIn(canonical_reference, migrated.saved_versions[0].cells[0]["sql"])
+        self.assertNotIn(legacy_alias, migrated.saved_versions[0].cells[0]["sql"])
+
     def test_upsert_shared_notebook_preserves_python_cell_language(self) -> None:
         service, _, _ = build_shared_notebook_service()
 
@@ -757,6 +833,8 @@ class SharedNotebookServiceTests(unittest.TestCase):
                     "cellId": "cell-python",
                     "language": "python",
                     "sql": "print('hello')",
+                    "processingHints": "Run in the Python kernel.",
+                    "resultExpectations": "Prints hello.",
                     "dataSources": ["pg_oltp"],
                 }
             ],
@@ -772,6 +850,8 @@ class SharedNotebookServiceTests(unittest.TestCase):
                             "cellId": "cell-python",
                             "language": "python",
                             "sql": "print('saved')",
+                            "processingHints": "Run saved Python state.",
+                            "resultExpectations": "Prints saved.",
                             "dataSources": ["pg_oltp"],
                         }
                     ],
@@ -783,7 +863,17 @@ class SharedNotebookServiceTests(unittest.TestCase):
         notebook = result["notebook"]
 
         self.assertEqual(notebook["cells"][0]["language"], "python")
+        self.assertEqual(notebook["cells"][0]["processingHints"], "Run in the Python kernel.")
+        self.assertEqual(notebook["cells"][0]["resultExpectations"], "Prints hello.")
         self.assertEqual(notebook["versions"][0]["cells"][0]["language"], "python")
+        self.assertEqual(
+            notebook["versions"][0]["cells"][0]["processingHints"],
+            "Run saved Python state.",
+        )
+        self.assertEqual(
+            notebook["versions"][0]["cells"][0]["resultExpectations"],
+            "Prints saved.",
+        )
 
     def test_shared_folder_visibility_does_not_change_existing_notebooks(self) -> None:
         _, notebook_cell_type, notebook_type, folder_type, _, _ = (

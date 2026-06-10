@@ -196,6 +196,8 @@ def notebook_cell_from_payload(payload: object) -> NotebookCellDefinition | None
         cell_id=cell_id,
         sql=str(payload.get("sql") or ""),
         language=normalize_notebook_cell_language(payload.get("language")),
+        processing_hints=str(payload.get("processingHints") or payload.get("processing_hints") or ""),
+        result_expectations=str(payload.get("resultExpectations") or payload.get("result_expectations") or ""),
         data_sources=[
             str(source_id).strip()
             for source_id in payload.get("dataSources", payload.get("data_sources", [])) or []

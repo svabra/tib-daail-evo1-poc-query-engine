@@ -212,6 +212,26 @@ export function createNotebookModel(helpers) {
     return {
       cellId,
       language: normalizeCellLanguage(cell.language ?? cell.cell_language, fallback.language ?? "sql"),
+      processingHints:
+        typeof cell.processingHints === "string"
+          ? cell.processingHints
+          : typeof cell.processing_hints === "string"
+            ? cell.processing_hints
+            : typeof fallback.processingHints === "string"
+              ? fallback.processingHints
+              : typeof fallback.processing_hints === "string"
+                ? fallback.processing_hints
+                : "",
+      resultExpectations:
+        typeof cell.resultExpectations === "string"
+          ? cell.resultExpectations
+          : typeof cell.result_expectations === "string"
+            ? cell.result_expectations
+            : typeof fallback.resultExpectations === "string"
+              ? fallback.resultExpectations
+              : typeof fallback.result_expectations === "string"
+                ? fallback.result_expectations
+                : "",
       dataSources: Array.isArray(cell.dataSources)
         ? normalizeDataSources(cell.dataSources)
         : Array.isArray(cell.data_sources)
@@ -360,6 +380,8 @@ export function createNotebookModel(helpers) {
       cells: (metadata.cells ?? []).map((cell) => ({
         cellId: cell.cellId,
         language: normalizeCellLanguage(cell.language, "sql"),
+        processingHints: cell.processingHints || "",
+        resultExpectations: cell.resultExpectations || "",
         dataSources: normalizeDataSources(cell.dataSources),
         queryOptions: normalizeCellQueryOptions(cell.queryOptions),
         stage: normalizeCellStage(cell.stage),

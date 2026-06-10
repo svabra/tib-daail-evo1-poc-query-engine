@@ -186,6 +186,14 @@
           </button>
           <button
             type="button"
+            class="workspace-action-menu-item"
+            data-share-notebook
+            title="Copy or email a notebook reference"
+          >
+            Share Notebook ...
+          </button>
+          <button
+            type="button"
             class="workspace-action-menu-item workspace-action-menu-item-danger{% if not active_notebook.can_delete %} is-action-disabled{% endif %}"
             data-delete-notebook
             {% if not active_notebook.can_delete %}disabled{% endif %}
@@ -654,6 +662,41 @@
               <span class="cell-stage-chip-row" data-cell-stage-predecessors></span>
               <span class="cell-stage-chip-row" data-cell-stage-successors></span>
             </div>
+          </div>
+
+          {% set processing_hints = cell.processing_hints or "" %}
+          {% set result_expectations = cell.result_expectations or "" %}
+          <div class="cell-descriptor-grid" data-cell-descriptors>
+            <label class="cell-descriptor-field">
+              <span>Cell processing hints</span>
+              {% if active_notebook.can_edit %}
+                <textarea
+                  class="cell-descriptor-input"
+                  rows="2"
+                  data-cell-descriptor="processingHints"
+                  placeholder="Describe processing hints for this cell."
+                >{{ processing_hints }}</textarea>
+              {% else %}
+                <div class="cell-descriptor-readonly" data-cell-descriptor-readonly="processingHints">
+                  {{ processing_hints or "No processing hints saved." }}
+                </div>
+              {% endif %}
+            </label>
+            <label class="cell-descriptor-field">
+              <span>Cell result expectations</span>
+              {% if active_notebook.can_edit %}
+                <textarea
+                  class="cell-descriptor-input"
+                  rows="2"
+                  data-cell-descriptor="resultExpectations"
+                  placeholder="Describe expected results for this cell."
+                >{{ result_expectations }}</textarea>
+              {% else %}
+                <div class="cell-descriptor-readonly" data-cell-descriptor-readonly="resultExpectations">
+                  {{ result_expectations or "No result expectations saved." }}
+                </div>
+              {% endif %}
+            </label>
           </div>
 
           <div

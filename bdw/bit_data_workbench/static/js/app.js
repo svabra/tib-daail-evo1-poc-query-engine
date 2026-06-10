@@ -3,6 +3,7 @@ import { sql, PostgreSQL } from "../vendor/lang-sql.bundle.mjs";
 import {
   ensureAboutDialog,
   ensureFeatureListDialog,
+  ensureNotebookShareDialog,
   ensureQueryExplainDialog,
   ensureResultDownloadDialog,
   ensureResultExportDialog,
@@ -1119,6 +1120,7 @@ const {
   moveCell,
   notebookMetadata,
   openCacheHydrationDialog,
+  openNotebookShareDialog,
   applyCellCacheHydrationToggle,
   queryOptionsForCellRoot,
   refreshCellCacheHydrationStatus,
@@ -1133,6 +1135,7 @@ const {
   setCellDataSources,
   setCellLanguage,
   setCellQueryOptions,
+  setCellDescriptor,
   setCellSql,
   setNotebookSummary,
   setNotebookTags,
@@ -4447,6 +4450,8 @@ function createNotebookLinkElement(notebookId, metadata) {
     (metadata.cells ?? []).map((cell) => ({
       cellId: cell.cellId,
       language: normalizeCellLanguage(cell.language),
+      processingHints: cell.processingHints || "",
+      resultExpectations: cell.resultExpectations || "",
       dataSources: normalizeDataSources(cell.dataSources),
       queryOptions: normalizeCellQueryOptions(cell.queryOptions),
       stage: normalizeCellStage(cell.stage),
@@ -4676,6 +4681,8 @@ function createNotebookVersionSnapshot(metadata) {
     cells: (metadata.cells ?? []).map((cell) => ({
       cellId: cell.cellId,
       language: normalizeCellLanguage(cell.language),
+      processingHints: cell.processingHints || "",
+      resultExpectations: cell.resultExpectations || "",
       dataSources: normalizeDataSources(cell.dataSources),
       queryOptions: normalizeCellQueryOptions(cell.queryOptions),
       stage: normalizeCellStage(cell.stage),
@@ -4706,6 +4713,8 @@ function sharedNotebookPayload(notebookId) {
       cellId: cell.cellId,
       language: normalizeCellLanguage(cell.language),
       sql: cell.sql,
+      processingHints: cell.processingHints || "",
+      resultExpectations: cell.resultExpectations || "",
       dataSources: normalizeDataSources(cell.dataSources),
       queryOptions: normalizeCellQueryOptions(cell.queryOptions),
       stage: normalizeCellStage(cell.stage),
@@ -4720,6 +4729,8 @@ function sharedNotebookPayload(notebookId) {
         cellId: cell.cellId,
         language: normalizeCellLanguage(cell.language),
         sql: cell.sql,
+        processingHints: cell.processingHints || "",
+        resultExpectations: cell.resultExpectations || "",
         dataSources: normalizeDataSources(cell.dataSources),
         queryOptions: normalizeCellQueryOptions(cell.queryOptions),
         stage: normalizeCellStage(cell.stage),
@@ -4772,6 +4783,8 @@ function writeNotebookDefaultsToMetaRoot(metaRoot, metadata) {
     (metadata.cells ?? []).map((cell) => ({
       cellId: cell.cellId,
       language: normalizeCellLanguage(cell.language),
+      processingHints: cell.processingHints || "",
+      resultExpectations: cell.resultExpectations || "",
       dataSources: normalizeDataSources(cell.dataSources),
       queryOptions: normalizeCellQueryOptions(cell.queryOptions),
       stage: normalizeCellStage(cell.stage),
@@ -4986,6 +4999,158 @@ async function shareNotebook(notebookId) {
   return payload;
 }
 
+function notebookAbsoluteReference(notebookId) {
+  const relativeUrl = notebookUrl(notebookId);
+  if (!relativeUrl) {
+    return "";
+  }
+  return new URL(relativeUrl, window.location.origin).href;
+}
+
+function notebookShareDialogElements(dialog) {
+  return {
+    copy: dialog.querySelector("[data-notebook-share-copy]"),
+    copyButton: dialog.querySelector("[data-notebook-share-copy-reference]"),
+    emailButton: dialog.querySelector("[data-notebook-share-email]"),
+    promoteButton: dialog.querySelector("[data-notebook-share-promote]"),
+    referenceInput: dialog.querySelector("[data-notebook-share-reference]"),
+    status: dialog.querySelector("[data-notebook-share-status]"),
+    title: dialog.querySelector("[data-notebook-share-title]"),
+  };
+}
+
+function setNotebookShareDialogStatus(dialog, message = "", tone = "neutral") {
+  const status = notebookShareDialogElements(dialog).status;
+  if (!status) {
+    return;
+  }
+  status.textContent = message;
+  status.dataset.tone = tone;
+}
+
+function renderNotebookShareDialog(dialog, notebookId) {
+  const metadata = notebookMetadata(notebookId);
+  const title = metadata.title || "Untitled Notebook";
+  const reference = notebookAbsoluteReference(notebookId);
+  const isLocalNotebook = isLocalNotebookId(notebookId);
+  const {
+    copy,
+    copyButton,
+    emailButton,
+    promoteButton,
+    referenceInput,
+    title: titleNode,
+  } = notebookShareDialogElements(dialog);
+
+  dialog.dataset.notebookId = notebookId;
+  if (titleNode) {
+    titleNode.textContent = "Share Notebook";
+  }
+  if (copy) {
+    copy.textContent = isLocalNotebook
+      ? `Share "${title}" to create a stable notebook reference.`
+      : `Use this reference to open "${title}" directly.`;
+  }
+  if (referenceInput) {
+    referenceInput.value = reference;
+    referenceInput.placeholder = isLocalNotebook
+      ? "Share this local notebook to create a stable reference."
+      : "";
+    referenceInput.disabled = !reference;
+  }
+  if (promoteButton) {
+    promoteButton.hidden = !isLocalNotebook;
+    promoteButton.disabled = false;
+  }
+  if (copyButton) {
+    copyButton.disabled = !reference;
+  }
+  if (emailButton) {
+    emailButton.disabled = !reference;
+  }
+  setNotebookShareDialogStatus(
+    dialog,
+    isLocalNotebook ? "This notebook is private to this browser until it is shared." : "",
+    "neutral"
+  );
+}
+
+function ensureNotebookShareDialogController(dialog) {
+  if (!dialog || dialog.dataset.notebookShareControllerReady === "true") {
+    return;
+  }
+  dialog.dataset.notebookShareControllerReady = "true";
+
+  dialog.addEventListener("click", async (event) => {
+    const copyButton = event.target.closest("[data-notebook-share-copy-reference]");
+    const emailButton = event.target.closest("[data-notebook-share-email]");
+    const promoteButton = event.target.closest("[data-notebook-share-promote]");
+    if (!copyButton && !emailButton && !promoteButton) {
+      return;
+    }
+    event.preventDefault();
+
+    const notebookId = dialog.dataset.notebookId || "";
+    const reference = notebookShareDialogElements(dialog).referenceInput?.value || "";
+    if (copyButton) {
+      try {
+        await writeTextToClipboard(reference, {
+          emptyMessage: "There is no notebook reference to copy yet.",
+        });
+        setNotebookShareDialogStatus(dialog, "Notebook reference copied.", "success");
+      } catch (error) {
+        setNotebookShareDialogStatus(
+          dialog,
+          error instanceof Error ? error.message : "The notebook reference could not be copied.",
+          "error"
+        );
+      }
+      return;
+    }
+
+    if (emailButton) {
+      if (!reference) {
+        setNotebookShareDialogStatus(dialog, "Share the notebook before sending an email draft.", "error");
+        return;
+      }
+      const metadata = notebookMetadata(notebookId);
+      const subject = encodeURIComponent(`Notebook reference: ${metadata.title || "Untitled Notebook"}`);
+      const body = encodeURIComponent(`${metadata.title || "Untitled Notebook"}\n\n${reference}`);
+      window.location.href = `mailto:?subject=${subject}&body=${body}`;
+      return;
+    }
+
+    if (!promoteButton || !notebookId) {
+      return;
+    }
+    promoteButton.disabled = true;
+    setNotebookShareDialogStatus(dialog, "Sharing notebook and creating reference...", "neutral");
+    try {
+      const payload = await shareNotebook(notebookId);
+      const sharedNotebookId = payload?.notebook?.notebookId || currentWorkspaceNotebookId();
+      if (sharedNotebookId) {
+        renderNotebookShareDialog(dialog, sharedNotebookId);
+        setNotebookShareDialogStatus(dialog, "Notebook is shared and the reference is ready.", "success");
+      }
+    } catch (error) {
+      promoteButton.disabled = false;
+      console.error("Failed to share notebook from share dialog.", error);
+      setNotebookShareDialogStatus(dialog, "The notebook could not be shared.", "error");
+    }
+  });
+}
+
+async function openNotebookShareDialog(notebookId) {
+  const dialog = ensureNotebookShareDialog();
+  ensureNotebookShareDialogController(dialog);
+  renderNotebookShareDialog(dialog, notebookId);
+  if (dialog.showModal) {
+    dialog.showModal();
+  } else {
+    dialog.setAttribute("open", "");
+  }
+}
+
 async function unshareNotebook(notebookId) {
   const metadata = notebookMetadata(notebookId);
   const folderPath = notebookTreePathForId(notebookId);
@@ -5189,9 +5354,11 @@ function updateSidebarNotebookLink(link, metadata) {
   link.dataset.canDelete = metadata.canDelete ? "true" : "false";
   link.dataset.defaultNotebookCells = JSON.stringify(
     (metadata.cells ?? []).map((cell) => ({
-      cellId: cell.cellId,
-      language: normalizeCellLanguage(cell.language),
-      dataSources: normalizeDataSources(cell.dataSources),
+        cellId: cell.cellId,
+        language: normalizeCellLanguage(cell.language),
+        processingHints: cell.processingHints || "",
+        resultExpectations: cell.resultExpectations || "",
+        dataSources: normalizeDataSources(cell.dataSources),
       queryOptions: normalizeCellQueryOptions(cell.queryOptions),
       stage: normalizeCellStage(cell.stage),
       sql: cell.sql,
@@ -5323,6 +5490,8 @@ function createEmptyCellState(initial = {}) {
     {
       cellId: initial.cellId ?? createCellId(),
       language: normalizeCellLanguage(initial.language),
+      processingHints: initial.processingHints ?? "",
+      resultExpectations: initial.resultExpectations ?? "",
       dataSources: initial.dataSources ?? [],
       queryOptions: initial.queryOptions ?? {},
       stage: initial.stage ?? {},
@@ -5331,6 +5500,8 @@ function createEmptyCellState(initial = {}) {
     {
       cellId: initial.cellId ?? createCellId(),
       language: normalizeCellLanguage(initial.language),
+      processingHints: initial.processingHints ?? "",
+      resultExpectations: initial.resultExpectations ?? "",
       dataSources: initial.dataSources ?? [],
       queryOptions: initial.queryOptions ?? {},
       stage: initial.stage ?? {},
@@ -5498,6 +5669,30 @@ function setCellSql(notebookId, cellId, sqlText) {
           ? {
               ...cell,
               sql: sqlText,
+            }
+          : cell
+      ),
+    };
+  });
+  recordNotebookActivity(notebookId, "edited");
+  scheduleSharedNotebookSync(notebookId);
+}
+
+function setCellDescriptor(notebookId, cellId, descriptorName, value) {
+  const normalizedName = String(descriptorName || "").trim();
+  if (!["processingHints", "resultExpectations"].includes(normalizedName)) {
+    return;
+  }
+
+  updateStoredNotebookState(notebookId, (currentState) => {
+    const baseCells = normalizeNotebookCells(currentState.cells ?? notebookMetadata(notebookId).cells);
+    return {
+      ...currentState,
+      cells: baseCells.map((cell) =>
+        cell.cellId === cellId
+          ? {
+              ...cell,
+              [normalizedName]: String(value ?? ""),
             }
           : cell
       ),
@@ -6483,6 +6678,30 @@ function applyWorkspaceCellState(workspaceRoot, cell, index, editable, totalCell
       ?.classList.toggle("is-selected", optionInput.checked);
   });
 
+  const descriptorValues = {
+    processingHints: String(cell.processingHints || ""),
+    resultExpectations: String(cell.resultExpectations || ""),
+  };
+  cellRoot.querySelectorAll("[data-cell-descriptor]").forEach((descriptorInput) => {
+    const descriptorName = descriptorInput.dataset.cellDescriptor;
+    if (!Object.prototype.hasOwnProperty.call(descriptorValues, descriptorName)) {
+      return;
+    }
+    descriptorInput.disabled = !editable;
+    setInputValue(descriptorInput, descriptorValues[descriptorName]);
+  });
+  cellRoot.querySelectorAll("[data-cell-descriptor-readonly]").forEach((descriptorNode) => {
+    const descriptorName = descriptorNode.dataset.cellDescriptorReadonly;
+    if (!Object.prototype.hasOwnProperty.call(descriptorValues, descriptorName)) {
+      return;
+    }
+    descriptorNode.textContent =
+      descriptorValues[descriptorName] ||
+      (descriptorName === "processingHints"
+        ? "No processing hints saved."
+        : "No result expectations saved.");
+  });
+
   if (!editable) {
     cellRoot.querySelector("[data-cell-source-picker]")?.removeAttribute("open");
   }
@@ -6541,6 +6760,8 @@ function applyWorkspaceMetadata(metaRoot, metadata) {
     (metadata.cells ?? []).map((cell) => ({
       cellId: cell.cellId,
       language: normalizeCellLanguage(cell.language),
+      processingHints: cell.processingHints || "",
+      resultExpectations: cell.resultExpectations || "",
       dataSources: normalizeDataSources(cell.dataSources),
       queryOptions: normalizeCellQueryOptions(cell.queryOptions),
       stage: normalizeCellStage(cell.stage),
@@ -6622,6 +6843,11 @@ function applyWorkspaceMetadata(metaRoot, metadata) {
     allowed: true,
     enabledTitle: "Create a copy of this notebook",
     disabledTitle: "Create a copy of this notebook",
+  });
+  syncWorkspaceActionButton(workspaceRoot?.querySelector("[data-share-notebook]"), {
+    allowed: true,
+    enabledTitle: "Copy or email a notebook reference",
+    disabledTitle: "Copy or email a notebook reference",
   });
   syncWorkspaceActionButton(metaRoot.querySelector("[data-save-version]"), {
     allowed: metadata.canEdit,
@@ -6752,6 +6978,8 @@ function copyNotebook(notebookId) {
     cells: sourceMetadata.cells.map((cell) =>
       createEmptyCellState({
         dataSources: [...normalizeDataSources(cell.dataSources)],
+        processingHints: cell.processingHints || "",
+        resultExpectations: cell.resultExpectations || "",
         queryOptions: normalizeCellQueryOptions(cell.queryOptions),
         stage: normalizeCellStage(cell.stage),
         sql: cell.sql,

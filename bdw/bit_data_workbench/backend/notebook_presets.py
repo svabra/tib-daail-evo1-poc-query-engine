@@ -19,6 +19,13 @@ MWA_PARQUET_PIPELINE_TREE_PATH = DATA_PIPELINES_TREE_PATH
 KOSTENBELEGE_3_1_PIPELINE_NOTEBOOK_ID = "kostenbelege-3-1-s3-parquet-pipeline"
 KOSTENBELEGE_3_1_PIPELINE_CREATED_AT = "2026-06-07T00:00:00+00:00"
 KOSTENBELEGE_3_1_PIPELINE_TREE_PATH = DATA_PIPELINES_TREE_PATH
+KOSTENBELEGE_3_1_PROBLEM_NOTEBOOK_ID = "test-3-1-problem-solving"
+KOSTENBELEGE_3_1_PROBLEM_CREATED_AT = "2026-06-10T00:00:00+00:00"
+KOSTENBELEGE_3_1_PROBLEM_TREE_PATH = (
+    "PoC Tests",
+    "Performance Evaluation",
+    "Kostenbelege (3.1)",
+)
 
 KOSTENBELEGE_3_1_SOURCE_COLUMNS = {
     "KBKP": (
@@ -1087,6 +1094,153 @@ FROM UNIO;
     return _quote_kostenbelege_3_1_source_columns(sql)
 
 
+def _kostenbelege_3_1_problem_loader_status_sql() -> str:
+    return (
+        "SELECT 'Run the Kostenbelege Multi-Source Loader (3.1) from the Loader "
+        "Workbench first. This problem-solving seed switches to five S3 Parquet "
+        "investigation cells after KBKP, KBPO, KBHP, and DIM_KALENDER are "
+        "discovered.' AS status;"
+    )
+
+
+def _build_kostenbelege_3_1_problem_readiness_sql(
+    *,
+    kbkp_relation: str,
+    kbpo_relation: str,
+    kbhp_relation: str,
+    kalender_relation: str,
+) -> str:
+    sql = f"""
+SELECT
+      'KBKP' AS SourceName
+    , COUNT(*) AS RowCount
+    , MIN(KBKP.KBKP_TechBeginnDt) AS MinTechnicalDate
+    , MAX(KBKP.KBKP_TechEndeDt) AS MaxTechnicalDate
+FROM {kbkp_relation} KBKP
+UNION ALL
+SELECT
+      'KBPO' AS SourceName
+    , COUNT(*) AS RowCount
+    , MIN(KBPO.KBPO_TechBeginnDt) AS MinTechnicalDate
+    , MAX(KBPO.KBPO_TechEndeDt) AS MaxTechnicalDate
+FROM {kbpo_relation} KBPO
+UNION ALL
+SELECT
+      'KBHP' AS SourceName
+    , COUNT(*) AS RowCount
+    , MIN(KBHP.KBHP_TechBeginnDt) AS MinTechnicalDate
+    , MAX(KBHP.KBHP_TechEndeDt) AS MaxTechnicalDate
+FROM {kbhp_relation} KBHP
+UNION ALL
+SELECT
+      'DIM_KALENDER' AS SourceName
+    , COUNT(*) AS RowCount
+    , MIN(KALE.Datum) AS MinTechnicalDate
+    , MAX(KALE.Datum) AS MaxTechnicalDate
+FROM {kalender_relation} KALE
+ORDER BY SourceName;
+""".strip()
+    return _quote_kostenbelege_3_1_source_columns(sql)
+
+
+def _build_kostenbelege_3_1_problem_calendar_sql(
+    *,
+    kalender_relation: str,
+) -> str:
+    sql = f"""
+SELECT
+      COUNT(*) AS CalendarRows
+    , MIN(KALE.Datum) AS FirstCalendarDate
+    , MAX(KALE.Datum) AS LastCalendarDate
+FROM {kalender_relation} KALE
+WHERE KALE.Datum BETWEEN DATE '2018-07-01' AND CURRENT_DATE;
+""".strip()
+    return _quote_kostenbelege_3_1_source_columns(sql)
+
+
+def _build_kostenbelege_3_1_original_semantics_sql(
+    *,
+    kbkp_relation: str,
+    kbpo_relation: str,
+    kbhp_relation: str,
+    kalender_relation: str,
+) -> str:
+    sql = _build_kostenbelege_3_1_sql(
+        kbkp_relation=kbkp_relation,
+        kbpo_relation=kbpo_relation,
+        kbhp_relation=kbhp_relation,
+        kalender_relation=kalender_relation,
+        quote_source_columns=True,
+    )
+    sql = sql.replace(
+        'AND KALE."Datum" = CURRENT_DATE',
+        'AND KALE."Datum" BETWEEN DATE \'2018-07-01\' AND CURRENT_DATE',
+    )
+    sql = sql.replace(
+        'KBKP."KBKP_Belegnummer" = KBPO."KBKP_AusgleichBelegnummer"',
+        'KBKP."KBKP_Belegnummer" = KBPO.KBKP_Belegnummer',
+        1,
+    )
+    return sql
+
+
+def _build_kostenbelege_3_1_original_explain_sql(
+    *,
+    kbkp_relation: str,
+    kbpo_relation: str,
+    kbhp_relation: str,
+    kalender_relation: str,
+) -> str:
+    full_sql = _build_kostenbelege_3_1_original_semantics_sql(
+        kbkp_relation=kbkp_relation,
+        kbpo_relation=kbpo_relation,
+        kbhp_relation=kbhp_relation,
+        kalender_relation=kalender_relation,
+    ).rstrip(";")
+    return f"EXPLAIN {full_sql};"
+
+
+def _build_kostenbelege_3_1_original_branch_counts_sql(
+    *,
+    kbkp_relation: str,
+    kbpo_relation: str,
+    kbhp_relation: str,
+    kalender_relation: str,
+) -> str:
+    del kbhp_relation
+    sql = f"""
+WITH branch_counts AS (
+    SELECT
+          CAST('Originalposition' AS VARCHAR(20)) AS PositionsArt
+        , COUNT(*) AS RowCount
+    FROM {kbkp_relation} KBKP
+    INNER JOIN {kalender_relation} KALE
+        ON  KALE.Datum BETWEEN KBKP.KBKP_TechBeginnDt AND KBKP.KBKP_TechEndeDt
+        AND KALE.Datum BETWEEN DATE '2018-07-01' AND CURRENT_DATE
+    INNER JOIN {kbpo_relation} KBPO
+        ON  KBKP.KBKP_Belegnummer = KBPO.KBKP_Belegnummer
+        AND KALE.Datum BETWEEN KBPO.KBPO_TechBeginnDt AND KBPO.KBPO_TechEndeDt
+    UNION ALL
+    SELECT
+          CAST('Ausgleichsposition' AS VARCHAR(20)) AS PositionsArt
+        , COUNT(*) AS RowCount
+    FROM {kbkp_relation} KBKP
+    INNER JOIN {kalender_relation} KALE
+        ON  KALE.Datum BETWEEN KBKP.KBKP_TechBeginnDt AND KBKP.KBKP_TechEndeDt
+        AND KALE.Datum BETWEEN DATE '2018-07-01' AND CURRENT_DATE
+    INNER JOIN {kbpo_relation} KBPO
+        ON  KBKP.KBKP_Belegnummer = KBPO.KBKP_AusgleichBelegnummer
+        AND KALE.Datum BETWEEN KBPO.KBPO_TechBeginnDt AND KBPO.KBPO_TechEndeDt
+)
+SELECT
+      PositionsArt
+    , RowCount
+FROM branch_counts
+ORDER BY PositionsArt;
+""".strip()
+    return _quote_kostenbelege_3_1_source_columns(sql)
+
+
 def _build_kostenbelege_3_1_optimized_sql(
     *,
     kbkp_relation: str,
@@ -1856,6 +2010,151 @@ def build_kostenbelege_3_1_s3_parquet_pipeline_notebook(
         can_delete=True,
         shared=True,
         created_at=KOSTENBELEGE_3_1_PIPELINE_CREATED_AT,
+    )
+
+
+def build_kostenbelege_3_1_problem_solving_notebook(
+    *,
+    kostenbelege_3_1_s3_relations: dict[str, str | None],
+) -> NotebookDefinition:
+    kbkp_relation = kostenbelege_3_1_s3_relations.get("kbkp_2019") or ""
+    kbpo_relation = kostenbelege_3_1_s3_relations.get("kbpo_2019") or ""
+    kbhp_relation = kostenbelege_3_1_s3_relations.get("kbhp_2019") or ""
+    kalender_relation = kostenbelege_3_1_s3_relations.get("dim_kalender") or ""
+
+    if kbkp_relation and kbpo_relation and kbhp_relation and kalender_relation:
+        s3_query_options = {
+            "duckdb": {"parquetHivePartitioning": "auto"},
+            "validation": {"sourceExistence": "off"},
+        }
+        cells = [
+            NotebookCellDefinition(
+                cell_id="test-3-1-problem-solving-cell-1",
+                data_sources=["workspace.s3"],
+                query_options=s3_query_options,
+                processing_hints=(
+                    "Confirm KBKP, KBPO, KBHP, and DIM_KALENDER S3 Parquet views "
+                    "or generated read_parquet relations exist before running the "
+                    "original query probes."
+                ),
+                result_expectations=(
+                    "One row per source with row counts and min/max technical "
+                    "dates, or a surfaced DuckDB relation/read failure."
+                ),
+                sql=_build_kostenbelege_3_1_problem_readiness_sql(
+                    kbkp_relation=kbkp_relation,
+                    kbpo_relation=kbpo_relation,
+                    kbhp_relation=kbhp_relation,
+                    kalender_relation=kalender_relation,
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="test-3-1-problem-solving-cell-2",
+                data_sources=["workspace.s3"],
+                query_options=s3_query_options,
+                processing_hints=(
+                    "Inspect how many generated calendar dates participate under "
+                    "the original date window."
+                ),
+                result_expectations=(
+                    "Calendar row count with the first and last DIM_KALENDER dates "
+                    "between DATE '2018-07-01' and CURRENT_DATE."
+                ),
+                sql=_build_kostenbelege_3_1_problem_calendar_sql(
+                    kalender_relation=kalender_relation,
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="test-3-1-problem-solving-cell-3",
+                data_sources=["workspace.s3"],
+                query_options=s3_query_options,
+                processing_hints=(
+                    "Inspect DuckDB binding and planning for the original-semantics "
+                    "query without returning the full result."
+                ),
+                result_expectations=(
+                    "EXPLAIN output showing scans, joins, union, and projection, "
+                    "or the full DuckDB bind/planning error."
+                ),
+                sql=_build_kostenbelege_3_1_original_explain_sql(
+                    kbkp_relation=kbkp_relation,
+                    kbpo_relation=kbpo_relation,
+                    kbhp_relation=kbhp_relation,
+                    kalender_relation=kalender_relation,
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="test-3-1-problem-solving-cell-4",
+                data_sources=["workspace.s3"],
+                query_options=s3_query_options,
+                processing_hints=(
+                    "Run the original two-branch CTE shape and count rows by "
+                    "PositionsArt before inspecting the full business projection."
+                ),
+                result_expectations=(
+                    "Counts for Originalposition and Ausgleichsposition, or a "
+                    "surfaced DuckDB failure if the original query cannot bind or run."
+                ),
+                sql=_build_kostenbelege_3_1_original_branch_counts_sql(
+                    kbkp_relation=kbkp_relation,
+                    kbpo_relation=kbpo_relation,
+                    kbhp_relation=kbhp_relation,
+                    kalender_relation=kalender_relation,
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="test-3-1-problem-solving-cell-5",
+                data_sources=["workspace.s3"],
+                query_options=s3_query_options,
+                processing_hints=(
+                    "Run the complete original SQL shape against the generated S3 "
+                    "Parquet relations."
+                ),
+                result_expectations=(
+                    "Final business projection rows with UI truncation if large, "
+                    "or the full DuckDB error visible in the cell result."
+                ),
+                sql=_build_kostenbelege_3_1_original_semantics_sql(
+                    kbkp_relation=kbkp_relation,
+                    kbpo_relation=kbpo_relation,
+                    kbhp_relation=kbhp_relation,
+                    kalender_relation=kalender_relation,
+                ),
+            ),
+        ]
+    else:
+        cells = [
+            NotebookCellDefinition(
+                cell_id="test-3-1-problem-solving-loader-status",
+                data_sources=[],
+                processing_hints=(
+                    "Run the Kostenbelege Multi-Source Loader (3.1) first so this "
+                    "notebook can bind generated KBKP, KBPO, KBHP, and DIM_KALENDER "
+                    "S3 Parquet relations."
+                ),
+                result_expectations=(
+                    "A status row explaining that the loader output has not been "
+                    "discovered yet."
+                ),
+                sql=_kostenbelege_3_1_problem_loader_status_sql(),
+            )
+        ]
+
+    return NotebookDefinition(
+        notebook_id=KOSTENBELEGE_3_1_PROBLEM_NOTEBOOK_ID,
+        title="Test 3.1 - Problem Solving",
+        summary=(
+            "Editable investigation notebook for the original Kostenbelege 3.1 SQL "
+            "semantics against generated S3 Parquet loader output."
+        ),
+        cells=cells,
+        tags=["performance", "kostenbelege", "3.1", "s3", "parquet", "problem-solving"],
+        tree_path=KOSTENBELEGE_3_1_PROBLEM_TREE_PATH,
+        linked_generator_id="kostenbelege_3_1_multi_source_loader",
+        can_edit=True,
+        can_delete=True,
+        shared=True,
+        created_at=KOSTENBELEGE_3_1_PROBLEM_CREATED_AT,
     )
 
 

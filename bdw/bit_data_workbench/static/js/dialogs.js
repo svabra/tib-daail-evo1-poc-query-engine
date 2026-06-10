@@ -40,6 +40,10 @@ export function queryExplainDialog() {
   return document.querySelector("[data-query-explain-dialog]");
 }
 
+export function notebookShareDialog() {
+  return document.querySelector("[data-notebook-share-dialog]");
+}
+
 function appendModalDialog(markup) {
   document.body.insertAdjacentHTML("beforeend", markup.trim());
 }
@@ -136,6 +140,48 @@ export function ensureQueryExplainDialog() {
   `);
 
   dialog = queryExplainDialog();
+  return dialog;
+}
+
+export function ensureNotebookShareDialog() {
+  let dialog = notebookShareDialog();
+  if (dialog) {
+    return dialog;
+  }
+
+  appendModalDialog(`
+    <dialog class="modal-dialog" data-notebook-share-dialog>
+      <form method="dialog" class="modal-card notebook-share-dialog-card" data-notebook-share-form>
+        <div>
+          <h2 class="modal-title" data-notebook-share-title>Share Notebook</h2>
+          <p class="modal-copy" data-notebook-share-copy>
+            Copy or email a stable notebook reference.
+          </p>
+        </div>
+        <label class="modal-field notebook-share-reference-field">
+          <span class="modal-field-label">Notebook reference</span>
+          <input class="modal-input notebook-share-reference-input" type="text" readonly data-notebook-share-reference>
+        </label>
+        <p class="modal-status" data-notebook-share-status></p>
+        <menu class="modal-actions notebook-share-actions">
+          <button class="modal-button modal-button-secondary" type="button" data-notebook-share-promote hidden>
+            Share and get link
+          </button>
+          <button class="modal-button modal-button-secondary" type="button" data-notebook-share-copy-reference>
+            Copy reference
+          </button>
+          <button class="modal-button modal-button-secondary" type="button" data-notebook-share-email>
+            Share via email
+          </button>
+          <button class="modal-button" type="submit" value="confirm" data-notebook-share-close>
+            Close
+          </button>
+        </menu>
+      </form>
+    </dialog>
+  `);
+
+  dialog = notebookShareDialog();
   return dialog;
 }
 

@@ -1,9 +1,37 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.2. Keep entries concise and
+# Derived from git history through version 0.10.3. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.3",
+        "releasedAt": "2026-06-10T22:44:41+02:00",
+        "features": [
+            (
+                "Kostenbelege 3.1 now includes a shared Test 3.1 - Problem "
+                "Solving notebook linked from the loader card, with editable "
+                "cell processing hints and result expectations for each SQL "
+                "investigation step."
+            ),
+            (
+                "Notebook SQL now keeps canonical virtual S3 paths visible "
+                "while DuckDB execution rewrites them to generated S3 Parquet "
+                "read_parquet scans, including KBPO compatibility binding for "
+                "the original Kostenbelege query."
+            ),
+            (
+                "Notebook actions now include Share Notebook, with copyable "
+                "references, email drafts, and share-and-link handling for "
+                "private local notebooks."
+            ),
+            (
+                "Query results now surface worker warnings and clearer "
+                "unexpected worker-exit diagnostics alongside existing SQL "
+                "errors."
+            ),
+        ],
+    },
     {
         "version": "0.10.2",
         "releasedAt": "2026-06-09T22:33:38+02:00",

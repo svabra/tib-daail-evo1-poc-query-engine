@@ -43,6 +43,18 @@ from bit_data_workbench.backend.service import WorkbenchService  # noqa: E402
 from bit_data_workbench.models import SourceCatalog, SourceObject, SourceSchema  # noqa: E402
 
 
+KOSTENBELEGE_3_1_GENERATED_BUCKET = (
+    "poc-tests-performance-evaluation-kostenbelege-3-1"
+)
+
+
+def kostenbelege_3_1_s3_reference(table_name: str) -> str:
+    return s3_source_reference(
+        bucket=KOSTENBELEGE_3_1_GENERATED_BUCKET,
+        key=f"generated/kostenbelege_3_1/parquet/{table_name}/*.parquet",
+    )
+
+
 def sample_catalogs() -> list[SourceCatalog]:
     return [
         SourceCatalog(
@@ -309,6 +321,93 @@ class QuerySourceValidationTests(unittest.TestCase):
 
         self.assertEqual(payload["executionSql"], "select * from missing.schema_table")
         self.assertEqual(payload["queryOptions"]["validation"]["sourceExistence"], "off")
+
+    def test_prepare_query_sql_rewrites_relation_only_loader_schema_alias(self) -> None:
+        bucket = "poc-tests-performance-evaluation-kostenbelege-3-1"
+        query_sql = (
+            f"read_parquet('s3://{bucket}/generated/kostenbelege_3_1/"
+            "parquet/kbkp_2019/*.parquet', hive_partitioning=false)"
+        )
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = [
+            SourceCatalog(
+                name="workspace",
+                connection_source_id="workspace.s3",
+                schemas=[
+                    SourceSchema(
+                        name="s3_3_1_imports_a08e7385",
+                        objects=[
+                            SourceObject(
+                                name="kbkp_2019",
+                                kind="view",
+                                relation="workspace.s3_3_1_imports_a08e7385.kbkp_2019",
+                            )
+                        ],
+                    )
+                ],
+            )
+        ]
+
+        payload = service.prepare_query_sql(
+            sql="SELECT COUNT(*) FROM s3_3_1_imports_a08e7385.kbkp_2019 KBKP",
+            notebook_id="test-3-1-problem-solving",
+            data_sources=["workspace.s3"],
+            query_options={"validation": {"sourceExistence": "off"}},
+        )
+
+        self.assertEqual(
+            payload["executionSql"],
+            f"SELECT COUNT(*) FROM {query_sql} KBKP",
+        )
+        self.assertNotIn("s3_3_1_imports_a08e7385.kbkp_2019", payload["executionSql"])
+
+    def test_prepare_query_sql_adapts_kbpo_loader_alias_for_original_query(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        kbpo_reference = kostenbelege_3_1_s3_reference("kbpo_2019")
+        service._catalogs = [
+            SourceCatalog(
+                name="workspace",
+                connection_source_id="workspace.s3",
+                schemas=[
+                    SourceSchema(
+                        name="poc_tests_performance_evaluation_kostenbelege_3_1",
+                        objects=[
+                            SourceObject(
+                                name="kbpo_2019_parquet",
+                                kind="view",
+                                relation="poc_tests_performance_evaluation_kostenbelege_3_1.kbpo_2019_parquet",
+                                query_reference=kbpo_reference,
+                                query_sql=(
+                                    "read_parquet('s3://poc-tests-performance-evaluation-"
+                                    "kostenbelege-3-1/generated/kostenbelege_3_1/"
+                                    "parquet/kbpo_2019/*.parquet')"
+                                ),
+                            )
+                        ],
+                    )
+                ],
+            )
+        ]
+
+        payload = service.prepare_query_sql(
+            sql=(
+                "SELECT COUNT(*) "
+                f"FROM {kbpo_reference} KBPO "
+                "WHERE KBPO.KBKP_Belegnummer IS NOT NULL"
+            ),
+            notebook_id="test-3-1-problem-solving",
+            data_sources=["workspace.s3"],
+            query_options={"validation": {"sourceExistence": "off"}},
+        )
+
+        self.assertIn(
+            '"KBKP_AusgleichBelegnummer" AS "KBKP_Belegnummer"',
+            payload["executionSql"],
+        )
+        self.assertIn("read_parquet('s3://poc-tests-performance-evaluation-kostenbelege-3-1", payload["executionSql"])
+        self.assertNotIn(kbpo_reference, payload["executionSql"])
 
     def test_prepare_query_sql_returns_postgres_source_object_for_navigation(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)

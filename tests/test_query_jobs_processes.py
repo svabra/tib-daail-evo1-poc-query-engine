@@ -21,6 +21,7 @@ if str(BDW_ROOT) not in sys.path:
 
 from bit_data_workbench.backend import query_jobs as query_jobs_module  # noqa: E402
 from bit_data_workbench.backend.query_jobs import (  # noqa: E402
+    _bootstrap_duckdb_source_views,
     _is_direct_file_relation,
     DUCKDB_EXECUTION_PATH_SHARED_FILE_READ,
     QUERY_EXECUTION_DUCKDB_READ,
@@ -144,6 +145,36 @@ class QueryJobClassifierTests(TestCase):
             _is_direct_file_relation("s3.test")
         )
 
+    def test_source_view_bootstrap_skips_direct_s3_file_references(self) -> None:
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.executed_sql: list[str] = []
+
+            def execute(self, sql: str):
+                self.executed_sql.append(sql)
+                return self
+
+        connection = FakeConnection()
+
+        _bootstrap_duckdb_source_views(
+            connection,
+            [
+                {
+                    "relation": (
+                        's3."poc-tests-performance-evaluation-kostenbelege-3-1".'
+                        '"generated/kostenbelege_3_1/parquet/kbpo_2019/*.parquet"'
+                    ),
+                    "query_sql": (
+                        "(SELECT *, "
+                        '"KBKP_AusgleichBelegnummer" AS "KBKP_Belegnummer" '
+                        "FROM read_parquet('s3://bucket/key/*.parquet'))"
+                    ),
+                }
+            ],
+        )
+
+        self.assertEqual(connection.executed_sql, [])
+
 
 class QueryJobPayloadTests(TestCase):
     def test_payload_includes_process_metrics_and_cancellation_fields(self) -> None:
@@ -196,6 +227,7 @@ class QueryJobPayloadTests(TestCase):
                     duckdb_spill_disk_free_bytes=10 * 1024**3,
                 )
             ],
+            warnings=["DuckDB reported a non-fatal warning."],
             cancellation_phase="interrupting",
             cancellation_requested_at="2026-05-13T00:00:02+00:00",
             worker_exit_code=-15,
@@ -234,6 +266,7 @@ class QueryJobPayloadTests(TestCase):
         self.assertEqual(payload["duckdbSpillDiskFreeBytes"], 10 * 1024**3)
         self.assertEqual(payload["resourceSamples"][0]["elapsedMs"], 2000)
         self.assertEqual(payload["resourceSamples"][0]["cpuCapacityPercent"], 6.25)
+        self.assertEqual(payload["warnings"], ["DuckDB reported a non-fatal warning."])
         self.assertEqual(payload["resourceSamples"][0]["processThreadCount"], 12)
         self.assertEqual(payload["resourceSamples"][0]["duckdbThreadLimit"], 8)
         self.assertEqual(payload["resourceSamples"][0]["duckdbSpillBytes"], 4096)
@@ -337,6 +370,73 @@ class ProcessQueryJobManagerTests(TestCase):
     def tearDown(self) -> None:
         self.manager.shutdown()
         self.temp_dir.cleanup()
+
+    def test_worker_payload_warnings_are_normalized(self) -> None:
+        snapshot = QueryJobDefinition(
+            job_id="query-warning-normalization",
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-1",
+            sql="select 1",
+            status="running",
+            started_at=utc_now_iso(),
+            updated_at=utc_now_iso(),
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+        )
+        record = QueryJobRecord(
+            snapshot=snapshot,
+            sort_index=1,
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+            execution_sql="select 1",
+        )
+        with self.manager._condition:
+            self.manager._jobs[snapshot.job_id] = record
+
+        self.manager._patch_job(
+            snapshot.job_id,
+            warnings=[" first warning ", "", None, "second warning"],
+        )
+
+        updated = self.manager.snapshot(snapshot.job_id)
+        self.assertEqual(updated.warnings, ["first warning", "second warning"])
+        self.assertEqual(updated.payload["warnings"], ["first warning", "second warning"])
+
+    def test_unexpected_worker_exit_reports_last_phase_progress_and_code(self) -> None:
+        snapshot = QueryJobDefinition(
+            job_id="query-worker-exit",
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-1",
+            sql="select 1",
+            status="running",
+            started_at=utc_now_iso(),
+            updated_at=utc_now_iso(),
+            progress=0.37,
+            progress_label="Scanning S3 Parquet",
+            message="DuckDB is scanning KBPO.",
+            cancellation_phase="interrupt_requested",
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+        )
+        record = QueryJobRecord(
+            snapshot=snapshot,
+            sort_index=1,
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+            execution_sql="select 1",
+        )
+        with self.manager._condition:
+            self.manager._jobs[snapshot.job_id] = record
+
+        with patch.object(query_jobs_module.logger, "log"):
+            self.manager._finalize_after_process_exit(snapshot.job_id, 7)
+
+        failed = self.manager.snapshot(snapshot.job_id)
+        self.assertEqual(failed.status, "failed")
+        self.assertEqual(failed.worker_exit_code, 7)
+        self.assertIn("Query worker exited unexpectedly with code 7.", failed.error)
+        self.assertIn("Last phase: Scanning S3 Parquet.", failed.error)
+        self.assertIn("Last message: DuckDB is scanning KBPO.", failed.error)
+        self.assertIn("Last DuckDB progress: 37.0%.", failed.error)
+        self.assertIn("Cancellation phase: interrupt_requested.", failed.error)
 
     def _create_mwa_parquet_join_fixture(self) -> tuple[Path, Path]:
         entities_directory = (

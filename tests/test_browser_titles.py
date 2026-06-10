@@ -34,6 +34,8 @@ class FakeWorkbenchService:
                 NotebookCellDefinition(
                     cell_id="cell-1",
                     sql="SELECT 1;",
+                    processing_hints="Inspect the smoke query.",
+                    result_expectations="Returns one row.",
                 )
             ],
         )
@@ -115,6 +117,14 @@ class BrowserTitleTests(unittest.TestCase):
         self.assertIn("data-expand-editor", body)
         self.assertIn('aria-label="Expand SQL editor"', body)
         self.assertIn('aria-pressed="false"', body)
+        self.assertIn("Cell processing hints", body)
+        self.assertIn("Cell result expectations", body)
+        self.assertIn('data-cell-descriptor="processingHints"', body)
+        self.assertIn('data-cell-descriptor="resultExpectations"', body)
+        self.assertIn("Inspect the smoke query.", body)
+        self.assertIn("Returns one row.", body)
+        self.assertIn("data-share-notebook", body)
+        self.assertIn("Share Notebook ...", body)
 
 
 if __name__ == "__main__":

@@ -43,6 +43,9 @@ export function normalizeQueryJob(job) {
     ...job,
     columns: Array.isArray(job.columns) ? job.columns : [],
     rows: Array.isArray(job.rows) ? job.rows : [],
+    warnings: Array.isArray(job.warnings)
+      ? job.warnings.map((warning) => String(warning ?? "").trim()).filter(Boolean)
+      : [],
     dataSources: Array.isArray(job.dataSources) ? job.dataSources : [],
     sourceTypes: Array.isArray(job.sourceTypes) ? job.sourceTypes : [],
     touchedRelations: Array.isArray(job.touchedRelations)

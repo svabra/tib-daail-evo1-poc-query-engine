@@ -31,6 +31,43 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn('classList.contains("is-editor-expanded")', autosize_source)
         self.assertIn(".editor-expand-button", css_source)
 
+    def test_cell_descriptors_share_action_and_warning_panel_have_wiring(self) -> None:
+        markup_source = (
+            STATIC_ROOT / "js" / "notebook-workspace-markup.js"
+        ).read_text(encoding="utf-8")
+        controller_source = (
+            STATIC_ROOT / "js" / "notebook-workspace-controller.js"
+        ).read_text(encoding="utf-8")
+        model_source = (STATIC_ROOT / "js" / "notebook-model.js").read_text(
+            encoding="utf-8"
+        )
+        app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
+        dialogs_source = (STATIC_ROOT / "js" / "dialogs.js").read_text(encoding="utf-8")
+        query_ui_source = (STATIC_ROOT / "js" / "query-ui.js").read_text(encoding="utf-8")
+        css_source = (STATIC_ROOT / "css" / "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("Cell processing hints", markup_source)
+        self.assertIn("Cell result expectations", markup_source)
+        self.assertIn('data-cell-descriptor="processingHints"', markup_source)
+        self.assertIn('data-cell-descriptor="resultExpectations"', markup_source)
+        self.assertIn("data-cell-descriptor", controller_source)
+        self.assertIn("setCellDescriptor", controller_source)
+        self.assertIn("processingHints", model_source)
+        self.assertIn("resultExpectations", model_source)
+        self.assertIn("processingHints: cell.processingHints", app_source)
+        self.assertIn("resultExpectations: cell.resultExpectations", app_source)
+        self.assertIn("data-share-notebook", markup_source)
+        self.assertIn("openNotebookShareDialog", controller_source)
+        self.assertIn("ensureNotebookShareDialog", dialogs_source)
+        self.assertIn("data-notebook-share-copy-reference", dialogs_source)
+        self.assertIn("Share and get link", dialogs_source)
+        self.assertIn("mailto:?subject", app_source)
+        self.assertIn("queryWarningsMarkup", query_ui_source)
+        self.assertIn("data-query-warnings", query_ui_source)
+        self.assertIn(".cell-descriptor-grid", css_source)
+        self.assertIn(".result-warning-list", css_source)
+        self.assertIn(".notebook-share-actions", css_source)
+
     def test_sql_view_toggle_has_markup_runtime_wiring_and_styles(self) -> None:
         markup_source = (
             STATIC_ROOT / "js" / "notebook-workspace-markup.js"

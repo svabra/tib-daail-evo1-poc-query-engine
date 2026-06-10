@@ -7,15 +7,22 @@ from ..models import (
     LinkedNotebookReference,
     NotebookDefinition,
     NotebookFolder,
+    SourceObject,
     SourceCatalog,
 )
 from .notebook_presets import (
+    build_kostenbelege_3_1_problem_solving_notebook,
     build_kostenbelege_3_1_s3_parquet_pipeline_notebook,
     build_mwa_s3_parquet_pipeline_notebook,
     build_static_notebooks,
 )
-from .s3_storage import s3_bucket_schema_name
-from .source_references import parse_source_reference, pg_source_reference, s3_source_reference
+from .s3_storage import parse_s3_url, s3_bucket_schema_name
+from .source_references import (
+    parse_source_reference,
+    pg_source_reference,
+    s3_source_reference,
+    s3_table_function_sql,
+)
 from .sql_utils import sql_literal
 
 
@@ -23,6 +30,13 @@ KOSTENBELEGE_3_1_GENERATED_BUCKET = (
     "poc-tests-performance-evaluation-kostenbelege-3-1"
 )
 KOSTENBELEGE_3_1_GENERATED_DATASET = "kostenbelege_3_1"
+KOSTENBELEGE_3_1_LOADER_SCHEMA = "s3_3_1_imports_a08e7385"
+KOSTENBELEGE_3_1_OBJECT_NAMES = (
+    "kbkp_2019",
+    "kbpo_2019",
+    "kbhp_2019",
+    "dim_kalender",
+)
 
 
 def _find_relation(
@@ -66,6 +80,7 @@ def _find_generated_s3_relation_by_object_name(
     catalogs: Iterable[SourceCatalog],
     *,
     object_names: Iterable[str],
+    executable_only: bool = False,
 ) -> str | None:
     preferred = {name.lower(): name for name in object_names}
     fallback_relation: str | None = None
@@ -76,11 +91,20 @@ def _find_generated_s3_relation_by_object_name(
             for source_object in schema.objects:
                 if source_object.name.lower() not in preferred:
                     continue
+                executable_relation = _s3_object_executable_relation(source_object)
+                relation = (
+                    executable_relation
+                    or (
+                        None
+                        if executable_only
+                        else source_object.query_reference or source_object.relation
+                    )
+                )
                 if fallback_relation is None:
-                    fallback_relation = source_object.query_reference or source_object.relation
+                    fallback_relation = relation
                 normalized_key = str(source_object.s3_key or "").strip().lower()
                 if normalized_key.startswith("generated/"):
-                    return source_object.query_reference or source_object.relation
+                    return relation
     return fallback_relation
 
 
@@ -108,6 +132,86 @@ def _find_relations_by_object_names(
     return relations
 
 
+def _s3_object_executable_relation(source_object: SourceObject) -> str | None:
+    query_sql = str(getattr(source_object, "query_sql", "") or "").strip().rstrip(";")
+    if query_sql:
+        normalized_query_sql = query_sql.lower()
+        if normalized_query_sql.startswith("select * from "):
+            return query_sql[len("SELECT * FROM ") :].strip()
+        if normalized_query_sql.startswith(("select", "with", "values")):
+            return f"({query_sql})"
+        return query_sql
+
+    query_reference = str(source_object.query_reference or "").strip()
+    if query_reference.startswith(("s3.", "workspace.s3.")):
+        return query_reference
+
+    bucket = str(source_object.s3_bucket or "").strip()
+    key = str(source_object.s3_key or "").strip()
+    if (not bucket or not key) and source_object.s3_path:
+        try:
+            bucket, key = parse_s3_url(str(source_object.s3_path))
+        except ValueError:
+            bucket, key = "", ""
+    if bucket and key:
+        return s3_table_function_sql(
+            bucket=bucket,
+            key=key,
+            file_format=str(source_object.s3_file_format or "parquet"),
+        )
+    return None
+
+
+def _resolve_kostenbelege_3_1_s3_relations(
+    catalogs: Iterable[SourceCatalog],
+    *,
+    object_names: Iterable[str],
+) -> dict[str, str | None]:
+    requested_names = tuple(object_names)
+    generated_relations = _find_kostenbelege_3_1_generated_s3_relations(
+        catalogs,
+        object_names=requested_names,
+    )
+    if all(generated_relations.values()):
+        return generated_relations
+
+    loader_relations = _find_executable_s3_relations_by_object_names(
+        catalogs,
+        schema_name=KOSTENBELEGE_3_1_LOADER_SCHEMA,
+        object_names=requested_names,
+    )
+    if all(loader_relations.values()):
+        return {
+            object_name: kostenbelege_3_1_loader_virtual_relation(object_name)
+            for object_name in requested_names
+        }
+
+    return generated_relations
+
+
+def _find_executable_s3_relations_by_object_names(
+    catalogs: Iterable[SourceCatalog],
+    *,
+    schema_name: str | None = None,
+    object_names: Iterable[str],
+) -> dict[str, str | None]:
+    requested_names = tuple(object_names)
+    preferred = {name.lower(): name for name in requested_names}
+    relations: dict[str, str | None] = {name: None for name in requested_names}
+    for catalog in catalogs:
+        if catalog.name != "workspace":
+            continue
+        for schema in catalog.schemas:
+            if schema_name is not None and schema.name != schema_name:
+                continue
+            for source_object in schema.objects:
+                preferred_name = preferred.get(source_object.name.lower())
+                if preferred_name is None or relations[preferred_name] is not None:
+                    continue
+                relations[preferred_name] = _s3_object_executable_relation(source_object)
+    return relations
+
+
 def _workspace_schema_exists(
     catalogs: Iterable[SourceCatalog],
     *,
@@ -121,12 +225,42 @@ def _workspace_schema_exists(
     return False
 
 
-def _kostenbelege_3_1_generated_parquet_scan(table_name: str) -> str:
-    object_path = (
-        f"s3://{KOSTENBELEGE_3_1_GENERATED_BUCKET}/generated/"
-        f"{KOSTENBELEGE_3_1_GENERATED_DATASET}/parquet/{table_name}/*.parquet"
+def kostenbelege_3_1_generated_parquet_key(table_name: str) -> str:
+    return (
+        f"generated/{KOSTENBELEGE_3_1_GENERATED_DATASET}/"
+        f"parquet/{table_name}/*.parquet"
     )
-    return f"read_parquet({sql_literal(object_path)}, hive_partitioning=false)"
+
+
+def _kostenbelege_3_1_generated_parquet_scan(table_name: str) -> str:
+    return s3_table_function_sql(
+        bucket=KOSTENBELEGE_3_1_GENERATED_BUCKET,
+        key=kostenbelege_3_1_generated_parquet_key(table_name),
+        file_format="parquet",
+        hive_partitioning=False,
+    )
+
+
+def kostenbelege_3_1_generated_parquet_scan(table_name: str) -> str:
+    return _kostenbelege_3_1_generated_parquet_scan(table_name)
+
+
+def kostenbelege_3_1_loader_virtual_relation(table_name: str) -> str:
+    return s3_source_reference(
+        bucket=KOSTENBELEGE_3_1_GENERATED_BUCKET,
+        key=kostenbelege_3_1_generated_parquet_key(table_name),
+    )
+
+
+def kostenbelege_3_1_loader_query_sql(table_name: str) -> str:
+    scan_sql = _kostenbelege_3_1_generated_parquet_scan(table_name)
+    if str(table_name or "").strip().lower() != "kbpo_2019":
+        return scan_sql
+    return (
+        "(SELECT *, "
+        '"KBKP_AusgleichBelegnummer" AS "KBKP_Belegnummer" '
+        f"FROM {scan_sql})"
+    )
 
 
 def _find_kostenbelege_3_1_generated_s3_relations(
@@ -135,25 +269,35 @@ def _find_kostenbelege_3_1_generated_s3_relations(
     object_names: Iterable[str],
 ) -> dict[str, str | None]:
     requested_names = tuple(object_names)
-    relations = {
-        object_name: _find_generated_s3_relation_by_object_name(
-            catalogs,
-            object_names=(f"{object_name}_parquet", object_name),
-        )
-        for object_name in requested_names
-    }
-    if all(relations.values()):
-        return relations
-
     generated_bucket_schema_name = s3_bucket_schema_name(
         KOSTENBELEGE_3_1_GENERATED_BUCKET
     )
-    if not _workspace_schema_exists(catalogs, schema_name=generated_bucket_schema_name):
-        return relations
+    discovered_names = {
+        object_name: False
+        for object_name in requested_names
+    }
+    for catalog in catalogs:
+        if catalog.name != "workspace":
+            continue
+        for schema in catalog.schemas:
+            if schema.name != generated_bucket_schema_name:
+                continue
+            schema_object_names = {
+                source_object.name.lower()
+                for source_object in schema.objects
+            }
+            for object_name in requested_names:
+                if (
+                    object_name.lower() in schema_object_names
+                    or f"{object_name}_parquet".lower() in schema_object_names
+                ):
+                    discovered_names[object_name] = True
+
+    if not all(discovered_names.values()):
+        return {object_name: None for object_name in requested_names}
 
     return {
-        object_name: relations.get(object_name)
-        or _kostenbelege_3_1_generated_parquet_scan(object_name)
+        object_name: kostenbelege_3_1_loader_virtual_relation(object_name)
         for object_name in requested_names
     }
 
@@ -346,10 +490,8 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         schema_name="public",
         object_names=kostenbelege_3_1_object_names,
     )
-    kostenbelege_3_1_s3_relations = _find_relations_by_object_names(
+    kostenbelege_3_1_s3_relations = _resolve_kostenbelege_3_1_s3_relations(
         catalogs,
-        catalog_name="workspace",
-        schema_name="s3_3_1_imports_a08e7385",
         object_names=kostenbelege_3_1_object_names,
     )
     contest_postgres_native_relation = _strip_catalog_prefix(
@@ -428,27 +570,18 @@ def build_restart_seeded_shared_notebooks(
         )
         for object_name in mwa_object_names
     }
-    kostenbelege_3_1_s3_relations = _find_relations_by_object_names(
+    kostenbelege_3_1_s3_relations = _resolve_kostenbelege_3_1_s3_relations(
         catalogs,
-        catalog_name="workspace",
-        schema_name="s3_3_1_imports_a08e7385",
         object_names=kostenbelege_3_1_object_names,
     )
-    if not all(kostenbelege_3_1_s3_relations.values()):
-        generated_relations = _find_kostenbelege_3_1_generated_s3_relations(
-            catalogs,
-            object_names=kostenbelege_3_1_object_names,
-        )
-        kostenbelege_3_1_s3_relations = {
-            object_name: kostenbelege_3_1_s3_relations.get(object_name)
-            or generated_relations.get(object_name)
-            for object_name in kostenbelege_3_1_object_names
-        }
     return [
         build_mwa_s3_parquet_pipeline_notebook(
             mwa_s3_parquet_relations=mwa_s3_parquet_relations,
         ),
         build_kostenbelege_3_1_s3_parquet_pipeline_notebook(
+            kostenbelege_3_1_s3_relations=kostenbelege_3_1_s3_relations,
+        ),
+        build_kostenbelege_3_1_problem_solving_notebook(
             kostenbelege_3_1_s3_relations=kostenbelege_3_1_s3_relations,
         ),
     ]

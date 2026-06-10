@@ -1007,6 +1007,8 @@ def _bootstrap_duckdb_source_views(
     for summary in source_summaries:
         if not isinstance(summary, dict):
             continue
+        if _is_direct_file_relation(summary.get("relation")):
+            continue
         relation_parts = _relation_parts(summary.get("relation"))
         query_sql = _source_summary_view_sql(str(summary.get("query_sql") or ""))
         if not relation_parts or not query_sql:
@@ -2511,6 +2513,7 @@ class QueryJobManager:
             "progressLabel": "progress_label",
             "message": "message",
             "error": "error",
+            "warnings": "warnings",
             "columns": "columns",
             "rows": "rows",
             "rowCount": "row_count",
@@ -2754,6 +2757,10 @@ class QueryJobManager:
                     process.kill()
 
     def _finalize_after_process_exit(self, job_id: str, exit_code: int | None) -> None:
+        last_progress_label = ""
+        last_message = ""
+        last_progress: float | None = None
+        last_cancellation_phase = ""
         with self._condition:
             record = self._jobs.get(job_id)
             if record is None or record.snapshot.status in TERMINAL_QUERY_STATUSES:
@@ -2761,6 +2768,10 @@ class QueryJobManager:
             if record.final_received:
                 return
             cancelled = record.cancel_requested
+            last_progress_label = str(record.snapshot.progress_label or "")
+            last_message = str(record.snapshot.message or "")
+            last_progress = record.snapshot.progress
+            last_cancellation_phase = str(record.snapshot.cancellation_phase or "")
 
         if cancelled:
             self._finalize_job(
@@ -2773,23 +2784,39 @@ class QueryJobManager:
                 worker_exit_code=exit_code,
             )
         elif exit_code not in (0, None):
+            diagnostic_parts = [f"Query worker exited unexpectedly with code {exit_code}."]
+            if last_progress_label:
+                diagnostic_parts.append(f"Last phase: {last_progress_label}.")
+            if last_message:
+                diagnostic_parts.append(f"Last message: {last_message}")
+            if isinstance(last_progress, (int, float)):
+                diagnostic_parts.append(f"Last DuckDB progress: {float(last_progress) * 100:.1f}%.")
+            if last_cancellation_phase:
+                diagnostic_parts.append(f"Cancellation phase: {last_cancellation_phase}.")
             self._finalize_job(
                 job_id,
                 status="failed",
                 duration_ms=self._elapsed_duration_ms(job_id),
                 progress_label="Failed",
                 message="Query failed.",
-                error=f"Query worker exited unexpectedly with code {exit_code}.",
+                error=" ".join(diagnostic_parts),
                 worker_exit_code=exit_code,
             )
         else:
+            diagnostic_parts = ["The query worker exited without returning a result."]
+            if last_progress_label:
+                diagnostic_parts.append(f"Last phase: {last_progress_label}.")
+            if last_message:
+                diagnostic_parts.append(f"Last message: {last_message}")
+            if isinstance(last_progress, (int, float)):
+                diagnostic_parts.append(f"Last DuckDB progress: {float(last_progress) * 100:.1f}%.")
             self._finalize_job(
                 job_id,
                 status="failed",
                 duration_ms=self._elapsed_duration_ms(job_id),
                 progress_label="Failed",
                 message="Query failed.",
-                error="The query worker exited without returning a result.",
+                error=" ".join(diagnostic_parts),
                 worker_exit_code=exit_code,
             )
 
@@ -2826,6 +2853,12 @@ class QueryJobManager:
             for key, value in changes.items():
                 if key in {"columns", "rows"} and value is None:
                     continue
+                if key == "warnings":
+                    value = [
+                        str(item).strip()
+                        for item in (value if isinstance(value, list) else [])
+                        if item is not None and str(item).strip()
+                    ]
                 if key == "timings" and isinstance(value, dict):
                     self._merge_timings_locked(record, value)
                     continue
@@ -2866,6 +2899,12 @@ class QueryJobManager:
             for key, value in changes.items():
                 if key in {"columns", "rows"} and value is None:
                     continue
+                if key == "warnings":
+                    value = [
+                        str(item).strip()
+                        for item in (value if isinstance(value, list) else [])
+                        if item is not None and str(item).strip()
+                    ]
                 setattr(record.snapshot, key, value)
             self._prune_history_locked()
             self._touch_locked()

@@ -17,6 +17,7 @@ export function createNotebookWorkspaceController(helpers) {
     moveCell,
     notebookMetadata,
     openCacheHydrationDialog,
+    openNotebookShareDialog,
     queryOptionsForCellRoot,
     refreshCellCacheHydrationStatus,
     refreshQuerySourceValidationForCell = () => {},
@@ -26,6 +27,7 @@ export function createNotebookWorkspaceController(helpers) {
     restartPythonKernel,
     setActiveCell,
     setCellDataSources,
+    setCellDescriptor,
     setCellLanguage,
     setCellQueryOptions,
     setCellSql,
@@ -166,6 +168,18 @@ export function createNotebookWorkspaceController(helpers) {
       const { notebookId } = notebookContext(copyNotebookButton);
       if (notebookId) {
         copyNotebook(notebookId);
+      }
+      return true;
+    }
+
+    const shareNotebookButton = event.target.closest("[data-share-notebook]");
+    if (shareNotebookButton) {
+      event.preventDefault();
+      closeWorkspaceActionMenus();
+
+      const { notebookId } = notebookContext(shareNotebookButton);
+      if (notebookId) {
+        await openNotebookShareDialog(notebookId);
       }
       return true;
     }
@@ -394,6 +408,16 @@ export function createNotebookWorkspaceController(helpers) {
       const { notebookId } = notebookContext(summaryInput);
       if (notebookId) {
         setNotebookSummary(notebookId, summaryInput.value);
+      }
+      return true;
+    }
+
+    const descriptorInput = event.target.closest("[data-cell-descriptor]");
+    if (descriptorInput) {
+      const { notebookId, cellId } = notebookCellContext(descriptorInput);
+      const metaRoot = descriptorInput.closest("[data-notebook-meta]");
+      if (notebookId && cellId && metaRoot?.dataset.canEdit !== "false") {
+        setCellDescriptor(notebookId, cellId, descriptorInput.dataset.cellDescriptor, descriptorInput.value);
       }
       return true;
     }

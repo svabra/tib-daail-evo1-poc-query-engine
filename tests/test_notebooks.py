@@ -11,6 +11,17 @@ BDW_ROOT = REPO_ROOT / "bdw"
 if str(BDW_ROOT) not in sys.path:
     sys.path.insert(0, str(BDW_ROOT))
 
+KOSTENBELEGE_3_1_GENERATED_BUCKET = (
+    "poc-tests-performance-evaluation-kostenbelege-3-1"
+)
+
+
+def kostenbelege_3_1_s3_reference(table_name: str) -> str:
+    return (
+        f's3."{KOSTENBELEGE_3_1_GENERATED_BUCKET}".'
+        f'"generated/kostenbelege_3_1/parquet/{table_name}/*.parquet"'
+    )
+
 
 def import_notebook_helpers():
     from bit_data_workbench.backend.notebooks import (
@@ -312,6 +323,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             pg_source_reference,
             s3_source_reference,
         )
+        from bit_data_workbench.backend.s3_storage import s3_bucket_schema_name  # noqa: WPS433
         from bit_data_workbench.data_generator.registry import DataGeneratorRegistry  # noqa: WPS433
 
         def pg_object(name: str, *, source_id: str = "pg_oltp"):
@@ -346,6 +358,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             "federal_tax_appeals_mt",
         )
         kostenbelege_names = ("kbkp_2019", "kbpo_2019", "kbhp_2019", "dim_kalender")
+        kostenbelege_s3_schema = s3_bucket_schema_name(KOSTENBELEGE_3_1_GENERATED_BUCKET)
         mwa_names = ("mwa_abrechnung_entities", "mwa_abrechnungs_ziffern_entities")
         parquet_option_names = (
             "federal_tax_parquet_off",
@@ -411,9 +424,9 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
                         ],
                     ),
                     source_schema_type(
-                        name="s3_3_1_imports_a08e7385",
+                        name=kostenbelege_s3_schema,
                         objects=[
-                            s3_object(name, schema="s3_3_1_imports_a08e7385")
+                            s3_object(f"{name}_parquet", schema=kostenbelege_s3_schema)
                             for name in kostenbelege_names
                         ],
                     ),
@@ -874,23 +887,30 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             source_object_type,
             source_schema_type,
         ) = import_restart_seed_helpers()
+        from bit_data_workbench.backend.s3_storage import s3_bucket_schema_name
+
         table_names = (
             "kbkp_2019",
             "kbpo_2019",
             "kbhp_2019",
             "dim_kalender",
         )
+        schema_name = s3_bucket_schema_name(KOSTENBELEGE_3_1_GENERATED_BUCKET)
         catalogs = [
             source_catalog_type(
                 name="workspace",
                 schemas=[
                     source_schema_type(
-                        name="s3_3_1_imports_a08e7385",
+                        name=schema_name,
                         objects=[
                             source_object_type(
-                                name=table_name,
+                                name=f"{table_name}_parquet",
                                 kind="view",
-                                relation=f"workspace.s3_3_1_imports_a08e7385.{table_name}",
+                                relation=f"{schema_name}.{table_name}_parquet",
+                                query_reference=kostenbelege_3_1_s3_reference(table_name),
+                                s3_bucket=KOSTENBELEGE_3_1_GENERATED_BUCKET,
+                                s3_key=f"generated/kostenbelege_3_1/parquet/{table_name}/*.parquet",
+                                s3_file_format="parquet",
                             )
                             for table_name in table_names
                         ],
@@ -922,10 +942,12 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
         )
 
         all_sql = "\n".join(cell.sql for cell in notebook.cells)
-        self.assertIn("workspace.s3_3_1_imports_a08e7385.kbkp_2019", all_sql)
-        self.assertIn("workspace.s3_3_1_imports_a08e7385.kbpo_2019", all_sql)
-        self.assertIn("workspace.s3_3_1_imports_a08e7385.kbhp_2019", all_sql)
-        self.assertIn("workspace.s3_3_1_imports_a08e7385.dim_kalender", all_sql)
+        self.assertNotIn("read_parquet(", all_sql)
+        for table_name in ("kbkp_2019", "kbpo_2019", "kbhp_2019", "dim_kalender"):
+            self.assertIn(
+                kostenbelege_3_1_s3_reference(table_name),
+                all_sql,
+            )
         self.assertIn("stage.kb_original_positions", all_sql)
         self.assertIn("stage.kb_settlement_positions", all_sql)
         self.assertNotIn("_csv", all_sql)
@@ -1000,26 +1022,136 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             "final",
         )
 
-    def test_restart_seeded_kostenbelege_pipeline_uses_generated_s3_folders(
+    def test_restart_seeded_kostenbelege_problem_solving_notebook_preserves_original_semantics(
         self,
     ) -> None:
         (
             build_restart_seeded_shared_notebooks,
             _build_stage_graph,
             source_catalog_type,
-            _source_object_type,
+            source_object_type,
             source_schema_type,
         ) = import_restart_seed_helpers()
         from bit_data_workbench.backend.s3_storage import s3_bucket_schema_name
 
-        bucket = "poc-tests-performance-evaluation-kostenbelege-3-1"
+        table_names = (
+            "kbkp_2019",
+            "kbpo_2019",
+            "kbhp_2019",
+            "dim_kalender",
+        )
+        schema_name = s3_bucket_schema_name(KOSTENBELEGE_3_1_GENERATED_BUCKET)
         catalogs = [
             source_catalog_type(
                 name="workspace",
                 schemas=[
                     source_schema_type(
-                        name=s3_bucket_schema_name(bucket),
-                        objects=[],
+                        name=schema_name,
+                        objects=[
+                            source_object_type(
+                                name=f"{table_name}_parquet",
+                                kind="view",
+                                relation=f"{schema_name}.{table_name}_parquet",
+                                query_reference=kostenbelege_3_1_s3_reference(table_name),
+                                s3_bucket=KOSTENBELEGE_3_1_GENERATED_BUCKET,
+                                s3_key=f"generated/kostenbelege_3_1/parquet/{table_name}/*.parquet",
+                                s3_file_format="parquet",
+                            )
+                            for table_name in table_names
+                        ],
+                    )
+                ],
+            )
+        ]
+
+        notebooks = {
+            notebook.notebook_id: notebook
+            for notebook in build_restart_seeded_shared_notebooks(catalogs)
+        }
+        notebook = notebooks["test-3-1-problem-solving"]
+
+        self.assertEqual(notebook.title, "Test 3.1 - Problem Solving")
+        self.assertTrue(notebook.can_edit)
+        self.assertTrue(notebook.can_delete)
+        self.assertTrue(notebook.shared)
+        self.assertEqual(
+            notebook.tree_path,
+            ("PoC Tests", "Performance Evaluation", "Kostenbelege (3.1)"),
+        )
+        self.assertEqual(
+            notebook.linked_generator_id,
+            "kostenbelege_3_1_multi_source_loader",
+        )
+        self.assertEqual(len(notebook.cells), 5)
+        self.assertTrue(all(cell.data_sources == ["workspace.s3"] for cell in notebook.cells))
+        self.assertTrue(all(cell.processing_hints for cell in notebook.cells))
+        self.assertTrue(all(cell.result_expectations for cell in notebook.cells))
+        self.assertEqual(
+            notebook.cells_payload[0]["processingHints"],
+            notebook.cells[0].processing_hints,
+        )
+        self.assertEqual(
+            notebook.cells_payload[0]["resultExpectations"],
+            notebook.cells[0].result_expectations,
+        )
+
+        all_sql = "\n".join(cell.sql for cell in notebook.cells)
+        self.assertNotIn("read_parquet(", all_sql)
+        for table_name in ("kbkp_2019", "kbpo_2019", "kbhp_2019", "dim_kalender"):
+            self.assertIn(
+                kostenbelege_3_1_s3_reference(table_name),
+                all_sql,
+            )
+        self.assertIn(
+            'KBKP."KBKP_Belegnummer" = KBPO.KBKP_Belegnummer',
+            all_sql,
+        )
+        self.assertIn(
+            'KBKP."KBKP_Belegnummer" = KBPO."KBKP_AusgleichBelegnummer"',
+            all_sql,
+        )
+        self.assertIn(
+            'KALE."Datum" BETWEEN DATE \'2018-07-01\' AND CURRENT_DATE',
+            all_sql,
+        )
+        self.assertNotIn('AND KALE."Datum" = CURRENT_DATE', all_sql)
+        self.assertIn("EXPLAIN WITH UNIO AS", all_sql)
+        self.assertIn("WITH branch_counts AS", all_sql)
+        self.assertIn("FROM branch_counts", all_sql)
+
+    def test_restart_seeded_kostenbelege_pipeline_uses_virtual_s3_sources(
+        self,
+    ) -> None:
+        (
+            build_restart_seeded_shared_notebooks,
+            _build_stage_graph,
+            source_catalog_type,
+            source_object_type,
+            source_schema_type,
+        ) = import_restart_seed_helpers()
+        from bit_data_workbench.backend.s3_storage import s3_bucket_schema_name
+
+        table_names = ("kbkp_2019", "kbpo_2019", "kbhp_2019", "dim_kalender")
+        bucket = KOSTENBELEGE_3_1_GENERATED_BUCKET
+        schema_name = s3_bucket_schema_name(bucket)
+        catalogs = [
+            source_catalog_type(
+                name="workspace",
+                schemas=[
+                    source_schema_type(
+                        name=schema_name,
+                        objects=[
+                            source_object_type(
+                                name=f"{table_name}_parquet",
+                                kind="view",
+                                relation=f"{schema_name}.{table_name}_parquet",
+                                query_reference=kostenbelege_3_1_s3_reference(table_name),
+                                s3_bucket=bucket,
+                                s3_key=f"generated/kostenbelege_3_1/parquet/{table_name}/*.parquet",
+                                s3_file_format="parquet",
+                            )
+                            for table_name in table_names
+                        ],
                     )
                 ],
             )
@@ -1034,12 +1166,28 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
 
         self.assertEqual(len(notebook.cells), 9)
         self.assertNotIn("Run the Kostenbelege Multi-Source Loader", all_sql)
-        for table_name in ("kbkp_2019", "kbpo_2019", "kbhp_2019", "dim_kalender"):
+        self.assertNotIn("read_parquet(", all_sql)
+        for table_name in table_names:
             self.assertIn(
-                f"read_parquet('s3://{bucket}/generated/kostenbelege_3_1/parquet/{table_name}/*.parquet'",
+                kostenbelege_3_1_s3_reference(table_name),
                 all_sql,
             )
-        self.assertIn("hive_partitioning=false", all_sql)
+
+        problem_notebook = notebooks["test-3-1-problem-solving"]
+        problem_sql = "\n".join(cell.sql for cell in problem_notebook.cells)
+
+        self.assertEqual(len(problem_notebook.cells), 5)
+        self.assertNotIn("Run the Kostenbelege Multi-Source Loader", problem_sql)
+        self.assertNotIn("read_parquet(", problem_sql)
+        for table_name in table_names:
+            self.assertIn(
+                kostenbelege_3_1_s3_reference(table_name),
+                problem_sql,
+            )
+        self.assertIn(
+            'KBKP."KBKP_Belegnummer" = KBPO.KBKP_Belegnummer',
+            problem_sql,
+        )
 
     def test_build_notebooks_includes_parquet_performance_options_presets(
         self,
@@ -1164,8 +1312,10 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             source_object_type,
             source_schema_type,
         ) = import_notebook_helpers()
+        from bit_data_workbench.backend.s3_storage import s3_bucket_schema_name
 
         table_names = ("kbkp_2019", "kbpo_2019", "kbhp_2019", "dim_kalender")
+        s3_schema_name = s3_bucket_schema_name(KOSTENBELEGE_3_1_GENERATED_BUCKET)
         catalogs = [
             source_catalog_type(
                 name="pg_oltp",
@@ -1203,12 +1353,16 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
                 name="workspace",
                 schemas=[
                     source_schema_type(
-                        name="s3_3_1_imports_a08e7385",
+                        name=s3_schema_name,
                         objects=[
                             source_object_type(
-                                name=table_name,
+                                name=f"{table_name}_parquet",
                                 kind="view",
-                                relation=f"workspace.s3_3_1_imports_a08e7385.{table_name}",
+                                relation=f"{s3_schema_name}.{table_name}_parquet",
+                                query_reference=kostenbelege_3_1_s3_reference(table_name),
+                                s3_bucket=KOSTENBELEGE_3_1_GENERATED_BUCKET,
+                                s3_key=f"generated/kostenbelege_3_1/parquet/{table_name}/*.parquet",
+                                s3_file_format="parquet",
                             )
                             for table_name in table_names
                         ],
@@ -1246,8 +1400,12 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             "INNER JOIN pg_olap.public.kbpo_2019",
             notebooks["kostenbelege-3-1-olap"].cells[0].sql,
         )
+        self.assertNotIn(
+            "read_parquet(",
+            notebooks["kostenbelege-3-1-s3-parquet"].cells[0].sql,
+        )
         self.assertIn(
-            "FROM workspace.s3_3_1_imports_a08e7385.kbkp_2019",
+            f"FROM {kostenbelege_3_1_s3_reference('kbkp_2019')}",
             notebooks["kostenbelege-3-1-s3-parquet"].cells[0].sql,
         )
         self.assertEqual(

@@ -755,6 +755,23 @@ export function createQueryUi(helpers) {
     `;
   }
 
+  function queryWarningsMarkup(job) {
+    const warnings = Array.isArray(job?.warnings)
+      ? job.warnings.map((warning) => String(warning ?? "").trim()).filter(Boolean)
+      : [];
+    if (!warnings.length) {
+      return "";
+    }
+    return `
+      <div class="result-warning-list" data-query-warnings>
+        <strong>Warnings</strong>
+        <ul>
+          ${warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}
+        </ul>
+      </div>
+    `;
+  }
+
   function resultExportMenuMarkup(showActions, jobId = "") {
     const normalizedJobId = String(jobId || "").trim();
     const sharedWorkspaceTooltip =
@@ -868,9 +885,11 @@ export function createQueryUi(helpers) {
     const terminalMetricsMarkup = queryJobIsRunning(job) ? "" : queryProcessMetricStripMarkup(job);
     const hasResourceCharts = Boolean(queryResourceSparklineMarkup(job));
     const terminalSparklineMarkup = queryJobIsRunning(job) ? "" : queryResourceSparklineMarkup(job, { hidden: !chartsVisible });
+    const warningsMarkup = queryWarningsMarkup(job);
     const resultBody = job.status === "cancelled"
       ? `
           <div class="result-empty result-empty-cancelled">
+            ${warningsMarkup}
             <p>${escapeHtml(queryCancellationCopy({ ...job, cancellationPhase: "cancelled" }))}</p>
             ${terminalMetricsMarkup}
             ${terminalSparklineMarkup}
@@ -880,6 +899,7 @@ export function createQueryUi(helpers) {
       ? `
           <div class="result-error">
             <strong>${escapeHtml(job.status === "cancelled" ? "Query cancelled." : "Query failed.")}</strong>
+            ${warningsMarkup}
             <pre>${escapeHtml(job.error)}</pre>
             ${terminalMetricsMarkup}
             ${terminalSparklineMarkup}
@@ -888,6 +908,7 @@ export function createQueryUi(helpers) {
       : job.columns.length
         ? `
             ${queryProgressMarkup(job, { chartsHidden: !chartsVisible })}
+            ${warningsMarkup}
             ${terminalMetricsMarkup}
             ${terminalSparklineMarkup}
             ${queryResultTableMarkup(job)}
@@ -896,11 +917,13 @@ export function createQueryUi(helpers) {
           ? `
               ${queryProgressMarkup(job, { chartsHidden: !chartsVisible })}
               <div class="result-empty result-empty-running">
+                ${warningsMarkup}
                 <p>${escapeHtml(job.message || "Running query...")}</p>
               </div>
             `
           : `
               <div class="result-empty">
+                ${warningsMarkup}
                 <p>${escapeHtml(job.message || "Statement executed successfully.")}</p>
                 ${terminalMetricsMarkup}
                 ${terminalSparklineMarkup}

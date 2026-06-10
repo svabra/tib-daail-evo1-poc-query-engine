@@ -224,6 +224,24 @@ export function createNotebookWorkspaceMarkup(helpers) {
     const sovereigntyHint =
       "Your data is exclusivly stored and processed in Swiss Government facilities. Hybrid or 3rd-party storage will be available with the Swiss Government Cloud for insensitive data.";
     const languageBadge = cellLanguage === "python" ? "Python / Headless Jupyter Kernel" : "SQL / Query Engine";
+    const processingHints = String(cell.processingHints || "");
+    const resultExpectations = String(cell.resultExpectations || "");
+    const descriptorMarkup = `
+      <div class="cell-descriptor-grid" data-cell-descriptors>
+        <label class="cell-descriptor-field">
+          <span>Cell processing hints</span>
+          ${canEdit
+            ? `<textarea class="cell-descriptor-input" rows="2" data-cell-descriptor="processingHints" placeholder="Describe processing hints for this cell.">${escapeHtml(processingHints)}</textarea>`
+            : `<div class="cell-descriptor-readonly" data-cell-descriptor-readonly="processingHints">${escapeHtml(processingHints || "No processing hints saved.")}</div>`}
+        </label>
+        <label class="cell-descriptor-field">
+          <span>Cell result expectations</span>
+          ${canEdit
+            ? `<textarea class="cell-descriptor-input" rows="2" data-cell-descriptor="resultExpectations" placeholder="Describe expected results for this cell.">${escapeHtml(resultExpectations)}</textarea>`
+            : `<div class="cell-descriptor-readonly" data-cell-descriptor-readonly="resultExpectations">${escapeHtml(resultExpectations || "No result expectations saved.")}</div>`}
+        </label>
+      </div>
+    `;
     const sourceOptionsMarkup =
       readSourceOptions()
         .map((option) => {
@@ -325,6 +343,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
             </div>
           </div>
           ${cellStageStripMarkup(cell, canEdit, pipelineMode, cellLanguage)}
+          ${descriptorMarkup}
           <div class="editor-frame" data-editor-root data-editor-name="sql-${escapeHtml(cell.cellId)}" data-editor-language="${escapeHtml(cellLanguage)}">
             <button
               type="button"
@@ -441,6 +460,8 @@ export function createNotebookWorkspaceMarkup(helpers) {
         data-default-cells='${escapeHtml(JSON.stringify((metadata.cells ?? []).map((cell) => ({
           cellId: cell.cellId,
           language: normalizeCellLanguage(cell.language),
+          processingHints: cell.processingHints || "",
+          resultExpectations: cell.resultExpectations || "",
           dataSources: normalizeDataSources(cell.dataSources),
           queryOptions: cell.queryOptions,
           stage: normalizeCellStage(cell.stage),
@@ -455,6 +476,8 @@ export function createNotebookWorkspaceMarkup(helpers) {
           cells: normalizeNotebookCells(version.cells).map((cell) => ({
             cellId: cell.cellId,
             language: normalizeCellLanguage(cell.language),
+            processingHints: cell.processingHints || "",
+            resultExpectations: cell.resultExpectations || "",
             dataSources: normalizeDataSources(cell.dataSources),
             queryOptions: cell.queryOptions,
             stage: normalizeCellStage(cell.stage),
@@ -528,6 +551,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
                 <button type="button" class="workspace-action-menu-item" data-edit-notebook title="Edit notebook metadata">Edit</button>
                 <button type="button" class="workspace-action-menu-item" data-restart-python-kernel title="Clear variables, imports, and stuck Python state for this notebook without changing any cells">Restart Python session</button>
                 <button type="button" class="workspace-action-menu-item" data-copy-notebook title="Create a copy of this notebook">Copy notebook</button>
+                <button type="button" class="workspace-action-menu-item" data-share-notebook title="Copy or email a notebook reference">Share Notebook ...</button>
                 <button type="button" class="workspace-action-menu-item workspace-action-menu-item-danger" data-delete-notebook title="Delete notebook">Delete notebook</button>
               </div>
             </details>

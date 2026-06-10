@@ -138,12 +138,17 @@ from .runtime_storage import (
     runtime_storage_snapshot,
 )
 from .notebooks import (
+    KOSTENBELEGE_3_1_GENERATED_BUCKET,
+    KOSTENBELEGE_3_1_LOADER_SCHEMA,
+    KOSTENBELEGE_3_1_OBJECT_NAMES,
     build_completion_schema,
     build_generator_notebook_links,
     build_notebook_tree,
     build_notebooks,
     build_restart_seeded_shared_notebooks,
     build_source_options,
+    kostenbelege_3_1_loader_virtual_relation,
+    kostenbelege_3_1_loader_query_sql,
     merge_restart_seeded_shared_notebook,
 )
 from .notebook_activity import NotebookActivityStore
@@ -1307,6 +1312,8 @@ class WorkbenchService:
                 cell_id=str(cell.get("cellId") or "").strip() or f"shared-cell-{uuid.uuid4().hex[:12]}",
                 sql=str(cell.get("sql") or ""),
                 language=normalize_notebook_cell_language(cell.get("language")),
+                processing_hints=str(cell.get("processingHints") or cell.get("processing_hints") or ""),
+                result_expectations=str(cell.get("resultExpectations") or cell.get("result_expectations") or ""),
                 data_sources=[
                     source_id
                     for source_id in (str(value).strip() for value in cell.get("dataSources", []) or [])
@@ -1337,6 +1344,8 @@ class WorkbenchService:
                         cell_id=str(cell.get("cellId") or "").strip() or f"shared-cell-{uuid.uuid4().hex[:12]}",
                         sql=str(cell.get("sql") or ""),
                         language=normalize_notebook_cell_language(cell.get("language")),
+                        processing_hints=str(cell.get("processingHints") or cell.get("processing_hints") or ""),
+                        result_expectations=str(cell.get("resultExpectations") or cell.get("result_expectations") or ""),
                         data_sources=[
                             source_id
                             for source_id in (str(value).strip() for value in cell.get("dataSources", []) or [])
@@ -2089,7 +2098,12 @@ class WorkbenchService:
         sql: str | None = None,
     ) -> dict[str, KnownRelationReference]:
         with self._lock:
-            relation_index = build_relation_index(self._catalogs)
+            catalogs = list(self._catalogs)
+            relation_index = build_relation_index(catalogs)
+        self._add_kostenbelege_3_1_loader_relation_aliases(
+            relation_index,
+            catalogs=catalogs,
+        )
         self._add_local_relation_aliases(relation_index, local_relation_map)
         self._add_completed_stage_relation_aliases(
             relation_index,
@@ -2104,6 +2118,75 @@ class WorkbenchService:
             return relation_index
         self._add_s3_discovery_relation_aliases(relation_index)
         return relation_index
+
+    @staticmethod
+    def _add_kostenbelege_3_1_loader_relation_aliases(
+        relation_index: dict[str, KnownRelationReference],
+        *,
+        catalogs: list[SourceCatalog],
+    ) -> None:
+        for table_name in KOSTENBELEGE_3_1_OBJECT_NAMES:
+            virtual_relation = kostenbelege_3_1_loader_virtual_relation(table_name)
+            query_sql = kostenbelege_3_1_loader_query_sql(table_name)
+            entry = KnownRelationReference(
+                relation=virtual_relation,
+                bucket=KOSTENBELEGE_3_1_GENERATED_BUCKET,
+                query_sql=query_sql,
+            )
+            aliases = {
+                virtual_relation,
+                f"workspace.{virtual_relation}",
+                f"{KOSTENBELEGE_3_1_LOADER_SCHEMA}.{table_name}",
+                f"workspace.{KOSTENBELEGE_3_1_LOADER_SCHEMA}.{table_name}",
+            }
+            aliases.update(
+                WorkbenchService._kostenbelege_3_1_discovered_s3_aliases(
+                    catalogs,
+                    table_name=table_name,
+                )
+            )
+            for alias in aliases:
+                normalized_alias = normalize_query_alias_key(alias)
+                if not normalized_alias:
+                    continue
+                relation_index[normalized_alias] = entry
+
+    @staticmethod
+    def _kostenbelege_3_1_discovered_s3_aliases(
+        catalogs: list[SourceCatalog],
+        *,
+        table_name: str,
+    ) -> set[str]:
+        normalized_table_name = str(table_name or "").strip().lower()
+        if not normalized_table_name:
+            return set()
+
+        aliases: set[str] = set()
+        accepted_names = {
+            normalized_table_name,
+            f"{normalized_table_name}_parquet",
+        }
+        for catalog in catalogs:
+            if catalog.name != "workspace":
+                continue
+            for schema in catalog.schemas:
+                for source_object in schema.objects:
+                    if str(source_object.name or "").strip().lower() not in accepted_names:
+                        continue
+                    query_reference = str(source_object.query_reference or "").strip()
+                    if query_reference.startswith(("s3.", "workspace.s3.")):
+                        aliases.add(query_reference)
+                        if query_reference.startswith("s3."):
+                            aliases.add(f"workspace.{query_reference}")
+                    if source_object.s3_bucket and source_object.s3_key:
+                        source_reference = s3_source_reference(
+                            bucket=source_object.s3_bucket,
+                            key=source_object.s3_key,
+                        )
+                        if source_reference:
+                            aliases.add(source_reference)
+                            aliases.add(f"workspace.{source_reference}")
+        return aliases
 
     def _completed_stage_records_by_alias(self, notebook_id: str) -> dict[str, StageRecord]:
         normalized_notebook_id = str(notebook_id or "").strip()
@@ -2373,6 +2456,10 @@ class WorkbenchService:
     ) -> str:
         alias_map = {}
         for key, value in relation_index.items():
+            query_sql = str(value.query_sql or "").strip()
+            if query_sql:
+                alias_map[key] = query_sql
+                continue
             if not (
                 key.startswith("s3.")
                 or key.startswith("workspace.s3.")
@@ -2630,6 +2717,16 @@ class WorkbenchService:
         for summary in source_summaries:
             if not isinstance(summary, dict):
                 continue
+            normalized_s3_relation = WorkbenchService._normalized_s3_relation_reference(
+                str(summary.get("relation") or "")
+            )
+            if normalized_s3_relation is not None:
+                bucket_name, object_key = normalized_s3_relation
+                if WorkbenchService._is_direct_s3_relation(
+                    bucket=bucket_name,
+                    object_key=object_key,
+                ):
+                    continue
             relation_parts = [
                 part.strip().strip('"').strip("`").strip("[]")
                 for part in str(summary.get("relation") or "").split(".")
@@ -4015,6 +4112,10 @@ class WorkbenchService:
 
     def _source_reference_migration_alias_map(self) -> dict[str, str]:
         alias_map: dict[str, str] = {}
+        for table_name in KOSTENBELEGE_3_1_OBJECT_NAMES:
+            canonical_reference = kostenbelege_3_1_loader_virtual_relation(table_name)
+            alias_map[f"{KOSTENBELEGE_3_1_LOADER_SCHEMA}.{table_name}"] = canonical_reference
+            alias_map[f"workspace.{KOSTENBELEGE_3_1_LOADER_SCHEMA}.{table_name}"] = canonical_reference
         with self._lock:
             catalogs = list(self._catalogs)
         for catalog in catalogs:
