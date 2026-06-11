@@ -1305,6 +1305,20 @@ class WorkbenchService:
                 return seed.notebook_id
         return ""
 
+    def _deleted_shared_notebook_ids(self) -> set[str]:
+        list_deleted = getattr(self._shared_notebook_store, "list_deleted_notebook_ids", None)
+        if not callable(list_deleted):
+            return set()
+        return {
+            str(notebook_id).strip()
+            for notebook_id in list_deleted()
+            if str(notebook_id).strip()
+        }
+
+    def _shared_notebook_is_deleted(self, notebook_id: str) -> bool:
+        normalized_notebook_id = str(notebook_id or "").strip()
+        return bool(normalized_notebook_id and normalized_notebook_id in self._deleted_shared_notebook_ids())
+
     def upsert_shared_notebook(
         self,
         *,
@@ -1330,6 +1344,10 @@ class WorkbenchService:
             )
         if not normalized_notebook_id:
             normalized_notebook_id = f"shared-notebook-{uuid.uuid4().hex}"
+        if self._shared_notebook_is_deleted(normalized_notebook_id):
+            raise ValueError(
+                f"Shared notebook {normalized_notebook_id} was deleted. Reload the Notebook Browser before editing it."
+            )
         existing_notebook = next(
             (item for item in self._shared_notebook_store.list_notebooks() if item.notebook_id == normalized_notebook_id),
             None,
@@ -2054,6 +2072,7 @@ class WorkbenchService:
         data_sources: list[str],
         query_options: dict[str, object],
     ) -> list[dict[str, object]]:
+        normalized_query_options = normalize_query_options(query_options)
         relation_index = self._query_source_relation_index(
             local_relation_map=None,
             sql=sql,
@@ -2063,22 +2082,23 @@ class WorkbenchService:
             relation_index[normalize_query_alias_key(relation)] = KnownRelationReference(
                 relation=relation
             )
-        source_validation = self.validate_query_sources(
-            sql=sql,
-            data_sources=data_sources,
-            local_relation_map=None,
-            relation_index=relation_index,
-        )
-        if source_validation.get("status") == QUERY_SOURCE_INVALID:
-            raise ValueError(
-                str(source_validation.get("message") or "Referenced source(s) were not found.")
+        if source_existence_validation_enabled(normalized_query_options):
+            source_validation = self.validate_query_sources(
+                sql=sql,
+                data_sources=data_sources,
+                local_relation_map=None,
+                relation_index=relation_index,
             )
+            if source_validation.get("status") == QUERY_SOURCE_INVALID:
+                raise ValueError(
+                    str(source_validation.get("message") or "Referenced source(s) were not found.")
+                )
         query_analysis = self._analyze_query(sql, relation_index=relation_index)
         return self._query_source_summaries(
             query_analysis.touched_relations,
             relation_index=relation_index,
             local_relation_map=None,
-            query_options=query_options,
+            query_options=normalized_query_options,
         )
 
     def _materialized_stage_execution_sql(
@@ -4118,11 +4138,14 @@ class WorkbenchService:
 
         seeded_count = 0
         with self._condition:
+            deleted_seed_notebook_ids = self._deleted_shared_notebook_ids()
             existing_seed_notebooks = {
                 notebook.notebook_id: notebook
                 for notebook in self._shared_notebook_store.list_notebooks()
             }
             for notebook in seeded_notebooks:
+                if notebook.notebook_id in deleted_seed_notebook_ids:
+                    continue
                 notebook = merge_restart_seeded_shared_notebook(
                     notebook,
                     existing_seed_notebooks.get(notebook.notebook_id),

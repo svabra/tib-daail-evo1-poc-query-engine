@@ -37,12 +37,17 @@ def import_shared_notebook_components():
 
 
 class InMemorySharedNotebookStore:
-    def __init__(self, notebooks=None, folders=None):
+    def __init__(self, notebooks=None, folders=None, deleted_notebook_ids=None):
         self._notebooks = {
             notebook.notebook_id: notebook for notebook in (notebooks or [])
         }
         self._folders = {
             tuple(folder.path): folder for folder in (folders or [])
+        }
+        self._deleted_notebook_ids = {
+            str(notebook_id).strip()
+            for notebook_id in (deleted_notebook_ids or [])
+            if str(notebook_id).strip()
         }
 
     def list_notebooks(self):
@@ -58,7 +63,17 @@ class InMemorySharedNotebookStore:
         return notebook, action
 
     def delete_notebook(self, notebook_id):
-        return self._notebooks.pop(notebook_id)
+        notebook = self._notebooks.pop(notebook_id)
+        self._deleted_notebook_ids.add(notebook_id)
+        return notebook
+
+    def list_deleted_notebook_ids(self):
+        return set(self._deleted_notebook_ids)
+
+    def mark_notebook_deleted(self, notebook_id):
+        normalized_notebook_id = str(notebook_id or "").strip()
+        if normalized_notebook_id:
+            self._deleted_notebook_ids.add(normalized_notebook_id)
 
     def list_folders(self):
         return list(self._folders.values())
@@ -136,7 +151,11 @@ class FakeSharedNotebookS3Settings:
         return "secret-key"
 
 
-def build_shared_notebook_service(existing_notebooks=None, existing_folders=None):
+def build_shared_notebook_service(
+    existing_notebooks=None,
+    existing_folders=None,
+    deleted_notebook_ids=None,
+):
     WorkbenchService, _, _, _, _, _ = import_shared_notebook_components()
     service = WorkbenchService.__new__(WorkbenchService)
     service._lock = threading.RLock()
@@ -144,6 +163,7 @@ def build_shared_notebook_service(existing_notebooks=None, existing_folders=None
     service._shared_notebook_store = InMemorySharedNotebookStore(
         existing_notebooks,
         existing_folders,
+        deleted_notebook_ids,
     )
     rebuild_calls: list[str] = []
     appended_events: list[dict[str, object]] = []
@@ -471,6 +491,117 @@ class SharedNotebookServiceTests(unittest.TestCase):
             ["updated", "updated"],
         )
 
+    def test_deleted_seeded_problem_notebook_and_accidental_copies_do_not_reappear(
+        self,
+    ) -> None:
+        _, notebook_cell_type, notebook_type, _, _, _ = (
+            import_shared_notebook_components()
+        )
+        seed = notebook_type(
+            notebook_id="test-3-1-problem-solving",
+            title="Test 3.1 - Problem Solving",
+            summary="Canonical seed",
+            cells=[
+                notebook_cell_type(
+                    cell_id="test-3-1-problem-solving-cell-1",
+                    sql="select 'seed'",
+                )
+            ],
+            tree_path=(
+                "PoC Tests",
+                "Performance Evaluation",
+                "Kostenbelege (3.1)",
+            ),
+            linked_generator_id="kostenbelege_3_1_multi_source_loader",
+            can_edit=True,
+            can_delete=True,
+            shared=True,
+            created_at="2026-06-10T00:00:00+00:00",
+        )
+        accidental_copy = notebook_type(
+            notebook_id="shared-notebook-accidental-copy",
+            title="Test 3.1 - Problem Solving",
+            summary="Accidental stale-browser copy",
+            cells=[
+                notebook_cell_type(
+                    cell_id="test-3-1-problem-solving-cell-1",
+                    sql="select 'copy'",
+                )
+            ],
+            tree_path=seed.tree_path,
+            linked_generator_id="kostenbelege_3_1_multi_source_loader",
+            can_edit=True,
+            can_delete=True,
+            shared=True,
+            created_at="2026-06-10T00:00:00+00:00",
+        )
+        service, rebuild_calls, appended_events = (
+            build_shared_notebook_service([seed, accidental_copy])
+        )
+        service._catalogs = []
+
+        deleted_copy = service.delete_shared_notebook(
+            "shared-notebook-accidental-copy",
+            origin_client_id="cleanup-client",
+        )
+
+        self.assertEqual(deleted_copy["action"], "deleted")
+        self.assertEqual(
+            service._shared_notebook_store.list_deleted_notebook_ids(),
+            {"shared-notebook-accidental-copy"},
+        )
+        self.assertEqual(
+            [item.notebook_id for item in service._shared_notebook_store.list_notebooks()],
+            ["test-3-1-problem-solving"],
+        )
+        with self.assertRaisesRegex(ValueError, "was deleted"):
+            service.upsert_shared_notebook(
+                notebook_id="shared-notebook-accidental-copy",
+                title="Test 3.1 - Problem Solving",
+                summary="Stale tab tried to sync the deleted copy",
+                tags=[],
+                tree_path=list(seed.tree_path),
+                linked_generator_id="kostenbelege_3_1_multi_source_loader",
+                created_at="2026-06-10T00:00:00+00:00",
+                cells=[{"cellId": "cell-1", "sql": "select 'stale'"}],
+                versions=[],
+                origin_client_id="stale-client",
+            )
+
+        deleted_seed = service.delete_shared_notebook(
+            "test-3-1-problem-solving",
+            origin_client_id="cleanup-client",
+        )
+        service._ensure_startup_shared_notebook_seeds()
+
+        notebook_ids = {
+            item.notebook_id for item in service._shared_notebook_store.list_notebooks()
+        }
+        self.assertEqual(deleted_seed["action"], "deleted")
+        self.assertNotIn("test-3-1-problem-solving", notebook_ids)
+        self.assertIn(
+            "test-3-1-problem-solving",
+            service._shared_notebook_store.list_deleted_notebook_ids(),
+        )
+        with self.assertRaisesRegex(ValueError, "was deleted"):
+            service.upsert_shared_notebook(
+                notebook_id=None,
+                title="Test 3.1 - Problem Solving",
+                summary="Stale tab tried to recreate the canonical seed",
+                tags=[],
+                tree_path=list(seed.tree_path),
+                linked_generator_id="kostenbelege_3_1_multi_source_loader",
+                created_at="2026-06-10T00:00:00+00:00",
+                cells=[{"cellId": "cell-1", "sql": "select 'stale seed'"}],
+                versions=[],
+                origin_client_id="stale-client",
+            )
+        self.assertEqual(rebuild_calls[:2], ["rebuild", "rebuild"])
+        self.assertEqual(
+            [event["event_type"] for event in appended_events[:2]],
+            ["deleted", "deleted"],
+        )
+
     def test_shared_notebook_serialization_round_trips_pipeline_paths(self) -> None:
         _, notebook_cell_type, notebook_type, _, _, _ = import_shared_notebook_components()
         from bit_data_workbench.backend.shared_notebooks import (
@@ -587,6 +718,42 @@ class SharedNotebookServiceTests(unittest.TestCase):
         )
         self.assertEqual(len(restored), 1)
         self.assertEqual(restored[0].pipeline_paths, notebook.pipeline_paths)
+
+    def test_s3_shared_notebook_store_records_deleted_notebook_tombstones(self) -> None:
+        _, notebook_cell_type, notebook_type, _, _, _ = import_shared_notebook_components()
+        from bit_data_workbench.backend.shared_notebooks import S3SharedNotebookStore
+
+        fake_s3 = FakeSharedNotebookS3Client()
+        store = S3SharedNotebookStore(
+            FakeSharedNotebookS3Settings(),
+            s3_client_factory=lambda _settings: fake_s3,
+            ensure_bucket=lambda _settings, _bucket: None,
+        )
+        store.initialize()
+
+        notebook = notebook_type(
+            notebook_id="shared-notebook-accidental-copy",
+            title="Test 3.1 - Problem Solving",
+            summary="Accidental duplicate",
+            cells=[notebook_cell_type(cell_id="cell-a", sql="select 1")],
+            shared=True,
+        )
+
+        store.upsert_notebook(notebook)
+        removed = store.delete_notebook("shared-notebook-accidental-copy")
+
+        self.assertEqual(removed.notebook_id, "shared-notebook-accidental-copy")
+        self.assertEqual(store.list_notebooks(), [])
+        self.assertEqual(
+            store.list_deleted_notebook_ids(),
+            {"shared-notebook-accidental-copy"},
+        )
+        self.assertTrue(
+            any(
+                key.startswith("metadata/deleted-notebooks/")
+                for _bucket, key in fake_s3.objects
+            )
+        )
 
     def test_startup_seed_reestablishes_editable_mwa_parquet_pipeline(
         self,

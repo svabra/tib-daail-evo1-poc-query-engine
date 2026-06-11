@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import RLock
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from ..config import Settings
 from ..models import NotebookCellDefinition, NotebookDefinition, NotebookVersionDefinition
@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 S3_NOTEBOOK_PREFIX = "notebooks/"
 S3_FOLDER_MANIFEST_KEY = "folders/shared-folders.json"
 S3_MIGRATION_MARKER_KEY = "metadata/local-migration-complete.json"
+S3_DELETED_NOTEBOOK_PREFIX = "metadata/deleted-notebooks/"
 SHARED_NOTEBOOK_DEFAULT_FOLDER_PATH = ("Shared Notebooks",)
 
 
@@ -328,6 +329,28 @@ class SharedNotebookStore:
         state = self._read_state()
         return folders_from_manifest({"folders": state.get("folders", [])})
 
+    def list_deleted_notebook_ids(self) -> set[str]:
+        state = self._read_state()
+        return {
+            str(notebook_id).strip()
+            for notebook_id in state.get("deletedNotebookIds", []) or []
+            if str(notebook_id).strip()
+        }
+
+    def mark_notebook_deleted(self, notebook_id: str) -> None:
+        normalized_notebook_id = str(notebook_id or "").strip()
+        if not normalized_notebook_id:
+            return
+        state = self._read_state()
+        deleted_ids = sorted({*self.list_deleted_notebook_ids(), normalized_notebook_id})
+        self._write_state(
+            {
+                "notebooks": list(state.get("notebooks", [])),
+                "folders": list(state.get("folders", [])),
+                "deletedNotebookIds": deleted_ids,
+            }
+        )
+
     def upsert_folder(self, folder: SharedNotebookFolder) -> tuple[SharedNotebookFolder, str]:
         state = self._read_state()
         folders = folders_from_manifest({"folders": state.get("folders", [])})
@@ -353,6 +376,7 @@ class SharedNotebookStore:
             {
                 "notebooks": list(state.get("notebooks", [])),
                 "folders": [serialize_folder(item) for item in folders],
+                "deletedNotebookIds": list(state.get("deletedNotebookIds", [])),
             }
         )
         return refreshed, action
@@ -408,7 +432,13 @@ class SharedNotebookStore:
         else:
             notebooks[existing_index] = serialized
 
-        self._write_state({"notebooks": notebooks, "folders": list(state.get("folders", []))})
+        self._write_state(
+            {
+                "notebooks": notebooks,
+                "folders": list(state.get("folders", [])),
+                "deletedNotebookIds": list(state.get("deletedNotebookIds", [])),
+            }
+        )
         refreshed = deserialize_notebook(serialized)
         if refreshed is None:
             raise ValueError(f"Failed to deserialize shared notebook {notebook.notebook_id}.")
@@ -430,26 +460,33 @@ class SharedNotebookStore:
         if removed_payload is None:
             raise KeyError(f"Unknown shared notebook: {notebook_id}")
 
-        self._write_state({"notebooks": remaining, "folders": list(state.get("folders", []))})
+        self._write_state(
+            {
+                "notebooks": remaining,
+                "folders": list(state.get("folders", [])),
+                "deletedNotebookIds": sorted({*self.list_deleted_notebook_ids(), notebook_id}),
+            }
+        )
         removed = deserialize_notebook(removed_payload)
         if removed is None:
             raise ValueError(f"Failed to deserialize removed shared notebook {notebook_id}.")
         return removed
 
-    def _read_state(self) -> dict[str, list[dict[str, object]]]:
+    def _read_state(self) -> dict[str, list[dict[str, object]] | list[str]]:
         if not self._path.exists():
-            return {"notebooks": [], "folders": []}
+            return {"notebooks": [], "folders": [], "deletedNotebookIds": []}
 
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
-            return {"notebooks": [], "folders": []}
+            return {"notebooks": [], "folders": [], "deletedNotebookIds": []}
 
         if not isinstance(raw, dict):
-            return {"notebooks": [], "folders": []}
+            return {"notebooks": [], "folders": [], "deletedNotebookIds": []}
 
         notebooks = raw.get("notebooks")
         folders = raw.get("folders")
+        deleted_notebook_ids = raw.get("deletedNotebookIds")
         return {
             "notebooks": [item for item in notebooks if isinstance(item, dict)]
             if isinstance(notebooks, list)
@@ -457,9 +494,16 @@ class SharedNotebookStore:
             "folders": [item for item in folders if isinstance(item, dict)]
             if isinstance(folders, list)
             else [],
+            "deletedNotebookIds": [
+                str(item).strip()
+                for item in deleted_notebook_ids
+                if str(item).strip()
+            ]
+            if isinstance(deleted_notebook_ids, list)
+            else [],
         }
 
-    def _write_state(self, state: dict[str, list[dict[str, object]]]) -> None:
+    def _write_state(self, state: dict[str, list[dict[str, object]] | list[str]]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         temp_path = self._path.with_suffix(f"{self._path.suffix}.tmp")
         temp_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
@@ -547,6 +591,43 @@ class S3SharedNotebookStore:
             )
             return []
 
+    def list_deleted_notebook_ids(self) -> set[str]:
+        if not self._available:
+            return set()
+
+        deleted_ids: set[str] = set()
+        try:
+            client = self._client()
+            for key in iter_s3_keys(client, self._bucket, S3_DELETED_NOTEBOOK_PREFIX):
+                if not key.endswith(".json"):
+                    continue
+                raw_id = key[len(S3_DELETED_NOTEBOOK_PREFIX):-5]
+                notebook_id = unquote(raw_id).strip()
+                if notebook_id:
+                    deleted_ids.add(notebook_id)
+        except Exception as exc:
+            logger.warning(
+                "Failed to list deleted shared notebook markers from S3 bucket %r: %s",
+                self._bucket,
+                exc,
+                exc_info=True,
+            )
+        return deleted_ids
+
+    def mark_notebook_deleted(self, notebook_id: str) -> None:
+        self._require_available()
+        normalized_notebook_id = str(notebook_id or "").strip()
+        if not normalized_notebook_id:
+            return
+        self._write_payload(
+            self._client(),
+            self._deleted_notebook_key(normalized_notebook_id),
+            {
+                "notebookId": normalized_notebook_id,
+                "deletedAt": utc_now_iso(),
+            },
+        )
+
     def upsert_notebook(self, notebook: NotebookDefinition) -> tuple[NotebookDefinition, str]:
         self._require_available()
         serialized = serialize_notebook(notebook)
@@ -573,6 +654,7 @@ class S3SharedNotebookStore:
         if removed is None:
             raise ValueError(f"Failed to deserialize removed shared notebook {normalized_notebook_id}.")
         client.delete_object(Bucket=self._bucket, Key=key)
+        self.mark_notebook_deleted(normalized_notebook_id)
         return removed
 
     def upsert_folder(self, folder: SharedNotebookFolder) -> tuple[SharedNotebookFolder, str]:
@@ -669,6 +751,12 @@ class S3SharedNotebookStore:
         if not normalized_notebook_id:
             raise ValueError("Shared notebook id is required.")
         return f"{S3_NOTEBOOK_PREFIX}{quote(normalized_notebook_id, safe='')}.json"
+
+    def _deleted_notebook_key(self, notebook_id: str) -> str:
+        normalized_notebook_id = str(notebook_id or "").strip()
+        if not normalized_notebook_id:
+            raise ValueError("Shared notebook id is required.")
+        return f"{S3_DELETED_NOTEBOOK_PREFIX}{quote(normalized_notebook_id, safe='')}.json"
 
     def _ensure_default_folders_locked(self) -> None:
         client = self._client()

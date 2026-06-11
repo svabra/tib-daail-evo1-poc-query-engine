@@ -1,9 +1,27 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.4. Keep entries concise and
+# Derived from git history through version 0.10.5. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.5",
+        "releasedAt": "2026-06-11T13:04:52+02:00",
+        "features": [
+            (
+                "Shared notebook deletes now persist tombstone markers in "
+                "local and S3-backed shared notebook stores, so accidental "
+                "Test 3.1 - Problem Solving copies can be removed without "
+                "restart seeding or stale browser sync recreating them."
+            ),
+            (
+                "Data pipeline materialized stages now apply the same virtual "
+                "S3 source rewrite used by exploration mode before writing "
+                "each stage to Parquet, including the Kostenbelege KBPO "
+                "compatibility projection for the original query."
+            ),
+        ],
+    },
     {
         "version": "0.10.4",
         "releasedAt": "2026-06-11T11:26:32+02:00",
