@@ -80,6 +80,26 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn(".result-warning-list", css_source)
         self.assertIn(".notebook-share-actions", css_source)
 
+    def test_shared_notebook_delete_marks_pending_state_in_ui(self) -> None:
+        app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
+        css_source = (STATIC_ROOT / "css" / "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("const notebookDeletionInProgressIds = new Set();", app_source)
+        self.assertIn("function setNotebookDeletionInProgress", app_source)
+        self.assertIn("function clearSharedNotebookPendingWork", app_source)
+        self.assertIn("setNotebookDeletionInProgress(notebookId, true);", app_source)
+        self.assertIn("setNotebookDeletionInProgress(notebookId, false);", app_source)
+        self.assertIn("notebookDeletionInProgress(notebookId)", app_source)
+        self.assertIn("link.classList.toggle(\"is-deleting\", deleteInProgress);", app_source)
+        self.assertIn("link.draggable = Boolean(metadata.canEdit && !deleteInProgress);", app_source)
+        self.assertIn("sharedBadge.textContent = deleteInProgress", app_source)
+        self.assertIn("DELETION IN PROGRESS", app_source)
+        self.assertIn("dataset.deleteInProgress", app_source)
+        self.assertIn("Notebook deletion is in progress.", app_source)
+        self.assertIn("clearSharedNotebookPendingWork(notebookId);", app_source)
+        self.assertIn(".notebook-link.is-deleting", css_source)
+        self.assertIn('.notebook-sharing-pill[data-tone="deleting"]', css_source)
+
     def test_sql_view_toggle_has_markup_runtime_wiring_and_styles(self) -> None:
         markup_source = (
             STATIC_ROOT / "js" / "notebook-workspace-markup.js"

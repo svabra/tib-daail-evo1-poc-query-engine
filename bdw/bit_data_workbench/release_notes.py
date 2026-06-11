@@ -1,9 +1,28 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.5. Keep entries concise and
+# Derived from git history through version 0.10.6. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.6",
+        "releasedAt": "2026-06-11T14:21:26+02:00",
+        "features": [
+            (
+                "Shared notebook deletes now immediately show a DELETION IN "
+                "PROGRESS state in the sidebar and workspace header while the "
+                "server request is still pending, with notebook edit, delete, "
+                "copy, share, version, and stale shared-sync actions disabled "
+                "until the request completes."
+            ),
+            (
+                "Navigate to source object now resolves direct S3 "
+                "read_parquet paths and Local Workspace physical DuckDB "
+                "relations back to the logical source objects shown in the "
+                "sidebar."
+            ),
+        ],
+    },
     {
         "version": "0.10.5",
         "releasedAt": "2026-06-11T13:04:52+02:00",

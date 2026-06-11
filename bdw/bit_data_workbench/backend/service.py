@@ -2808,6 +2808,11 @@ class WorkbenchService:
         *,
         local_relation_map: dict[str, str] | None = None,
     ) -> list[dict[str, object]]:
+        logical_by_physical = {
+            normalize_query_alias_key(physical_relation): str(logical_relation or "").strip()
+            for logical_relation, physical_relation in (local_relation_map or {}).items()
+            if str(logical_relation or "").strip() and str(physical_relation or "").strip()
+        }
         physical_relations = {
             str(value or "").strip()
             for value in (local_relation_map or {}).values()
@@ -2822,12 +2827,20 @@ class WorkbenchService:
         for relation in sorted(physical_relations):
             if normalize_query_alias_key(relation) not in touched_keys and not relation.startswith("workspace_local_"):
                 continue
-            summary = self._local_workspace_source_summary(relation)
+            summary = self._local_workspace_source_summary(
+                relation,
+                query_alias=logical_by_physical.get(normalize_query_alias_key(relation), ""),
+            )
             if summary:
                 summaries.append(summary)
         return summaries
 
-    def _local_workspace_source_summary(self, relation: str) -> dict[str, object] | None:
+    def _local_workspace_source_summary(
+        self,
+        relation: str,
+        *,
+        query_alias: str = "",
+    ) -> dict[str, object] | None:
         parts = [part.strip().strip('"') for part in str(relation or "").split(".") if part.strip()]
         if len(parts) != 2:
             return None
@@ -2851,7 +2864,7 @@ class WorkbenchService:
             source_format = suffix or "csv"
         return {
             "relation": relation,
-            "query_alias": "",
+            "query_alias": str(query_alias or "").strip(),
             "bucket": "",
             "key": local_path.name,
             "path": local_path.as_posix(),

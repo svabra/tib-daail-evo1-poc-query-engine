@@ -607,6 +607,50 @@ class QuerySourceValidationTests(unittest.TestCase):
         self.assertEqual(snapshot["jobId"], "query-local")
         self.assertTrue(fake_query_jobs.called)
 
+    def test_prepare_query_sql_returns_local_workspace_alias_for_navigation(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            schema_name = "workspace_local_browser_abc"
+            table_name = "entry_local_entry_123"
+            source_dir = temp_path / "local-workspace-query-sources" / schema_name
+            source_dir.mkdir(parents=True)
+            (source_dir / f"{table_name}.csv").write_text("id\n1\n", encoding="utf-8")
+            physical_relation = f"{schema_name}.{table_name}"
+            logical_relation = "workspace.local.saved_results.local-entry-123"
+
+            service = WorkbenchService.__new__(WorkbenchService)
+            service._lock = threading.RLock()
+            service._catalogs = []
+            service.settings = SimpleNamespace(
+                duckdb_database=temp_path / "bit-data-workbench.dev.duckdb"
+            )
+
+            payload = service.prepare_query_sql(
+                sql=f"select * from {physical_relation}",
+                display_sql=f"select * from {logical_relation}",
+                notebook_id="notebook",
+                data_sources=["workspace.local"],
+                local_relation_map={logical_relation: physical_relation},
+            )
+
+            self.assertEqual(
+                payload["sourceObjects"],
+                [
+                    {
+                        "label": f"{table_name}.csv",
+                        "kind": "table",
+                        "sourceId": "workspace.local",
+                        "relation": physical_relation,
+                        "queryAlias": logical_relation,
+                        "queryReference": "",
+                        "bucket": "",
+                        "key": f"{table_name}.csv",
+                        "path": (source_dir / f"{table_name}.csv").as_posix(),
+                        "format": "csv",
+                    }
+                ],
+            )
+
     def test_start_query_job_rewrites_s3_alias_but_keeps_display_sql(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)
         service._lock = threading.RLock()
@@ -685,6 +729,39 @@ class QuerySourceValidationTests(unittest.TestCase):
                     "key": "federal_tax_data_10gb.csv",
                     "path": "s3://test/federal_tax_data_10gb.csv",
                     "format": "csv",
+                }
+            ],
+        )
+
+    def test_prepare_query_sql_returns_direct_s3_table_function_source_object_for_navigation(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
+
+        payload = service.prepare_query_sql(
+            sql=(
+                "select * from read_parquet("
+                "'s3://direct-source-bucket/generated/entities/*.parquet'"
+                ")"
+            ),
+            notebook_id="notebook",
+            data_sources=["workspace.s3"],
+        )
+
+        self.assertEqual(
+            payload["sourceObjects"],
+            [
+                {
+                    "label": "*.parquet",
+                    "kind": "s3-object",
+                    "sourceId": "workspace.s3",
+                    "relation": "s3://direct-source-bucket/generated/entities/*.parquet",
+                    "queryAlias": "",
+                    "queryReference": "",
+                    "bucket": "direct-source-bucket",
+                    "key": "generated/entities/*.parquet",
+                    "path": "s3://direct-source-bucket/generated/entities/*.parquet",
+                    "format": "parquet",
                 }
             ],
         )

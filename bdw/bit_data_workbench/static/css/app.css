@@ -1807,6 +1807,23 @@ details:not([open]) > .source-schema > summary::before {
   box-shadow: var(--shadow);
 }
 
+.notebook-link.is-deleting {
+  border-color: rgba(213, 43, 30, 0.28);
+  background: var(--danger-bg);
+  cursor: progress;
+}
+
+.notebook-link.is-deleting:hover,
+.notebook-link.is-deleting.is-active {
+  border-color: rgba(213, 43, 30, 0.4);
+  background: var(--danger-bg);
+}
+
+.notebook-link.is-deleting .notebook-title,
+.notebook-link.is-deleting .notebook-summary {
+  color: var(--text-muted);
+}
+
 .runbook-list,
 .runbook-tree {
   display: grid;
@@ -5278,6 +5295,13 @@ details:not([open]) > .tree-children {
   font-size: 0.72rem;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.notebook-sharing-pill[data-tone="deleting"],
+.workspace-access-badge[data-tone="deleting"] {
+  border-color: rgba(213, 43, 30, 0.22);
+  background: var(--danger-bg);
+  color: var(--accent-deep);
 }
 
 .workspace-linked-loader {

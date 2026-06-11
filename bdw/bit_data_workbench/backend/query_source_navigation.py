@@ -7,6 +7,7 @@ from ..models import SourceCatalog, SourceObject, SourceSchema
 from .query_aliases import normalize_relation_key as normalize_query_alias_key
 from .query_analysis import KnownRelationReference
 from .source_discovery import parse_s3_path
+from .source_references import infer_s3_reference_format
 
 
 def _source_object_key(payload: dict[str, object]) -> str:
@@ -89,6 +90,30 @@ def _source_object_payload_from_summary(
         "key": key,
         "path": path or (f"s3://{bucket}/{key}" if bucket and key else ""),
         "format": str(summary.get("format") or "").strip(),
+    }
+
+
+def _source_object_payload_from_s3_path(path: str) -> dict[str, object] | None:
+    normalized_path = str(path or "").strip()
+    if not normalized_path.lower().startswith("s3://"):
+        return None
+    try:
+        bucket, key = parse_s3_path(normalized_path)
+    except ValueError:
+        return None
+    if not bucket or not key:
+        return None
+    return {
+        "label": _source_object_display_label(bucket=bucket, key=key),
+        "kind": "s3-object",
+        "sourceId": "workspace.s3",
+        "relation": normalized_path,
+        "queryAlias": "",
+        "queryReference": "",
+        "bucket": bucket,
+        "key": key,
+        "path": normalized_path,
+        "format": infer_s3_reference_format(key=key),
     }
 
 
@@ -196,6 +221,11 @@ def query_source_objects(
         )
         if summary is not None:
             add(_source_object_payload_from_summary(summary))
+            continue
+
+        direct_s3_payload = _source_object_payload_from_s3_path(relation)
+        if direct_s3_payload is not None:
+            add(direct_s3_payload)
             continue
 
         matched_payload: dict[str, object] | None = None

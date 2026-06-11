@@ -217,6 +217,7 @@ let sidebarSourceOperationStatusClearHandle = null;
 const sharedNotebookDrafts = new Map();
 const sharedNotebookSyncHandles = new Map();
 const sharedNotebookActivityTouchHandles = new Map();
+const notebookDeletionInProgressIds = new Set();
 const s3ExplorerNodeRequests = new Map();
 const resultExportDialogState = {
   jobId: "",
@@ -3570,9 +3571,51 @@ function normalizeNotebookActivityAction(reason = "edited") {
   return "edit";
 }
 
+function notebookDeletionInProgress(notebookId) {
+  return notebookDeletionInProgressIds.has(String(notebookId || "").trim());
+}
+
+function clearSharedNotebookPendingWork(notebookId) {
+  const normalizedNotebookId = String(notebookId || "").trim();
+  if (!normalizedNotebookId) {
+    return;
+  }
+
+  const pendingSync = sharedNotebookSyncHandles.get(normalizedNotebookId);
+  if (pendingSync) {
+    window.clearTimeout(pendingSync);
+    sharedNotebookSyncHandles.delete(normalizedNotebookId);
+  }
+
+  const pendingActivityTouch = sharedNotebookActivityTouchHandles.get(normalizedNotebookId);
+  if (pendingActivityTouch) {
+    window.clearTimeout(pendingActivityTouch);
+    sharedNotebookActivityTouchHandles.delete(normalizedNotebookId);
+  }
+}
+
+function setNotebookDeletionInProgress(notebookId, inProgress) {
+  const normalizedNotebookId = String(notebookId || "").trim();
+  if (!normalizedNotebookId) {
+    return;
+  }
+
+  if (inProgress) {
+    notebookDeletionInProgressIds.add(normalizedNotebookId);
+    clearSharedNotebookPendingWork(normalizedNotebookId);
+  } else {
+    notebookDeletionInProgressIds.delete(normalizedNotebookId);
+  }
+  applyNotebookMetadata();
+}
+
 function scheduleSharedNotebookActivityTouch(notebookId, reason = "edited") {
   const normalizedNotebookId = String(notebookId || "").trim();
-  if (!normalizedNotebookId || !notebookMetadata(normalizedNotebookId).shared) {
+  if (
+    !normalizedNotebookId ||
+    notebookDeletionInProgress(normalizedNotebookId) ||
+    !notebookMetadata(normalizedNotebookId).shared
+  ) {
     return;
   }
 
@@ -4433,9 +4476,11 @@ function notebookVisibilityTitle(shared) {
 }
 
 function createNotebookLinkElement(notebookId, metadata) {
+  const deleteInProgress = Boolean(metadata.deleteInProgress);
   const link = document.createElement("a");
   link.href = notebookUrl(notebookId) || "#";
   link.className = "notebook-link notebook-tree-leaf";
+  link.classList.toggle("is-deleting", deleteInProgress);
   link.dataset.notebookId = notebookId;
   link.dataset.notebookTitle = metadata.title;
   link.dataset.notebookSummary = metadata.summary;
@@ -4464,8 +4509,9 @@ function createNotebookLinkElement(notebookId, metadata) {
   link.dataset.defaultNotebookShared = metadata.shared ? "true" : "false";
   link.dataset.canEdit = metadata.canEdit ? "true" : "false";
   link.dataset.canDelete = metadata.canDelete ? "true" : "false";
+  link.dataset.deleteInProgress = deleteInProgress ? "true" : "false";
   link.dataset.draggableNotebook = "";
-  link.draggable = Boolean(metadata.canEdit);
+  link.draggable = Boolean(metadata.canEdit && !deleteInProgress);
 
   const titleRow = document.createElement("span");
   titleRow.className = "notebook-title-row";
@@ -4477,8 +4523,13 @@ function createNotebookLinkElement(notebookId, metadata) {
 
   const sharedBadge = document.createElement("small");
   sharedBadge.className = "notebook-sharing-pill";
-  sharedBadge.textContent = notebookVisibilityLabel(metadata.shared);
-  sharedBadge.title = notebookVisibilityTitle(metadata.shared);
+  sharedBadge.textContent = deleteInProgress
+    ? "DELETION IN PROGRESS"
+    : notebookVisibilityLabel(metadata.shared);
+  sharedBadge.title = deleteInProgress
+    ? "Notebook deletion is in progress."
+    : notebookVisibilityTitle(metadata.shared);
+  sharedBadge.dataset.tone = deleteInProgress ? "deleting" : "";
   titleRow.append(sharedBadge);
 
   const tools = document.createElement("span");
@@ -4491,9 +4542,11 @@ function createNotebookLinkElement(notebookId, metadata) {
   }`;
   renameButton.dataset.sidebarRenameNotebook = "";
   renameButton.textContent = "Rename";
-  renameButton.title = metadata.canEdit
-    ? "Rename notebook"
-    : "This notebook cannot be renamed.";
+  renameButton.title = deleteInProgress
+    ? "Notebook deletion is in progress."
+    : metadata.canEdit
+      ? "Rename notebook"
+      : "This notebook cannot be renamed.";
   renameButton.disabled = !metadata.canEdit;
 
   const editButton = document.createElement("button");
@@ -4503,9 +4556,11 @@ function createNotebookLinkElement(notebookId, metadata) {
   }`;
   editButton.dataset.sidebarEditNotebook = "";
   editButton.textContent = "Edit";
-  editButton.title = metadata.canEdit
-    ? "Edit notebook metadata"
-    : "This notebook cannot be edited.";
+  editButton.title = deleteInProgress
+    ? "Notebook deletion is in progress."
+    : metadata.canEdit
+      ? "Edit notebook metadata"
+      : "This notebook cannot be edited.";
   editButton.disabled = !metadata.canEdit;
 
   const deleteButton = document.createElement("button");
@@ -4515,9 +4570,11 @@ function createNotebookLinkElement(notebookId, metadata) {
   }`;
   deleteButton.dataset.sidebarDeleteNotebook = "";
   deleteButton.textContent = "Delete";
-  deleteButton.title = metadata.canDelete
-    ? "Delete notebook"
-    : "This notebook cannot be deleted.";
+  deleteButton.title = deleteInProgress
+    ? "Notebook deletion is in progress."
+    : metadata.canDelete
+      ? "Delete notebook"
+      : "This notebook cannot be deleted.";
   deleteButton.disabled = !metadata.canDelete;
 
   tools.append(renameButton, editButton, deleteButton);
@@ -4536,6 +4593,7 @@ function createNotebookLinkElement(notebookId, metadata) {
 
 function notebookMetadata(notebookId) {
   const defaults = readNotebookDefaults(notebookId);
+  const deleteInProgress = notebookDeletionInProgress(notebookId);
   if (!defaults.canEdit) {
     const readOnlyMetadata = {
       ...defaults,
@@ -4553,6 +4611,11 @@ function notebookMetadata(notebookId) {
         ? defaults.versions
         : [createInitialNotebookVersion(notebookId, defaults)],
     };
+    readOnlyMetadata.deleteInProgress = deleteInProgress;
+    if (deleteInProgress) {
+      readOnlyMetadata.canEdit = false;
+      readOnlyMetadata.canDelete = false;
+    }
 
     updateStoredNotebookState(notebookId, () => ({
       title: readOnlyMetadata.title,
@@ -4632,6 +4695,9 @@ function notebookMetadata(notebookId) {
 
   return {
     ...baseMetadata,
+    canEdit: deleteInProgress ? false : baseMetadata.canEdit,
+    canDelete: deleteInProgress ? false : baseMetadata.canDelete,
+    deleteInProgress,
     versions,
   };
 }
@@ -4913,7 +4979,7 @@ async function setSharedNotebookFolderVisibility(folder, isPublic) {
 }
 
 async function syncSharedNotebookNow(notebookId) {
-  if (!notebookId || !notebookMetadata(notebookId).shared) {
+  if (!notebookId || notebookDeletionInProgress(notebookId) || !notebookMetadata(notebookId).shared) {
     return null;
   }
 
@@ -4947,7 +5013,7 @@ async function syncSharedNotebookNow(notebookId) {
 }
 
 function scheduleSharedNotebookSync(notebookId, delayMs = 450) {
-  if (!notebookId || !notebookMetadata(notebookId).shared) {
+  if (!notebookId || notebookDeletionInProgress(notebookId) || !notebookMetadata(notebookId).shared) {
     return;
   }
 
@@ -5338,6 +5404,7 @@ function renderWorkspaceVersions(metaRoot, versions) {
 }
 
 function updateSidebarNotebookLink(link, metadata) {
+  const deleteInProgress = Boolean(metadata.deleteInProgress);
   link.dataset.notebookTitle = metadata.title;
   link.dataset.notebookSummary = metadata.summary;
   link.dataset.createdAt = metadata.createdAt || link.dataset.createdAt || new Date().toISOString();
@@ -5353,6 +5420,9 @@ function updateSidebarNotebookLink(link, metadata) {
   link.dataset.defaultNotebookShared = metadata.shared ? "true" : "false";
   link.dataset.canEdit = metadata.canEdit ? "true" : "false";
   link.dataset.canDelete = metadata.canDelete ? "true" : "false";
+  link.dataset.deleteInProgress = deleteInProgress ? "true" : "false";
+  link.classList.toggle("is-deleting", deleteInProgress);
+  link.draggable = Boolean(metadata.canEdit && !deleteInProgress);
   link.dataset.defaultNotebookCells = JSON.stringify(
     (metadata.cells ?? []).map((cell) => ({
         cellId: cell.cellId,
@@ -5377,8 +5447,13 @@ function updateSidebarNotebookLink(link, metadata) {
     sharedBadge.className = "notebook-sharing-pill";
     titleNode?.after(sharedBadge);
   }
-  sharedBadge.textContent = notebookVisibilityLabel(metadata.shared);
-  sharedBadge.title = notebookVisibilityTitle(metadata.shared);
+  sharedBadge.textContent = deleteInProgress
+    ? "DELETION IN PROGRESS"
+    : notebookVisibilityLabel(metadata.shared);
+  sharedBadge.title = deleteInProgress
+    ? "Notebook deletion is in progress."
+    : notebookVisibilityTitle(metadata.shared);
+  sharedBadge.dataset.tone = deleteInProgress ? "deleting" : "";
 
   const summaryNode = link.querySelector(".notebook-summary");
   if (summaryNode) {
@@ -5389,27 +5464,33 @@ function updateSidebarNotebookLink(link, metadata) {
   if (renameButton) {
     renameButton.disabled = !metadata.canEdit;
     renameButton.classList.toggle("is-action-disabled", !metadata.canEdit);
-    renameButton.title = metadata.canEdit
-      ? "Rename notebook"
-      : "This notebook cannot be renamed.";
+    renameButton.title = deleteInProgress
+      ? "Notebook deletion is in progress."
+      : metadata.canEdit
+        ? "Rename notebook"
+        : "This notebook cannot be renamed.";
   }
 
   const editButton = link.querySelector("[data-sidebar-edit-notebook]");
   if (editButton) {
     editButton.disabled = !metadata.canEdit;
     editButton.classList.toggle("is-action-disabled", !metadata.canEdit);
-    editButton.title = metadata.canEdit
-      ? "Edit notebook metadata"
-      : "This notebook cannot be edited.";
+    editButton.title = deleteInProgress
+      ? "Notebook deletion is in progress."
+      : metadata.canEdit
+        ? "Edit notebook metadata"
+        : "This notebook cannot be edited.";
   }
 
   const deleteButton = link.querySelector("[data-sidebar-delete-notebook]");
   if (deleteButton) {
     deleteButton.disabled = !metadata.canDelete;
     deleteButton.classList.toggle("is-action-disabled", !metadata.canDelete);
-    deleteButton.title = metadata.canDelete
-      ? "Delete notebook"
-      : "This notebook cannot be deleted.";
+    deleteButton.title = deleteInProgress
+      ? "Notebook deletion is in progress."
+      : metadata.canDelete
+        ? "Delete notebook"
+        : "This notebook cannot be deleted.";
   }
 
   renderSidebarTags(link, metadata.tags);
@@ -6749,9 +6830,12 @@ function workspaceCellIds(workspaceRoot) {
 
 function applyWorkspaceMetadata(metaRoot, metadata) {
   const workspaceRoot = metaRoot.closest("[data-workspace-notebook]");
+  const deleteInProgress = Boolean(metadata.deleteInProgress);
   metaRoot.dataset.shared = metadata.shared ? "true" : "false";
+  metaRoot.dataset.deleteInProgress = deleteInProgress ? "true" : "false";
   if (workspaceRoot) {
     workspaceRoot.dataset.shared = metadata.shared ? "true" : "false";
+    workspaceRoot.dataset.deleteInProgress = deleteInProgress ? "true" : "false";
   }
   metaRoot.dataset.canEdit = metadata.canEdit ? "true" : "false";
   metaRoot.dataset.canDelete = metadata.canDelete ? "true" : "false";
@@ -6789,8 +6873,13 @@ function applyWorkspaceMetadata(metaRoot, metadata) {
 
   const accessBadge = workspaceRoot?.querySelector("[data-access-badge]");
   if (accessBadge) {
-    accessBadge.textContent = notebookAccessMode(metadata);
-    accessBadge.title = notebookAccessModeHint(metadata);
+    accessBadge.textContent = deleteInProgress
+      ? "DELETION IN PROGRESS"
+      : notebookAccessMode(metadata);
+    accessBadge.title = deleteInProgress
+      ? "Notebook deletion is in progress."
+      : notebookAccessModeHint(metadata);
+    accessBadge.dataset.tone = deleteInProgress ? "deleting" : "";
   }
 
   const tagInput = metaRoot.querySelector("[data-tag-input]");
@@ -6819,41 +6908,60 @@ function applyWorkspaceMetadata(metaRoot, metadata) {
   if (sharedToggle) {
     sharedToggle.classList.toggle("is-on", metadata.shared === true);
     sharedToggle.setAttribute("aria-pressed", metadata.shared === true ? "true" : "false");
-    sharedToggle.title = metadata.canEdit
-      ? notebookVisibilityTitle(metadata.shared === true)
-      : "Immutable preset notebooks are public.";
+    const sharedToggleTitle = deleteInProgress
+      ? "Notebook deletion is in progress."
+      : metadata.canEdit
+        ? notebookVisibilityTitle(metadata.shared === true)
+        : "Immutable preset notebooks are public.";
+    sharedToggle.title = sharedToggleTitle;
     sharedToggle.disabled = !metadata.canEdit;
+    const sharedToggleCopy = sharedToggle.querySelector(".workspace-sharing-toggle-copy");
+    if (sharedToggleCopy) {
+      const toggleLabel = deleteInProgress
+        ? "DELETION IN PROGRESS"
+        : notebookVisibilityLabel(metadata.shared);
+      const toggleDetail = deleteInProgress
+        ? "The notebook will disappear when the server confirms deletion."
+        : metadata.shared
+          ? "Stores this notebook on the server and announces it to connected users."
+          : "Keeps this notebook local to this browser workspace.";
+      const detail = document.createElement("small");
+      detail.textContent = toggleDetail;
+      sharedToggleCopy.replaceChildren(document.createTextNode(toggleLabel), detail);
+    }
   }
+
+  const disabledByDeletionTitle = "Notebook deletion is in progress.";
 
   syncWorkspaceActionButton(workspaceRoot?.querySelector("[data-rename-notebook]"), {
     allowed: metadata.canEdit,
     enabledTitle: "Rename notebook",
-    disabledTitle: "This notebook cannot be renamed.",
+    disabledTitle: deleteInProgress ? disabledByDeletionTitle : "This notebook cannot be renamed.",
   });
   syncWorkspaceActionButton(workspaceRoot?.querySelector("[data-edit-notebook]"), {
     allowed: metadata.canEdit,
     enabledTitle: "Edit notebook metadata",
-    disabledTitle: "This notebook cannot be edited.",
+    disabledTitle: deleteInProgress ? disabledByDeletionTitle : "This notebook cannot be edited.",
   });
   syncWorkspaceActionButton(workspaceRoot?.querySelector("[data-delete-notebook]"), {
     allowed: metadata.canDelete,
     enabledTitle: "Delete notebook",
-    disabledTitle: "This notebook cannot be deleted.",
+    disabledTitle: deleteInProgress ? disabledByDeletionTitle : "This notebook cannot be deleted.",
   });
   syncWorkspaceActionButton(workspaceRoot?.querySelector("[data-copy-notebook]"), {
-    allowed: true,
+    allowed: !deleteInProgress,
     enabledTitle: "Create a copy of this notebook",
-    disabledTitle: "Create a copy of this notebook",
+    disabledTitle: deleteInProgress ? disabledByDeletionTitle : "Create a copy of this notebook",
   });
   syncWorkspaceActionButton(workspaceRoot?.querySelector("[data-share-notebook]"), {
-    allowed: true,
+    allowed: !deleteInProgress,
     enabledTitle: "Copy or email a notebook reference",
-    disabledTitle: "Copy or email a notebook reference",
+    disabledTitle: deleteInProgress ? disabledByDeletionTitle : "Copy or email a notebook reference",
   });
   syncWorkspaceActionButton(metaRoot.querySelector("[data-save-version]"), {
     allowed: metadata.canEdit,
     enabledTitle: "Save the current notebook state as a version",
-    disabledTitle: "This notebook cannot be versioned.",
+    disabledTitle: deleteInProgress ? disabledByDeletionTitle : "This notebook cannot be versioned.",
   });
 
   renderWorkspaceTags(metaRoot, metadata.tags, metadata.canEdit);
@@ -7042,15 +7150,21 @@ async function deleteNotebook(notebookId) {
   }
 
   if (metadata.shared) {
-    const response = await window.fetch(`/api/notebooks/shared/${encodeURIComponent(notebookId)}`, {
-      method: "DELETE",
-      headers: {
-        Accept: "application/json",
-        "X-Workbench-Client-Id": workbenchClientId(),
-      },
-    });
-    if (!response.ok) {
-      throw new Error(`Failed to delete shared notebook ${notebookId}: ${response.status}`);
+    setNotebookDeletionInProgress(notebookId, true);
+    try {
+      const response = await window.fetch(`/api/notebooks/shared/${encodeURIComponent(notebookId)}`, {
+        method: "DELETE",
+        headers: {
+          Accept: "application/json",
+          "X-Workbench-Client-Id": workbenchClientId(),
+        },
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to delete shared notebook ${notebookId}: ${response.status}`);
+      }
+    } catch (error) {
+      setNotebookDeletionInProgress(notebookId, false);
+      throw error;
     }
     removeNotebookFromStoredTreeState(notebookId);
     deleteStoredNotebookState(notebookId);
@@ -7092,11 +7206,8 @@ function deleteStoredNotebookState(notebookId) {
 
   sharedNotebookDrafts.delete(notebookId);
   removeNotebookFromStoredTreeState(notebookId);
-  const pendingSync = sharedNotebookSyncHandles.get(notebookId);
-  if (pendingSync) {
-    window.clearTimeout(pendingSync);
-    sharedNotebookSyncHandles.delete(notebookId);
-  }
+  clearSharedNotebookPendingWork(notebookId);
+  notebookDeletionInProgressIds.delete(notebookId);
 
   const state = readStoredNotebookMetadata();
   if (!(notebookId in state)) {
@@ -7374,6 +7485,10 @@ async function applyNotebookEvent(eventPayload) {
   }
 
   sharedNotebookDrafts.delete(notebookId);
+  if (eventPayload.eventType === "deleted") {
+    clearSharedNotebookPendingWork(notebookId);
+    notebookDeletionInProgressIds.delete(notebookId);
+  }
   const mode = currentWorkspaceMode();
   const activeNotebookId = currentWorkspaceNotebookId();
 
