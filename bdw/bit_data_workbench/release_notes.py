@@ -1,9 +1,26 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.3. Keep entries concise and
+# Derived from git history through version 0.10.4. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.4",
+        "releasedAt": "2026-06-11T11:26:32+02:00",
+        "features": [
+            (
+                "Editable seeded shared notebooks now preserve their stable "
+                "notebook id when syncing edits, preventing the Test 3.1 - "
+                "Problem Solving notebook from creating duplicate shared "
+                "copies."
+            ),
+            (
+                "Shared notebook saves now repair stale browser requests that "
+                "omit the seeded notebook id by matching restart-seeded "
+                "notebook metadata before creating a new shared notebook."
+            ),
+        ],
+    },
     {
         "version": "0.10.3",
         "releasedAt": "2026-06-10T22:44:41+02:00",

@@ -1276,6 +1276,35 @@ class WorkbenchService:
     ) -> list[dict[str, Any]]:
         return self._realtime_facade().wait_for_updates(last_versions, timeout)
 
+    def _restart_seeded_shared_notebook_id_for_upsert(
+        self,
+        *,
+        title: str,
+        linked_generator_id: str,
+        created_at: str | None,
+    ) -> str:
+        normalized_title = str(title or "").strip()
+        normalized_linked_generator_id = str(linked_generator_id or "").strip()
+        normalized_created_at = str(created_at or "").strip()
+        if not (
+            normalized_title
+            and normalized_linked_generator_id
+            and normalized_created_at
+        ):
+            return ""
+
+        with self._lock:
+            catalogs = list(getattr(self, "_catalogs", []))
+
+        for seed in build_restart_seeded_shared_notebooks(catalogs):
+            if (
+                seed.title == normalized_title
+                and seed.linked_generator_id == normalized_linked_generator_id
+                and seed.created_at == normalized_created_at
+            ):
+                return seed.notebook_id
+        return ""
+
     def upsert_shared_notebook(
         self,
         *,
@@ -1292,7 +1321,15 @@ class WorkbenchService:
         created_at: str | None = None,
         origin_client_id: str = "",
     ) -> dict[str, object]:
-        normalized_notebook_id = str(notebook_id or "").strip() or f"shared-notebook-{uuid.uuid4().hex}"
+        normalized_notebook_id = str(notebook_id or "").strip()
+        if not normalized_notebook_id:
+            normalized_notebook_id = self._restart_seeded_shared_notebook_id_for_upsert(
+                title=title,
+                linked_generator_id=linked_generator_id,
+                created_at=created_at,
+            )
+        if not normalized_notebook_id:
+            normalized_notebook_id = f"shared-notebook-{uuid.uuid4().hex}"
         existing_notebook = next(
             (item for item in self._shared_notebook_store.list_notebooks() if item.notebook_id == normalized_notebook_id),
             None,

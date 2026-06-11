@@ -399,6 +399,78 @@ class SharedNotebookServiceTests(unittest.TestCase):
         )
         self.assertEqual(appended_events[1]["origin_client_id"], "client-2")
 
+    def test_upsert_without_id_updates_matching_restart_seed_notebook(
+        self,
+    ) -> None:
+        _, notebook_cell_type, notebook_type, _, _, _ = (
+            import_shared_notebook_components()
+        )
+        seed = notebook_type(
+            notebook_id="test-3-1-problem-solving",
+            title="Test 3.1 - Problem Solving",
+            summary="Seed summary",
+            cells=[
+                notebook_cell_type(
+                    cell_id="test-3-1-problem-solving-cell-1",
+                    sql="select 'seed'",
+                )
+            ],
+            tree_path=(
+                "PoC Tests",
+                "Performance Evaluation",
+                "Kostenbelege (3.1)",
+            ),
+            linked_generator_id="kostenbelege_3_1_multi_source_loader",
+            can_edit=True,
+            can_delete=True,
+            shared=True,
+            created_at="2026-06-10T00:00:00+00:00",
+        )
+        service, rebuild_calls, appended_events = (
+            build_shared_notebook_service([seed])
+        )
+        service._catalogs = []
+
+        for index in range(2):
+            result = service.upsert_shared_notebook(
+                notebook_id=None,
+                title="Test 3.1 - Problem Solving",
+                summary=f"Edited summary {index + 1}",
+                tags=["performance", "kostenbelege"],
+                tree_path=[
+                    "PoC Tests",
+                    "Performance Evaluation",
+                    "Renamed Folder",
+                ],
+                linked_generator_id="kostenbelege_3_1_multi_source_loader",
+                created_at="2026-06-10T00:00:00+00:00",
+                cells=[
+                    {
+                        "cellId": "test-3-1-problem-solving-cell-1",
+                        "sql": f"select {index + 1} as edited",
+                    }
+                ],
+                versions=[],
+                origin_client_id="stale-browser-client",
+            )
+
+            self.assertEqual(result["action"], "updated")
+            self.assertEqual(
+                result["notebook"]["notebookId"],
+                "test-3-1-problem-solving",
+            )
+
+        notebooks = service._shared_notebook_store.list_notebooks()
+        self.assertEqual(len(notebooks), 1)
+        self.assertEqual(notebooks[0].notebook_id, "test-3-1-problem-solving")
+        self.assertEqual(notebooks[0].summary, "Edited summary 2")
+        self.assertEqual(notebooks[0].cells[0].sql, "select 2 as edited")
+        self.assertEqual(rebuild_calls, ["rebuild", "rebuild"])
+        self.assertEqual(
+            [event["event_type"] for event in appended_events],
+            ["updated", "updated"],
+        )
+
     def test_shared_notebook_serialization_round_trips_pipeline_paths(self) -> None:
         _, notebook_cell_type, notebook_type, _, _, _ = import_shared_notebook_components()
         from bit_data_workbench.backend.shared_notebooks import (

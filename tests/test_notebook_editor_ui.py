@@ -56,6 +56,18 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("resultExpectations", model_source)
         self.assertIn("processingHints: cell.processingHints", app_source)
         self.assertIn("resultExpectations: cell.resultExpectations", app_source)
+        self.assertIn(
+            "const shouldPreserveNotebookId = metadata.shared === true && !isLocalNotebookId(notebookId);",
+            app_source,
+        )
+        self.assertIn(
+            "notebookId: shouldPreserveNotebookId ? notebookId : null",
+            app_source,
+        )
+        self.assertNotIn(
+            "notebookId: isSharedNotebookId(notebookId) ? notebookId : null",
+            app_source,
+        )
         self.assertIn("data-share-notebook", markup_source)
         self.assertIn("openNotebookShareDialog", controller_source)
         self.assertIn("ensureNotebookShareDialog", dialogs_source)

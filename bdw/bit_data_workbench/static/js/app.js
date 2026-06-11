@@ -4699,8 +4699,9 @@ function notebookTreePathForId(notebookId) {
 
 function sharedNotebookPayload(notebookId) {
   const metadata = notebookMetadata(notebookId);
+  const shouldPreserveNotebookId = metadata.shared === true && !isLocalNotebookId(notebookId);
   return {
-    notebookId: isSharedNotebookId(notebookId) ? notebookId : null,
+    notebookId: shouldPreserveNotebookId ? notebookId : null,
     title: metadata.title,
     summary: metadata.summary,
     tags: normalizeTags(metadata.tags),
