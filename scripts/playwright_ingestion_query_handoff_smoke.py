@@ -117,11 +117,36 @@ async def assert_query_handoff(page, expected_relation: str, timeout_ms: int) ->
         f'[data-source-object].is-selected[data-source-option-id="pg_oltp"][data-source-object-relation="{expected_relation}"]'
     )
     await selected_source.wait_for(state="visible", timeout=timeout_ms)
+    expected_sql_reference = (
+        await selected_source.get_attribute("data-source-object-query-reference")
+        or await selected_source.get_attribute("data-source-object-query-alias")
+        or expected_relation
+    ).strip()
+    if not expected_sql_reference:
+        raise RuntimeError("The selected imported source does not expose a query reference.")
 
-    editor = page.locator("[data-query-cell] [data-editor-source]").first
-    sql_text = (await editor.input_value()).strip()
-    if expected_relation not in sql_text:
-        raise RuntimeError("The new notebook SQL does not reference the imported PostgreSQL relation.")
+    workspace = page.locator("[data-workspace-notebook]").first
+    try:
+        await page.wait_for_function(
+            """(relation) => {
+              const editors = Array.from(document.querySelectorAll(
+                "[data-workspace-notebook] [data-query-cell].is-active [data-editor-source], " +
+                "[data-workspace-notebook] [data-editor-source]"
+              ));
+              return editors.some((editor) => String(editor.value || "").includes(relation));
+            }""",
+            arg=expected_sql_reference,
+            timeout=timeout_ms,
+        )
+    except PlaywrightTimeoutError as exc:
+        sql_texts = await workspace.locator("[data-query-cell] [data-editor-source]").evaluate_all(
+            "(editors) => editors.map((editor) => editor.value || '')"
+        )
+        raise RuntimeError(
+            "The new notebook SQL does not reference the imported PostgreSQL query reference "
+            f"{expected_sql_reference!r}. "
+            f"Editor SQL values: {sql_texts!r}"
+        ) from exc
 
 
 async def run_smoke(args: argparse.Namespace) -> int:

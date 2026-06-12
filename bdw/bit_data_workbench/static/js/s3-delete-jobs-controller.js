@@ -369,7 +369,9 @@ export function createS3DeleteJobsController(helpers) {
         dismissible: isTerminal(job),
         markup: `
           <div class="topbar-notification-item topbar-notification-item-s3-delete">
-            <span class="topbar-notification-item-status topbar-notification-item-status-notice${isRunning(job) ? " is-live" : ""}">
+            <span class="topbar-notification-item-status topbar-notification-item-status-notice is-${escapeHtml(
+              String(job.status || "unknown").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "unknown"
+            )}${isRunning(job) ? " is-live" : ""}">
               ${escapeHtml(statusLabel(job))} S3 delete
             </span>
             <span class="topbar-notification-item-title">${escapeHtml(job.path || job.bucket || "S3 delete")}</span>

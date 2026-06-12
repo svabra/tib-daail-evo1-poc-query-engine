@@ -20,10 +20,12 @@ if str(BDW_ROOT) not in sys.path:
 
 from bit_data_workbench.backend.service import STARTUP_SEED_S3_BUCKETS, WorkbenchService  # noqa: E402
 from bit_data_workbench.backend.s3_storage import s3_bucket_schema_name  # noqa: E402
+from bit_data_workbench.backend.source_discovery import DiscoveredRelationSpec  # noqa: E402
 from bit_data_workbench.backend.source_discovery import S3DataSourceDiscoverer  # noqa: E402
 from bit_data_workbench.backend.source_discovery import build_s3_query  # noqa: E402
 from bit_data_workbench.backend.source_discovery import drop_discovered_relation_object  # noqa: E402
 from bit_data_workbench.config import Settings  # noqa: E402
+from bit_data_workbench.models import SourceObject  # noqa: E402
 from bit_data_workbench.version_info import current_repo_version  # noqa: E402
 
 
@@ -178,6 +180,15 @@ class GeneratedMwaLoaderS3Client:
             "ContentLength": self.sizes[key],
             "Metadata": metadata,
         }
+
+
+class SinglePartGeneratedMwaLoaderS3Client(GeneratedMwaLoaderS3Client):
+    keys = (
+        "generated/mwa_abrechnung_test/parquet/mwa_abrechnung_entities/part-00001.parquet",
+    )
+    sizes = {
+        "generated/mwa_abrechnung_test/parquet/mwa_abrechnung_entities/part-00001.parquet": 512,
+    }
 
 
 class PartitionedParquetS3Client:
@@ -553,6 +564,31 @@ class CsvS3DiscoveryTests(TestCase):
         self.assertFalse(parquet_spec.merge_downloadable)
         self.assertTrue(parquet_spec.zip_downloadable)
 
+    def test_single_part_generated_loader_output_keeps_dataset_wildcard_reference(self) -> None:
+        discoverer = S3DataSourceDiscoverer(make_settings())
+
+        specs = discoverer._build_desired_specs(
+            SinglePartGeneratedMwaLoaderS3Client(),
+            {"vat-smoke-test"},
+        )
+        specs_by_relation = {spec.relation_name: spec for spec in specs.values()}
+
+        parquet_spec = specs_by_relation["mwa_abrechnung_entities_parquet"]
+        self.assertEqual(parquet_spec.display_name, "mwa_abrechnung_entities.parquet")
+        self.assertEqual(parquet_spec.object_format, "parquet")
+        self.assertTrue(
+            parquet_spec.object_path.endswith(
+                "/parquet/mwa_abrechnung_entities/*.parquet"
+            )
+        )
+        self.assertNotIn("part-00001.parquet", parquet_spec.object_path)
+        self.assertEqual(parquet_spec.download_kind, "generated_parts")
+        self.assertEqual(parquet_spec.part_count, 1)
+        self.assertEqual(
+            parquet_spec.part_prefix,
+            "generated/mwa_abrechnung_test/parquet/mwa_abrechnung_entities/",
+        )
+
     def test_generated_parts_expose_download_metadata_in_workspace_metadata(self) -> None:
         discoverer = S3DataSourceDiscoverer(make_settings())
         specs = discoverer._build_desired_specs(
@@ -611,3 +647,96 @@ class CsvS3DiscoveryTests(TestCase):
             "s3.vat_smoke_test.generated.mwa_abrechnung_test.parquet.mwa_abrechnung_entities.parquet",
         )
         self.assertNotIn("mwa_abrechnung_entities.mwa_abrechnung_entities", parquet_metadata["query_alias"])
+
+    def test_generated_parts_workspace_metadata_normalizes_stale_single_part_path(self) -> None:
+        service = object.__new__(WorkbenchService)
+        service._data_source_discovery = SimpleNamespace(
+            s3_relation_specs=lambda: {
+                "kostenbelege.dim_kalender_parquet": DiscoveredRelationSpec(
+                    schema_name="kostenbelege",
+                    relation_name="dim_kalender_parquet",
+                    query_sql=(
+                        "SELECT * FROM read_parquet("
+                        "'s3://poc-tests-performance-evaluation-kostenbelege-3-1/"
+                        "generated/kostenbelege_3_1/parquet/dim_kalender/part-00001.parquet')"
+                    ),
+                    object_path=(
+                        "s3://poc-tests-performance-evaluation-kostenbelege-3-1/"
+                        "generated/kostenbelege_3_1/parquet/dim_kalender/part-00001.parquet"
+                    ),
+                    object_format="parquet",
+                    display_name="dim_kalender.parquet",
+                    download_kind="generated_parts",
+                    part_prefix="generated/kostenbelege_3_1/parquet/dim_kalender/",
+                    part_file_format="parquet",
+                    part_count=1,
+                    download_filename="dim_kalender.parquet",
+                    zip_downloadable=True,
+                )
+            },
+        )
+
+        metadata = WorkbenchService._workspace_s3_object_metadata(service)
+        item = metadata["kostenbelege.dim_kalender_parquet"]
+
+        self.assertEqual(
+            item["path"],
+            "s3://poc-tests-performance-evaluation-kostenbelege-3-1/"
+            "generated/kostenbelege_3_1/parquet/dim_kalender/*.parquet",
+        )
+        self.assertEqual(
+            item["query_reference"],
+            's3."poc-tests-performance-evaluation-kostenbelege-3-1".'
+            '"generated/kostenbelege_3_1/parquet/dim_kalender/*.parquet"',
+        )
+        self.assertIn("dim_kalender/*.parquet", item["query_sql"])
+        self.assertNotIn("part-00001.parquet", item["query_reference"])
+        self.assertNotIn("part-00001.parquet", item["query_sql"])
+        self.assertEqual(item["download_kind"], "generated_parts")
+        self.assertEqual(item["key"], "")
+
+    def test_cached_generated_source_object_normalizes_stale_single_part_path(self) -> None:
+        source_object = SourceObject(
+            name="dim_kalender_parquet",
+            kind="PARQUET",
+            relation="kostenbelege.dim_kalender_parquet",
+            display_name="dim_kalender.parquet",
+            query_reference=(
+                's3."poc-tests-performance-evaluation-kostenbelege-3-1".'
+                '"generated/kostenbelege_3_1/parquet/dim_kalender/part-00001.parquet"'
+            ),
+            query_sql=(
+                "read_parquet('s3://poc-tests-performance-evaluation-kostenbelege-3-1/"
+                "generated/kostenbelege_3_1/parquet/dim_kalender/part-00001.parquet')"
+            ),
+            s3_bucket="poc-tests-performance-evaluation-kostenbelege-3-1",
+            s3_key="",
+            s3_path=(
+                "s3://poc-tests-performance-evaluation-kostenbelege-3-1/"
+                "generated/kostenbelege_3_1/parquet/dim_kalender/part-00001.parquet"
+            ),
+            s3_file_format="parquet",
+            s3_download_kind="generated_parts",
+            s3_part_prefix="generated/kostenbelege_3_1/parquet/dim_kalender/",
+            s3_part_file_format="parquet",
+            s3_part_count=1,
+            s3_download_filename="dim_kalender.parquet",
+            s3_zip_downloadable=True,
+        )
+
+        WorkbenchService._normalize_generated_s3_source_object(source_object)
+
+        self.assertEqual(
+            source_object.s3_path,
+            "s3://poc-tests-performance-evaluation-kostenbelege-3-1/"
+            "generated/kostenbelege_3_1/parquet/dim_kalender/*.parquet",
+        )
+        self.assertEqual(
+            source_object.query_reference,
+            's3."poc-tests-performance-evaluation-kostenbelege-3-1".'
+            '"generated/kostenbelege_3_1/parquet/dim_kalender/*.parquet"',
+        )
+        self.assertEqual(source_object.s3_key, "")
+        self.assertIn("dim_kalender/*.parquet", source_object.query_sql)
+        self.assertNotIn("part-00001.parquet", source_object.query_reference)
+        self.assertNotIn("part-00001.parquet", source_object.query_sql)

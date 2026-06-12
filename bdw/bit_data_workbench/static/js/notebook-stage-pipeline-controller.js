@@ -38,6 +38,8 @@ export function createNotebookStagePipelineController(helpers) {
     "Notebook mode: Exploration. Click to enable Pipeline mode, which links SQL cells into staged materialized data products with dependency-aware runs.";
   const pipelineModeTitle =
     "Notebook mode: Pipeline. Click to return to Exploration mode, which keeps cells independent for ad-hoc SQL or Python work.";
+  const failedStageStatuses = new Set(["failed", "cancelled", "canceled", "aborted", "incomplete"]);
+  const terminalStageRunStatuses = new Set(["completed", ...failedStageStatuses]);
   function stageReferencePattern() {
     return /(^|[^A-Za-z0-9_$])stage\.([A-Za-z_][A-Za-z0-9_$]*)/gi;
   }
@@ -138,6 +140,10 @@ export function createNotebookStagePipelineController(helpers) {
 
   function statusClass(value) {
     return String(value || "planned").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "planned";
+  }
+
+  function statusIsFailure(value) {
+    return failedStageStatuses.has(String(value || "").trim().toLowerCase());
   }
 
   function pipelineTooltipAttributes(label) {
@@ -296,7 +302,7 @@ export function createNotebookStagePipelineController(helpers) {
     const nodeById = new Map(nodes.map((node) => [String(node.stageId || ""), node]));
     return (Array.isArray(graph?.activeRuns) ? graph.activeRuns : []).filter((run) => {
       const status = String(run?.status || "running").toLowerCase();
-      if (["completed", "failed", "cancelled"].includes(status)) {
+      if (terminalStageRunStatuses.has(status)) {
         return false;
       }
       const stageIds = Array.isArray(run?.stageIds) ? run.stageIds.map((item) => String(item)) : [];
@@ -541,7 +547,7 @@ export function createNotebookStagePipelineController(helpers) {
         </svg>
       `;
     }
-    if (status === "failed" || status === "cancelled") {
+    if (statusIsFailure(status)) {
       return `
         <svg class="pipeline-status-icon pipeline-status-icon-failed" viewBox="0 0 24 24" role="img" aria-label="${escapeHtml(label)}">
           <path d="M8 8l8 8"></path>
@@ -641,10 +647,17 @@ export function createNotebookStagePipelineController(helpers) {
       tone = "ok";
       icon = '<path d="M18 8 10.5 15.5 6 11"></path>';
       label = "Stage is ready";
-    } else if (status === "failed" || status === "cancelled") {
+    } else if (statusIsFailure(status)) {
       tone = "failed";
       icon = '<path d="M8 8l8 8"></path><path d="M16 8l-8 8"></path>';
-      label = "Stage failed";
+      label =
+        status === "cancelled" || status === "canceled"
+          ? "Stage cancelled"
+          : status === "aborted"
+            ? "Stage aborted"
+            : status === "incomplete"
+              ? "Stage incomplete"
+              : "Stage failed";
     } else if (status === "running") {
       tone = "running";
       icon = '<path d="M12 3a9 9 0 1 1-9 9"></path>';
@@ -1482,6 +1495,11 @@ export function createNotebookStagePipelineController(helpers) {
     const message = errorMessage(error);
     if (notebookId) {
       setPipelineStatusError(notebookId, message);
+      try {
+        await refreshGraph(notebookId);
+      } catch (_refreshError) {
+        // Preserve the original failure message for the user.
+      }
     }
     await showMessageDialog({
       title,

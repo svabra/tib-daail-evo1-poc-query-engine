@@ -23,6 +23,7 @@ export function createS3DataSourceExplorer(helpers) {
     viewSourceData,
     downloadSourceObjectDdl,
     downloadSourceS3Object,
+    downloadSourceS3GeneratedParts,
     downloadJobsController,
     prepareSourceS3Download,
   } = helpers;
@@ -72,10 +73,30 @@ export function createS3DataSourceExplorer(helpers) {
       s3Key: selectedEntry.prefix,
       s3Path: selectedEntry.path,
       s3FileFormat: selectedEntry.fileFormat,
-      s3Downloadable: true,
+      s3Downloadable: entryFlag(selectedEntry.s3Downloadable, true),
       sizeBytes: selectedEntry.sizeBytes,
+      s3DownloadKind: selectedEntry.s3DownloadKind,
+      s3PartPrefix: selectedEntry.s3PartPrefix,
+      s3PartFileFormat: selectedEntry.s3PartFileFormat,
       s3PartCount: selectedEntry.s3PartCount,
+      s3DownloadFilename: selectedEntry.s3DownloadFilename,
+      s3MergeDownloadable: entryFlag(selectedEntry.s3MergeDownloadable),
+      s3ZipDownloadable: entryFlag(selectedEntry.s3ZipDownloadable),
     });
+  }
+
+  function entryFlag(value, fallback = false) {
+    if (value === undefined || value === null) {
+      return fallback;
+    }
+    if (typeof value === "boolean") {
+      return value;
+    }
+    const normalized = String(value || "").trim().toLowerCase();
+    if (!normalized) {
+      return false;
+    }
+    return ["1", "true", "yes", "y"].includes(normalized);
   }
 
   function entrySecondaryText(entry) {
@@ -100,6 +121,43 @@ export function createS3DataSourceExplorer(helpers) {
     const publishedItems = publicationMenuItems(entry.publishedDataProducts);
     const queryable = Boolean(String(entry.queryReference || entry.queryAlias || entry.relation || "").trim());
     const isCsv = String(entry.fileFormat || "").trim().toLowerCase() === "csv";
+    const canDownloadObject = entryFlag(entry.s3Downloadable, true);
+    const canDownloadMerged = entryFlag(entry.s3MergeDownloadable);
+    const canDownloadZip = entryFlag(entry.s3ZipDownloadable);
+    const downloadItems = [
+      canDownloadObject
+        ? {
+            label: "Download S3 object",
+            action: "download",
+            attrs: { "data-download-source-s3-object": true },
+            title: "Download the underlying S3 object",
+          }
+        : null,
+      canDownloadObject && isCsv
+        ? {
+            label: "Prepare ZIP download",
+            action: "prepare-zip",
+            attrs: { "data-prepare-source-s3-download": true },
+            title: "Prepare a resumable ZIP download for this CSV object",
+          }
+        : null,
+      canDownloadMerged
+        ? {
+            label: "Download merged file",
+            action: "download-generated-merged",
+            attrs: { "data-download-source-s3-generated-merged": true },
+            title: "Download the generated S3 parts as one merged file",
+          }
+        : null,
+      canDownloadZip
+        ? {
+            label: "Download parts as ZIP",
+            action: "download-generated-zip",
+            attrs: { "data-download-source-s3-generated-zip": true },
+            title: "Download the generated S3 parts as a ZIP archive",
+          }
+        : null,
+    ].filter(Boolean);
     return sourceActionMenuMarkup(
       [
         ...publishedItems,
@@ -147,20 +205,7 @@ export function createS3DataSourceExplorer(helpers) {
           title: "Publish this object as a managed data product",
         },
         "separator",
-        {
-          label: "Download S3 object",
-          action: "download",
-          attrs: { "data-download-source-s3-object": true },
-          title: "Download the underlying S3 object",
-        },
-        isCsv
-          ? {
-              label: "Prepare ZIP download",
-              action: "prepare-zip",
-              attrs: { "data-prepare-source-s3-download": true },
-              title: "Prepare a resumable ZIP download for this CSV object",
-            }
-          : null,
+        ...downloadItems,
         {
           label: "Download DDL",
           action: "download-ddl",
@@ -197,6 +242,7 @@ export function createS3DataSourceExplorer(helpers) {
     const queryPath = String(entry.queryReference || entry.queryAlias || entry.relation || "").trim();
     const displayName = entry.displayName || entry.name || "";
     const fileFormat = String(entry.fileFormat || "file").toUpperCase();
+    const s3Downloadable = entryFlag(entry.s3Downloadable, true);
     return sourceObjectRowMarkup(
       {
         kind: "file",
@@ -220,9 +266,15 @@ export function createS3DataSourceExplorer(helpers) {
           "data-s3-key": entry.prefix || "",
           "data-s3-path": entry.path || "",
           "data-s3-file-format": entry.fileFormat || "",
-          "data-s3-downloadable": "true",
+          "data-s3-downloadable": s3Downloadable ? "true" : "false",
           "data-s3-size-bytes": entry.sizeBytes || 0,
+          "data-s3-download-kind": entry.s3DownloadKind || "",
+          "data-s3-part-prefix": entry.s3PartPrefix || "",
+          "data-s3-part-file-format": entry.s3PartFileFormat || "",
           "data-s3-part-count": entry.s3PartCount || 0,
+          "data-s3-download-filename": entry.s3DownloadFilename || "",
+          "data-s3-merge-downloadable": entryFlag(entry.s3MergeDownloadable) ? "true" : "false",
+          "data-s3-zip-downloadable": entryFlag(entry.s3ZipDownloadable) ? "true" : "false",
           "data-data-source-explorer-s3-file": entry.prefix || "",
           "data-bucket": entry.bucket || "",
           "data-prefix": entry.prefix || "",
@@ -357,6 +409,9 @@ export function createS3DataSourceExplorer(helpers) {
           ""
       ).trim();
       const canPrepareZip = String(state.selectedEntry.fileFormat || "").trim().toLowerCase() === "csv";
+      const canDownloadObject = entryFlag(state.selectedEntry.s3Downloadable, true);
+      const canDownloadMerged = entryFlag(state.selectedEntry.s3MergeDownloadable);
+      const canDownloadZip = entryFlag(state.selectedEntry.s3ZipDownloadable);
       const preparedZipJob = downloadJobsController?.jobForS3Object?.(
         state.selectedEntry.bucket,
         state.selectedEntry.prefix
@@ -377,8 +432,14 @@ export function createS3DataSourceExplorer(helpers) {
                 ? "Copy the SQL source reference for this object"
                 : "This object is not queryable yet.",
             }),
-            actionButtonMarkup("Download", "download", escapeHtml),
-            canPrepareZip ? actionButtonMarkup("Prepare ZIP download", "prepare-zip", escapeHtml) : "",
+            canDownloadObject ? actionButtonMarkup("Download", "download", escapeHtml) : "",
+            canDownloadObject && canPrepareZip ? actionButtonMarkup("Prepare ZIP download", "prepare-zip", escapeHtml) : "",
+            canDownloadMerged
+              ? actionButtonMarkup("Download merged file", "download-generated-merged", escapeHtml)
+              : "",
+            canDownloadZip
+              ? actionButtonMarkup("Download parts as ZIP", "download-generated-zip", escapeHtml)
+              : "",
             canDownloadPreparedZip
               ? `<button
                   type="button"
@@ -606,6 +667,21 @@ export function createS3DataSourceExplorer(helpers) {
           await showMessageDialog({
             title: "S3 download unavailable",
             copy: "Choose a concrete Shared Workspace object before downloading it.",
+          });
+        }
+        return true;
+      }
+
+      if (action === "download-generated-merged" || action === "download-generated-zip") {
+        const descriptor = selectedFileDescriptor(state);
+        const mode = action === "download-generated-zip" ? "zip" : "merged";
+        if (
+          !(descriptor instanceof Element) ||
+          downloadSourceS3GeneratedParts?.(descriptor, mode) === false
+        ) {
+          await showMessageDialog({
+            title: "S3 download unavailable",
+            copy: "This source object does not expose generated S3 parts for that download mode.",
           });
         }
         return true;

@@ -408,6 +408,38 @@ class SharedNotebookStore:
         )
         return self.upsert_folder(folder)
 
+    def delete_folder(self, path: list[str] | tuple[str, ...]) -> dict[str, object]:
+        normalized_path = normalize_folder_path(path)
+        if not normalized_path:
+            raise ValueError("Notebook folder path is required.")
+
+        state = self._read_state()
+        folders = folders_from_manifest({"folders": state.get("folders", [])})
+        remaining = [
+            folder
+            for folder in folders
+            if not (
+                folder.path == normalized_path
+                or folder.path[: len(normalized_path)] == normalized_path
+            )
+        ]
+        removed_count = len(folders) - len(remaining)
+        if removed_count == 0:
+            raise KeyError(f"Unknown shared notebook folder: {' / '.join(normalized_path)}")
+
+        self._write_state(
+            {
+                "notebooks": list(state.get("notebooks", [])),
+                "folders": [serialize_folder(item) for item in remaining],
+                "deletedNotebookIds": list(state.get("deletedNotebookIds", [])),
+            }
+        )
+        return {
+            "action": "deleted",
+            "path": list(normalized_path),
+            "removedFolderCount": removed_count,
+        }
+
     def ensure_default_folders(self) -> None:
         if any(folder.path == SHARED_NOTEBOOK_DEFAULT_FOLDER_PATH for folder in self.list_folders()):
             return
@@ -688,6 +720,37 @@ class S3SharedNotebookStore:
             version=existing.version if existing is not None else 1,
         )
         return self._upsert_folder_locked(folder)
+
+    def delete_folder(self, path: list[str] | tuple[str, ...]) -> dict[str, object]:
+        self._require_available()
+        normalized_path = normalize_folder_path(path)
+        if not normalized_path:
+            raise ValueError("Notebook folder path is required.")
+
+        with self._lock:
+            client = self._client()
+            try:
+                folders = folders_from_manifest(self._read_payload(client, S3_FOLDER_MANIFEST_KEY))
+            except KeyError:
+                folders = []
+            remaining = [
+                folder
+                for folder in folders
+                if not (
+                    folder.path == normalized_path
+                    or folder.path[: len(normalized_path)] == normalized_path
+                )
+            ]
+            removed_count = len(folders) - len(remaining)
+            if removed_count == 0:
+                raise KeyError(f"Unknown shared notebook folder: {' / '.join(normalized_path)}")
+
+            self._write_payload(client, S3_FOLDER_MANIFEST_KEY, folder_manifest_payload(remaining))
+            return {
+                "action": "deleted",
+                "path": list(normalized_path),
+                "removedFolderCount": removed_count,
+            }
 
     def ensure_default_folders(self) -> None:
         self._require_available()

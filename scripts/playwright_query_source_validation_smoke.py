@@ -41,6 +41,27 @@ async def ensure_empty_query_notebook(page, base_url: str, timeout_ms: int) -> N
 
     cell = page.locator("[data-query-cell]:visible").first
     await cell.wait_for(state="visible", timeout=timeout_ms)
+    await page.evaluate(
+        """
+        () => {
+          const switchButton = document.querySelector('[data-query-cell] [data-cell-query-option="validation.sourceExistence"]');
+          if (
+            switchButton instanceof HTMLButtonElement &&
+            switchButton.getAttribute("aria-checked") !== "true"
+          ) {
+            switchButton.click();
+          }
+        }
+        """
+    )
+    await page.wait_for_function(
+        """
+        () => document
+          .querySelector('[data-query-cell] [data-cell-query-option="validation.sourceExistence"]')
+          ?.getAttribute("aria-checked") === "true"
+        """,
+        timeout=timeout_ms,
+    )
     await write_cell_sql(page, "select 1")
     await page.wait_for_timeout(250)
 
@@ -100,7 +121,12 @@ async def first_catalog_relation(page) -> str:
             return relation && !relation.startsWith('workspace.local.saved_results.');
           });
           return candidate instanceof HTMLElement
-            ? String(candidate.dataset.sourceObjectQueryAlias || candidate.dataset.sourceObjectRelation || '').trim()
+            ? String(
+                candidate.dataset.sourceObjectQueryReference
+                || candidate.dataset.sourceObjectQueryAlias
+                || candidate.dataset.sourceObjectRelation
+                || ''
+              ).trim()
             : '';
         }
         """

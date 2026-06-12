@@ -4,6 +4,7 @@ from pathlib import PurePosixPath
 import re
 
 from ..models import SourceCatalog, SourceObject, SourceSchema
+from .data_sources.s3_paths import source_object_s3_location
 from .query_aliases import normalize_relation_key as normalize_query_alias_key
 from .query_analysis import KnownRelationReference
 from .source_discovery import parse_s3_path
@@ -172,6 +173,50 @@ def _source_object_payload_from_catalog(
     }
 
 
+def _catalog_s3_payload_for_reference(
+    *,
+    bucket: str,
+    key: str,
+    catalogs: list[SourceCatalog] | None,
+) -> dict[str, object] | None:
+    normalized_bucket = str(bucket or "").strip()
+    normalized_key = str(key or "").strip().lstrip("/")
+    if not normalized_bucket or not normalized_key:
+        return None
+
+    generated_match: tuple[SourceCatalog, SourceObject] | None = None
+    for catalog in catalogs or []:
+        if str(catalog.connection_source_id or "").strip() != "workspace.s3":
+            continue
+        for schema in catalog.schemas:
+            for source_object in schema.objects:
+                location = source_object_s3_location(source_object)
+                if location is None or location.bucket != normalized_bucket:
+                    continue
+                if location.key == normalized_key:
+                    return _source_object_payload_from_catalog(
+                        catalog=catalog,
+                        source_object=source_object,
+                    )
+
+                part_prefix = str(source_object.s3_part_prefix or "").strip().strip("/")
+                part_prefix_with_slash = f"{part_prefix}/" if part_prefix else ""
+                if part_prefix_with_slash and normalized_key.startswith(part_prefix_with_slash):
+                    generated_match = (catalog, source_object)
+                    continue
+
+                if location.is_wildcard and normalized_key.startswith(location.logical_prefix):
+                    generated_match = (catalog, source_object)
+
+    if generated_match is None:
+        return None
+    catalog, source_object = generated_match
+    return _source_object_payload_from_catalog(
+        catalog=catalog,
+        source_object=source_object,
+    )
+
+
 def query_source_objects(
     touched_relations: list[str] | None,
     *,
@@ -220,12 +265,27 @@ def query_source_objects(
             normalized_reference
         )
         if summary is not None:
-            add(_source_object_payload_from_summary(summary))
+            payload = _source_object_payload_from_summary(summary)
+            add(
+                _catalog_s3_payload_for_reference(
+                    bucket=str(payload.get("bucket") or ""),
+                    key=str(payload.get("key") or ""),
+                    catalogs=catalogs,
+                )
+                or payload
+            )
             continue
 
         direct_s3_payload = _source_object_payload_from_s3_path(relation)
         if direct_s3_payload is not None:
-            add(direct_s3_payload)
+            add(
+                _catalog_s3_payload_for_reference(
+                    bucket=str(direct_s3_payload.get("bucket") or ""),
+                    key=str(direct_s3_payload.get("key") or ""),
+                    catalogs=catalogs,
+                )
+                or direct_s3_payload
+            )
             continue
 
         matched_payload: dict[str, object] | None = None

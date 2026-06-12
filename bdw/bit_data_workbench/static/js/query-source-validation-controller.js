@@ -77,8 +77,8 @@ function validationMessageFor(result, runtimePhase = "") {
       ? result.missingReferences.filter(Boolean).join(", ")
       : "";
     return missing
-      ? `Missing sources: ${missing}. Run Cell is blocked.`
-      : "Source existence check failed. Run Cell is blocked.";
+      ? `Missing sources: ${missing}. Run Cell will report this in Query Monitoring.`
+      : "Source existence check failed. Run Cell will report this in Query Monitoring.";
   }
   return "No source references found. Sources will be checked before execution.";
 }
@@ -111,8 +111,8 @@ function runTooltipFor(result, runtimePhase = "") {
       ? result.missingReferences.filter(Boolean).join(", ")
       : "";
     return missing
-      ? `Run Cell is disabled because these sources were not found: ${missing}`
-      : "Run Cell is disabled because source existence validation failed.";
+      ? `Run Cell will start backend monitoring and report missing sources: ${missing}`
+      : "Run Cell will start backend monitoring and report source validation failures.";
   }
   return runTooltips.unchecked;
 }
@@ -310,13 +310,13 @@ export function createQuerySourceValidationController(helpers) {
       cellRoot?.classList?.contains?.("is-query-running") ||
       runButton?.classList?.contains?.("is-running");
     const status = normalizedStatus(runtimePhase || result?.status);
-    const disabled = status === "invalid" || status === "checking" || status === "starting";
+    const explainDisabled = status === "invalid" || status === "checking" || status === "starting";
 
     if (explainButton) {
       const isSqlCell = cellLanguageForCellRoot(cellRoot) === "sql";
       const nativePostgres = isSqlCell && cellUsesNativePostgres(cellRoot);
       explainButton.hidden = !isSqlCell;
-      explainButton.disabled = !isSqlCell || nativePostgres || disabled || Boolean(isRunning);
+      explainButton.disabled = !isSqlCell || nativePostgres || explainDisabled || Boolean(isRunning);
       explainButton.title = !isSqlCell
         ? explainTooltips.python
         : nativePostgres
@@ -332,7 +332,7 @@ export function createQuerySourceValidationController(helpers) {
       return;
     }
 
-    runButton.disabled = disabled;
+    runButton.disabled = false;
     runButton.title = runTooltipFor(result, runtimePhase);
     if (!runButton.classList.contains("is-running")) {
       runButton.textContent = "Run Cell";

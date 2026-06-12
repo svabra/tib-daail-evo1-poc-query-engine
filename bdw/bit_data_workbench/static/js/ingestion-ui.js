@@ -224,6 +224,7 @@ export function createIngestionUi(helpers) {
   }
 
   function dataGenerationJobCardMarkup(job) {
+    const statusClass = String(job.status || "unknown").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "unknown";
     return `
       <article class="ingestion-job-card" data-data-generation-job-card data-job-id="${escapeHtml(job.jobId)}">
         <div class="ingestion-job-card-header">
@@ -232,7 +233,7 @@ export function createIngestionUi(helpers) {
             <p class="ingestion-job-description">${escapeHtml(job.description)}</p>
           </div>
           <div class="ingestion-job-actions">
-            <span class="ingestion-job-status${dataGenerationJobIsRunning(job) ? " is-live" : ""}">${escapeHtml(
+            <span class="ingestion-job-status is-${escapeHtml(statusClass)}${dataGenerationJobIsRunning(job) ? " is-live" : ""}">${escapeHtml(
               dataGenerationJobStatusCopy(job)
             )}</span>
             ${
@@ -257,6 +258,7 @@ export function createIngestionUi(helpers) {
   }
 
   function dataGenerationNotificationItemMarkup(job) {
+    const statusClass = String(job.status || "unknown").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "unknown";
     return `
       <button
         type="button"
@@ -265,7 +267,7 @@ export function createIngestionUi(helpers) {
         data-focus-generation-job="${escapeHtml(job.jobId)}"
         title="Open the Loader Workbench"
       >
-        <span class="topbar-notification-item-status topbar-notification-item-status-notice${dataGenerationJobIsRunning(job) ? " is-live" : ""}">${escapeHtml(
+        <span class="topbar-notification-item-status topbar-notification-item-status-notice is-${escapeHtml(statusClass)}${dataGenerationJobIsRunning(job) ? " is-live" : ""}">${escapeHtml(
           `${dataGenerationJobStatusCopy(job)} loader`
         )}</span>
         <span class="topbar-notification-item-title">${escapeHtml(job.title)}</span>

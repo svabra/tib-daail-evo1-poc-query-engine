@@ -6,6 +6,7 @@ from ..backend.data_sources.explorer_payloads import (
     explorer_kind_for_source,
 )
 from ..models import SourceCatalog
+from .source_tree import build_source_tree_s3_hierarchy
 
 
 DATA_SOURCES_PATH = "/data-sources"
@@ -479,6 +480,9 @@ def data_source_management_context(
         "data_sources": sources,
         "selected_data_source": selected_source,
         "inline_browse_catalogs": inline_browse_catalogs,
+        "inline_source_tree_s3_hierarchy": build_source_tree_s3_hierarchy(
+            inline_browse_catalogs
+        ),
         "inline_source_option_id": inline_source_option_id,
     }
 

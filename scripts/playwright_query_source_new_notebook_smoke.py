@@ -93,6 +93,7 @@ async def query_source_in_new_notebook(page, timeout_ms: int) -> tuple[str, str,
             return {
                 relation: String(firstVisible.dataset.sourceObjectRelation || '').trim(),
                 queryAlias: String(firstVisible.dataset.sourceObjectQueryAlias || '').trim(),
+                queryReference: String(firstVisible.dataset.sourceObjectQueryReference || '').trim(),
                 name: String(firstVisible.dataset.sourceObjectName || '').trim(),
             };
         }
@@ -104,7 +105,11 @@ async def query_source_in_new_notebook(page, timeout_ms: int) -> tuple[str, str,
     relation = str(clicked_source.get("relation") or "").strip()
     if not relation:
         raise RuntimeError("The first source object did not expose a queryable relation.")
-    expected_sql_relation = str(clicked_source.get("queryAlias") or relation).strip()
+    expected_sql_relation = str(
+        clicked_source.get("queryReference")
+        or clicked_source.get("queryAlias")
+        or relation
+    ).strip()
 
     await page.wait_for_function(
         """

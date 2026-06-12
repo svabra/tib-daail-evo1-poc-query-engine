@@ -193,6 +193,34 @@ class QuerySourceValidationTests(unittest.TestCase):
         unchecked = validate("with staged as (select 1) select * from staged")
         self.assertEqual(unchecked.status, QUERY_SOURCE_UNCHECKED)
 
+    def test_nested_cte_names_are_skipped(self) -> None:
+        result = validate(
+            """
+            with original_semantics as (
+              with UNIO as (
+                select * from pg_oltp.public.customers
+              )
+              select * from UNIO
+            )
+            select count(*) from original_semantics
+            """
+        )
+
+        self.assertEqual(result.status, QUERY_SOURCE_VALID)
+        self.assertEqual(result.references, ["pg_oltp.public.customers"])
+        self.assertEqual(result.missing_references, [])
+
+        unchecked = validate(
+            """
+            with wrapper as (
+              with inner_cte as (select 1)
+              select * from inner_cte
+            )
+            select * from wrapper
+            """
+        )
+        self.assertEqual(unchecked.status, QUERY_SOURCE_UNCHECKED)
+
     def test_quoted_schema_qualified_identifiers_match(self) -> None:
         result = validate('select * from "pg_oltp"."public"."sales_orders"')
 
@@ -275,30 +303,57 @@ class QuerySourceValidationTests(unittest.TestCase):
         ):
             self.assertEqual(validate(sql).status, QUERY_SOURCE_UNCHECKED)
 
-    def test_start_query_job_blocks_invalid_references_before_job_creation(self) -> None:
+    def test_start_query_job_records_invalid_references_as_failed_preflight(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)
         service._lock = threading.RLock()
         service._catalogs = sample_catalogs()
-        fake_query_jobs = SimpleNamespace(called=False)
+        fake_query_jobs = SimpleNamespace(
+            preflight_called=False,
+            prepared_called=False,
+            failed_error="",
+        )
 
-        def fail_if_called(**_kwargs):
-            fake_query_jobs.called = True
-            return SimpleNamespace(payload={"jobId": "query-1"})
+        def start_preflight(**kwargs):
+            fake_query_jobs.preflight_called = True
+            return SimpleNamespace(job_id=kwargs.get("requested_job_id") or "query-preflight")
 
-        fake_query_jobs.start_job = fail_if_called
-        service._query_jobs = fake_query_jobs
+        def start_prepared(*_args, **_kwargs):
+            fake_query_jobs.prepared_called = True
+            return SimpleNamespace(payload={"jobId": "query-preflight", "status": "queued"})
 
-        with self.assertRaises(ValueError):
-            service.start_query_job(
-                sql="select * from missing.schema_table",
-                notebook_id="notebook",
-                notebook_title="Notebook",
-                cell_id="cell-1",
-                data_sources=[],
-                query_options={"validation": {"sourceExistence": "on"}},
+        def fail_preflight(job_id, *, error, message, backend_prepare_ms=None):
+            fake_query_jobs.failed_error = str(error)
+            return SimpleNamespace(
+                payload={
+                    "jobId": job_id,
+                    "status": "failed",
+                    "message": message,
+                    "error": str(error),
+                    "timings": {"backendPrepareMs": backend_prepare_ms},
+                }
             )
 
-        self.assertFalse(fake_query_jobs.called)
+        fake_query_jobs.start_preflight_job = start_preflight
+        fake_query_jobs.start_prepared_job = start_prepared
+        fake_query_jobs.fail_preflight_job = fail_preflight
+        service._query_jobs = fake_query_jobs
+
+        payload = service.start_query_job(
+            sql="select * from missing.schema_table",
+            notebook_id="notebook",
+            notebook_title="Notebook",
+            cell_id="cell-1",
+            data_sources=[],
+            query_options={"validation": {"sourceExistence": "on"}},
+            client_job_id="query-client-invalid-reference",
+        )
+
+        self.assertTrue(fake_query_jobs.preflight_called)
+        self.assertFalse(fake_query_jobs.prepared_called)
+        self.assertEqual(payload["jobId"], "query-client-invalid-reference")
+        self.assertEqual(payload["status"], "failed")
+        self.assertIn("missing.schema_table", payload["error"])
+        self.assertIn("missing.schema_table", fake_query_jobs.failed_error)
 
     def test_prepare_query_sql_skips_source_validation_when_option_off(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)
@@ -765,6 +820,72 @@ class QuerySourceValidationTests(unittest.TestCase):
                 }
             ],
         )
+
+    def test_prepare_query_sql_maps_generated_part_file_to_dataset_for_navigation(self) -> None:
+        bucket = "test"
+        part_prefix = "generated/kostenbelege_3_1/parquet/dim_kalender/"
+        dataset_reference = s3_source_reference(
+            bucket=bucket,
+            key=f"{part_prefix}*.parquet",
+        )
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = [
+            SourceCatalog(
+                name="workspace",
+                connection_source_id="workspace.s3",
+                schemas=[
+                    SourceSchema(
+                        name="test",
+                        label=bucket,
+                        objects=[
+                            SourceObject(
+                                name="dim_kalender_parquet",
+                                kind="file",
+                                relation="test.dim_kalender_parquet",
+                                display_name="dim_kalender.parquet",
+                                query_alias=(
+                                    "s3.test.generated.kostenbelege_3_1.parquet."
+                                    "dim_kalender.parquet"
+                                ),
+                                query_reference=dataset_reference,
+                                query_sql=(
+                                    "read_parquet("
+                                    "'s3://test/generated/kostenbelege_3_1/"
+                                    "parquet/dim_kalender/*.parquet')"
+                                ),
+                                s3_bucket=bucket,
+                                s3_path=f"s3://{bucket}/{part_prefix}*.parquet",
+                                s3_file_format="parquet",
+                                s3_download_kind="generated_parts",
+                                s3_part_prefix=part_prefix,
+                                s3_part_file_format="parquet",
+                                s3_part_count=1,
+                                s3_download_filename="dim_kalender.parquet",
+                            )
+                        ],
+                    )
+                ],
+            )
+        ]
+
+        payload = service.prepare_query_sql(
+            sql=(
+                "select * from read_parquet("
+                "'s3://test/generated/kostenbelege_3_1/parquet/"
+                "dim_kalender/part-00001.parquet')"
+            ),
+            notebook_id="notebook",
+            data_sources=["workspace.s3"],
+        )
+
+        self.assertEqual(len(payload["sourceObjects"]), 1)
+        source = payload["sourceObjects"][0]
+        self.assertEqual(source["label"], "dim_kalender.parquet")
+        self.assertEqual(source["queryReference"], dataset_reference)
+        self.assertEqual(source["path"], f"s3://{bucket}/{part_prefix}*.parquet")
+        self.assertNotIn("part-00001.parquet", source["queryReference"])
+        self.assertNotIn("part-00001.parquet", source["path"])
 
     def test_start_query_job_uses_submitted_sql_for_validation_and_routing(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)

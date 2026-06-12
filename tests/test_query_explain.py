@@ -120,6 +120,18 @@ class QueryExplainServiceTests(unittest.TestCase):
         self.assertTrue(payload["summary"]["operatorCounts"])
         self.assertTrue(payload["duckdbVersion"])
 
+    def test_isolated_explain_uses_writable_memory_connection_when_database_exists(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
+            settings = make_settings(Path(tmp))
+            settings.duckdb_database.parent.mkdir(parents=True, exist_ok=True)
+            settings.duckdb_database.touch()
+            service = make_service(settings)
+
+            payload = service.explain_query(sql="select 1 as smoke_value", data_sources=[])
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertIn("PROJECTION", payload["plans"]["physical_plan"]["text"])
+
     def test_missing_source_is_rejected_before_explain(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             service = make_service(make_settings(Path(tmp)))

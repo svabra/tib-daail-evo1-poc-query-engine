@@ -2,6 +2,264 @@
 {% set source_tree_scope = source_tree_scope | default('sidebar') %}
 {% set source_tree_force_source_option_id = source_tree_force_source_option_id | default('') %}
 {% set source_tree_open_catalogs = source_tree_open_catalogs | default(false) %}
+{% set source_tree_s3_hierarchy = source_tree_s3_hierarchy | default({}) %}
+
+{% macro schema_icon() -%}
+  <svg class="source-icon source-icon-schema" viewBox="0 0 16 16" aria-hidden="true">
+    <rect x="1.6" y="1.8" width="3.7" height="3.7" rx="0.7"></rect>
+    <rect x="10.7" y="1.8" width="3.7" height="3.7" rx="0.7"></rect>
+    <rect x="10.7" y="10.5" width="3.7" height="3.7" rx="0.7"></rect>
+    <path d="M5.3 3.7h2.8a2 2 0 0 1 2 2v1.5"></path>
+    <path d="M10.1 8H7.4a2 2 0 0 0-2 2v.5"></path>
+  </svg>
+{%- endmacro %}
+
+{% macro folder_icon() -%}
+  <svg class="source-icon source-icon-schema" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M2.2 4.1a1.1 1.1 0 0 1 1.1-1.1h3l1.2 1.5h5.2a1.1 1.1 0 0 1 1.1 1.1v5.9a1.1 1.1 0 0 1-1.1 1.1H3.3a1.1 1.1 0 0 1-1.1-1.1z"></path>
+  </svg>
+{%- endmacro %}
+
+{% macro bucket_icon() -%}
+  <svg class="source-icon source-icon-bucket" viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M3.1 5.4h9.8l-.9 7.1a1.2 1.2 0 0 1-1.2 1H5.2a1.2 1.2 0 0 1-1.2-1z"></path>
+    <path d="M4.5 5.4V4.5A3.5 3.5 0 0 1 8 1a3.5 3.5 0 0 1 3.5 3.5v.9"></path>
+    <path d="M5.3 8h5.4"></path>
+  </svg>
+{%- endmacro %}
+
+{% macro object_icon(source_object) -%}
+  {% if source_object.kind in ("view", "materialized view", "file") %}
+    <svg
+      class="source-icon source-icon-object source-icon-object-view"
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+    >
+      <rect x="2.4" y="3" width="11.2" height="9.6" rx="1.1"></rect>
+      <path d="M4.2 5.2h7.6M4.2 7.7h7.6"></path>
+      <path d="M3.2 10.7c1.5-1.7 3.1-2.6 4.8-2.6s3.3.9 4.8 2.6"></path>
+      <circle cx="8" cy="10.2" r="1"></circle>
+    </svg>
+  {% else %}
+    <svg
+      class="source-icon source-icon-object source-icon-object-table"
+      viewBox="0 0 16 16"
+      aria-hidden="true"
+    >
+      <rect x="2.1" y="2.3" width="11.8" height="11.1" rx="1.1"></rect>
+      <path d="M2.8 6.1h10.4M2.8 9.4h10.4M6 2.9v9.8M10 2.9v9.8"></path>
+    </svg>
+  {% endif %}
+{%- endmacro %}
+
+{% macro source_object_item(source_object, source_option_id, display_label='', searchable_text='') -%}
+  {% set source_object_display_name = source_object.display_name or source_object.name %}
+  {% set source_object_label = display_label or source_object_display_name %}
+  {% set source_object_query_path = source_object.query_reference or source_object.query_alias or source_object.relation %}
+  {% set source_object_published_products = source_object.published_data_products | default([], true) %}
+  <li
+    class="source-object source-object-{{ source_object.kind | replace(' ', '-') }}"
+    data-searchable-item="{{ searchable_text or source_object_label ~ ' ' ~ source_object_display_name ~ ' ' ~ source_object.name ~ ' ' ~ source_object.relation ~ ' ' ~ source_object.query_reference ~ ' ' ~ source_object.query_alias }}"
+    data-source-object
+    data-source-object-kind="{{ source_object.kind }}"
+    data-source-object-name="{{ source_object.name }}"
+    data-source-object-display-name="{{ source_object_display_name }}"
+    data-source-object-relation="{{ source_object.relation }}"
+    data-source-object-query-alias="{{ source_object.query_alias }}"
+    data-source-object-query-reference="{{ source_object.query_reference }}"
+    data-source-object-query-sql="{{ source_object.query_sql }}"
+    data-source-option-id="{{ source_option_id }}"
+    data-s3-bucket="{{ source_object.s3_bucket }}"
+    data-s3-key="{{ source_object.s3_key }}"
+    data-s3-path="{{ source_object.s3_path }}"
+    data-s3-file-format="{{ source_object.s3_file_format }}"
+    data-s3-downloadable="{{ 'true' if source_object.s3_downloadable else 'false' }}"
+    data-s3-size-bytes="{{ source_object.size_bytes }}"
+    data-s3-download-kind="{{ source_object.s3_download_kind }}"
+    data-s3-part-prefix="{{ source_object.s3_part_prefix }}"
+    data-s3-part-file-format="{{ source_object.s3_part_file_format }}"
+    data-s3-part-count="{{ source_object.s3_part_count }}"
+    data-s3-download-filename="{{ source_object.s3_download_filename }}"
+    data-s3-merge-downloadable="{{ 'true' if source_object.s3_merge_downloadable else 'false' }}"
+    data-s3-zip-downloadable="{{ 'true' if source_object.s3_zip_downloadable else 'false' }}"
+    data-published-data-products='{{ source_object_published_products | tojson }}'
+  >
+    <span class="source-node-label">
+      {{ object_icon(source_object) }}
+      <span title="{{ source_object_label }}{% if source_object_query_path %} | Source reference: {{ source_object_query_path }}{% endif %}">{{ source_object_label | truncate_source_navigation_label }}</span>
+    </span>
+    <span class="source-object-meta">
+      {% if source_object_published_products %}
+        <span
+          class="source-publication-pill"
+          title="Published as a managed Data Product"
+        >
+          Data Product{% if source_object_published_products | length != 1 %}s{% endif %}
+        </span>
+      {% endif %}
+      {% if source_object.s3_file_format %}
+        <small>{{ source_object.s3_file_format | upper }}</small>
+        <small>{{ source_object.size_bytes | format_byte_count }}</small>
+      {% else %}
+        <small>{{ source_object.kind }}</small>
+      {% endif %}
+      <details class="workspace-action-menu source-action-menu" data-source-action-menu>
+        <summary
+          class="workspace-action-menu-toggle"
+          data-source-action-menu-toggle
+          aria-label="Source actions"
+          title="Source actions"
+        >
+          <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
+        </summary>
+        <div class="workspace-action-menu-panel">
+          {% if source_object_published_products %}
+            {% for published_product in source_object_published_products %}
+              <a
+                href="{{ published_product.documentationPath }}"
+                class="workspace-action-menu-item"
+                title="Open the published Data Product page"
+              >
+                Open Data Product{% if source_object_published_products | length != 1 %} - {{ published_product.title }}{% endif %}
+              </a>
+            {% endfor %}
+            <div class="workspace-action-menu-separator" aria-hidden="true"></div>
+          {% endif %}
+          {% if source_object.s3_downloadable %}
+            <button
+              type="button"
+              class="workspace-action-menu-item"
+              data-download-source-s3-object
+              title="Download the underlying S3 object"
+            >
+              Download S3 object
+            </button>
+            {% if source_object.s3_file_format | lower == "csv" %}
+              <button
+                type="button"
+                class="workspace-action-menu-item"
+                data-prepare-source-s3-download
+                title="Prepare a resumable ZIP download for this CSV object"
+              >
+                Prepare ZIP download
+              </button>
+            {% endif %}
+          {% endif %}
+          {% if source_object.s3_merge_downloadable %}
+            <button
+              type="button"
+              class="workspace-action-menu-item"
+              data-download-source-s3-generated-merged
+              title="Download the generated S3 parts as one merged file"
+            >
+              Download merged file
+            </button>
+          {% endif %}
+          {% if source_object.s3_zip_downloadable %}
+            <button
+              type="button"
+              class="workspace-action-menu-item"
+              data-download-source-s3-generated-zip
+              title="Download the generated S3 parts as a ZIP archive"
+            >
+              Download parts as ZIP
+            </button>
+          {% endif %}
+          <button
+            type="button"
+            class="workspace-action-menu-item"
+            data-download-source-ddl
+            title="Download DDL for this source"
+          >
+            Download DDL
+          </button>
+          <button
+            type="button"
+            class="workspace-action-menu-item"
+            data-view-source-data
+            title="Insert and run a query with all fields in the current notebook"
+          >
+            View Data
+          </button>
+          <button
+            type="button"
+            class="workspace-action-menu-item"
+            data-query-source-current
+            title="Insert a query into the current notebook"
+          >
+            Query in current notebook
+          </button>
+          <button
+            type="button"
+            class="workspace-action-menu-item"
+            data-query-source-new
+            title="Create a new notebook with this query"
+          >
+            Query in new notebook
+          </button>
+          <button
+            type="button"
+            class="workspace-action-menu-item"
+            data-copy-query-path
+            title="Copy the SQL source reference for this source"
+            {% if not source_object_query_path %}disabled{% endif %}
+          >
+            Copy source reference
+          </button>
+          <button
+            type="button"
+            class="workspace-action-menu-item"
+            data-create-data-product
+            title="Publish this source as a managed data product"
+          >
+            Create data product ...
+          </button>
+          {% if source_object.s3_downloadable %}
+            <div class="workspace-action-menu-separator" aria-hidden="true"></div>
+            <button
+              type="button"
+              class="workspace-action-menu-item workspace-action-menu-item-danger"
+              data-delete-source-s3-object
+              title="Delete the underlying S3 object"
+            >
+              Delete S3 object
+            </button>
+          {% endif %}
+        </div>
+      </details>
+    </span>
+  </li>
+{%- endmacro %}
+
+{% macro s3_tree_nodes(nodes, source_option_id) -%}
+  {% for node in nodes %}
+    {% if node.kind == "folder" %}
+      <details
+        class="source-schema source-s3-folder"
+        data-source-schema
+        data-source-s3-folder
+        data-source-bucket="{{ node.bucket }}"
+        data-s3-bucket="{{ node.bucket }}"
+        data-s3-prefix="{{ node.prefix }}"
+      >
+        <summary data-searchable-item="{{ node.searchable }}">
+          <span class="source-node-label">
+            {{ folder_icon() }}
+            <span title="{{ node.path }}">{{ node.label | truncate_source_navigation_label }}</span>
+          </span>
+          <span class="source-schema-meta">
+            <small>{{ node.childCount }} item{% if node.childCount != 1 %}s{% endif %}</small>
+          </span>
+        </summary>
+        <ul class="source-object-list">
+          {{ s3_tree_nodes(node.children, source_option_id) }}
+        </ul>
+      </details>
+    {% else %}
+      {{ source_object_item(node.source_object, source_option_id, node.label, node.searchable) }}
+    {% endif %}
+  {% endfor %}
+{%- endmacro %}
 
 <div class="sidebar-source-operation-status" data-source-operation-status hidden>
   <strong class="sidebar-source-operation-status-title" data-source-operation-status-title></strong>
@@ -108,21 +366,28 @@
         {% endif %}
       </summary>
       {% for schema in catalog.schemas %}
+        {% set schema_key = catalog.name ~ "::" ~ schema.name %}
+        {% set schema_s3_nodes = source_tree_s3_hierarchy.get(schema_key, []) if source_tree_s3_hierarchy else [] %}
+        {% if source_tree_force_source_option_id %}
+          {% set source_option_id = source_tree_force_source_option_id %}
+        {% elif catalog.name == "workspace" %}
+          {% set source_option_id = "workspace.s3" %}
+        {% else %}
+          {% set source_option_id = catalog_source_id %}
+        {% endif %}
         <details
           class="source-schema"
           data-source-schema
-          data-source-schema-key="{{ catalog.name }}::{{ schema.name }}"
+          data-source-schema-key="{{ schema_key }}"
           {% if catalog.name == "workspace" %}data-source-bucket="{{ schema.label or schema.name }}"{% endif %}
         >
           <summary data-searchable-item="{{ schema.label or schema.name }}">
             <span class="source-node-label">
-              <svg class="source-icon source-icon-schema" viewBox="0 0 16 16" aria-hidden="true">
-                <rect x="1.6" y="1.8" width="3.7" height="3.7" rx="0.7"></rect>
-                <rect x="10.7" y="1.8" width="3.7" height="3.7" rx="0.7"></rect>
-                <rect x="10.7" y="10.5" width="3.7" height="3.7" rx="0.7"></rect>
-                <path d="M5.3 3.7h2.8a2 2 0 0 1 2 2v1.5"></path>
-                <path d="M10.1 8H7.4a2 2 0 0 0-2 2v.5"></path>
-              </svg>
+              {% if catalog.name == "workspace" %}
+                {{ bucket_icon() }}
+              {% else %}
+                {{ schema_icon() }}
+              {% endif %}
               <span title="{{ schema.label or schema.name }}">{{ (schema.label or schema.name) | truncate_source_navigation_label }}</span>
             </span>
             {% if catalog.name == "workspace" %}
@@ -180,210 +445,13 @@
             {% endif %}
           </summary>
           <ul class="source-object-list">
-            {% for source_object in schema.objects %}
-              {% if source_tree_force_source_option_id %}
-                {% set source_option_id = source_tree_force_source_option_id %}
-              {% elif catalog.name == "workspace" %}
-                {% set source_option_id = "workspace.s3" %}
-              {% else %}
-                {% set source_option_id = catalog_source_id %}
-              {% endif %}
-              {% set source_object_display_name = source_object.display_name or source_object.name %}
-              {% set source_object_query_path = source_object.query_reference or source_object.query_alias or source_object.relation %}
-              {% set source_object_published_products = source_object.published_data_products | default([], true) %}
-              <li
-                class="source-object source-object-{{ source_object.kind | replace(' ', '-') }}"
-                data-searchable-item="{{ source_object_display_name }} {{ source_object.name }} {{ source_object.relation }} {{ source_object.query_reference }} {{ source_object.query_alias }}"
-                data-source-object
-                data-source-object-kind="{{ source_object.kind }}"
-                data-source-object-name="{{ source_object.name }}"
-                data-source-object-display-name="{{ source_object_display_name }}"
-                data-source-object-relation="{{ source_object.relation }}"
-                data-source-object-query-alias="{{ source_object.query_alias }}"
-                data-source-object-query-reference="{{ source_object.query_reference }}"
-                data-source-object-query-sql="{{ source_object.query_sql }}"
-                data-source-option-id="{{ source_option_id }}"
-                data-s3-bucket="{{ source_object.s3_bucket }}"
-                data-s3-key="{{ source_object.s3_key }}"
-                data-s3-path="{{ source_object.s3_path }}"
-                data-s3-file-format="{{ source_object.s3_file_format }}"
-                data-s3-downloadable="{{ 'true' if source_object.s3_downloadable else 'false' }}"
-                data-s3-size-bytes="{{ source_object.size_bytes }}"
-                data-s3-download-kind="{{ source_object.s3_download_kind }}"
-                data-s3-part-prefix="{{ source_object.s3_part_prefix }}"
-                data-s3-part-file-format="{{ source_object.s3_part_file_format }}"
-                data-s3-part-count="{{ source_object.s3_part_count }}"
-                data-s3-download-filename="{{ source_object.s3_download_filename }}"
-                data-s3-merge-downloadable="{{ 'true' if source_object.s3_merge_downloadable else 'false' }}"
-                data-s3-zip-downloadable="{{ 'true' if source_object.s3_zip_downloadable else 'false' }}"
-                data-published-data-products='{{ source_object_published_products | tojson }}'
-              >
-                <span class="source-node-label">
-                  {% if source_object.kind in ("view", "materialized view") %}
-                    <svg
-                      class="source-icon source-icon-object source-icon-object-view"
-                      viewBox="0 0 16 16"
-                      aria-hidden="true"
-                    >
-                      <rect x="2.4" y="3" width="11.2" height="9.6" rx="1.1"></rect>
-                      <path d="M4.2 5.2h7.6M4.2 7.7h7.6"></path>
-                      <path d="M3.2 10.7c1.5-1.7 3.1-2.6 4.8-2.6s3.3.9 4.8 2.6"></path>
-                      <circle cx="8" cy="10.2" r="1"></circle>
-                    </svg>
-                  {% else %}
-                    <svg
-                      class="source-icon source-icon-object source-icon-object-table"
-                      viewBox="0 0 16 16"
-                      aria-hidden="true"
-                    >
-                      <rect x="2.1" y="2.3" width="11.8" height="11.1" rx="1.1"></rect>
-                      <path d="M2.8 6.1h10.4M2.8 9.4h10.4M6 2.9v9.8M10 2.9v9.8"></path>
-                    </svg>
-                  {% endif %}
-                  <span title="{{ source_object_display_name }}{% if source_object_query_path %} | Source reference: {{ source_object_query_path }}{% endif %}">{{ source_object_display_name | truncate_source_navigation_label }}</span>
-                </span>
-                <span class="source-object-meta">
-                  {% if source_object_published_products %}
-                    <span
-                      class="source-publication-pill"
-                      title="Published as a managed Data Product"
-                    >
-                      Data Product{% if source_object_published_products | length != 1 %}s{% endif %}
-                    </span>
-                  {% endif %}
-                  {% if source_object.s3_file_format %}
-                    <small>{{ source_object.s3_file_format | upper }}</small>
-                    <small>{{ source_object.size_bytes | format_byte_count }}</small>
-                  {% else %}
-                    <small>{{ source_object.kind }}</small>
-                  {% endif %}
-                  <details class="workspace-action-menu source-action-menu" data-source-action-menu>
-                    <summary
-                      class="workspace-action-menu-toggle"
-                      data-source-action-menu-toggle
-                      aria-label="Source actions"
-                      title="Source actions"
-                    >
-                      <span class="workspace-action-menu-dots" aria-hidden="true">...</span>
-                    </summary>
-                    <div class="workspace-action-menu-panel">
-                      {% if source_object_published_products %}
-                        {% for published_product in source_object_published_products %}
-                          <a
-                            href="{{ published_product.documentationPath }}"
-                            class="workspace-action-menu-item"
-                            title="Open the published Data Product page"
-                          >
-                            Open Data Product{% if source_object.published_data_products | length != 1 %} - {{ published_product.title }}{% endif %}
-                          </a>
-                        {% endfor %}
-                        <div class="workspace-action-menu-separator" aria-hidden="true"></div>
-                      {% endif %}
-                      {% if source_object.s3_downloadable %}
-                        <button
-                          type="button"
-                          class="workspace-action-menu-item"
-                          data-download-source-s3-object
-                          title="Download the underlying S3 object"
-                        >
-                          Download S3 object
-                        </button>
-                        {% if source_object.s3_file_format | lower == "csv" %}
-                          <button
-                            type="button"
-                            class="workspace-action-menu-item"
-                            data-prepare-source-s3-download
-                            title="Prepare a resumable ZIP download for this CSV object"
-                          >
-                            Prepare ZIP download
-                          </button>
-                        {% endif %}
-                      {% endif %}
-                      {% if source_object.s3_merge_downloadable %}
-                        <button
-                          type="button"
-                          class="workspace-action-menu-item"
-                          data-download-source-s3-generated-merged
-                          title="Download the generated S3 parts as one merged file"
-                        >
-                          Download merged file
-                        </button>
-                      {% endif %}
-                      {% if source_object.s3_zip_downloadable %}
-                        <button
-                          type="button"
-                          class="workspace-action-menu-item"
-                          data-download-source-s3-generated-zip
-                          title="Download the generated S3 parts as a ZIP archive"
-                        >
-                          Download parts as ZIP
-                        </button>
-                      {% endif %}
-                      <button
-                        type="button"
-                        class="workspace-action-menu-item"
-                        data-download-source-ddl
-                        title="Download DDL for this source"
-                      >
-                        Download DDL
-                      </button>
-                      <button
-                        type="button"
-                        class="workspace-action-menu-item"
-                        data-view-source-data
-                        title="Insert and run a query with all fields in the current notebook"
-                      >
-                        View Data
-                      </button>
-                      <button
-                        type="button"
-                        class="workspace-action-menu-item"
-                        data-query-source-current
-                        title="Insert a query into the current notebook"
-                      >
-                        Query in current notebook
-                      </button>
-                      <button
-                        type="button"
-                        class="workspace-action-menu-item"
-                        data-query-source-new
-                        title="Create a new notebook with this query"
-                      >
-                        Query in new notebook
-                      </button>
-                      <button
-                        type="button"
-                        class="workspace-action-menu-item"
-                        data-copy-query-path
-                        title="Copy the SQL source reference for this source"
-                        {% if not source_object_query_path %}disabled{% endif %}
-                      >
-                        Copy source reference
-                      </button>
-                      <button
-                        type="button"
-                        class="workspace-action-menu-item"
-                        data-create-data-product
-                        title="Publish this source as a managed data product"
-                      >
-                        Create data product ...
-                      </button>
-                      {% if source_object.s3_downloadable %}
-                        <div class="workspace-action-menu-separator" aria-hidden="true"></div>
-                        <button
-                          type="button"
-                          class="workspace-action-menu-item workspace-action-menu-item-danger"
-                          data-delete-source-s3-object
-                          title="Delete the underlying S3 object"
-                        >
-                          Delete S3 object
-                        </button>
-                      {% endif %}
-                    </div>
-                  </details>
-                </span>
-              </li>
-            {% endfor %}
+            {% if schema_s3_nodes %}
+              {{ s3_tree_nodes(schema_s3_nodes, source_option_id) }}
+            {% else %}
+              {% for source_object in schema.objects %}
+                {{ source_object_item(source_object, source_option_id) }}
+              {% endfor %}
+            {% endif %}
           </ul>
         </details>
       {% endfor %}

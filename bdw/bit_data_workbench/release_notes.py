@@ -1,9 +1,44 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.6. Keep entries concise and
+# Derived from git history through version 0.10.7. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.7",
+        "releasedAt": "2026-06-12T23:19:11+02:00",
+        "features": [
+            (
+                "S3 source navigation now renders bucket contents as a deep "
+                "folder tree, keeps generated Parquet datasets copyable as "
+                "folder/*.parquet references, and uses exact references for "
+                "true single-file objects."
+            ),
+            (
+                "Notebook and pipeline source handling now rewrites virtual "
+                "S3 references consistently for exploration and materialized "
+                "stage execution, while source navigation resolves generated "
+                "part files back to their logical dataset objects."
+            ),
+            (
+                "Query monitoring now records Run Cell attempts immediately, "
+                "keeps warnings and failures visible through SSE updates, and "
+                "uses blue running states, green completed states, orange "
+                "warnings, and red failed, cancelled, aborted, or incomplete "
+                "states."
+            ),
+            (
+                "Nested CTEs such as the Kostenbelege UNIO branch are no "
+                "longer reported as missing external sources during source "
+                "validation."
+            ),
+            (
+                "Clicking query result or query-history timing values now "
+                "copies a tab-separated timing table with Total elapsed and "
+                "phase timings."
+            ),
+        ],
+    },
     {
         "version": "0.10.6",
         "releasedAt": "2026-06-11T14:21:26+02:00",

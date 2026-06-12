@@ -512,12 +512,16 @@ class NotebookStagePipelineTests(unittest.TestCase):
                 {"stage-raw": "raw-v1"},
             )
 
-            with self.assertRaises(ValueError):
-                manager.run_pipeline(
-                    notebook_id="nb-1",
-                    cells=[stage_cell("cell-1", "raw", "select 1")],
-                    start_stage_id="stage-missing",
-                )
+            snapshot = manager.run_pipeline(
+                notebook_id="nb-1",
+                cells=[stage_cell("cell-1", "raw", "select 1")],
+                start_stage_id="stage-missing",
+            )
+
+            failed = snapshot["records"][-1]
+            self.assertEqual(failed["status"], "failed")
+            self.assertEqual(failed["stageId"], "stage-missing")
+            self.assertIn("Unknown stage: stage-missing", failed["error"])
 
     def test_atomic_stage_run_ignores_unrelated_downstream_diagnostics(self) -> None:
         _, Store, _, _, _, _ = import_stage_components()
@@ -538,12 +542,23 @@ class NotebookStagePipelineTests(unittest.TestCase):
             graph = manager.graph_payload(notebook_id="nb-1", cells=cells)
             self.assertEqual(graph["nodes"][0]["status"], "valid")
 
-            with self.assertRaises(ValueError):
-                manager.run_pipeline(notebook_id="nb-1", cells=cells)
+            snapshot = manager.run_pipeline(notebook_id="nb-1", cells=cells)
+            failed = snapshot["records"][-1]
+            self.assertEqual(failed["status"], "failed")
+            self.assertEqual(failed["stageId"], "stage-broken")
+            self.assertIn("stage.missing", failed["error"])
 
     def test_stage_execution_strips_trailing_semicolons_before_copy_wrapper(self) -> None:
         _, Store, _, _, normalize_stage_sql, _ = import_stage_components()
         self.assertEqual(normalize_stage_sql(" SELECT 1; \n ; "), "SELECT 1")
+        self.assertEqual(
+            normalize_stage_sql(" read_parquet('s3://bucket/path/data.parquet'); "),
+            "SELECT * FROM read_parquet('s3://bucket/path/data.parquet')",
+        )
+        self.assertEqual(
+            normalize_stage_sql(" parquet_scan('s3://bucket/path/*.parquet') "),
+            "SELECT * FROM parquet_scan('s3://bucket/path/*.parquet')",
+        )
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = FakeStageManager(
                 Store(Path(temp_dir) / "materialized-stages.json"),
@@ -585,6 +600,38 @@ class NotebookStagePipelineTests(unittest.TestCase):
             self.assertEqual(
                 manager.executed_sql,
                 ["SELECT * FROM vat_smoke_test_e93f1988.vat_context_bootstrap"],
+            )
+
+    def test_stage_execution_wraps_rewritten_bare_reader_for_materialization(self) -> None:
+        _, Store, _, _, _, _ = import_stage_components()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager = FakeStageManager(
+                Store(Path(temp_dir) / "materialized-stages.json"),
+                {"stage-raw": "raw-v1"},
+                sql_rewriter=lambda sql, _sources, _options: sql.replace(
+                    's3."vat-smoke-test"."_bdw_stages/kostenbelege/data.parquet"',
+                    "read_parquet('s3://vat-smoke-test/_bdw_stages/kostenbelege/data.parquet')",
+                ),
+            )
+
+            manager.run_pipeline(
+                notebook_id="nb-1",
+                cells=[
+                    stage_cell(
+                        "cell-1",
+                        "raw",
+                        's3."vat-smoke-test"."_bdw_stages/kostenbelege/data.parquet";',
+                    )
+                ],
+            )
+            manager.wait_for_idle()
+
+            self.assertEqual(
+                manager.executed_sql,
+                [
+                    "SELECT * FROM "
+                    "read_parquet('s3://vat-smoke-test/_bdw_stages/kostenbelege/data.parquet')"
+                ],
             )
 
 

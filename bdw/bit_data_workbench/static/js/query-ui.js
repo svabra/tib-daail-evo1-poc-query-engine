@@ -257,6 +257,60 @@ export function createQueryUi(helpers) {
     `;
   }
 
+  function queryTimingValue(job, key) {
+    const numeric = Number(job?.timings?.[key]);
+    return Number.isFinite(numeric) && numeric >= 0 ? numeric : null;
+  }
+
+  function queryTimingRows(job) {
+    if (!job) {
+      return [];
+    }
+
+    const totalMs = queryJobElapsedMs(job);
+    const backendTotalMs = queryTimingValue(job, "backendTotalMs");
+    const deliveryMs =
+      Number.isFinite(totalMs) && backendTotalMs !== null
+        ? Math.max(0, Number(totalMs) - backendTotalMs)
+        : null;
+    const fetchMs =
+      queryTimingValue(job, "resultFetchMs") ??
+      (Number.isFinite(Number(job?.fetchMs)) && Number(job.fetchMs) >= 0 ? Number(job.fetchMs) : null);
+    const rows = [
+      ["Total elapsed", Number.isFinite(totalMs) ? totalMs : null],
+      ["Backend reported", backendTotalMs],
+      ["Prepare", queryTimingValue(job, "backendPrepareMs")],
+      ["File lock", queryTimingValue(job, "engineAccessWaitMs")],
+      ["Startup", queryTimingValue(job, "workerStartupMs")],
+      ["Source setup", queryTimingValue(job, "sourceBootstrapMs")],
+      ["Query", queryTimingValue(job, "engineQueryMs")],
+      ["Fetch", fetchMs],
+      ["Delivery", deliveryMs],
+    ].filter(([, value]) => value !== null && Number.isFinite(value));
+
+    const visiblePartTotalMs = rows
+      .filter(([label]) => !["Total elapsed", "Backend reported"].includes(label))
+      .reduce((sum, [, value]) => sum + Number(value || 0), 0);
+    if (Number.isFinite(totalMs)) {
+      const overheadMs = totalMs - visiblePartTotalMs;
+      if (overheadMs > 1) {
+        rows.push(["Overhead", overheadMs]);
+      }
+    }
+    return rows;
+  }
+
+  function queryTimingClipboardTable(job) {
+    const rows = queryTimingRows(job);
+    if (!rows.length) {
+      return "";
+    }
+    return [
+      "Metric\tValue",
+      ...rows.map(([label, value]) => `${label}\t${formatQueryDuration(value)}`),
+    ].join("\n");
+  }
+
   function queryRowsShownLabel(job) {
     if (!job) {
       return "Run this cell to inspect the selected data sources.";
@@ -366,6 +420,12 @@ export function createQueryUi(helpers) {
     }
     if (typeof job.duckdbThreadLimit === "number") {
       metrics.push(["Thread limit", String(job.duckdbThreadLimit)]);
+    } else if (
+      typeof job.processId === "number" ||
+      typeof job.processThreadCount === "number" ||
+      typeof job.peakProcessThreadCount === "number"
+    ) {
+      metrics.push(["Thread limit", "Auto"]);
     }
     if (showCurrent && typeof job.cpuPercent === "number") {
       metrics.push(["Active cores", formatQueryCoreCount(job.cpuPercent / 100)]);
@@ -845,7 +905,12 @@ export function createQueryUi(helpers) {
       return "";
     }
 
-    return `<div class="result-metric-strip">${metricPills.join("")}</div>`;
+    const timingTable = queryTimingClipboardTable(job);
+    const timingAttributes = timingTable
+      ? ` data-copy-query-timings data-query-timing-table="${escapeHtml(encodeURIComponent(timingTable))}" role="button" tabindex="0" title="Copy timing table"`
+      : "";
+
+    return `<div class="result-metric-strip"${timingAttributes}>${metricPills.join("")}</div>`;
   }
 
   function queryMonitorInsightStripMarkup(job) {
@@ -867,6 +932,70 @@ export function createQueryUi(helpers) {
     }
 
     return `<div class="query-monitor-item-insights">${metricPills.join("")}</div>`;
+  }
+
+  function queryMonitorWarningsMarkup(job) {
+    const warnings = Array.isArray(job?.warnings)
+      ? job.warnings.map((warning) => String(warning ?? "").trim()).filter(Boolean)
+      : [];
+    if (!warnings.length) {
+      return "";
+    }
+
+    return `
+      <div class="query-monitor-warning-list">
+        <strong>Warnings</strong>
+        <ul>
+          ${warnings.map((warning) => `<li>${escapeHtml(warning)}</li>`).join("")}
+        </ul>
+      </div>
+    `;
+  }
+
+  function queryMonitorErrorMarkup(job) {
+    const error = String(job?.error || "").trim();
+    if (!error) {
+      return "";
+    }
+
+    return `
+      <div class="query-monitor-error">
+        <strong>${escapeHtml(job.status === "cancelled" ? "Query cancelled." : "Query failed.")}</strong>
+        <pre>${escapeHtml(error)}</pre>
+      </div>
+    `;
+  }
+
+  function queryMonitorProgressEventsMarkup(job) {
+    const events = Array.isArray(job?.progressEvents)
+      ? job.progressEvents.filter((event) => event && typeof event === "object")
+      : [];
+    if (!events.length) {
+      return "";
+    }
+
+    const visibleEvents = events.slice(-5);
+    return `
+      <details class="query-monitor-progress-events">
+        <summary>Progress updates (${events.length})</summary>
+        <ol>
+          ${visibleEvents
+            .map((event) => {
+              const label = timingEventLabel(event);
+              const message = String(event?.message || event?.phase || event?.event || "").trim();
+              const timestamp = String(event?.displayTime || event?.occurredAt || "").trim();
+              return `
+                <li>
+                  <strong>${escapeHtml(label)}</strong>
+                  ${message && message !== label ? `<span>${escapeHtml(message)}</span>` : ""}
+                  ${timestamp ? `<time>${escapeHtml(timestamp)}</time>` : ""}
+                </li>
+              `;
+            })
+            .join("")}
+        </ol>
+      </details>
+    `;
   }
 
   function queryResultPanelMarkup(cellId, job = null) {
@@ -1166,6 +1295,7 @@ export function createQueryUi(helpers) {
   function queryMonitorItemMarkup(job) {
     const running = queryJobIsRunning(job);
     const cancelling = running && Boolean(job.cancellationPhase);
+    const canCancel = running && job.canCancel !== false;
     const rowsCopy = job.rowsShown > 0 ? `${job.rowsShown} row(s)` : "No rows yet";
     const timestamp = job.startedAt || job.updatedAt;
     const progressValue =
@@ -1206,10 +1336,13 @@ export function createQueryUi(helpers) {
           ${queryResourceSparklineMarkup(job, { compact: true })}
           ${progressMarkup}
           ${queryMonitorInsightStripMarkup(job)}
+          ${queryMonitorWarningsMarkup(job)}
+          ${queryMonitorErrorMarkup(job)}
+          ${queryMonitorProgressEventsMarkup(job)}
           <p class="query-monitor-sql">${escapeHtml(job.sql)}</p>
         </div>
         <div class="query-monitor-item-actions">
-          ${running
+          ${running && canCancel
             ? cancelling
               ? `<button type="button" class="query-monitor-cancel is-cancelling" disabled>Cancelling...</button>`
               : `<button type="button" class="query-monitor-cancel" data-cancel-query-job="${escapeHtml(job.jobId)}">Cancel</button>`
@@ -1223,6 +1356,7 @@ export function createQueryUi(helpers) {
   function queryNotificationItemMarkup(job) {
     const rowsLabel = queryRowsShownLabel(job);
     const statusLabel = job.cancellationPhase ? queryCancellationCopy(job) : queryJobStatusCopy(job);
+    const statusClass = String(job.status || "unknown").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "unknown";
     return `
       <button
         type="button"
@@ -1231,7 +1365,7 @@ export function createQueryUi(helpers) {
         data-open-query-cell="${escapeHtml(job.cellId)}"
         title="Open ${escapeHtml(job.notebookTitle)}"
       >
-        <span class="topbar-notification-item-status${queryJobIsRunning(job) ? " is-live" : ""}">${escapeHtml(statusLabel)}</span>
+        <span class="topbar-notification-item-status is-${escapeHtml(statusClass)}${queryJobIsRunning(job) ? " is-live" : ""}">${escapeHtml(statusLabel)}</span>
         <span class="topbar-notification-item-title">${escapeHtml(job.notebookTitle)}</span>
         <span class="topbar-notification-item-copy" data-query-notification-copy data-job-id="${escapeHtml(job.jobId)}" data-query-copy-suffix="${escapeHtml(rowsLabel)}">${escapeHtml(formatQueryDuration(queryJobElapsedMs(job)))} | ${escapeHtml(rowsLabel)}</span>
         <span class="topbar-notification-item-copy topbar-notification-item-copy-secondary">${escapeHtml(queryJobEventDateTimeCopy(job))}</span>

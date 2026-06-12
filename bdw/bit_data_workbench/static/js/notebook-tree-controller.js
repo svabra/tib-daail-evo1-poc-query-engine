@@ -6,6 +6,7 @@ export function createNotebookTreeController(helpers) {
     createFolderNode,
     createNotebook,
     defaultFolderPermissions,
+    deleteSharedNotebookFolder = null,
     deleteTreeFolder,
     deriveFolderId,
     applyWorkbenchTitle = () => {},
@@ -141,6 +142,11 @@ export function createNotebookTreeController(helpers) {
       return true;
     }
 
+    try {
+      await deleteSharedNotebookFolder?.(folder);
+    } catch (error) {
+      console.error("Failed to delete notebook folder metadata.", error);
+    }
     await deleteTreeFolder(folder, { recursive: optionChecked });
     return true;
   }

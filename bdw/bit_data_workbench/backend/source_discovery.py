@@ -1045,24 +1045,15 @@ class S3DataSourceDiscoverer(DataSourceDiscoverer):
                     for part_key, head_response in part_head_responses
                 ) or "|".join(sorted_group_keys)
                 first_head_response = part_head_responses[0][1] if part_head_responses else {}
-                if len(sorted_group_keys) == 1:
-                    object_key = sorted_group_keys[0]
-                    object_path = f"s3://{bucket}/{object_key}"
-                    csv_delimiter, csv_has_header = (
-                        self._csv_read_settings_from_head(first_head_response)
-                        if reader_format == "csv"
-                        else ("", None)
-                    )
-                else:
-                    object_path = (
-                        f"s3://{bucket}/generated/{dataset_name}/{format_name}/"
-                        f"{table_name}/*.{extension}"
-                    )
-                    csv_delimiter, csv_has_header = (
-                        self._csv_read_settings_from_head(first_head_response)
-                        if reader_format == "csv"
-                        else ("", None)
-                    )
+                object_path = (
+                    f"s3://{bucket}/generated/{dataset_name}/{format_name}/"
+                    f"{table_name}/*.{extension}"
+                )
+                csv_delimiter, csv_has_header = (
+                    self._csv_read_settings_from_head(first_head_response)
+                    if reader_format == "csv"
+                    else ("", None)
+                )
 
                 if reader_format == "csv" and csv_has_header is None:
                     csv_has_header = True

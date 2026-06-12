@@ -58,6 +58,20 @@ async def create_notebook(page, timeout_ms: int) -> tuple[str, float]:
         () => document.querySelector("[data-notebook-meta]")?.dataset.notebookId || ""
         """
     )
+    active_editor = page.locator("[data-query-cell]:visible [data-editor-source]").first
+    if previous_notebook_id and await active_editor.count():
+        await active_editor.evaluate(
+            """
+            (editor) => {
+              if (editor instanceof HTMLTextAreaElement && !editor.value.trim()) {
+                editor.value = "-- smoke notebook already used";
+                editor.dispatchEvent(new Event("input", { bubbles: true }));
+                editor.dispatchEvent(new Event("change", { bubbles: true }));
+              }
+            }
+            """
+        )
+        await page.wait_for_timeout(100)
 
     notebook_section_summary = page.locator("[data-notebook-section] > summary").first
     await notebook_section_summary.wait_for(state="visible", timeout=timeout_ms)
@@ -294,15 +308,34 @@ async def assert_reload_persists_state(
             timeout=2000,
         )
     except PlaywrightTimeoutError:
-        notebook_link = page.locator(f'[data-notebook-id="{notebook_id}"]').first
+        notebook_link = page.locator(f'.notebook-link[data-notebook-id="{notebook_id}"]').first
         await notebook_link.wait_for(state="attached", timeout=args.timeout_ms)
-        await notebook_link.evaluate("(node) => node.click()")
+        await notebook_link.evaluate(
+            """
+            (node) => {
+              let current = node.parentElement;
+              while (current) {
+                if (current instanceof HTMLDetailsElement) {
+                  current.open = true;
+                }
+                current = current.parentElement;
+              }
+              node.click();
+            }
+            """
+        )
 
     await page.wait_for_function(
         """
         (notebookId) => {
           const meta = document.querySelector("[data-notebook-meta]");
-          return Boolean(meta && meta.dataset.notebookId === notebookId);
+          const workspace = document.querySelector("[data-workspace-notebook]");
+          return Boolean(
+            meta &&
+            meta.dataset.notebookId === notebookId &&
+            workspace instanceof HTMLElement &&
+            getComputedStyle(workspace).display !== "none"
+          );
         }
         """,
         arg=notebook_id,
@@ -310,7 +343,36 @@ async def assert_reload_persists_state(
     )
 
     summary_display = page.locator("[data-summary-display]").first
-    await summary_display.wait_for(state="visible", timeout=args.timeout_ms)
+    try:
+        await summary_display.wait_for(state="visible", timeout=args.timeout_ms)
+    except PlaywrightTimeoutError as exc:
+        state = await page.evaluate(
+            """
+            () => {
+              const meta = document.querySelector("[data-notebook-meta]");
+              const display = document.querySelector("[data-summary-display]");
+              const input = document.querySelector("[data-summary-input]");
+              const workspace = document.querySelector("[data-workspace-notebook]");
+              const entryPage = document.querySelector("[data-query-workbench-entry-page]");
+              return {
+                url: window.location.href,
+                notebookId: meta?.dataset.notebookId || "",
+                workspaceVisible: workspace instanceof HTMLElement
+                  ? getComputedStyle(workspace).display !== "none"
+                  : false,
+                entryPageVisible: entryPage instanceof HTMLElement
+                  ? getComputedStyle(entryPage).display !== "none"
+                  : false,
+                summaryDisplayText: display?.textContent || "",
+                summaryDisplayStyle: display instanceof HTMLElement ? getComputedStyle(display).cssText : "",
+                summaryInputHidden: input instanceof HTMLElement ? input.hidden : null,
+                summaryInputValue: input instanceof HTMLTextAreaElement ? input.value : "",
+                summaryContainerClass: display?.closest("[data-summary-container]")?.className || "",
+              };
+            }
+            """
+        )
+        raise RuntimeError(f"Reloaded notebook summary display was not visible. State: {state!r}") from exc
     displayed_summary = (await summary_display.inner_text()).strip()
     if displayed_summary != expected_summary:
         raise RuntimeError(

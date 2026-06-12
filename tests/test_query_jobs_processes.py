@@ -228,6 +228,16 @@ class QueryJobPayloadTests(TestCase):
                 )
             ],
             warnings=["DuckDB reported a non-fatal warning."],
+            error="DuckDB failed while scanning source parquet.",
+            progress_events=[
+                {
+                    "event": "querying",
+                    "phase": "Scanning S3 Parquet",
+                    "message": "DuckDB is scanning KBPO.",
+                    "occurredAt": "2026-05-13T00:00:01+00:00",
+                    "durationMs": 1000,
+                }
+            ],
             cancellation_phase="interrupting",
             cancellation_requested_at="2026-05-13T00:00:02+00:00",
             worker_exit_code=-15,
@@ -272,6 +282,9 @@ class QueryJobPayloadTests(TestCase):
         self.assertEqual(payload["resourceSamples"][0]["duckdbSpillBytes"], 4096)
         self.assertEqual(payload["resourceSamples"][0]["duckdbSpillTotalBytes"], 12288)
         self.assertEqual(payload["resourceSamples"][0]["duckdbSpillOtherBytes"], 4096)
+        self.assertEqual(payload["error"], "DuckDB failed while scanning source parquet.")
+        self.assertEqual(payload["progressEvents"][0]["event"], "querying")
+        self.assertEqual(payload["progressEvents"][0]["phase"], "Scanning S3 Parquet")
         self.assertEqual(payload["cancellationPhase"], "interrupting")
         self.assertEqual(payload["workerExitCode"], -15)
         self.assertEqual(payload["timings"]["backendPrepareMs"], 4.5)
@@ -400,6 +413,40 @@ class ProcessQueryJobManagerTests(TestCase):
         updated = self.manager.snapshot(snapshot.job_id)
         self.assertEqual(updated.warnings, ["first warning", "second warning"])
         self.assertEqual(updated.payload["warnings"], ["first warning", "second warning"])
+
+    def test_preflight_job_appears_in_state_and_can_fail_before_worker_start(self) -> None:
+        snapshot = self.manager.start_preflight_job(
+            sql="select * from missing.schema_table",
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-1",
+            requested_job_id="query-client-preflight-failure",
+            data_sources=["workspace.s3"],
+            query_options={"validation": {"sourceExistence": "on"}},
+            client_pre_submit_ms=12.5,
+        )
+
+        self.assertEqual(snapshot.job_id, "query-client-preflight-failure")
+        state = self.manager.state_payload()
+        queued = state["jobs"][0]
+        self.assertEqual(queued["jobId"], "query-client-preflight-failure")
+        self.assertEqual(queued["status"], "queued")
+        self.assertEqual(queued["progressLabel"], "Preparing query...")
+        self.assertEqual(queued["timings"]["clientPreSubmitMs"], 12.5)
+
+        failed = self.manager.fail_preflight_job(
+            snapshot.job_id,
+            error="Referenced source(s) were not found: missing.schema_table",
+            message="Query preparation failed before DuckDB execution started.",
+            backend_prepare_ms=7.25,
+        )
+
+        self.assertEqual(failed.status, "failed")
+        self.assertIn("missing.schema_table", failed.error)
+        self.assertEqual(failed.timings["backendPrepareMs"], 7.25)
+        self.assertTrue(
+            any(event.get("event") == "failed" for event in failed.progress_events)
+        )
 
     def test_unexpected_worker_exit_reports_last_phase_progress_and_code(self) -> None:
         snapshot = QueryJobDefinition(

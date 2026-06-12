@@ -23,15 +23,55 @@ async def ensure_query_notebook(page, base_url: str, timeout_ms: int) -> None:
         wait_until="domcontentloaded",
         timeout=timeout_ms,
     )
-    await page.wait_for_timeout(1500)
-    if await page.locator("[data-query-workbench-entry-page]").count():
+    await page.wait_for_function(
+        """
+        () => Boolean(
+          document.querySelector("[data-query-cell]")
+          || document.querySelector("[data-query-workbench-entry-page]")
+        )
+        """,
+        timeout=timeout_ms,
+    )
+    query_cells = page.locator("[data-query-cell]:visible")
+    if not await query_cells.count():
+        await page.wait_for_timeout(1500)
+        await page.wait_for_function(
+            """
+            () => Array.from(document.querySelectorAll("[data-query-workbench-entry-page] [data-create-notebook]"))
+              .some((button) => {
+                const rect = button.getBoundingClientRect();
+                return button instanceof HTMLButtonElement
+                  && !button.disabled
+                  && rect.width > 0
+                  && rect.height > 0;
+              })
+            """,
+            timeout=timeout_ms,
+        )
         create_button = page.locator(
-            "[data-query-workbench-entry-page] [data-create-notebook]"
+            "[data-query-workbench-entry-page] [data-create-notebook]:visible"
         ).first
-        await create_button.wait_for(state="visible", timeout=timeout_ms)
         await create_button.click(force=True)
-    await page.locator("[data-query-cell]:visible").first.wait_for(
-        state="visible",
+    await query_cells.first.wait_for(state="visible", timeout=timeout_ms)
+    await page.evaluate(
+        """
+        () => {
+          const switchButton = document.querySelector('[data-query-cell] [data-cell-query-option="validation.sourceExistence"]');
+          if (
+            switchButton instanceof HTMLButtonElement &&
+            switchButton.getAttribute("aria-checked") !== "true"
+          ) {
+            switchButton.click();
+          }
+        }
+        """
+    )
+    await page.wait_for_function(
+        """
+        () => document
+          .querySelector('[data-query-cell] [data-cell-query-option="validation.sourceExistence"]')
+          ?.getAttribute("aria-checked") === "true"
+        """,
         timeout=timeout_ms,
     )
 
@@ -97,7 +137,7 @@ async def main() -> None:
                 timeout=args.timeout_ms,
             )
 
-            await write_cell_sql(page, "select * from range(3) where range > 0")
+            await write_cell_sql(page, "select * from range(3) as t(i) where i > 0")
             await cell.hover()
             await page.wait_for_function(
                 """

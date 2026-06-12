@@ -286,10 +286,10 @@ const localCellPrefix = "local-cell-";
 const initialSqlEditorRows = 5;
 const populatedSqlEditorRows = 10;
 const defaultSqlEditorAutoRows = 10;
-const queryJobTerminalStatuses = new Set(["completed", "failed", "cancelled"]);
+const queryJobTerminalStatuses = new Set(["completed", "failed", "cancelled", "canceled", "aborted", "incomplete"]);
 const queryClientTimingStarts = new Map();
 const acknowledgedQueryClientTimings = new Set();
-const dataGenerationTerminalStatuses = new Set(["completed", "failed", "cancelled"]);
+const dataGenerationTerminalStatuses = new Set(["completed", "failed", "cancelled", "canceled", "aborted", "incomplete"]);
 const dataGenerationRunningStatuses = new Set(["queued", "running"]);
 let dismissedNotificationKeys = new Set();
 
@@ -843,6 +843,7 @@ const dataSourceExplorerController = createDataSourceExplorerController({
   copySourceQueryPath,
   downloadLocalWorkspaceExportFromSource,
   downloadSourceObjectDdl,
+  downloadSourceS3GeneratedParts,
   downloadSourceS3Object,
   downloadJobsController,
   escapeHtml,
@@ -1197,6 +1198,7 @@ const {
   createFolderNode,
   createNotebook,
   defaultFolderPermissions,
+  deleteSharedNotebookFolder,
   deleteTreeFolder,
   deriveFolderId,
   applyWorkbenchTitle,
@@ -3291,7 +3293,7 @@ function formatEventDateTime(value) {
 }
 
 function dataGenerationJobIsRunning(job) {
-  return Boolean(job && dataGenerationRunningStatuses.has(job.status));
+  return Boolean(job && dataGenerationRunningStatuses.has(String(job.status || "").trim().toLowerCase()));
 }
 
 function dataGenerationJobStatusCopy(job) {
@@ -3299,7 +3301,7 @@ function dataGenerationJobStatusCopy(job) {
     return "Idle";
   }
 
-  switch (job.status) {
+  switch (String(job.status || "").trim().toLowerCase()) {
     case "queued":
       return "Queued";
     case "running":
@@ -3307,7 +3309,12 @@ function dataGenerationJobStatusCopy(job) {
     case "completed":
       return "Completed";
     case "cancelled":
+    case "canceled":
       return "Cancelled";
+    case "aborted":
+      return "Aborted";
+    case "incomplete":
+      return "Incomplete";
     case "failed":
       return "Failed";
     default:
@@ -3402,7 +3409,11 @@ function dataGenerationJobCopy(job) {
         : "0 rows";
   const metricCopy = `${formatQueryDuration(dataGenerationJobElapsedMs(job))} | ${sizeCopy} | ${rowsCopy}`;
   const messageCopy = String(job.message || "").trim();
-  if (messageCopy && (dataGenerationJobIsRunning(job) || ["cancelled", "failed"].includes(job.status))) {
+  const status = String(job.status || "").trim().toLowerCase();
+  if (
+    messageCopy &&
+    (dataGenerationJobIsRunning(job) || ["cancelled", "canceled", "aborted", "incomplete", "failed"].includes(status))
+  ) {
     return `${messageCopy} | ${metricCopy}`;
   }
   return metricCopy;
@@ -4114,13 +4125,18 @@ function openSidebarSourceObjectAncestors(target) {
   if (sourcesRoot instanceof HTMLDetailsElement) {
     sourcesRoot.open = true;
   }
-  const catalog = target?.closest?.("[data-source-catalog]");
-  if (catalog instanceof HTMLDetailsElement) {
-    catalog.open = true;
-  }
-  const schema = target?.closest?.("[data-source-schema]");
-  if (schema instanceof HTMLDetailsElement) {
-    schema.open = true;
+
+  let ancestor = target?.parentElement ?? null;
+  while (ancestor instanceof Element) {
+    if (
+      ancestor instanceof HTMLDetailsElement &&
+      (ancestor.hasAttribute("data-source-catalog") ||
+        ancestor.hasAttribute("data-source-schema") ||
+        ancestor.hasAttribute("data-source-s3-folder"))
+    ) {
+      ancestor.open = true;
+    }
+    ancestor = ancestor.parentElement;
   }
 }
 
@@ -4313,6 +4329,31 @@ async function copyEditorSql(editorRoot, triggerButton = null) {
       triggerButton.setAttribute("aria-label", "Copy SQL");
     }, 1200);
   }
+  return true;
+}
+
+async function copyQueryTimingTable(trigger) {
+  if (!(trigger instanceof HTMLElement)) {
+    return false;
+  }
+  const encoded = String(trigger.dataset.queryTimingTable || "");
+  let timingTable = "";
+  try {
+    timingTable = decodeURIComponent(encoded);
+  } catch (_error) {
+    timingTable = encoded;
+  }
+  await writeTextToClipboard(timingTable, {
+    trim: false,
+    emptyMessage: "There are no query timing values to copy.",
+  });
+  const previousTitle = trigger.title;
+  trigger.classList.add("is-copied");
+  trigger.title = "Timing table copied";
+  window.setTimeout(() => {
+    trigger.classList.remove("is-copied");
+    trigger.title = previousTitle || "Copy timing table";
+  }, 1200);
   return true;
 }
 
@@ -4973,6 +5014,32 @@ async function setSharedNotebookFolderVisibility(folder, isPublic) {
   });
   if (!response.ok) {
     throw new Error(`Failed to update notebook folder visibility: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+async function deleteSharedNotebookFolder(folder) {
+  const payload = sharedNotebookFolderPayload(folder);
+  if (!payload.path.length) {
+    return null;
+  }
+
+  const response = await window.fetch("/api/notebooks/shared/folders", {
+    method: "DELETE",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      path: payload.path,
+    }),
+  });
+  if (response.status === 404) {
+    return null;
+  }
+  if (!response.ok) {
+    throw new Error(`Failed to delete notebook folder metadata: ${response.status}`);
   }
 
   return response.json();
@@ -8307,6 +8374,131 @@ function renderLocalQueryFailure(cellRoot, { cellId, notebookId, workspaceRoot, 
   });
 }
 
+function localQueryJobId() {
+  return `query-client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function queryMonitorSummaryForJobs(jobs) {
+  const runningJobs = jobs.filter((job) => queryJobIsRunning(job));
+  return {
+    runningCount: runningJobs.length,
+    runningProcessCount: runningJobs.filter((job) => Number(job.processId || 0) > 0).length,
+    totalCount: jobs.length,
+  };
+}
+
+function applyLocalQueryJobSnapshot(snapshot, { removeJobIds = [] } = {}) {
+  const normalizedSnapshot = normalizeQueryJobForDisplay(snapshot);
+  if (!normalizedSnapshot?.jobId) {
+    return null;
+  }
+
+  const removeIds = new Set(removeJobIds.map((jobId) => String(jobId || "").trim()).filter(Boolean));
+  const currentState = currentQueryState();
+  const nextJobs = [
+    normalizedSnapshot,
+    ...(currentState.snapshot ?? []).filter(
+      (job) => job.jobId !== normalizedSnapshot.jobId && !removeIds.has(job.jobId)
+    ),
+  ];
+
+  const nextSnapshot = {
+    version: currentState.version,
+    summary: queryMonitorSummaryForJobs(nextJobs),
+    jobs: nextJobs,
+    performance: currentState.performance ?? { recent: [], stats: {} },
+  };
+  applyQueryJobsState(nextSnapshot);
+  queryRunsController.refreshForQueryJobsSnapshot(nextSnapshot);
+  return normalizedSnapshot;
+}
+
+function appendLocalQueryProgressEvent(snapshot, event, { phase = "", message = "", progress = null } = {}) {
+  const now = new Date();
+  const startedAtMs = Date.parse(snapshot.startedAt || "");
+  const durationMs = Number.isNaN(startedAtMs) ? 0 : Math.max(0, now.getTime() - startedAtMs);
+  return {
+    ...snapshot,
+    updatedAt: now.toISOString(),
+    progress: typeof progress === "number" ? Math.max(0, Math.min(1, progress)) : snapshot.progress,
+    progressLabel: phase || snapshot.progressLabel,
+    message: message || snapshot.message,
+    progressEvents: [
+      ...(Array.isArray(snapshot.progressEvents) ? snapshot.progressEvents : []),
+      {
+        event,
+        phase,
+        message,
+        occurredAt: now.toISOString(),
+        durationMs,
+      },
+    ],
+  };
+}
+
+function createLocalQueryJobSnapshot({ jobId, notebookId, notebookTitle, cellId, sql, startedAt }) {
+  const initialSnapshot = {
+    jobId,
+    notebookId,
+    notebookTitle,
+    cellId,
+    sql,
+    executionSql: "",
+    status: "queued",
+    startedAt,
+    updatedAt: startedAt,
+    completedAt: null,
+    durationMs: 0,
+    progress: 0.02,
+    progressLabel: "Preparing submission...",
+    message: "The browser accepted Run Cell and is preparing the query request.",
+    error: "",
+    warnings: [],
+    columns: [],
+    rows: [],
+    rowCount: 0,
+    rowsShown: 0,
+    truncated: false,
+    dataSources: [],
+    sourceTypes: [],
+    touchedRelations: [],
+    touchedBuckets: [],
+    backendName: "Browser",
+    executionMode: "",
+    duckdbExecutionPath: "",
+    resourceSamples: [],
+    progressEvents: [],
+    canCancel: false,
+  };
+  return appendLocalQueryProgressEvent(initialSnapshot, "client_submitted", {
+    phase: "Preparing submission",
+    message: "Run Cell was clicked. Preparing validation, source rewrites, and the backend request.",
+    progress: 0.02,
+  });
+}
+
+function failLocalQueryJobSnapshot(snapshot, error, { message = "Query failed before the backend accepted it." } = {}) {
+  const now = new Date();
+  const startedAtMs = Date.parse(snapshot.startedAt || "");
+  const durationMs = Number.isNaN(startedAtMs) ? 0 : Math.max(0, now.getTime() - startedAtMs);
+  return {
+    ...appendLocalQueryProgressEvent(snapshot, "failed", {
+      phase: "Failed",
+      message,
+      progress: null,
+    }),
+    status: "failed",
+    completedAt: now.toISOString(),
+    updatedAt: now.toISOString(),
+    durationMs,
+    progress: null,
+    progressLabel: "Failed",
+    message,
+    error,
+    canCancel: false,
+  };
+}
+
 async function startQueryJobForForm(form) {
   if (formCellLanguage(form) === "python") {
     await startPythonJobForForm(form);
@@ -8332,32 +8524,46 @@ async function startQueryJobForForm(form) {
   const formData = new FormData(form);
   const editorSource = cellRoot.querySelector("[data-editor-source]");
   const originalSql = editorSource?.value ?? "";
-  const sourceValidation = await querySourceValidationController.validateBeforeRun(cellRoot, originalSql);
-  if (sourceValidation?.status === "invalid") {
-    renderLocalQueryFailure(cellRoot, {
-      cellId,
-      notebookId,
-      workspaceRoot,
-      sql: originalSql,
-      error: sourceValidation.message || "Referenced source(s) were not found.",
-    });
-    return;
-  }
+  const clientJobId = localQueryJobId();
+  let clientSnapshot = createLocalQueryJobSnapshot({
+    jobId: clientJobId,
+    notebookId,
+    notebookTitle: currentWorkspaceNotebookTitle(workspaceRoot),
+    cellId,
+    sql: originalSql,
+    startedAt: new Date(clientRunStartedAt).toISOString(),
+  });
+  queryClientTimingStarts.set(clientJobId, {
+    startedPerf: clientRunStartedPerf,
+  });
+  applyLocalQueryJobSnapshot(clientSnapshot);
 
   let preparedSubmission = null;
   try {
+    clientSnapshot = appendLocalQueryProgressEvent(clientSnapshot, "client_preparing_sql", {
+      phase: "Preparing SQL",
+      message: "Rewriting virtual source paths and Local Workspace references for DuckDB.",
+      progress: 0.08,
+    });
+    applyLocalQueryJobSnapshot(clientSnapshot);
     preparedSubmission = await prepareSqlSubmissionForCell(cellRoot, originalSql);
   } catch (error) {
+    const errorMessage =
+      error instanceof Error
+        ? error.message
+        : "The Local Workspace sources could not be prepared for querying.";
+    clientSnapshot = failLocalQueryJobSnapshot(clientSnapshot, errorMessage, {
+      message: "SQL preparation failed before backend submission.",
+    });
+    applyLocalQueryJobSnapshot(clientSnapshot);
     renderLocalQueryFailure(cellRoot, {
       cellId,
       notebookId,
       workspaceRoot,
       sql: originalSql,
-      error:
-        error instanceof Error
-          ? error.message
-          : "The Local Workspace sources could not be prepared for querying.",
+      error: errorMessage,
     });
+    queryClientTimingStarts.delete(clientJobId);
     return;
   }
   formData.set("sql", preparedSubmission.executionSql);
@@ -8368,6 +8574,7 @@ async function startQueryJobForForm(form) {
   formData.set("data_sources", preparedSubmission.dataSources.join("||"));
   formData.set("localRelations", JSON.stringify(preparedSubmission.localRelationMap));
   formData.set("queryOptions", JSON.stringify(preparedSubmission.queryOptions));
+  formData.set("clientJobId", clientJobId);
   formData.set("clientRunStartedAt", String(clientRunStartedAt));
   formData.set("clientPreSubmitMs", String(Math.max(0, performance.now() - clientRunStartedPerf)));
   if (cellCacheHydrationEnabled(cellRoot)) {
@@ -8378,23 +8585,28 @@ async function startQueryJobForForm(form) {
     });
   }
 
-  const response = await window.fetch("/api/query-jobs", {
-    method: "POST",
-    body: formData,
-    headers: {
-      Accept: "application/json",
-    },
+  clientSnapshot = appendLocalQueryProgressEvent(clientSnapshot, "client_submitting", {
+    phase: "Submitting to backend",
+    message: "Sending the query job request to the backend. Backend/SSE updates will replace this local monitor row.",
+    progress: 0.16,
   });
+  applyLocalQueryJobSnapshot(clientSnapshot);
 
-  if (!response.ok) {
-    let message = "The query could not be started.";
-    try {
-      const payload = await response.json();
-      message = payload?.detail || message;
-    } catch (_error) {
-      // Ignore invalid JSON bodies.
-    }
-
+  let response = null;
+  try {
+    response = await window.fetch("/api/query-jobs", {
+      method: "POST",
+      body: formData,
+      headers: {
+        Accept: "application/json",
+      },
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "The query job request failed before a response arrived.";
+    clientSnapshot = failLocalQueryJobSnapshot(clientSnapshot, message, {
+      message: "The backend did not accept the query job request.",
+    });
+    applyLocalQueryJobSnapshot(clientSnapshot);
     renderLocalQueryFailure(cellRoot, {
       cellId,
       notebookId,
@@ -8402,6 +8614,31 @@ async function startQueryJobForForm(form) {
       sql: originalSql,
       error: message,
     });
+    queryClientTimingStarts.delete(clientJobId);
+    return;
+  }
+
+  if (!response.ok) {
+    let message = `The query could not be started. HTTP ${response.status}.`;
+    try {
+      const payload = await response.json();
+      message = payload?.detail || message;
+    } catch (_error) {
+      // Ignore invalid JSON bodies.
+    }
+
+    clientSnapshot = failLocalQueryJobSnapshot(clientSnapshot, message, {
+      message: `The backend rejected the query job request with HTTP ${response.status}.`,
+    });
+    applyLocalQueryJobSnapshot(clientSnapshot);
+    renderLocalQueryFailure(cellRoot, {
+      cellId,
+      notebookId,
+      workspaceRoot,
+      sql: originalSql,
+      error: message,
+    });
+    queryClientTimingStarts.delete(clientJobId);
     return;
   }
 
@@ -8411,6 +8648,7 @@ async function startQueryJobForForm(form) {
   }
 
   if (snapshot.jobId) {
+    queryClientTimingStarts.delete(clientJobId);
     queryClientTimingStarts.set(snapshot.jobId, {
       startedPerf: clientRunStartedPerf,
     });
@@ -8436,12 +8674,7 @@ async function startQueryJobForForm(form) {
     }
   }
   recordNotebookActivity(notebookId, "run");
-  applyOptimisticQueryJobSnapshot({
-    snapshot: displaySnapshot,
-    applyQueryJobsState,
-    getQueryState: currentQueryState,
-    incrementRunningCount: true,
-  });
+  applyLocalQueryJobSnapshot(displaySnapshot, { removeJobIds: [clientJobId] });
 }
 
 async function startQueryExplainForForm(form) {
@@ -10702,6 +10935,22 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const queryTimingsCopyTrigger = event.target.closest("[data-copy-query-timings]");
+  if (queryTimingsCopyTrigger) {
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      await copyQueryTimingTable(queryTimingsCopyTrigger);
+    } catch (error) {
+      console.error("Failed to copy query timing table.", error);
+      await showMessageDialog({
+        title: "Copy timing table failed",
+        copy: error instanceof Error ? error.message : "The query timing table could not be copied.",
+      });
+    }
+    return;
+  }
+
   const timingDetailsToggle = event.target.closest("[data-query-duration-details-toggle]");
   if (timingDetailsToggle) {
     event.preventDefault();
@@ -11157,6 +11406,27 @@ document.body.addEventListener("keydown", (event) => {
 
 document.body.addEventListener("keydown", async (event) => {
   await handleNotebookWorkspaceRenameTitleKeydown(event);
+});
+
+document.body.addEventListener("keydown", async (event) => {
+  if (!["Enter", " "].includes(event.key)) {
+    return;
+  }
+  const queryTimingsCopyTrigger = event.target.closest?.("[data-copy-query-timings]");
+  if (!queryTimingsCopyTrigger) {
+    return;
+  }
+  event.preventDefault();
+  event.stopPropagation();
+  try {
+    await copyQueryTimingTable(queryTimingsCopyTrigger);
+  } catch (error) {
+    console.error("Failed to copy query timing table.", error);
+    await showMessageDialog({
+      title: "Copy timing table failed",
+      copy: error instanceof Error ? error.message : "The query timing table could not be copied.",
+    });
+  }
 });
 
 document.body.addEventListener("htmx:afterSwap", (event) => {

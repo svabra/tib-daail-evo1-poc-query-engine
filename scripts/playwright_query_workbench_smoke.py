@@ -89,17 +89,25 @@ async def assert_sql_copy_button(page, timeout_ms: int) -> None:
     editor = cell.locator("[data-editor-root]").first
     copy_button = editor.locator("[data-copy-editor-sql]").first
     await copy_button.wait_for(state="attached", timeout=timeout_ms)
+    await page.evaluate(
+        "() => { if (document.activeElement instanceof HTMLElement) document.activeElement.blur(); }"
+    )
     await page.mouse.move(5, 5)
     button_handle = await copy_button.element_handle()
     await page.wait_for_function(
-        """button => Number.parseFloat(getComputedStyle(button).opacity || "0") < 0.05""",
+        """button => {
+            const opacity = Number.parseFloat(getComputedStyle(button).opacity || "0");
+            return opacity >= 0.7 && opacity < 0.95;
+        }""",
         arg=button_handle,
         timeout=timeout_ms,
     )
 
     opacity_before = await copy_button.evaluate("node => getComputedStyle(node).opacity")
-    if float(opacity_before) > 0.05:
-        raise RuntimeError("The SQL copy button is visible before hovering over the editor.")
+    if not 0.7 <= float(opacity_before) < 0.95:
+        raise RuntimeError(
+            "The SQL copy button did not render at its idle opacity before hovering over the editor."
+        )
 
     await editor.hover()
     await page.wait_for_function(

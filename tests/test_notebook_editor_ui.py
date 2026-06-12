@@ -30,6 +30,13 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("[data-expand-editor]", app_source)
         self.assertIn('classList.contains("is-editor-expanded")', autosize_source)
         self.assertIn(".editor-expand-button", css_source)
+        self.assertIn("isolation: isolate;", css_source)
+        self.assertIn("z-index: 20;", css_source)
+        self.assertIn("opacity: 0.78;", css_source)
+        self.assertIn("pointer-events: auto;", css_source)
+        self.assertIn(".editor-shell {\n  position: relative;\n  z-index: 1;", css_source)
+        self.assertIn(".editor-frame:hover .editor-source-nav-button", css_source)
+        self.assertIn(".editor-frame:focus-within .editor-source-nav-button", css_source)
 
     def test_cell_descriptors_share_action_and_warning_panel_have_wiring(self) -> None:
         markup_source = (
@@ -44,6 +51,9 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
         dialogs_source = (STATIC_ROOT / "js" / "dialogs.js").read_text(encoding="utf-8")
         query_ui_source = (STATIC_ROOT / "js" / "query-ui.js").read_text(encoding="utf-8")
+        query_runs_source = (STATIC_ROOT / "js" / "query-runs-controller.js").read_text(
+            encoding="utf-8"
+        )
         css_source = (STATIC_ROOT / "css" / "app.css").read_text(encoding="utf-8")
 
         self.assertIn("Cell processing hints", markup_source)
@@ -76,9 +86,119 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("mailto:?subject", app_source)
         self.assertIn("queryWarningsMarkup", query_ui_source)
         self.assertIn("data-query-warnings", query_ui_source)
+        self.assertIn("queryMonitorErrorMarkup", query_ui_source)
+        self.assertIn("queryMonitorWarningsMarkup", query_ui_source)
+        self.assertIn("queryMonitorProgressEventsMarkup", query_ui_source)
+        self.assertIn("runWarningsMarkup", query_runs_source)
         self.assertIn(".cell-descriptor-grid", css_source)
         self.assertIn(".result-warning-list", css_source)
+        self.assertIn(".query-monitor-error", css_source)
+        self.assertIn(".query-monitor-warning-list", css_source)
+        self.assertIn(".query-monitor-progress-events", css_source)
+        self.assertIn(".query-run-history-warning", css_source)
         self.assertIn(".notebook-share-actions", css_source)
+
+    def test_run_cell_immediately_updates_query_monitor(self) -> None:
+        app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
+        state_source = (STATIC_ROOT / "js" / "query-job-state.js").read_text(
+            encoding="utf-8"
+        )
+        realtime_source = (STATIC_ROOT / "js" / "realtime-controller.js").read_text(
+            encoding="utf-8"
+        )
+        query_runs_source = (STATIC_ROOT / "js" / "query-runs-controller.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("function createLocalQueryJobSnapshot", app_source)
+        self.assertIn("function applyLocalQueryJobSnapshot", app_source)
+        self.assertIn("function failLocalQueryJobSnapshot", app_source)
+        self.assertIn("Run Cell was clicked", app_source)
+        self.assertIn("applyLocalQueryJobSnapshot(clientSnapshot);", app_source)
+        self.assertIn("queryRunsController.refreshForQueryJobsSnapshot(nextSnapshot);", app_source)
+        self.assertIn("The backend rejected the query job request with HTTP", app_source)
+        self.assertIn('formData.set("clientJobId", clientJobId);', app_source)
+        self.assertIn("removeJobIds: [clientJobId]", app_source)
+        self.assertNotIn("sourceValidation blocked the query before backend submission", app_source)
+        self.assertIn("progressEvents: Array.isArray(job.progressEvents)", state_source)
+        self.assertIn("canCancel: job.canCancel !== false", state_source)
+        self.assertIn("const canCancel = queryJobIsRunning(job) && job?.canCancel !== false;", realtime_source)
+        self.assertIn("let latestQueryJobsSnapshot = { jobs: [] };", query_runs_source)
+        self.assertIn("function liveRunsForRoot", query_runs_source)
+        self.assertIn("function runsForRender", query_runs_source)
+        self.assertIn("renderList(root, root._bdwQueryRunsPayload || { available: true, runs: [] });", query_runs_source)
+
+    def test_status_colors_match_runtime_semantics(self) -> None:
+        css_source = (STATIC_ROOT / "css" / "app.css").read_text(encoding="utf-8")
+        query_ui_source = (STATIC_ROOT / "js" / "query-ui.js").read_text(encoding="utf-8")
+        query_state_source = (STATIC_ROOT / "js" / "query-job-state.js").read_text(
+            encoding="utf-8"
+        )
+        query_runs_source = (STATIC_ROOT / "js" / "query-runs-controller.js").read_text(
+            encoding="utf-8"
+        )
+        ingestion_ui_source = (STATIC_ROOT / "js" / "ingestion-ui.js").read_text(
+            encoding="utf-8"
+        )
+        download_jobs_source = (
+            STATIC_ROOT / "js" / "download-jobs-controller.js"
+        ).read_text(encoding="utf-8")
+        s3_delete_jobs_source = (
+            STATIC_ROOT / "js" / "s3-delete-jobs-controller.js"
+        ).read_text(encoding="utf-8")
+        pipeline_source = (
+            STATIC_ROOT / "js" / "notebook-stage-pipeline-controller.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("--status-blue: #0b4479;", css_source)
+        self.assertIn("--status-green:", css_source)
+        self.assertIn("--status-orange:", css_source)
+        self.assertIn("--status-red:", css_source)
+        self.assertIn(".query-monitor-item-running .query-monitor-status-badge", css_source)
+        self.assertIn(".query-monitor-item-queued .query-monitor-status-badge", css_source)
+        self.assertIn(".query-monitor-item-completed .query-monitor-status-badge", css_source)
+        self.assertIn(".query-monitor-item-warning .query-monitor-status-badge", css_source)
+        self.assertIn(".query-monitor-item-failed .query-monitor-status-badge", css_source)
+        self.assertIn(".query-monitor-item-aborted .query-monitor-status-badge", css_source)
+        self.assertIn(".query-monitor-item-incomplete .query-monitor-status-badge", css_source)
+        self.assertIn(".query-run-history-status.is-running", css_source)
+        self.assertIn(".query-run-history-status.is-cancelled", css_source)
+        self.assertIn(".query-run-history-status.is-canceled", css_source)
+        self.assertIn(".query-run-history-status.is-aborted", css_source)
+        self.assertIn(".query-run-history-status.is-incomplete", css_source)
+        self.assertIn(".topbar-notification-item-status.is-running", css_source)
+        self.assertIn(".topbar-notification-item-status.is-failed", css_source)
+        self.assertIn(".ingestion-job-status.is-running", css_source)
+        self.assertIn(".ingestion-job-status.is-failed", css_source)
+        self.assertIn(".download-job-status-cancelled", css_source)
+        self.assertIn(".prepared-download-indicator.is-running", css_source)
+        self.assertIn(".pipeline-node-incomplete .pipeline-node-rect", css_source)
+        self.assertIn(".pipeline-status-incomplete", css_source)
+        self.assertIn(".pipeline-stage-action-button.is-running", css_source)
+        self.assertIn("background: var(--status-blue-bg);", css_source)
+        self.assertIn("color: var(--status-blue);", css_source)
+        self.assertIn("background: var(--status-green-bg);", css_source)
+        self.assertIn("background: var(--status-orange-bg);", css_source)
+        self.assertIn("background: var(--status-red-bg);", css_source)
+        self.assertNotIn(
+            ".query-run-history-status.is-running {\n  background: rgba(170, 37, 20",
+            css_source,
+        )
+        self.assertNotIn(
+            ".prepared-download-indicator.is-running {\n  animation: prepared-download-blink 1.1s ease-in-out infinite;\n  background: rgba(214, 126, 116",
+            css_source,
+        )
+
+        self.assertIn("is-${escapeHtml(statusClass)}", query_ui_source)
+        self.assertIn("is-${escapeHtml(statusClass)}", ingestion_ui_source)
+        self.assertIn("is-${escapeHtml(statusClass)}", download_jobs_source)
+        self.assertIn("is-${escapeHtml(", s3_delete_jobs_source)
+        self.assertIn('"completed", "failed", "cancelled", "canceled", "aborted", "incomplete"', query_runs_source)
+        self.assertIn('case "canceled":', query_state_source)
+        self.assertIn('case "aborted":', query_state_source)
+        self.assertIn('case "incomplete":', query_state_source)
+        self.assertIn('const failedStageStatuses = new Set(["failed", "cancelled", "canceled", "aborted", "incomplete"]);', pipeline_source)
+        self.assertIn("statusIsFailure(status)", pipeline_source)
 
     def test_shared_notebook_delete_marks_pending_state_in_ui(self) -> None:
         app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
@@ -123,7 +243,8 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("invalidatePreparedSqlViewForCell", app_source)
         self.assertIn("notebookId", validation_source)
         self.assertIn(".editor-sql-view-toggle", css_source)
-        self.assertIn(".workspace-cell:hover .editor-sql-view-toggle", css_source)
+        self.assertIn(".editor-frame:hover .editor-sql-view-toggle", css_source)
+        self.assertIn(".editor-frame:focus-within .editor-sql-view-toggle", css_source)
         self.assertNotIn(".editor-frame.is-duckdb-sql-view .editor-sql-view-toggle", css_source)
         self.assertNotIn(".editor-frame[data-editor-language=\"sql\"] textarea", css_source)
         self.assertIn(".editor-duckdb-sql-panel", css_source)
@@ -544,6 +665,9 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         realtime_source = (STATIC_ROOT / "js" / "realtime-controller.js").read_text(
             encoding="utf-8"
         )
+        query_runs_source = (STATIC_ROOT / "js" / "query-runs-controller.js").read_text(
+            encoding="utf-8"
+        )
         insights_source = (STATIC_ROOT / "js" / "query-insights.js").read_text(
             encoding="utf-8"
         )
@@ -577,6 +701,18 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("clientObservedMs", insights_source)
         self.assertIn("Query is DuckDB execution time only", insights_source)
         self.assertIn("overhead", insights_source)
+        self.assertIn("queryTimingClipboardTable", query_ui_source)
+        self.assertIn("data-copy-query-timings", query_ui_source)
+        self.assertIn("data-query-timing-table", query_ui_source)
+        self.assertIn("Metric\\tValue", query_ui_source)
+        self.assertIn("Total elapsed", query_runs_source)
+        self.assertIn("runTimingClipboardTable", query_runs_source)
+        self.assertIn("data-copy-query-timings", query_runs_source)
+        self.assertIn("data-query-timing-table", query_runs_source)
+        self.assertIn("copyQueryTimingTable", app_source)
+        self.assertIn("Copy timing table failed", app_source)
+        self.assertIn(".result-metric-strip[data-copy-query-timings]", css_source)
+        self.assertIn(".query-run-history-timing[data-copy-query-timings]", css_source)
         self.assertIn("visibleQueryTimingDetailKeys", app_source)
         self.assertIn("toggleQueryTimingDetails", app_source)
         self.assertIn("[data-query-duration-total]", realtime_source)

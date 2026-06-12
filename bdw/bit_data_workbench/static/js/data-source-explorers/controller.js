@@ -15,6 +15,7 @@ export function createDataSourceExplorerController(helpers) {
     downloadJobsController,
     downloadLocalWorkspaceExportFromSource,
     downloadSourceObjectDdl,
+    downloadSourceS3GeneratedParts,
     downloadSourceS3Object,
     escapeHtml,
     fetchJsonOrThrow,
@@ -49,6 +50,7 @@ export function createDataSourceExplorerController(helpers) {
     s3: createS3DataSourceExplorer({
       downloadSourceObjectDdl,
       downloadSourceS3Object,
+      downloadSourceS3GeneratedParts,
       downloadJobsController,
       escapeHtml,
       fetchJsonOrThrow,
@@ -260,13 +262,20 @@ export function createDataSourceExplorerController(helpers) {
       containerRoot.dataset.sourceCatalogSourceId?.trim() ||
       containerRoot.dataset.sourceCatalogName?.trim() ||
       "";
-    const bucket = containerRoot.dataset.sourceBucket?.trim() || "";
+    const bucket =
+      containerRoot.dataset.sourceBucket?.trim() ||
+      containerRoot.dataset.s3Bucket?.trim() ||
+      "";
+    const s3Prefix = containerRoot.dataset.s3Prefix?.trim() || "";
     const schemaKey = containerRoot.dataset.sourceSchemaKey?.trim() || "";
     const objectCount = containerRoot.querySelectorAll("[data-source-object]").length;
     const isCatalog = containerRoot.hasAttribute("data-source-catalog");
+    const isS3Folder = containerRoot.hasAttribute("data-source-s3-folder");
     const isLocalFolder = containerRoot.hasAttribute("data-local-workspace-folder-node");
     const eyebrow = isCatalog
       ? "Data source"
+      : isS3Folder
+        ? "Shared Workspace prefix"
       : bucket
         ? "Shared Workspace bucket"
         : isLocalFolder
@@ -283,6 +292,7 @@ export function createDataSourceExplorerController(helpers) {
         body: detailRows([
           { label: "Source", value: sourceId },
           { label: "Bucket", value: bucket },
+          { label: "Prefix", value: s3Prefix },
           { label: "Schema", value: schemaKey },
           { label: "Objects", value: objectCount ? String(objectCount) : "" },
         ]),
@@ -336,7 +346,7 @@ export function createDataSourceExplorerController(helpers) {
     }
 
     const summary = event.target.closest("summary");
-    const containerRoot = summary?.closest("[data-source-schema], [data-source-catalog]");
+    const containerRoot = summary?.closest("[data-source-s3-folder], [data-source-schema], [data-source-catalog]");
     if (containerRoot && navigation.contains(containerRoot)) {
       window.setTimeout(() => {
         renderSourceTreeContainerDetail(root, containerRoot);

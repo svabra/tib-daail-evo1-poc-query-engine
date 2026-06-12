@@ -29,6 +29,11 @@ STAGE_SCHEMA_NAME = "stage"
 TERMINAL_STAGE_STATUSES = {"completed", "failed", "cancelled", "skipped"}
 VALID_MATERIALIZED_STATUS = "valid"
 STAGE_REF_RE = re.compile(r"(?<![A-Za-z0-9_$])stage\.([A-Za-z_][A-Za-z0-9_$]*)", re.IGNORECASE)
+QUERY_START_RE = re.compile(r"^(?:select|with|from|values)\b", re.IGNORECASE)
+DUCKDB_TABLE_FUNCTION_RE = re.compile(
+    r"^(?:parquet_scan|read_(?:parquet|csv|csv_auto|json|json_auto|ndjson|ndjson_auto|xlsx))\s*\(",
+    re.IGNORECASE,
+)
 
 
 def utc_now_iso() -> str:
@@ -119,6 +124,10 @@ def materialized_stage_query_sql(sql: object) -> str:
     normalized = str(sql or "").strip()
     while normalized.endswith(";"):
         normalized = normalized[:-1].rstrip()
+    if not normalized or QUERY_START_RE.match(normalized):
+        return normalized
+    if DUCKDB_TABLE_FUNCTION_RE.match(normalized):
+        return f"SELECT * FROM {normalized}"
     return normalized
 
 
@@ -879,7 +888,13 @@ class MaterializedStageManager:
         normalized_start_stage_id = str(start_stage_id or "").strip()
         if normalized_start_stage_id:
             if normalized_start_stage_id not in set(ordered_stage_ids):
-                raise ValueError(f"Unknown stage: {normalized_start_stage_id}")
+                return self._record_submission_failure(
+                    graph=graph,
+                    notebook_id=notebook_id,
+                    notebook_title=notebook_title,
+                    stage_ids=[normalized_start_stage_id],
+                    error=f"Unknown stage: {normalized_start_stage_id}",
+                )
             diagnostic_stage_ids = self._stage_and_successor_ids(graph, normalized_start_stage_id)
             ordered_stage_ids = [stage_id for stage_id in ordered_stage_ids if stage_id in diagnostic_stage_ids]
         return self._start_run(
@@ -908,7 +923,13 @@ class MaterializedStageManager:
         )
         normalized_stage_id = str(stage_id or "").strip()
         if normalized_stage_id not in {str(node.get("stageId")) for node in graph.get("nodes", [])}:
-            raise KeyError(f"Unknown stage: {normalized_stage_id}")
+            return self._record_submission_failure(
+                graph=graph,
+                notebook_id=notebook_id,
+                notebook_title=notebook_title,
+                stage_ids=[normalized_stage_id],
+                error=f"Unknown stage: {normalized_stage_id}",
+            )
         diagnostic_stage_ids = self._stage_and_predecessor_ids(graph, normalized_stage_id)
         return self._start_run(
             graph=graph,
@@ -990,9 +1011,23 @@ class MaterializedStageManager:
             )
         ]
         if diagnostics:
-            raise ValueError(str(diagnostics[0].get("message") or "Pipeline graph is invalid."))
+            diagnostic = diagnostics[0]
+            target_stage_ids = self._stage_ids_for_diagnostic(diagnostic) or list(stage_ids)
+            return self._record_submission_failure(
+                graph=graph,
+                notebook_id=notebook_id,
+                notebook_title=notebook_title,
+                stage_ids=target_stage_ids,
+                error=str(diagnostic.get("message") or "Pipeline graph is invalid."),
+            )
         if not stage_ids:
-            raise ValueError("The notebook does not contain SQL stages to run.")
+            return self._record_submission_failure(
+                graph=graph,
+                notebook_id=notebook_id,
+                notebook_title=notebook_title,
+                stage_ids=[],
+                error="The notebook does not contain SQL stages to run.",
+            )
         run_id = f"stage-run-{uuid.uuid4().hex}"
         with self._lock:
             self._active_runs[run_id] = {
@@ -1015,6 +1050,61 @@ class MaterializedStageManager:
             self._threads.append(thread)
         thread.start()
         self._publish_state()
+        return self.state_payload()
+
+    @staticmethod
+    def _stage_ids_for_diagnostic(diagnostic: dict[str, object]) -> list[str]:
+        stage_ids = [
+            str(item).strip()
+            for item in diagnostic.get("stageIds", []) or []
+            if str(item).strip()
+        ]
+        stage_id = str(diagnostic.get("stageId") or "").strip()
+        if stage_id and stage_id not in stage_ids:
+            stage_ids.insert(0, stage_id)
+        return stage_ids
+
+    def _record_submission_failure(
+        self,
+        *,
+        graph: dict[str, object],
+        notebook_id: str,
+        notebook_title: str,
+        stage_ids: list[str],
+        error: str,
+    ) -> dict[str, object]:
+        run_id = f"stage-run-{uuid.uuid4().hex}"
+        node_by_id = {
+            str(node.get("stageId") or ""): node
+            for node in graph.get("nodes", []) or []
+            if isinstance(node, dict)
+        }
+        target_nodes = [
+            node_by_id[stage_id]
+            for stage_id in stage_ids
+            if stage_id in node_by_id
+        ]
+        if not target_nodes:
+            fallback_stage_id = next((str(stage_id).strip() for stage_id in stage_ids if str(stage_id).strip()), "")
+            target_nodes = [
+                {
+                    "notebookId": notebook_id,
+                    "stageId": fallback_stage_id,
+                    "cellId": "",
+                    "alias": "",
+                    "title": notebook_title or "Pipeline",
+                }
+            ]
+        for node in target_nodes:
+            self._append_record(
+                self._record_for_node(
+                    run_id,
+                    {**node, "notebookId": notebook_id},
+                    status="failed",
+                    message="Pipeline request failed before execution started.",
+                    error=error,
+                )
+            )
         return self.state_payload()
 
     @staticmethod
@@ -1252,7 +1342,9 @@ class MaterializedStageManager:
         try:
             if self._run_cancelled(run_id):
                 raise InterruptedError("Stage run was cancelled before execution.")
-            execution_sql = self._sql_rewriter(sql, data_sources, query_options)
+            execution_sql = materialized_stage_query_sql(
+                self._sql_rewriter(sql, data_sources, query_options)
+            )
             completed = self._execute_stage(
                 run_id=run_id,
                 graph=graph,

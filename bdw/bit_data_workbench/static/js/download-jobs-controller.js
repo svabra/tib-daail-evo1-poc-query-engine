@@ -509,13 +509,14 @@ export function createDownloadJobsController(helpers) {
   function downloadJobNotificationMarkup(job) {
     const ready = job.status === "ready";
     const running = isRunning(job);
+    const statusClass = String(job.status || "unknown").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "unknown";
     const statusCopy = running ? "Preparing download" : `${statusLabel(job)} download`;
     const details = ready && job.expiresAt
       ? `${formatDownloadSize(job.artifactSizeBytes || 0)} ZIP - ${expiryCopy(job)}`
       : progressCopy(job);
     return `
       <div class="topbar-notification-item topbar-notification-item-download">
-        <span class="topbar-notification-item-status topbar-notification-item-status-notice${running ? " is-live" : ""}">
+        <span class="topbar-notification-item-status topbar-notification-item-status-notice is-${escapeHtml(statusClass)}${running ? " is-live" : ""}">
           ${escapeHtml(statusCopy)}
         </span>
         <span class="topbar-notification-item-title">${escapeHtml(job.sourceName)}</span>

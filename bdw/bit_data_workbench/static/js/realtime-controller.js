@@ -346,6 +346,7 @@ export function createRealtimeController(helpers) {
     const cellId = cellRoot.dataset.cellId;
     const job = queryJobForCell(notebookId, cellId);
     const cancelling = queryJobIsRunning(job) && Boolean(job?.cancellationPhase);
+    const canCancel = queryJobIsRunning(job) && job?.canCancel !== false;
     const runButton = cellRoot.querySelector("[data-run-cell]");
     const explainButton = cellRoot.querySelector("[data-explain-cell]");
     const cancelButton = cellRoot.querySelector("[data-cancel-query]");
@@ -374,10 +375,10 @@ export function createRealtimeController(helpers) {
     }
 
     if (cancelButton) {
-      cancelButton.hidden = !queryJobIsRunning(job);
-      cancelButton.dataset.jobId = job?.jobId || "";
+      cancelButton.hidden = !canCancel;
+      cancelButton.dataset.jobId = canCancel ? job?.jobId || "" : "";
       cancelButton.dataset.jobKind = "query";
-      cancelButton.disabled = !queryJobIsRunning(job) || cancelling;
+      cancelButton.disabled = !canCancel || cancelling;
       cancelButton.textContent = cancelling ? "Cancelling..." : "Cancel";
       cancelButton.classList.toggle("is-cancelling", cancelling);
     }

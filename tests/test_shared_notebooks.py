@@ -98,6 +98,23 @@ class InMemorySharedNotebookStore:
         )
         return self.upsert_folder(folder)
 
+    def delete_folder(self, path):
+        normalized_path = tuple(str(segment).strip() for segment in path if str(segment).strip())
+        removed = [
+            folder_path
+            for folder_path in self._folders
+            if folder_path == normalized_path or folder_path[: len(normalized_path)] == normalized_path
+        ]
+        if not removed:
+            raise KeyError(f"Unknown shared notebook folder: {' / '.join(normalized_path)}")
+        for folder_path in removed:
+            self._folders.pop(folder_path, None)
+        return {
+            "action": "deleted",
+            "path": list(normalized_path),
+            "removedFolderCount": len(removed),
+        }
+
 
 class FakeS3MissingObject(Exception):
     response = {"Error": {"Code": "NoSuchKey"}}
@@ -1167,6 +1184,32 @@ class SharedNotebookServiceTests(unittest.TestCase):
 
         self.assertTrue(team_folder.is_shared)
         self.assertEqual(team_folder.notebooks[0].notebook_id, "shared-a")
+
+    def test_delete_shared_notebook_folder_removes_descendant_metadata(self) -> None:
+        _, _, _, folder_type, _, _ = import_shared_notebook_components()
+        service, _, _ = build_shared_notebook_service(
+            [],
+            [
+                folder_type(path=("pw-nb-parent",), display_name="pw-nb-parent"),
+                folder_type(path=("pw-nb-parent", "child"), display_name="child"),
+                folder_type(path=("Keep",), display_name="Keep"),
+            ],
+        )
+
+        result = service.delete_shared_notebook_folder(path=["pw-nb-parent"])
+
+        self.assertEqual(result["action"], "deleted")
+        self.assertEqual(result["removedFolderCount"], 2)
+        remaining_paths = {
+            folder.path for folder in service._shared_notebook_store.list_folders()
+        }
+        self.assertEqual(remaining_paths, {("Keep",)})
+
+    def test_delete_shared_notebook_folder_rejects_unknown_path(self) -> None:
+        service, _, _ = build_shared_notebook_service([], [])
+
+        with self.assertRaises(KeyError):
+            service.delete_shared_notebook_folder(path=["missing-folder"])
 
 
 if __name__ == "__main__":

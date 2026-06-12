@@ -302,36 +302,47 @@ def read_quoted_token(
 
 
 def extract_cte_names(tokens: list[SqlToken]) -> set[str]:
-    cte_names: set[str] = set()
     if not tokens:
+        return set()
+
+    def collect_range(start: int, stop: int) -> set[str]:
+        cte_names: set[str] = set()
+        index = start
+        while index < stop:
+            token = tokens[index]
+            if token.value == "(":
+                end_index = skip_parenthesized(tokens, index)
+                cte_names.update(collect_range(index + 1, max(index + 1, end_index - 1)))
+                index = max(index + 1, end_index)
+                continue
+            if token.kind == "word" and token.normalized == "with":
+                index += 1
+                if index < stop and tokens[index].kind == "word" and tokens[index].normalized == "recursive":
+                    index += 1
+                while index < stop:
+                    if not is_identifier_token(tokens[index]):
+                        break
+                    cte_names.add(tokens[index].normalized)
+                    index += 1
+                    if index < stop and tokens[index].value == "(":
+                        index = skip_parenthesized(tokens, index)
+                    if index >= stop or tokens[index].kind != "word" or tokens[index].normalized != "as":
+                        break
+                    index += 1
+                    if index >= stop or tokens[index].value != "(":
+                        break
+                    end_index = skip_parenthesized(tokens, index)
+                    cte_names.update(collect_range(index + 1, max(index + 1, end_index - 1)))
+                    index = max(index + 1, end_index)
+                    if index < stop and tokens[index].value == ",":
+                        index += 1
+                        continue
+                    break
+                continue
+            index += 1
         return cte_names
 
-    index = 0
-    while index < len(tokens):
-        token = tokens[index]
-        if token.kind == "word" and token.normalized == "with":
-            index += 1
-            if index < len(tokens) and tokens[index].kind == "word" and tokens[index].normalized == "recursive":
-                index += 1
-            while index < len(tokens):
-                if not is_identifier_token(tokens[index]):
-                    return cte_names
-                cte_names.add(tokens[index].normalized)
-                index += 1
-                if index < len(tokens) and tokens[index].value == "(":
-                    index = skip_parenthesized(tokens, index)
-                if index >= len(tokens) or tokens[index].kind != "word" or tokens[index].normalized != "as":
-                    return cte_names
-                index += 1
-                if index >= len(tokens) or tokens[index].value != "(":
-                    return cte_names
-                index = skip_parenthesized(tokens, index)
-                if index < len(tokens) and tokens[index].value == ",":
-                    index += 1
-                    continue
-                return cte_names
-        index += 1
-    return cte_names
+    return collect_range(0, len(tokens))
 
 
 def extract_relation_references(tokens: list[SqlToken], cte_names: set[str]) -> list[str]:

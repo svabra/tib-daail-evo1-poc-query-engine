@@ -112,6 +112,38 @@ class FakeWorkbenchService:
                                 s3_file_format="csv",
                                 s3_downloadable=True,
                                 size_bytes=1024,
+                            ),
+                            SourceObject(
+                                name="kbkp_2019",
+                                kind="file",
+                                relation="workspace.shared_finance.kbkp_2019",
+                                display_name="kbkp_2019.parquet",
+                                query_alias=(
+                                    "s3.shared_finance.generated."
+                                    "kostenbelege_3_1.parquet.kbkp_2019"
+                                ),
+                                query_reference=(
+                                    's3."shared-finance".'
+                                    '"generated/kostenbelege_3_1/parquet/'
+                                    'kbkp_2019/*.parquet"'
+                                ),
+                                s3_bucket="shared-finance",
+                                s3_key="",
+                                s3_path=(
+                                    "s3://shared-finance/generated/"
+                                    "kostenbelege_3_1/parquet/kbkp_2019/*.parquet"
+                                ),
+                                s3_file_format="parquet",
+                                s3_downloadable=False,
+                                size_bytes=1456128,
+                                s3_download_kind="generated_parts",
+                                s3_part_prefix=(
+                                    "generated/kostenbelege_3_1/parquet/kbkp_2019/"
+                                ),
+                                s3_part_file_format="parquet",
+                                s3_part_count=3,
+                                s3_download_filename="kbkp_2019.parquet",
+                                s3_zip_downloadable=True,
                             )
                         ],
                     )
@@ -196,6 +228,48 @@ class FakeWorkbenchService:
     ) -> dict[str, object]:
         selected_bucket = bucket or "shared-finance"
         selected_prefix = prefix or "exports/"
+        if selected_prefix == "generated/kostenbelege_3_1/parquet/":
+            return {
+                "bucket": selected_bucket,
+                "prefix": selected_prefix,
+                "path": f"s3://{selected_bucket}/{selected_prefix}",
+                "entries": [
+                    {
+                        "entryKind": "prefix",
+                        "name": "kbkp_2019",
+                        "bucket": selected_bucket,
+                        "prefix": (
+                            "generated/kostenbelege_3_1/parquet/kbkp_2019/"
+                        ),
+                        "path": (
+                            f"s3://{selected_bucket}/generated/"
+                            "kostenbelege_3_1/parquet/kbkp_2019/"
+                        ),
+                    }
+                ],
+                "breadcrumbs": [
+                    {"label": "Buckets", "bucket": "", "prefix": ""},
+                    {"label": selected_bucket, "bucket": selected_bucket, "prefix": ""},
+                    {
+                        "label": "generated",
+                        "bucket": selected_bucket,
+                        "prefix": "generated/",
+                    },
+                    {
+                        "label": "kostenbelege_3_1",
+                        "bucket": selected_bucket,
+                        "prefix": "generated/kostenbelege_3_1/",
+                    },
+                    {
+                        "label": "parquet",
+                        "bucket": selected_bucket,
+                        "prefix": "generated/kostenbelege_3_1/parquet/",
+                    },
+                ],
+                "canCreateBucket": True,
+                "canCreateFolder": True,
+                "emptyMessage": "",
+            }
         return {
             "bucket": selected_bucket,
             "prefix": selected_prefix,
@@ -420,6 +494,54 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
         self.assertIn('data-source-object-query-alias="s3.shared_finance.exports.orders.csv"', body)
         self.assertNotIn("source-query-path-label", body)
 
+    def test_sidebar_renders_nested_s3_paths_with_dataset_leaf_reference(self) -> None:
+        response = sidebar_partial(
+            request=build_request("/sidebar", partial=True),
+            mode="notebook",
+            service=FakeWorkbenchService(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.body.decode("utf-8")
+        self.assertIn('data-source-s3-folder', body)
+        self.assertIn('data-s3-prefix="exports/"', body)
+        self.assertIn('data-s3-prefix="generated/"', body)
+        self.assertIn('data-s3-prefix="generated/kostenbelege_3_1/"', body)
+        self.assertIn(
+            'data-s3-prefix="generated/kostenbelege_3_1/parquet/"',
+            body,
+        )
+        self.assertIn("exports/orders.csv", body)
+        self.assertNotIn("exports/orders.csv/*.parquet", body)
+        self.assertIn("kbkp_2019", body)
+        self.assertIn(
+            "generated/kostenbelege_3_1/parquet/kbkp_2019/*.parquet",
+            body,
+        )
+        self.assertIn(
+            'data-s3-part-prefix="generated/kostenbelege_3_1/parquet/kbkp_2019/"',
+            body,
+        )
+
+    def test_sidebar_uses_bucket_icon_for_s3_bucket_schema_only(self) -> None:
+        response = sidebar_partial(
+            request=build_request("/sidebar", partial=True),
+            mode="notebook",
+            service=FakeWorkbenchService(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.body.decode("utf-8")
+        bucket_start = body.index('data-source-schema-key="workspace::shared-finance"')
+        bucket_summary = body[bucket_start:].split("</summary>", 1)[0]
+        self.assertIn("source-icon-bucket", bucket_summary)
+        self.assertNotIn("source-icon-schema", bucket_summary)
+
+        pg_schema_start = body.index('data-source-schema-key="pg_oltp::public"')
+        pg_schema_summary = body[pg_schema_start:].split("</summary>", 1)[0]
+        self.assertIn("source-icon-schema", pg_schema_summary)
+        self.assertNotIn("source-icon-bucket", pg_schema_summary)
+
     def test_browser_route_renders_dedicated_explorer_page(self) -> None:
         response = query_workbench_data_source_explorer(
             request=build_request(
@@ -507,6 +629,48 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
             entries["exports/nested/"]["queryPath"],
             "s3.shared_finance.exports.nested",
         )
+
+    def test_s3_explorer_payload_renders_generated_dataset_prefix_as_leaf(self) -> None:
+        payload = build_data_source_explorer_payload(
+            FakeWorkbenchService(),
+            source_id="workspace.s3",
+            bucket="shared-finance",
+            prefix="generated/kostenbelege_3_1/parquet/",
+        )
+
+        snapshot = payload["snapshot"]
+        entries = {
+            entry["prefix"]: entry
+            for entry in snapshot["entries"]
+            if isinstance(entry, dict)
+        }
+        dataset = entries[
+            "generated/kostenbelege_3_1/parquet/kbkp_2019/*.parquet"
+        ]
+        self.assertEqual(dataset["entryKind"], "file")
+        self.assertEqual(dataset["name"], "kbkp_2019")
+        self.assertEqual(dataset["displayName"], "kbkp_2019")
+        self.assertEqual(
+            dataset["queryReference"],
+            (
+                's3."shared-finance".'
+                '"generated/kostenbelege_3_1/parquet/kbkp_2019/*.parquet"'
+            ),
+        )
+        self.assertEqual(
+            dataset["queryPath"],
+            (
+                's3."shared-finance".'
+                '"generated/kostenbelege_3_1/parquet/kbkp_2019/*.parquet"'
+            ),
+        )
+        self.assertFalse(dataset["s3Downloadable"])
+        self.assertEqual(dataset["s3DownloadKind"], "generated_parts")
+        self.assertEqual(
+            dataset["s3PartPrefix"],
+            "generated/kostenbelege_3_1/parquet/kbkp_2019/",
+        )
+        self.assertTrue(dataset["s3ZipDownloadable"])
 
 
 if __name__ == "__main__":

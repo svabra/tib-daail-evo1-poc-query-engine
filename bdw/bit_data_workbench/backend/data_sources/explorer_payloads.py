@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ...models import SourceObject
 from ..query_aliases import normalize_query_alias_segment
+from .s3_paths import S3SourceObjectLocation, source_object_s3_location
 
 if TYPE_CHECKING:
     from ..service import WorkbenchService
@@ -111,20 +113,103 @@ def _s3_query_hierarchy(bucket: str, prefix: str = "") -> str:
     return ".".join(part for part in parts if part)
 
 
+@dataclass(frozen=True, slots=True)
+class _WorkspaceS3SourceObjectIndex:
+    exact: dict[tuple[str, str], tuple[SourceObject, S3SourceObjectLocation]]
+    datasets: dict[tuple[str, str], tuple[SourceObject, S3SourceObjectLocation]]
+
+
 def _workspace_s3_source_objects(
     service: WorkbenchService,
-) -> dict[tuple[str, str], SourceObject]:
-    objects_by_path: dict[tuple[str, str], SourceObject] = {}
+) -> _WorkspaceS3SourceObjectIndex:
+    exact: dict[tuple[str, str], tuple[SourceObject, S3SourceObjectLocation]] = {}
+    datasets: dict[tuple[str, str], tuple[SourceObject, S3SourceObjectLocation]] = {}
     for catalog in service.catalogs():
         if str(catalog.connection_source_id or "").strip() != "workspace.s3":
             continue
         for schema in catalog.schemas:
             for source_object in schema.objects:
-                bucket = str(source_object.s3_bucket or "").strip()
-                key = str(source_object.s3_key or "").strip()
-                if bucket and key and (source_object.query_reference or source_object.query_alias):
-                    objects_by_path[(bucket, key)] = source_object
-    return objects_by_path
+                if not (source_object.query_reference or source_object.query_alias):
+                    continue
+                location = source_object_s3_location(source_object)
+                if location is None:
+                    continue
+                if not location.is_wildcard:
+                    exact[(location.bucket, location.key)] = (source_object, location)
+                if _is_virtual_dataset_source(source_object, location):
+                    datasets[(location.bucket, location.logical_prefix)] = (
+                        source_object,
+                        location,
+                    )
+    return _WorkspaceS3SourceObjectIndex(exact=exact, datasets=datasets)
+
+
+def _is_virtual_dataset_source(
+    source_object: SourceObject,
+    location: S3SourceObjectLocation,
+) -> bool:
+    download_kind = str(source_object.s3_download_kind or "").strip()
+    return location.is_wildcard or download_kind in {
+        "generated_parts",
+        "partitioned_parts",
+    }
+
+
+def _source_object_publication_source(
+    source_object: SourceObject,
+    location: S3SourceObjectLocation,
+) -> dict[str, object] | None:
+    relation = str(source_object.relation or "").strip()
+    if source_object.s3_downloadable and not location.is_wildcard:
+        return {
+            "sourceKind": "object",
+            "sourceId": "workspace.s3",
+            "bucket": location.bucket,
+            "key": location.key,
+        }
+    if relation:
+        return {
+            "sourceKind": "relation",
+            "sourceId": "workspace.s3",
+            "relation": relation,
+        }
+    return None
+
+
+def _apply_s3_source_object_entry(
+    entry: dict[str, object],
+    *,
+    source_object: SourceObject,
+    location: S3SourceObjectLocation,
+    dataset_leaf: bool = False,
+) -> None:
+    display_name = (
+        location.leaf_label
+        if dataset_leaf
+        else str(source_object.display_name or source_object.name or "").strip()
+    )
+    entry["entryKind"] = "file"
+    entry["name"] = display_name
+    entry["displayName"] = display_name
+    entry["sourceObjectName"] = source_object.name
+    entry["relation"] = source_object.relation
+    entry["queryAlias"] = source_object.query_alias
+    entry["queryReference"] = source_object.query_reference
+    entry["querySql"] = source_object.query_sql
+    entry["queryPath"] = source_object.query_reference or source_object.query_alias
+    entry["prefix"] = location.key
+    entry["path"] = source_object.s3_path or f"s3://{location.bucket}/{location.key}"
+    if source_object.s3_file_format:
+        entry["fileFormat"] = source_object.s3_file_format
+    entry["s3Downloadable"] = source_object.s3_downloadable
+    entry["sizeBytes"] = int(source_object.size_bytes or 0)
+    entry["s3DownloadKind"] = source_object.s3_download_kind
+    entry["s3PartPrefix"] = source_object.s3_part_prefix
+    entry["s3PartFileFormat"] = source_object.s3_part_file_format
+    entry["s3PartCount"] = int(source_object.s3_part_count or 0)
+    entry["s3DownloadFilename"] = source_object.s3_download_filename
+    entry["s3MergeDownloadable"] = source_object.s3_merge_downloadable
+    entry["s3ZipDownloadable"] = source_object.s3_zip_downloadable
 
 
 def _annotate_s3_breadcrumbs(
@@ -185,24 +270,41 @@ def _annotate_s3_snapshot(
         elif entry_kind == "file":
             entry_key = entry_prefix
             if entry_bucket and entry_key:
-                source_object = s3_source_objects.get((entry_bucket, entry_key))
-                if source_object:
-                    entry["name"] = source_object.display_name or source_object.name
-                    entry["displayName"] = source_object.display_name or source_object.name
-                    entry["sourceObjectName"] = source_object.name
-                    entry["relation"] = source_object.relation
-                    entry["queryAlias"] = source_object.query_alias
-                    entry["queryReference"] = source_object.query_reference
-                    entry["querySql"] = source_object.query_sql
-                    entry["queryPath"] = source_object.query_reference or source_object.query_alias
-                publication_source = {
-                    "sourceKind": "object",
-                    "sourceId": "workspace.s3",
-                    "bucket": entry_bucket,
-                    "key": entry_key,
-                }
+                source_record = s3_source_objects.exact.get((entry_bucket, entry_key))
+                if source_record:
+                    source_object, location = source_record
+                    _apply_s3_source_object_entry(
+                        entry,
+                        source_object=source_object,
+                        location=location,
+                    )
+                    publication_source = _source_object_publication_source(
+                        source_object,
+                        location,
+                    )
+                else:
+                    publication_source = {
+                        "sourceKind": "object",
+                        "sourceId": "workspace.s3",
+                        "bucket": entry_bucket,
+                        "key": entry_key,
+                    }
         elif entry_bucket and entry_prefix:
-            entry["queryPath"] = _s3_query_hierarchy(entry_bucket, entry_prefix)
+            dataset_record = s3_source_objects.datasets.get((entry_bucket, entry_prefix))
+            if dataset_record:
+                source_object, location = dataset_record
+                _apply_s3_source_object_entry(
+                    entry,
+                    source_object=source_object,
+                    location=location,
+                    dataset_leaf=True,
+                )
+                publication_source = _source_object_publication_source(
+                    source_object,
+                    location,
+                )
+            else:
+                entry["queryPath"] = _s3_query_hierarchy(entry_bucket, entry_prefix)
 
         entry["publishedDataProducts"] = (
             service.published_data_products_for_source(source=publication_source)

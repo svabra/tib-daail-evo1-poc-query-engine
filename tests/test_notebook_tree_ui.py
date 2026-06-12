@@ -49,6 +49,17 @@ class NotebookTreeUiRegressionTests(unittest.TestCase):
         self.assertIn("collectServerFolderMetadata", ui_source)
         self.assertIn("serverPolicy.isShared", ui_source)
 
+    def test_folder_delete_removes_shared_folder_metadata(self) -> None:
+        controller_source = (
+            STATIC_JS_ROOT / "notebook-tree-controller.js"
+        ).read_text(encoding="utf-8")
+        app_source = (STATIC_JS_ROOT / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("deleteSharedNotebookFolder", controller_source)
+        self.assertIn("await deleteSharedNotebookFolder?.(folder);", controller_source)
+        self.assertIn('method: "DELETE"', app_source)
+        self.assertIn('"/api/notebooks/shared/folders"', app_source)
+
     def test_tree_state_exposes_folder_metadata_helper(self) -> None:
         state_source = (STATIC_JS_ROOT / "notebook-tree-state.js").read_text(
             encoding="utf-8"

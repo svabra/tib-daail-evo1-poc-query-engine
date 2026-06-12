@@ -7,8 +7,9 @@ export function createQueryRunsController(helpers) {
     queryResourceSparklineMarkup,
   } = helpers;
 
-  const terminalStatuses = new Set(["completed", "failed", "cancelled"]);
+  const terminalStatuses = new Set(["completed", "failed", "cancelled", "canceled", "aborted", "incomplete"]);
   const refreshTimers = new WeakMap();
+  let latestQueryJobsSnapshot = { jobs: [] };
 
   function pageRoot() {
     return document.querySelector("[data-query-runs-page]");
@@ -34,7 +35,12 @@ export function createQueryRunsController(helpers) {
       case "failed":
         return "Failed";
       case "cancelled":
+      case "canceled":
         return "Cancelled";
+      case "aborted":
+        return "Aborted";
+      case "incomplete":
+        return "Incomplete";
       default:
         return "Unknown";
     }
@@ -160,6 +166,32 @@ export function createQueryRunsController(helpers) {
     return "n/a";
   }
 
+  function runDateMs(value) {
+    const parsed = Date.parse(value || "");
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+
+  function compareRunsByStartedAt(left, right) {
+    return runDateMs(right?.startedAt || right?.updatedAt) - runDateMs(left?.startedAt || left?.updatedAt);
+  }
+
+  function runDurationMs(run) {
+    const explicit = Number(run?.durationMs);
+    if (Number.isFinite(explicit) && explicit >= 0) {
+      return explicit;
+    }
+    const startedAtMs = runDateMs(run?.startedAt || run?.updatedAt);
+    if (!startedAtMs) {
+      return 0;
+    }
+    const completedAtMs = runDateMs(run?.completedAt || run?.updatedAt);
+    const status = String(run?.status || "").trim().toLowerCase();
+    if (completedAtMs && terminalStatuses.has(status)) {
+      return Math.max(0, completedAtMs - startedAtMs);
+    }
+    return Math.max(0, Date.now() - startedAtMs);
+  }
+
   function normalizedRunTimings(run) {
     const timings = run?.timings && typeof run.timings === "object" ? run.timings : {};
     const valueFor = (key) => {
@@ -188,18 +220,59 @@ export function createQueryRunsController(helpers) {
     ].filter(([, value]) => value !== null && Number.isFinite(value));
   }
 
+  function runTimingClipboardTable(run) {
+    const parts = normalizedRunTimings(run);
+    if (!parts.length) {
+      return "";
+    }
+    const displayLabel = (label) => {
+      switch (label) {
+        case "total":
+          return "Total elapsed";
+        case "file lock":
+          return "File lock";
+        case "source setup":
+          return "Source setup";
+        default:
+          return `${label.charAt(0).toUpperCase()}${label.slice(1)}`;
+      }
+    };
+    return [
+      "Metric\tValue",
+      ...parts.map(([label, value]) => `${displayLabel(label)}\t${formatQueryDuration(value)}`),
+    ].join("\n");
+  }
+
   function runTimingBreakdownMarkup(run) {
     const parts = normalizedRunTimings(run);
     if (!parts.length) {
       return "";
     }
+    const timingTable = runTimingClipboardTable(run);
     return `
-      <small class="query-run-history-timing">
+      <small
+        class="query-run-history-timing"
+        data-copy-query-timings
+        data-query-timing-table="${escapeHtml(encodeURIComponent(timingTable))}"
+        role="button"
+        tabindex="0"
+        title="Copy timing table"
+      >
         ${parts
           .map(([label, value]) => `<span>${escapeHtml(label)} ${escapeHtml(formatQueryDuration(value))}</span>`)
           .join("")}
       </small>
     `;
+  }
+
+  function runWarningsMarkup(run) {
+    const warnings = Array.isArray(run?.warnings)
+      ? run.warnings.map((warning) => String(warning ?? "").trim()).filter(Boolean)
+      : [];
+    if (!warnings.length) {
+      return "";
+    }
+    return `<span class="query-run-history-message query-run-history-warning">Warnings: ${escapeHtml(warnings.join(" | "))}</span>`;
   }
 
   function runResourceChartMarkup(run) {
@@ -465,23 +538,25 @@ export function createQueryRunsController(helpers) {
     const messageMarkup = message
       ? `<span class="query-run-history-message">${escapeHtml(message)}</span>`
       : "";
+    const warningsMarkup = runWarningsMarkup(run);
     const notebookCell = includeNotebook
       ? `
           <td class="query-run-history-title-cell">
             ${notebookLinkMarkup(run, title)}
             <span>${escapeHtml(run?.cellId || "Cell")}</span>
             ${messageMarkup}
+            ${warningsMarkup}
           </td>
         `
       : "";
     return `
       <tr class="query-run-history-row query-run-history-row-${escapeHtml(status || "unknown")}">
         ${notebookCell}
-        <td>${runStatusMarkup(status)}</td>
+        <td>${runStatusMarkup(status)}${includeNotebook ? "" : `${messageMarkup}${warningsMarkup}`}</td>
         <td><time datetime="${escapeHtml(String(started))}">${escapeHtml(formatRunDateTime(started))}</time></td>
         <td><time datetime="${escapeHtml(String(ended))}">${escapeHtml(formatRunDateTime(ended))}</time></td>
         <td>
-          <span>${escapeHtml(formatQueryDuration(Number(run?.durationMs || 0)))}</span>
+          <span>${escapeHtml(formatQueryDuration(runDurationMs(run)))}</span>
           ${runTimingBreakdownMarkup(run)}
         </td>
         <td>${escapeHtml(formatMetric(metrics.averageCpuCapacityPercent ?? metrics.averageCpuPercent, formatCpu))}</td>
@@ -490,7 +565,7 @@ export function createQueryRunsController(helpers) {
         <td>${escapeHtml(formatMetric(metrics.peakMemoryRssBytes, formatByteCount))}</td>
         <td>${escapeHtml(formatRows(run))}</td>
         <td class="query-run-history-sql-cell">${runProgressToggleMarkup(run, key, progressExpanded)}</td>
-        <td class="query-run-history-sql-cell">${runSqlToggleMarkup(run, key, sqlExpanded)}${includeNotebook ? "" : messageMarkup}</td>
+        <td class="query-run-history-sql-cell">${runSqlToggleMarkup(run, key, sqlExpanded)}</td>
       </tr>
       ${chartRow}
       ${progressRow}
@@ -545,14 +620,64 @@ export function createQueryRunsController(helpers) {
     return payload?.message || "No recorded query runs yet.";
   }
 
+  function liveRunFromQueryJob(job) {
+    const status = String(job?.status || "queued").trim().toLowerCase() || "queued";
+    const startedAt = String(job?.startedAt || job?.updatedAt || new Date().toISOString()).trim();
+    const completedAt = String(job?.completedAt || (terminalStatuses.has(status) ? job?.updatedAt || "" : "") || "");
+    return {
+      ...job,
+      status,
+      startedAt,
+      completedAt,
+      updatedAt: String(job?.updatedAt || startedAt).trim(),
+      durationMs: runDurationMs({ ...job, status, startedAt, completedAt }),
+      rowCount: job?.rowCount ?? job?.rowsShown ?? 0,
+      rowsShown: job?.rowsShown ?? (Array.isArray(job?.rows) ? job.rows.length : 0),
+      progressEvents: Array.isArray(job?.progressEvents) ? job.progressEvents : [],
+      warnings: Array.isArray(job?.warnings) ? job.warnings : [],
+    };
+  }
+
+  function liveRunsForRoot(root) {
+    const jobs = Array.isArray(latestQueryJobsSnapshot?.jobs) ? latestQueryJobsSnapshot.jobs : [];
+    const liveOnly = queryRunsLiveOnly(root);
+    return jobs
+      .filter((job) => rootMatchesJob(root, job))
+      .filter((job) => !liveOnly || !terminalStatuses.has(String(job?.status || "").trim().toLowerCase()))
+      .map((job) => liveRunFromQueryJob(job));
+  }
+
+  function queryRunsLimit(root) {
+    const value = Number(root?.dataset?.queryRunsLimit || 100);
+    return Number.isFinite(value) && value > 0 ? Math.round(value) : 100;
+  }
+
+  function runsForRender(root, payload) {
+    const recordedRuns = Array.isArray(payload?.runs) ? payload.runs : [];
+    const liveRuns = liveRunsForRoot(root);
+    if (!liveRuns.length) {
+      return recordedRuns;
+    }
+    const liveIds = new Set(liveRuns.map((run) => String(run?.jobId || "").trim()).filter(Boolean));
+    return [
+      ...liveRuns,
+      ...recordedRuns.filter((run) => {
+        const jobId = String(run?.jobId || "").trim();
+        return !jobId || !liveIds.has(jobId);
+      }),
+    ]
+      .sort(compareRunsByStartedAt)
+      .slice(0, queryRunsLimit(root));
+  }
+
   function renderList(root, payload) {
     const listRoot = root.querySelector("[data-query-runs-list]");
     const statusRoot = root.querySelector("[data-query-runs-status]");
     if (!(listRoot instanceof HTMLElement)) {
       return;
     }
-    const runs = Array.isArray(payload?.runs) ? payload.runs : [];
     root._bdwQueryRunsPayload = payload;
+    const runs = runsForRender(root, payload);
     syncChartToggle(root);
     syncLiveToggle(root);
     if (statusRoot instanceof HTMLElement) {
@@ -762,11 +887,15 @@ export function createQueryRunsController(helpers) {
   }
 
   function refreshForQueryJobsSnapshot(snapshot) {
+    latestQueryJobsSnapshot = snapshot && typeof snapshot === "object" ? snapshot : { jobs: [] };
     const jobs = Array.isArray(snapshot?.jobs) ? snapshot.jobs : [];
     const terminalJobs = jobs.filter((job) => terminalStatuses.has(String(job?.status || "").trim().toLowerCase()));
     const liveJobs = jobs.filter((job) => !terminalStatuses.has(String(job?.status || "").trim().toLowerCase()));
     const roots = [pageRoot(), ...notebookRoots(document)].filter(Boolean);
     roots.forEach((root) => {
+      if (jobs.some((job) => rootMatchesJob(root, job))) {
+        renderList(root, root._bdwQueryRunsPayload || { available: true, runs: [] });
+      }
       if (terminalJobs.some((job) => rootMatchesJob(root, job))) {
         scheduleLoadInto(root);
       } else if (queryRunsLiveOnly(root) && liveJobs.some((job) => rootMatchesJob(root, job))) {

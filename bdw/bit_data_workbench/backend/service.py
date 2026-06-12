@@ -715,6 +715,7 @@ class WorkbenchService:
     def catalogs(self) -> list[SourceCatalog]:
         with self._lock:
             catalogs = list(self._catalogs)
+            self._normalize_generated_s3_source_objects(catalogs)
         return annotate_catalogs_with_published_products(
             catalogs,
             publication_links_for_source=lambda source: self._data_products.published_products_for_source(
@@ -1506,6 +1507,19 @@ class WorkbenchService:
                 "folder": refreshed.payload,
             }
 
+    def delete_shared_notebook_folder(self, *, path: list[str]) -> dict[str, object]:
+        normalized_path = normalize_folder_path(path)
+        if not normalized_path:
+            raise ValueError("Notebook folder path is required.")
+
+        with self._condition:
+            delete_folder = getattr(self._shared_notebook_store, "delete_folder", None)
+            if delete_folder is None:
+                raise KeyError(f"Unknown shared notebook folder: {' / '.join(normalized_path)}")
+            result = delete_folder(normalized_path)
+            self._rebuild_notebooks_locked()
+            return result
+
     def delete_shared_notebook(
         self,
         notebook_id: str,
@@ -1744,8 +1758,61 @@ class WorkbenchService:
         display_sql: str = "",
         query_options: dict[str, object] | None = None,
         client_pre_submit_ms: float | None = None,
+        client_job_id: str = "",
     ) -> dict[str, object]:
         backend_prepare_started = time.perf_counter()
+        start_preflight = getattr(self._query_jobs, "start_preflight_job", None)
+        start_prepared = getattr(self._query_jobs, "start_prepared_job", None)
+        fail_preflight = getattr(self._query_jobs, "fail_preflight_job", None)
+        if callable(start_preflight) and callable(start_prepared) and callable(fail_preflight):
+            initial_sql = str(display_sql or sql or "")
+            preflight_snapshot = start_preflight(
+                sql=initial_sql,
+                notebook_id=notebook_id,
+                notebook_title=notebook_title,
+                cell_id=cell_id,
+                requested_job_id=client_job_id,
+                data_sources=data_sources,
+                query_options=query_options,
+                client_pre_submit_ms=client_pre_submit_ms,
+            )
+            try:
+                if not initial_sql.strip():
+                    raise ValueError("Provide a SQL statement before running the query.")
+                prepared = self._prepare_exploration_query(
+                    sql=sql,
+                    display_sql=display_sql,
+                    notebook_id=notebook_id,
+                    data_sources=data_sources,
+                    local_relation_map=local_relation_map,
+                    query_options=query_options,
+                )
+                backend_prepare_ms = (time.perf_counter() - backend_prepare_started) * 1000
+                snapshot = start_prepared(
+                    preflight_snapshot.job_id,
+                    sql=prepared.display_sql,
+                    execution_sql=prepared.execution_sql,
+                    notebook_id=notebook_id,
+                    notebook_title=notebook_title,
+                    cell_id=cell_id,
+                    data_sources=prepared.data_sources,
+                    touched_relations=prepared.touched_relations,
+                    touched_buckets=prepared.touched_buckets,
+                    source_summaries=prepared.source_summaries,
+                    query_options=prepared.query_options,
+                    backend_prepare_ms=backend_prepare_ms,
+                )
+                return snapshot.payload
+            except Exception as exc:
+                backend_prepare_ms = (time.perf_counter() - backend_prepare_started) * 1000
+                failed = fail_preflight(
+                    preflight_snapshot.job_id,
+                    error=str(exc),
+                    message="Query preparation failed before DuckDB execution started.",
+                    backend_prepare_ms=backend_prepare_ms,
+                )
+                return failed.payload
+
         prepared = self._prepare_exploration_query(
             sql=sql,
             display_sql=display_sql,
@@ -1804,15 +1871,15 @@ class WorkbenchService:
 
         connection = None
         try:
+            uses_in_memory_connection = (
+                prepared.duckdb_execution_path == DUCKDB_EXECUTION_PATH_ISOLATED_READ
+            )
             connection = create_duckdb_worker_connection(
                 self.settings,
-                database_path=(
-                    ":memory:"
-                    if prepared.duckdb_execution_path == DUCKDB_EXECUTION_PATH_ISOLATED_READ
-                    else None
-                ),
+                database_path=":memory:" if uses_in_memory_connection else None,
                 read_only=(
-                    not prepared.source_summaries
+                    not uses_in_memory_connection
+                    and not prepared.source_summaries
                     and prepared.execution_mode == QUERY_EXECUTION_DUCKDB_READ
                     and self.settings.duckdb_database.exists()
                 ),
@@ -4277,6 +4344,76 @@ class WorkbenchService:
     def _rebuild_notebooks_locked(self) -> None:
         self._notebooks = self._combined_notebooks(self._catalogs)
 
+    @staticmethod
+    def _normalize_generated_s3_source_objects(catalogs: list[SourceCatalog]) -> None:
+        for catalog in catalogs:
+            if str(catalog.connection_source_id or "").strip() != "workspace.s3":
+                continue
+            for schema in catalog.schemas:
+                for source_object in schema.objects:
+                    if str(source_object.s3_download_kind or "").strip() != "generated_parts":
+                        continue
+                    WorkbenchService._normalize_generated_s3_source_object(source_object)
+
+    @staticmethod
+    def _normalize_generated_s3_source_object(source_object: SourceObject) -> None:
+        bucket = str(source_object.s3_bucket or "").strip()
+        part_prefix = str(source_object.s3_part_prefix or "").strip().strip("/")
+        file_format = str(source_object.s3_part_file_format or source_object.s3_file_format or "").strip().lower()
+        if not file_format:
+            for candidate in (source_object.s3_path, source_object.query_reference):
+                try:
+                    _bucket, key = parse_s3_path(str(candidate or ""))
+                except ValueError:
+                    parts = split_qualified_reference(str(candidate or ""))
+                    if len(parts) == 3 and parts[0].strip().lower() == "s3":
+                        key = parts[2].strip().lstrip("/")
+                    else:
+                        continue
+                suffix = PurePosixPath(key).suffix.lower().lstrip(".")
+                if suffix:
+                    file_format = "jsonl" if suffix == "ndjson" else suffix
+                    break
+        if not bucket or not part_prefix or not file_format:
+            return
+
+        query_key = f"{part_prefix}/*.{file_format}"
+        query_path = f"s3://{bucket}/{query_key}"
+        old_paths = {str(source_object.s3_path or "").strip()}
+        try:
+            reference_bucket, reference_key = parse_s3_path(str(source_object.query_reference or "").strip())
+            if reference_bucket and reference_key:
+                old_paths.add(f"s3://{reference_bucket}/{reference_key}")
+        except ValueError:
+            pass
+
+        query_sql = str(source_object.query_sql or "").strip()
+        rewritten_query_sql = query_sql
+        reference_parts = split_qualified_reference(str(source_object.query_reference or ""))
+        if len(reference_parts) == 3 and reference_parts[0].strip().lower() == "s3":
+            reference_bucket = reference_parts[1].strip()
+            reference_key = reference_parts[2].strip().lstrip("/")
+            if reference_bucket and reference_key:
+                old_paths.add(f"s3://{reference_bucket}/{reference_key}")
+        for old_path in sorted((path for path in old_paths if path), key=len, reverse=True):
+            rewritten_query_sql = rewritten_query_sql.replace(old_path, query_path)
+        if not rewritten_query_sql or rewritten_query_sql == query_sql:
+            try:
+                rewritten_query_sql = build_s3_query(file_format, query_path)
+            except ValueError:
+                rewritten_query_sql = s3_table_function_sql(
+                    bucket=bucket,
+                    key=query_key,
+                    file_format=file_format,
+                )
+        if rewritten_query_sql.lower().startswith("select * from "):
+            rewritten_query_sql = rewritten_query_sql[len("SELECT * FROM ") :].strip()
+
+        source_object.s3_key = ""
+        source_object.s3_path = query_path
+        source_object.query_reference = s3_source_reference(bucket=bucket, key=query_key)
+        source_object.query_sql = rewritten_query_sql
+
     def _shared_notebook_folders(self) -> list[SharedNotebookFolder]:
         list_folders = getattr(self._shared_notebook_store, "list_folders", None)
         folders = list_folders() if callable(list_folders) else []
@@ -5448,8 +5585,19 @@ class WorkbenchService:
                 continue
             download_kind = str(getattr(spec, "download_kind", "") or "").strip()
             generated_parts = download_kind == "generated_parts"
+            query_object_key = object_key
+            query_object_path = object_path
             if generated_parts:
                 part_prefix = str(getattr(spec, "part_prefix", "") or "").strip().strip("/")
+                part_file_format = str(getattr(spec, "part_file_format", "") or "").strip().lower()
+                if not part_file_format:
+                    part_file_format = str(spec.object_format or "").strip().lower()
+                if not part_file_format:
+                    suffix = PurePosixPath(object_key).suffix.lower().lstrip(".")
+                    part_file_format = "jsonl" if suffix == "ndjson" else suffix
+                if part_prefix and part_file_format:
+                    query_object_key = f"{part_prefix}/*.{part_file_format}"
+                    query_object_path = f"s3://{bucket_name}/{query_object_key}"
                 part_filename = (
                     str(getattr(spec, "download_filename", "") or "").strip()
                     or str(spec.display_name or "").strip()
@@ -5468,14 +5616,22 @@ class WorkbenchService:
                     display_name=str(spec.display_name or "").strip()
                     or str(getattr(spec, "download_filename", "") or "").strip(),
                 )
-            query_reference = s3_source_reference(bucket=bucket_name, key=object_key)
+            query_reference = s3_source_reference(bucket=bucket_name, key=query_object_key)
             query_sql = str(getattr(spec, "query_sql", "") or "").strip()
+            if generated_parts and query_object_path != object_path:
+                query_file_format = str(spec.object_format or "").strip() or part_file_format
+                query_sql = build_s3_query(
+                    query_file_format,
+                    query_object_path,
+                    csv_delimiter=str(getattr(spec, "csv_delimiter", "") or ""),
+                    csv_has_header=getattr(spec, "csv_has_header", None),
+                )
             if query_sql.lower().startswith("select * from "):
                 query_sql = query_sql[len("SELECT * FROM ") :].strip()
             if not query_sql and query_reference:
                 query_sql = s3_table_function_sql(
                     bucket=bucket_name,
-                    key=object_key,
+                    key=query_object_key,
                     file_format=str(spec.object_format or "").strip(),
                 )
             downloadable = (
@@ -5487,7 +5643,7 @@ class WorkbenchService:
             metadata[relation_id] = {
                 "bucket": bucket_name,
                 "key": "" if generated_parts else object_key,
-                "path": object_path,
+                "path": query_object_path,
                 "query_reference": query_reference,
                 "query_sql": query_sql,
                 "display_name": str(spec.display_name or "").strip()

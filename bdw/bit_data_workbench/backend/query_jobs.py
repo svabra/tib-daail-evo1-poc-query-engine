@@ -54,6 +54,7 @@ QUERY_LOG_MAX_LIST_ITEMS = 5
 QUERY_LOG_MAX_TEXT_CHARS = 320
 QUERY_LOG_MAX_ERROR_CHARS = 500
 QUERY_DUCKDB_PROFILE_MAX_OPERATORS = 8
+REQUESTED_QUERY_JOB_ID_RE = re.compile(r"^(?:query|client-query)-[A-Za-z0-9_-]{1,140}$")
 
 QUERY_EXECUTION_DUCKDB_READ = "duckdb-read"
 QUERY_EXECUTION_DUCKDB_WRITE = "duckdb-write"
@@ -179,6 +180,13 @@ def _safe_timing_ms(value: object) -> float | None:
     if numeric < 0:
         return None
     return round(numeric, 3)
+
+
+def _requested_query_job_id(value: object) -> str:
+    normalized = str(value or "").strip()
+    if REQUESTED_QUERY_JOB_ID_RE.match(normalized):
+        return normalized
+    return ""
 
 
 def _read_positive_float(path: str) -> float | None:
@@ -1517,6 +1525,200 @@ class QueryJobManager:
         self._jobs: dict[str, QueryJobRecord] = {}
         self._sort_counter = 0
         self._state_version = 0
+
+    def start_preflight_job(
+        self,
+        *,
+        sql: str,
+        notebook_id: str,
+        notebook_title: str,
+        cell_id: str,
+        requested_job_id: str = "",
+        data_sources: list[str] | None = None,
+        query_options: dict[str, object] | None = None,
+        client_pre_submit_ms: float | None = None,
+    ) -> QueryJobDefinition:
+        source_ids = [source_id.strip() for source_id in (data_sources or []) if source_id.strip()]
+        source_types = infer_source_types(source_ids)
+        now = utc_now_iso()
+        resolved_title = notebook_title.strip() or self._notebook_title_resolver(notebook_id) or "Notebook"
+        timings: dict[str, float] = {}
+        timing = _safe_timing_ms(client_pre_submit_ms)
+        if timing is not None:
+            timings["clientPreSubmitMs"] = timing
+        requested_id = _requested_query_job_id(requested_job_id)
+        with self._condition:
+            job_id = requested_id if requested_id and requested_id not in self._jobs else f"query-{uuid.uuid4().hex}"
+            snapshot = QueryJobDefinition(
+                job_id=job_id,
+                notebook_id=notebook_id.strip(),
+                notebook_title=resolved_title,
+                cell_id=cell_id.strip(),
+                sql=str(sql or ""),
+                execution_sql="",
+                status="queued",
+                started_at=now,
+                updated_at=now,
+                progress=0.01,
+                progress_label="Preparing query...",
+                message="Backend accepted Run Cell and is validating sources and rewriting SQL.",
+                data_sources=source_ids,
+                query_options=dict(query_options or {}),
+                source_types=source_types,
+                backend_name="Preparing",
+                execution_mode="",
+                duckdb_execution_path="",
+                timings=timings,
+                can_cancel=False,
+            )
+            self._sort_counter += 1
+            record = QueryJobRecord(
+                snapshot=snapshot,
+                sort_index=self._sort_counter,
+                execution_mode="",
+                execution_sql="",
+                duckdb_execution_path="",
+                source_summaries=[],
+                last_log_heartbeat_monotonic=time.monotonic(),
+            )
+            self._jobs[snapshot.job_id] = record
+            self._touch_locked()
+
+        self._log_query_job_event(snapshot.job_id, "queued")
+        return snapshot
+
+    def start_prepared_job(
+        self,
+        job_id: str,
+        *,
+        sql: str,
+        execution_sql: str = "",
+        notebook_id: str,
+        notebook_title: str,
+        cell_id: str,
+        data_sources: list[str] | None = None,
+        touched_relations: list[str] | None = None,
+        touched_buckets: list[str] | None = None,
+        source_summaries: list[dict[str, object]] | None = None,
+        query_options: dict[str, object] | None = None,
+        backend_prepare_ms: float | None = None,
+    ) -> QueryJobDefinition:
+        normalized_sql = str(sql or "").strip()
+        if not normalized_sql:
+            raise ValueError("Provide a SQL statement before running the query.")
+
+        source_ids = [source_id.strip() for source_id in (data_sources or []) if source_id.strip()]
+        source_types = infer_source_types(source_ids)
+        normalized_execution_sql = str(execution_sql or sql or "").strip()
+        execution_mode = classify_query_execution(normalized_execution_sql, source_ids)
+        normalized_touched_relations = [
+            str(value).strip()
+            for value in (touched_relations or [])
+            if str(value).strip()
+        ]
+        normalized_touched_buckets = [
+            str(value).strip()
+            for value in (touched_buckets or [])
+            if str(value).strip()
+        ]
+        normalized_source_summaries = [
+            dict(item)
+            for item in (source_summaries or [])
+            if isinstance(item, dict)
+        ]
+        duckdb_execution_path = self._duckdb_execution_path(
+            execution_mode=execution_mode,
+            source_ids=source_ids,
+            touched_relations=normalized_touched_relations,
+            touched_buckets=normalized_touched_buckets,
+            source_summaries=normalized_source_summaries,
+        )
+        worker_database_path = self._worker_database_path(
+            execution_mode=execution_mode,
+            duckdb_execution_path=duckdb_execution_path,
+        )
+        resolved_title = notebook_title.strip() or self._notebook_title_resolver(notebook_id) or "Notebook"
+        backend_name = "PostgreSQL Native" if execution_mode == QUERY_EXECUTION_POSTGRES_NATIVE else "VMTP DUCKDB"
+        duckdb_thread_limit = (
+            max(1, int(self._settings.duckdb_threads))
+            if execution_mode != QUERY_EXECUTION_POSTGRES_NATIVE
+            and self._settings.duckdb_threads is not None
+            else None
+        )
+        with self._condition:
+            record = self._jobs.get(str(job_id or "").strip())
+            if record is None:
+                raise KeyError(f"Unknown query job: {job_id}")
+            if record.snapshot.status in TERMINAL_QUERY_STATUSES:
+                return record.snapshot
+            record.execution_mode = execution_mode
+            record.execution_sql = normalized_execution_sql
+            record.duckdb_execution_path = duckdb_execution_path
+            record.worker_database_path = worker_database_path
+            record.source_summaries = normalized_source_summaries
+            record.snapshot.notebook_id = notebook_id.strip()
+            record.snapshot.notebook_title = resolved_title
+            record.snapshot.cell_id = cell_id.strip()
+            record.snapshot.sql = normalized_sql
+            record.snapshot.execution_sql = normalized_execution_sql
+            record.snapshot.status = "queued"
+            record.snapshot.progress = 0.0
+            record.snapshot.progress_label = "Queued..."
+            record.snapshot.message = "Waiting to start."
+            record.snapshot.data_sources = source_ids
+            record.snapshot.query_options = dict(query_options or {})
+            record.snapshot.source_types = source_types
+            record.snapshot.touched_relations = normalized_touched_relations
+            record.snapshot.touched_buckets = normalized_touched_buckets
+            record.snapshot.backend_name = backend_name
+            record.snapshot.execution_mode = execution_mode
+            record.snapshot.duckdb_execution_path = duckdb_execution_path
+            record.snapshot.duckdb_thread_limit = duckdb_thread_limit
+            record.snapshot.can_cancel = True
+            self._set_timing_locked(record, "backendPrepareMs", backend_prepare_ms)
+            record.snapshot.updated_at = utc_now_iso()
+            self._touch_locked()
+
+        self._log_query_job_event(str(job_id), "backend_prepared")
+        self._log_query_job_event(str(job_id), "prepared")
+
+        worker = threading.Thread(
+            target=self._run_job,
+            args=(str(job_id),),
+            daemon=True,
+            name=f"bdw-query-supervisor-{str(job_id)[:8]}",
+        )
+        with self._condition:
+            record = self._jobs.get(str(job_id))
+            if record is None or record.snapshot.status in TERMINAL_QUERY_STATUSES:
+                raise KeyError(f"Unknown query job: {job_id}")
+            record.thread = worker
+        worker.start()
+        return self.snapshot(str(job_id))
+
+    def fail_preflight_job(
+        self,
+        job_id: str,
+        *,
+        error: object,
+        message: str = "Query preparation failed.",
+        backend_prepare_ms: float | None = None,
+    ) -> QueryJobDefinition:
+        normalized_job_id = str(job_id or "").strip()
+        timings = {}
+        timing = _safe_timing_ms(backend_prepare_ms)
+        if timing is not None:
+            timings["backendPrepareMs"] = timing
+        self._finalize_job(
+            normalized_job_id,
+            status="failed",
+            duration_ms=self._elapsed_duration_ms(normalized_job_id),
+            progress_label="Failed",
+            message=message,
+            error=str(error or message),
+            timings=timings,
+        )
+        return self.snapshot(normalized_job_id)
 
     def start_job(
         self,

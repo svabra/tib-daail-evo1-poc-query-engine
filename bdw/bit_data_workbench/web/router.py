@@ -17,6 +17,7 @@ from .data_sources import (
     data_source_management_context as build_data_source_management_context,
     home_data_source_context as build_home_data_source_context,
 )
+from .source_tree import build_source_tree_s3_hierarchy
 from .template_filters import register_template_filters
 router = APIRouter(include_in_schema=False)
 templates = Jinja2Templates(
@@ -466,14 +467,18 @@ def shell_context(
     shell_sidebar_hidden: bool = False,
     shared_notebooks: list | None = None,
 ) -> dict[str, object]:
+    catalogs = service.catalogs()
+    source_options = service.source_options()
+    notebooks = service.notebooks()
     return {
         "title": brand_title_for_mode(workspace_mode),
         "runtime": service.runtime_info(),
-        "catalogs": service.catalogs(),
-        "notebooks": service.notebooks(),
+        "catalogs": catalogs,
+        "source_tree_s3_hierarchy": build_source_tree_s3_hierarchy(catalogs),
+        "notebooks": notebooks,
         "notebook_tree": service.notebook_tree(),
-        "source_options": service.source_options(),
-        "source_options_json": json.dumps(service.source_options()),
+        "source_options": source_options,
+        "source_options_json": json.dumps(source_options),
         "release_notes_json": json.dumps(release_notes()),
         "active_notebook_id": (
             active_notebook.notebook_id if active_notebook else None
@@ -484,7 +489,7 @@ def shell_context(
         "shell_sidebar_hidden": shell_sidebar_hidden,
         "shared_notebooks": shared_notebooks
         if shared_notebooks is not None
-        else [notebook for notebook in service.notebooks() if notebook.shared],
+        else [notebook for notebook in notebooks if notebook.shared],
         "data_generators": service.data_generators(),
         "runbook_tree": service.runbook_tree(),
         "completion_schema_json": json.dumps(service.completion_schema()),
@@ -539,11 +544,13 @@ def query_workbench_entry(
     )
 
     if is_partial_request(request):
+        catalogs = service.catalogs()
         return templates.TemplateResponse(
             request=request,
             name="partials/query_workbench_entry.html",
             context={
-                "catalogs": service.catalogs(),
+                "catalogs": catalogs,
+                "source_tree_s3_hierarchy": build_source_tree_s3_hierarchy(catalogs),
                 "notebook_tree": service.notebook_tree(),
                 "shared_notebooks": shared_notebooks,
             },
@@ -745,13 +752,15 @@ def sidebar_partial(
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> HTMLResponse:
     workspace_mode = "loader" if mode == "loader" else "notebook"
+    catalogs = service.catalogs()
     return templates.TemplateResponse(
         request=request,
         name="partials/sidebar.html",
         context={
             "sidebar_oob": False,
             "runtime": service.runtime_info(),
-            "catalogs": service.catalogs(),
+            "catalogs": catalogs,
+            "source_tree_s3_hierarchy": build_source_tree_s3_hierarchy(catalogs),
             "notebooks": service.notebooks(),
             "notebook_tree": service.notebook_tree(),
             "active_notebook_id": active_notebook_id,

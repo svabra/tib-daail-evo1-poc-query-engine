@@ -163,15 +163,21 @@ export function normalizeQueryJob(job) {
             sample.duckdbSpillTotalBytes !== null
           )
       : [],
+    progressEvents: Array.isArray(job.progressEvents)
+      ? job.progressEvents
+          .map((event) => (event && typeof event === "object" ? { ...event } : null))
+          .filter(Boolean)
+      : [],
     cancellationPhase: String(job.cancellationPhase ?? "").trim(),
     cancellationRequestedAt: String(job.cancellationRequestedAt ?? "").trim(),
     workerExitCode: Number.isFinite(workerExitCode) ? Math.round(workerExitCode) : null,
+    canCancel: job.canCancel !== false,
     timings,
   };
 }
 
 export function queryJobIsRunning(job) {
-  return Boolean(job && queryJobRunningStatuses.has(job.status));
+  return Boolean(job && queryJobRunningStatuses.has(String(job.status || "").trim().toLowerCase()));
 }
 
 export function queryJobStatusCopy(job) {
@@ -179,7 +185,7 @@ export function queryJobStatusCopy(job) {
     return "Idle";
   }
 
-  switch (job.status) {
+  switch (String(job.status || "").trim().toLowerCase()) {
     case "queued":
       return "Queued";
     case "running":
@@ -187,7 +193,12 @@ export function queryJobStatusCopy(job) {
     case "completed":
       return "Completed";
     case "cancelled":
+    case "canceled":
       return "Cancelled";
+    case "aborted":
+      return "Aborted";
+    case "incomplete":
+      return "Incomplete";
     case "failed":
       return "Failed";
     default:

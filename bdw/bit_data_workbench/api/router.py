@@ -129,6 +129,10 @@ class SharedNotebookFolderVisibilityPayload(BaseModel):
     is_public: bool = Field(alias="isPublic")
 
 
+class SharedNotebookFolderDeletePayload(BaseModel):
+    path: list[str] = Field(default_factory=list)
+
+
 class NotebookActivityTouchPayload(BaseModel):
     notebook_id: str = Field(validation_alias="notebookId", serialization_alias="notebookId")
     action: str = "open"
@@ -1573,6 +1577,7 @@ def start_query_job(
     data_sources: str = Form(""),
     local_relations: str = Form(default="{}", alias="localRelations"),
     query_options: str = Form(default="{}", alias="queryOptions"),
+    client_job_id: str = Form("", alias="clientJobId"),
     client_run_started_at: str = Form("", alias="clientRunStartedAt"),
     client_pre_submit_ms: float | None = Form(default=None, alias="clientPreSubmitMs"),
     service: WorkbenchService = Depends(get_workbench_service),
@@ -1605,6 +1610,7 @@ def start_query_job(
             display_sql=display_sql,
             query_options=query_options_payload,
             client_pre_submit_ms=client_pre_submit_ms,
+            client_job_id=client_job_id,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1846,6 +1852,21 @@ def set_shared_notebook_folder_visibility(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return JSONResponse(jsonable_encoder(result))
+
+
+@router.delete("/api/notebooks/shared/folders")
+def delete_shared_notebook_folder(
+    payload: SharedNotebookFolderDeletePayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        result = service.delete_shared_notebook_folder(path=list(payload.path))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     return JSONResponse(jsonable_encoder(result))
 

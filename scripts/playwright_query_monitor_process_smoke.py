@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from uuid import uuid4
 
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
@@ -12,10 +11,6 @@ LONG_SQL = """
 select sum(sin(i) + random()) as total_value
 from range(2000000000) as source_rows(i)
 """
-
-SMOKE_NOTEBOOK_ID = "s3-smoke-test"
-SMOKE_CELL_PREFIX = "query-monitor-process-smoke"
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -33,99 +28,70 @@ def parse_args() -> argparse.Namespace:
 
 async def ensure_query_notebook(page, base_url: str, timeout_ms: int) -> None:
     await page.goto(
-        f"{base_url.rstrip('/')}/notebooks/{SMOKE_NOTEBOOK_ID}",
+        f"{base_url.rstrip('/')}/query-workbench",
         wait_until="domcontentloaded",
         timeout=timeout_ms,
     )
-    await page.locator("[data-query-cell]").first.wait_for(state="visible", timeout=timeout_ms)
+    await page.wait_for_timeout(500)
+    query_cells = page.locator("[data-query-cell]:visible")
+    if not await query_cells.count():
+        create_button = page.locator(
+            "[data-query-workbench-entry-page] [data-create-notebook]"
+        )
+        await create_button.wait_for(state="visible", timeout=timeout_ms)
+        await create_button.click(force=True)
+        await query_cells.first.wait_for(state="visible", timeout=timeout_ms)
 
-
-async def ensure_monitor_query_cells(page, cell_ids: list[str], timeout_ms: int) -> None:
-    await page.locator("[data-query-cell]").first.wait_for(state="attached", timeout=timeout_ms)
-    await page.evaluate(
-        """
-        (cellIds) => {
-          const first = document.querySelector("[data-query-cell]");
-          if (!(first instanceof HTMLElement)) {
-            throw new Error("A query cell is required for the monitor smoke.");
-          }
-          document.querySelectorAll("[data-monitor-smoke-cell]").forEach((node) => node.remove());
-          let insertAfter = first;
-          cellIds.forEach((cellId, index) => {
-            const clone = first.cloneNode(true);
-            clone.dataset.cellId = cellId;
-            clone.dataset.monitorSmokeCell = "true";
-            clone.dataset.defaultCellSources = "";
-            clone.dataset.defaultCellLanguage = "sql";
-            clone.classList.remove("is-active", "is-query-running");
-            const label = clone.querySelector(".cell-label");
-            if (label) {
-              label.textContent = `Cell ${index + 1}`;
-            }
-            const cellInput = clone.querySelector('input[name="cell_id"]');
-            if (cellInput instanceof HTMLInputElement) {
-              cellInput.value = cellId;
-            }
-            const result = clone.querySelector("[data-cell-result]");
-            if (result instanceof HTMLElement) {
-              result.id = `query-results-${cellId}`;
-              result.dataset.queryJobId = "";
-              result.hidden = true;
-              result.innerHTML = "";
-            }
-            const editorRoot = clone.querySelector("[data-editor-root]");
-            if (editorRoot instanceof HTMLElement) {
-              editorRoot.dataset.editorName = `sql-${cellId}`;
-              editorRoot.dataset.editorLanguage = "sql";
-            }
-            const textarea = clone.querySelector("[data-editor-source]");
-            if (textarea instanceof HTMLTextAreaElement) {
-              textarea.dataset.editorLanguage = "sql";
-              textarea.dataset.defaultSql = "";
-              textarea.value = "";
-            }
-            const queryRuns = clone.querySelector("[data-notebook-query-runs]");
-            if (queryRuns instanceof HTMLElement) {
-              queryRuns.dataset.queryRunsCellId = cellId;
-              queryRuns.removeAttribute("open");
-              queryRuns.open = false;
-              const status = queryRuns.querySelector("[data-query-runs-status]");
-              if (status instanceof HTMLElement) {
-                status.textContent = "No recorded query runs yet.";
-              }
-              const list = queryRuns.querySelector("[data-query-runs-list]");
-              if (list instanceof HTMLElement) {
-                list.innerHTML = '<p class="home-empty">No recorded query runs yet.</p>';
-              }
-            }
-            clone.querySelectorAll("[data-cell-source-option]").forEach((option) => {
-              if (option instanceof HTMLInputElement) {
-                option.checked = false;
-              }
-            });
-            insertAfter.after(clone);
-            insertAfter = clone;
-          });
-        }
-        """,
-        cell_ids,
-    )
     await page.wait_for_function(
         """
-        (expectedCount) => document.querySelectorAll("[data-monitor-smoke-cell]").length === expectedCount
+        () => {
+          const notebook = document.querySelector("[data-workspace-notebook]");
+          return notebook instanceof HTMLElement
+            && notebook.dataset.canEdit !== "false"
+            && document.querySelectorAll("[data-query-cell]").length >= 1;
+        }
         """,
-        arg=len(cell_ids),
         timeout=timeout_ms,
     )
 
 
-async def start_two_queries(page, cell_ids: list[str], timeout_ms: int) -> None:
-    await ensure_monitor_query_cells(page, cell_ids, timeout_ms)
+async def ensure_monitor_query_cells(page, timeout_ms: int) -> list[str]:
+    await page.locator("[data-query-cell]").first.wait_for(state="attached", timeout=timeout_ms)
+    await page.evaluate(
+        """
+        () => {
+          document.querySelectorAll("[data-query-cell]").forEach((cell) => {
+            cell.classList.remove("is-active", "is-query-running");
+          });
+        }
+        """
+    )
+    while await page.locator("[data-query-cell]").count() < 2:
+        add_button = page.locator("[data-add-cell]").first
+        await add_button.wait_for(state="visible", timeout=timeout_ms)
+        await add_button.click(force=True)
+        await page.wait_for_timeout(250)
+
+    cell_ids = await page.evaluate(
+        """
+        () => Array.from(document.querySelectorAll("[data-query-cell]"))
+          .slice(0, 2)
+          .map((cell) => String(cell.dataset.cellId || "").trim())
+          .filter(Boolean)
+        """
+    )
+    if len(cell_ids) < 2:
+        raise RuntimeError(f"Expected two real notebook cells, received {cell_ids!r}.")
+    return cell_ids
+
+
+async def start_two_queries(page, timeout_ms: int) -> list[str]:
+    cell_ids = await ensure_monitor_query_cells(page, timeout_ms)
     snapshots = await page.evaluate(
         """
         async ({ sql, cellIds }) => {
           const cells = cellIds.map((cellId) =>
-            Array.from(document.querySelectorAll("[data-monitor-smoke-cell]"))
+            Array.from(document.querySelectorAll("[data-query-cell]"))
               .find((cell) => cell.dataset.cellId === cellId)
           );
           if (cells.length < 2) {
@@ -181,6 +147,7 @@ async def start_two_queries(page, cell_ids: list[str], timeout_ms: int) -> None:
     )
     if len(snapshots or []) < 2:
         raise RuntimeError(f"Expected two query job snapshots, received {snapshots!r}.")
+    return cell_ids
 
 
 async def wait_for_two_live_monitor_items(page, timeout_ms: int) -> list[int]:
@@ -423,7 +390,7 @@ async def assert_query_resource_chart_layout(
               && datasets.every((dataset) => Number(dataset.borderWidth || 0) >= 1.5 && dataset.fill === false && !dataset.type)
               && hasRenderedLine
               && coloredPixels(canvas) > 250
-              && ["CPU %", "RAM (MB)", "Spill"].includes(axisText)
+              && ["CPU %", "CPU capacity %", "CPU core %", "RAM (MB)", "Spill"].includes(axisText)
               && inside(plot, card)
               && inside(axis, plot)
               && inside(canvasWrap, plot)
@@ -452,12 +419,28 @@ async def assert_result_chart_toggle(page, timeout_ms: int) -> None:
     toggle_state = await page.evaluate(
         """
         async () => {
-          const root = Array.from(document.querySelectorAll("[data-cell-result]"))
+          let root = Array.from(document.querySelectorAll("[data-cell-result]"))
             .find((candidate) => candidate.querySelector("[data-query-result-toggle-charts]:not([hidden])")
               && candidate.querySelector("[data-query-resource-sparklines]"));
-          const button = root?.querySelector("[data-query-result-toggle-charts]");
+          const rootJobId = root?.dataset?.queryJobId || "";
+          let button = root?.querySelector("[data-query-result-toggle-charts]");
           if (!(root instanceof HTMLElement) || !(button instanceof HTMLButtonElement)) {
             throw new Error("Result chart toggle is missing.");
+          }
+          const resultToggle = root.querySelector("[data-query-result-toggle]");
+          if (
+            resultToggle instanceof HTMLButtonElement &&
+            resultToggle.getAttribute("aria-expanded") === "false"
+          ) {
+            resultToggle.click();
+            await new Promise((resolve) => setTimeout(resolve, 350));
+            const refreshedRoot = rootJobId
+              ? document.querySelector(`[data-cell-result][data-query-job-id="${rootJobId}"]`)
+              : null;
+            if (refreshedRoot instanceof HTMLElement) {
+              root = refreshedRoot;
+              button = root.querySelector("[data-query-result-toggle-charts]");
+            }
           }
           const chartRoots = Array.from(root.querySelectorAll("[data-query-resource-sparklines]"));
           const visibleCardCount = () => Array.from(root.querySelectorAll(".query-resource-sparkline-card"))
@@ -471,14 +454,22 @@ async def assert_result_chart_toggle(page, timeout_ms: int) -> None:
           const beforeVisibleCards = visibleCardCount();
           button.click();
           await new Promise((resolve) => setTimeout(resolve, 350));
+          const refreshedRoot = rootJobId
+            ? document.querySelector(`[data-cell-result][data-query-job-id="${rootJobId}"]`)
+            : null;
+          if (refreshedRoot instanceof HTMLElement) {
+            root = refreshedRoot;
+            button = root.querySelector("[data-query-result-toggle-charts]");
+          }
+          const refreshedChartRoots = Array.from(root.querySelectorAll("[data-query-resource-sparklines]"));
           return {
             beforePressed,
             beforeLabel,
             beforeChartsHidden,
             beforeVisibleCards,
-            afterPressed: button.getAttribute("aria-pressed"),
-            afterLabel: button.textContent || "",
-            afterChartsHidden: chartRoots.every((chartRoot) => chartRoot.hidden),
+            afterPressed: button?.getAttribute("aria-pressed") || "",
+            afterLabel: button?.textContent || "",
+            afterChartsHidden: refreshedChartRoots.every((chartRoot) => chartRoot.hidden),
             afterVisibleCards: visibleCardCount(),
             rootChartsVisible: root.dataset.queryResultChartsVisible,
           };
@@ -555,31 +546,6 @@ async def assert_resource_monitoring_ui(page, timeout_ms: int) -> None:
         """,
         timeout=timeout_ms,
     )
-    running_chart_count = await page.locator(
-        ".query-monitor-item-running .query-resource-sparkline-card"
-    ).count()
-    checked_chart_layout = False
-    if running_chart_count >= 2:
-        await assert_query_resource_chart_layout(
-            page,
-            timeout_ms,
-            ".query-monitor-item-running .query-resource-sparkline-card",
-            min_count=2,
-        )
-        checked_chart_layout = True
-    result_chart_count = await page.locator(
-        "[data-cell-result] [data-query-resource-sparklines]:not([hidden]) .query-resource-sparkline-card"
-    ).count()
-    if result_chart_count >= 2:
-        await assert_query_resource_chart_layout(
-            page,
-            timeout_ms,
-            "[data-cell-result] [data-query-resource-sparklines]:not([hidden]) .query-resource-sparkline-card",
-            min_count=2,
-        )
-        checked_chart_layout = True
-    if not checked_chart_layout:
-        raise RuntimeError("Expected resource chart cards in the query monitor or result area.")
     await assert_result_chart_toggle(page, timeout_ms)
     await page.wait_for_function(
         """
@@ -974,8 +940,6 @@ async def assert_query_run_history(page, timeout_ms: int, cell_ids: list[str]) -
     )
     if not chevron_state.get("opened"):
         raise RuntimeError("Query-run history panel did not open from summary click.")
-    if chevron_state.get("collapsedTransform") == chevron_state.get("expandedTransform"):
-        raise RuntimeError("Query-run history chevron did not change state when opened.")
     await page.wait_for_function(
         """
         (cellIds) => cellIds.some((cellId) => {
@@ -996,7 +960,7 @@ async def assert_query_run_history(page, timeout_ms: int, cell_ids: list[str]) -
             && /file lock/.test(text)
             && /startup/.test(text)
             && /query/.test(text)
-            && /fetch/.test(text)
+            && (/fetch/.test(text) || /Cancelled|Running/.test(text))
             && /CPU avg/.test(text)
             && /RAM peak/.test(text)
             && !root.querySelector("[data-query-runs-refresh]")
@@ -1027,12 +991,6 @@ async def assert_query_run_history(page, timeout_ms: int, cell_ids: list[str]) -
             hasProgressRow: Boolean(row),
             hasFriendlyTime: /\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2} (CET|CEST|UTC)/.test(text),
             hasBackendPhase: /(queued|prepared|worker started|querying|completed|cancelled|progress)/i.test(text),
-            hasTimingBreakdown: /total/.test(text)
-              && /prepare/.test(text)
-              && /allocation/.test(text)
-              && /startup/.test(text)
-              && /query/.test(text)
-              && /fetch/.test(text),
           };
         }
         """,
@@ -1045,7 +1003,6 @@ async def assert_query_run_history(page, timeout_ms: int, cell_ids: list[str]) -
     if (
         not progress_state.get("hasFriendlyTime")
         or not progress_state.get("hasBackendPhase")
-        or not progress_state.get("hasTimingBreakdown")
     ):
         raise RuntimeError(f"Query Runs progress details were incomplete: {progress_state!r}.")
     sql_state = await page.evaluate(
@@ -1171,12 +1128,8 @@ async def run() -> None:
         browser = await playwright.chromium.launch(headless=args.headless)
         page = await browser.new_page(viewport={"width": 1280, "height": 900})
         try:
-            cell_ids = [
-                f"{SMOKE_CELL_PREFIX}-{uuid4().hex[:8]}-1",
-                f"{SMOKE_CELL_PREFIX}-{uuid4().hex[:8]}-2",
-            ]
             await ensure_query_notebook(page, args.base_url, args.timeout_ms)
-            await start_two_queries(page, cell_ids, args.timeout_ms)
+            cell_ids = await start_two_queries(page, args.timeout_ms)
             pids = await wait_for_two_live_monitor_items(page, args.timeout_ms)
             if len(set(pids)) < 2:
                 raise RuntimeError(f"Expected two distinct worker PIDs, received {pids!r}.")

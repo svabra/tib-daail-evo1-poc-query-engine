@@ -279,19 +279,42 @@ async def assert_legacy_local_relation_still_runs(
         """,
         f"select * from {legacy_relation}",
     )
-    await page.wait_for_function(
-        """
-        () => {
-          const cell = document.querySelector('[data-query-cell]');
-          const indicator = cell?.querySelector('[data-query-source-validation]');
-          const runButton = cell?.querySelector('[data-run-cell]');
-          return indicator?.dataset.querySourceValidationStatus === 'unchecked'
+    try:
+        await page.wait_for_function(
+            """
+            () => {
+              const cell = document.querySelector('[data-query-cell]');
+              const indicator = cell?.querySelector('[data-query-source-validation]');
+              const runButton = cell?.querySelector('[data-run-cell]');
+          const status = indicator?.dataset.querySourceValidationStatus || '';
+          return ['unchecked', 'skipped'].includes(status)
             && runButton instanceof HTMLButtonElement
             && !runButton.disabled;
-        }
-        """,
-        timeout=timeout_ms,
-    )
+            }
+            """,
+            timeout=timeout_ms,
+        )
+    except PlaywrightTimeoutError as exc:
+        state = await cell.evaluate(
+            """
+            (cell) => {
+              const indicator = cell.querySelector('[data-query-source-validation]');
+              const runButton = cell.querySelector('[data-run-cell]');
+              const textarea = cell.querySelector('[data-editor-source]');
+              return {
+                validationStatus: indicator?.dataset.querySourceValidationStatus || '',
+                validationText: indicator?.textContent || '',
+                runDisabled: runButton instanceof HTMLButtonElement ? runButton.disabled : null,
+                runTitle: runButton instanceof HTMLButtonElement ? runButton.title : '',
+                sql: textarea instanceof HTMLTextAreaElement ? textarea.value : '',
+              };
+            }
+            """
+        )
+        raise RuntimeError(
+            "Legacy Local Workspace relation did not become runnable after SQL edit. "
+            f"State: {state!r}"
+        ) from exc
     query_job_posts.clear()
     await cell.locator("[data-run-cell]").first.click()
     deadline = asyncio.get_running_loop().time() + (timeout_ms / 1000)
@@ -322,11 +345,36 @@ async def assert_legacy_local_relation_still_runs(
     )
 
 
+async def enable_source_existence_validation(page, timeout_ms: int) -> None:
+    await page.evaluate(
+        """
+        () => {
+          const switchButton = document.querySelector('[data-query-cell] [data-cell-query-option="validation.sourceExistence"]');
+          if (
+            switchButton instanceof HTMLButtonElement &&
+            switchButton.getAttribute("aria-checked") !== "true"
+          ) {
+            switchButton.click();
+          }
+        }
+        """
+    )
+    await page.wait_for_function(
+        """
+        () => document
+          .querySelector('[data-query-cell] [data-cell-query-option="validation.sourceExistence"]')
+          ?.getAttribute("aria-checked") === "true"
+        """,
+        timeout=timeout_ms,
+    )
+
+
 async def assert_missing_local_alias_blocks_run(
     page,
     timeout_ms: int,
     query_job_posts: list[str],
 ) -> None:
+    await enable_source_existence_validation(page, timeout_ms)
     missing_alias = "local.test.test_sub.missing_federal_tax_file.csv"
     cell = page.locator("[data-query-cell]:visible").first
     await cell.evaluate(
@@ -395,23 +443,32 @@ async def run_smoke(args: argparse.Namespace) -> int:
             else None,
         )
 
+        stage = "open Local Workspace CSV ingestor"
         try:
+            stage = "open Local Workspace CSV ingestor"
             await open_local_csv_ingestor(page, args.base_url, args.timeout_ms)
+            stage = "import Local Workspace CSV"
             relation = await import_local_csv(page, args.timeout_ms)
             expected_alias = "local.test.test_sub.playwright_local_query.csv"
+            stage = "open uploaded Local Workspace source in new notebook without pre-run sync"
             await assert_upload_query_link_opens_without_pre_run_sync(page, args.timeout_ms)
+            stage = "assert Local Workspace query notebook"
             await assert_local_query_notebook(page, relation, expected_alias, args.timeout_ms)
+            stage = "assert Local Workspace sidebar actions"
             await assert_local_workspace_sidebar_actions(page, relation, args.timeout_ms)
+            stage = "run generated Local Workspace query"
             await run_local_query(page, args.timeout_ms)
+            stage = "run legacy Local Workspace relation"
             await assert_legacy_local_relation_still_runs(
                 page,
                 relation,
                 args.timeout_ms,
                 query_job_posts,
             )
+            stage = "block missing Local Workspace alias"
             await assert_missing_local_alias_blocks_run(page, args.timeout_ms, query_job_posts)
         except (PlaywrightTimeoutError, RuntimeError) as exc:
-            print(str(exc), file=sys.stderr)
+            print(f"{stage}: {exc}", file=sys.stderr)
             for message in console_messages:
                 print(message, file=sys.stderr)
             await browser.close()

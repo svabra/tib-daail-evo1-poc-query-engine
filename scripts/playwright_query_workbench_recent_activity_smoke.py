@@ -50,6 +50,11 @@ def shared_notebook_payload(notebook_id: str, title: str, summary: str) -> dict[
 
 
 async def open_query_workbench_entry(page, base_url: str, timeout_ms: int) -> None:
+    await page.goto(
+        f"{base_url.rstrip('/')}/",
+        wait_until="domcontentloaded",
+        timeout=timeout_ms,
+    )
     await page.evaluate("window.localStorage.removeItem('bdw.lastNotebook.v1')")
     await page.goto(
         f"{base_url.rstrip('/')}/query-workbench",
