@@ -16,7 +16,9 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
 
         self.assertIn("data-copy-editor-sql", source)
         self.assertIn("data-expand-editor", source)
+        self.assertIn("data-compare-editor-sql", source)
         self.assertIn('aria-label="Expand SQL editor"', source)
+        self.assertIn('aria-label="Compare"', source)
         self.assertIn('aria-pressed="false"', source)
 
     def test_editor_expand_control_has_runtime_wiring_and_styles(self) -> None:
@@ -37,6 +39,42 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn(".editor-shell {\n  position: relative;\n  z-index: 1;", css_source)
         self.assertIn(".editor-frame:hover .editor-source-nav-button", css_source)
         self.assertIn(".editor-frame:focus-within .editor-source-nav-button", css_source)
+
+    def test_sql_compare_button_has_runtime_dialog_and_styles(self) -> None:
+        markup_source = (
+            STATIC_ROOT / "js" / "notebook-workspace-markup.js"
+        ).read_text(encoding="utf-8")
+        workspace_template = (
+            REPO_ROOT / "bdw" / "bit_data_workbench" / "templates" / "partials" / "workspace.html"
+        ).read_text(encoding="utf-8")
+        app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
+        compare_source = (
+            STATIC_ROOT / "js" / "query-compare-controller.js"
+        ).read_text(encoding="utf-8")
+        dialogs_source = (STATIC_ROOT / "js" / "dialogs.js").read_text(encoding="utf-8")
+        css_source = (STATIC_ROOT / "css" / "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("data-compare-editor-sql", markup_source)
+        self.assertIn('aria-label="Compare"', markup_source)
+        self.assertIn('title="Compare"', markup_source)
+        self.assertIn("data-compare-editor-sql", workspace_template)
+        self.assertIn('aria-label="Compare"', workspace_template)
+        self.assertIn("ensureQueryCompareDialog", dialogs_source)
+        self.assertIn("data-query-compare-dialog", dialogs_source)
+        self.assertIn("data-query-compare-target-notebook", dialogs_source)
+        self.assertIn("data-query-compare-target-cell", dialogs_source)
+        self.assertIn("createQueryCompareController", app_source)
+        self.assertIn("queryCompareDiff", compare_source)
+        self.assertIn("function open", compare_source)
+        self.assertIn("currentEditorSql(editorRoot)", compare_source)
+        self.assertIn("[data-compare-editor-sql]", app_source)
+        self.assertIn("[data-query-compare-target-notebook]", compare_source)
+        self.assertIn("[data-query-compare-target-cell]", compare_source)
+        self.assertIn("No other SQL cells are available to compare.", compare_source)
+        self.assertIn(".editor-compare-button", css_source)
+        self.assertIn(".query-compare-table", css_source)
+        self.assertIn(".query-compare-row.is-changed", css_source)
+        self.assertIn('.editor-frame[data-editor-language="python"] .editor-compare-button', css_source)
 
     def test_cell_descriptors_share_action_and_warning_panel_have_wiring(self) -> None:
         markup_source = (

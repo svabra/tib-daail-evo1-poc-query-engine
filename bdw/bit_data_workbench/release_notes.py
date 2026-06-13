@@ -1,9 +1,26 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.7. Keep entries concise and
+# Derived from git history through version 0.10.8. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.8",
+        "releasedAt": "2026-06-13T08:02:57+02:00",
+        "features": [
+            (
+                "SQL notebook cells now include a Compare action that opens "
+                "a side-by-side Virtual SQL diff against another SQL cell in "
+                "the same or another notebook."
+            ),
+            (
+                "The Compare dialog defaults to another SQL cell in the "
+                "current notebook when available, uses live unsaved editor "
+                "text for the active notebook, and shows line-level changed, "
+                "added, removed, and unchanged counts."
+            ),
+        ],
+    },
     {
         "version": "0.10.7",
         "releasedAt": "2026-06-12T23:19:11+02:00",

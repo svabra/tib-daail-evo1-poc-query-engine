@@ -7019,6 +7019,155 @@ details:not([open]) > .tree-children {
   line-height: 1.35;
 }
 
+.query-compare-dialog {
+  width: min(1180px, calc(100vw - 32px));
+}
+
+.query-compare-dialog-card {
+  min-height: 580px;
+}
+
+.query-compare-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.query-compare-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.query-compare-select {
+  padding: 10px 12px;
+}
+
+.query-compare-empty,
+.query-compare-empty-state {
+  margin: 0;
+  padding: 16px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-control);
+  background: rgba(247, 249, 251, 0.92);
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  text-align: center;
+}
+
+.query-compare-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.query-compare-meta {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.query-compare-meta strong {
+  color: var(--text);
+  font-size: 0.86rem;
+}
+
+.query-compare-meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.query-compare-summary {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.query-compare-dialog-body {
+  max-height: min(68vh, 720px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: #fbfcfe;
+}
+
+.query-compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 0.78rem;
+}
+
+.query-compare-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+  background: #eef3f8;
+  color: var(--text);
+  text-align: left;
+}
+
+.query-compare-line-number-col {
+  width: 48px;
+}
+
+.query-compare-line-number {
+  padding: 3px 8px;
+  border-right: 1px solid rgba(192, 202, 212, 0.55);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  text-align: right;
+  user-select: none;
+  vertical-align: top;
+}
+
+.query-compare-line-code {
+  padding: 3px 10px;
+  border-right: 1px solid rgba(192, 202, 212, 0.55);
+  vertical-align: top;
+}
+
+.query-compare-line-code code {
+  display: block;
+  min-height: 1.45em;
+  color: var(--text);
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.query-compare-row.is-changed .query-compare-line-code {
+  background: rgba(255, 190, 77, 0.18);
+}
+
+.query-compare-row.is-added .query-compare-line-code:nth-child(n + 3),
+.query-compare-row.is-added .query-compare-line-number:nth-child(n + 3) {
+  background: rgba(26, 126, 79, 0.1);
+}
+
+.query-compare-row.is-removed .query-compare-line-code:nth-child(-n + 2),
+.query-compare-row.is-removed .query-compare-line-number:nth-child(-n + 2) {
+  background: rgba(180, 35, 24, 0.08);
+}
+
+@media (max-width: 760px) {
+  .query-compare-controls,
+  .query-compare-meta-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .query-compare-dialog-card {
+    padding: 18px;
+  }
+}
+
 .download-job-dialog-body {
   display: grid;
   gap: 14px;
@@ -8972,6 +9121,7 @@ details:not([open]) > .tree-children {
 .editor-copy-button,
 .editor-expand-button,
 .editor-source-nav-button,
+.editor-compare-button,
 .editor-sql-view-toggle {
   position: absolute;
   top: 8px;
@@ -8983,7 +9133,8 @@ details:not([open]) > .tree-children {
 
 .editor-copy-button,
 .editor-expand-button,
-.editor-source-nav-button {
+.editor-source-nav-button,
+.editor-compare-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -9010,8 +9161,12 @@ details:not([open]) > .tree-children {
   right: 80px;
 }
 
-.editor-sql-view-toggle {
+.editor-compare-button {
   right: 116px;
+}
+
+.editor-sql-view-toggle {
+  right: 152px;
   display: inline-grid;
   grid-template-columns: minmax(54px, auto) minmax(54px, auto);
   overflow: hidden;
@@ -9044,7 +9199,8 @@ details:not([open]) > .tree-children {
 }
 
 .editor-copy-button svg,
-.editor-source-nav-button svg {
+.editor-source-nav-button svg,
+.editor-compare-button svg {
   width: 16px;
   height: 16px;
   fill: none;
@@ -9057,14 +9213,17 @@ details:not([open]) > .tree-children {
 .editor-frame:hover .editor-copy-button,
 .editor-frame:hover .editor-expand-button,
 .editor-frame:hover .editor-source-nav-button,
+.editor-frame:hover .editor-compare-button,
 .editor-frame:hover .editor-sql-view-toggle,
 .editor-frame:focus-within .editor-copy-button,
 .editor-frame:focus-within .editor-expand-button,
 .editor-frame:focus-within .editor-source-nav-button,
+.editor-frame:focus-within .editor-compare-button,
 .editor-frame:focus-within .editor-sql-view-toggle,
 .editor-copy-button:focus-visible,
 .editor-expand-button:focus-visible,
 .editor-source-nav-button:focus-visible,
+.editor-compare-button:focus-visible,
 .editor-sql-view-toggle:focus-within,
 .editor-expand-button[aria-pressed="true"] {
   opacity: 1;
@@ -9079,6 +9238,8 @@ details:not([open]) > .tree-children {
 .editor-source-nav-button:hover,
 .editor-source-nav-button:focus-visible,
 .editor-source-nav-button.is-loading,
+.editor-compare-button:hover,
+.editor-compare-button:focus-visible,
 .editor-sql-view-toggle:hover,
 .editor-sql-view-toggle:focus-within,
 .editor-expand-button[aria-pressed="true"] {
@@ -9089,6 +9250,7 @@ details:not([open]) > .tree-children {
 .editor-frame[data-editor-language="python"] .editor-copy-button,
 .editor-frame[data-editor-language="python"] .editor-expand-button,
 .editor-frame[data-editor-language="python"] .editor-source-nav-button,
+.editor-frame[data-editor-language="python"] .editor-compare-button,
 .editor-frame[data-editor-language="python"] .editor-sql-view-toggle {
   display: none;
 }

@@ -68,6 +68,7 @@ import {
 } from "./python-job-state.js";
 import { createPythonUi } from "./python-ui.js";
 import { createPopupMenuManager } from "./popup-menu-manager.js";
+import { createQueryCompareController } from "./query-compare-controller.js";
 import {
   dataGenerationMonitorCount,
   dataGenerationMonitorList,
@@ -1149,6 +1150,21 @@ const {
   unshareNotebook,
   workspaceNotebookId,
   writeLastNotebookId,
+});
+
+const queryCompareController = createQueryCompareController({
+  cellLanguageForCellRoot,
+  currentEditorSql,
+  currentWorkspaceNotebookId,
+  currentWorkspaceNotebookTitle,
+  escapeHtml,
+  normalizeCellLanguage,
+  normalizeNotebookCells,
+  normalizeNotebookTitleValue,
+  notebookMetadata,
+  queryOptionsForCellRoot,
+  selectedDataSourcesForCell,
+  truncateWords,
 });
 
 notebookStagePipelineController = createNotebookStagePipelineController({
@@ -10900,6 +10916,14 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const editorCompareButton = event.target.closest("[data-compare-editor-sql]");
+  if (editorCompareButton) {
+    event.preventDefault();
+    event.stopPropagation();
+    queryCompareController.open(editorCompareButton);
+    return;
+  }
+
   const editorExpandButton = event.target.closest("[data-expand-editor]");
   if (editorExpandButton) {
     event.preventDefault();
@@ -11227,6 +11251,10 @@ document.body.addEventListener("input", (event) => {
 });
 
 document.body.addEventListener("change", async (event) => {
+  if (queryCompareController.handleChange(event)) {
+    return;
+  }
+
   const localWorkspaceMoveDestinationSelect = event.target.closest(
     "[data-local-workspace-move-destination]"
   );

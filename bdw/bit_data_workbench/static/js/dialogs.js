@@ -40,6 +40,10 @@ export function queryExplainDialog() {
   return document.querySelector("[data-query-explain-dialog]");
 }
 
+export function queryCompareDialog() {
+  return document.querySelector("[data-query-compare-dialog]");
+}
+
 export function notebookShareDialog() {
   return document.querySelector("[data-notebook-share-dialog]");
 }
@@ -140,6 +144,51 @@ export function ensureQueryExplainDialog() {
   `);
 
   dialog = queryExplainDialog();
+  return dialog;
+}
+
+export function ensureQueryCompareDialog() {
+  let dialog = queryCompareDialog();
+  if (dialog) {
+    return dialog;
+  }
+
+  appendModalDialog(`
+    <dialog class="modal-dialog modal-dialog-wide query-compare-dialog" data-query-compare-dialog>
+      <form method="dialog" class="modal-card modal-card-wide query-compare-dialog-card" data-query-compare-form>
+        <div class="query-compare-dialog-header">
+          <div>
+            <h2 class="modal-title">Compare SQL Cells</h2>
+            <p class="modal-copy">
+              Side-by-side line comparison of editable Virtual SQL.
+            </p>
+          </div>
+        </div>
+        <div class="query-compare-controls" data-query-compare-controls>
+          <label class="modal-field">
+            <span class="modal-field-label">Target notebook</span>
+            <select class="modal-input query-compare-select" data-query-compare-target-notebook></select>
+          </label>
+          <label class="modal-field">
+            <span class="modal-field-label">Target cell</span>
+            <select class="modal-input query-compare-select" data-query-compare-target-cell></select>
+          </label>
+        </div>
+        <p class="query-compare-empty" data-query-compare-empty hidden></p>
+        <div class="query-compare-meta-grid">
+          <div class="query-compare-meta" data-query-compare-current-meta></div>
+          <div class="query-compare-meta" data-query-compare-target-meta></div>
+        </div>
+        <p class="query-compare-summary" data-query-compare-summary></p>
+        <div class="query-compare-dialog-body" data-query-compare-body></div>
+        <menu class="modal-actions">
+          <button class="modal-button" type="submit" value="confirm">Close</button>
+        </menu>
+      </form>
+    </dialog>
+  `);
+
+  dialog = queryCompareDialog();
   return dialog;
 }
 
