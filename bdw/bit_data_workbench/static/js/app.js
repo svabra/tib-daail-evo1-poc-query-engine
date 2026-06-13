@@ -1188,6 +1188,10 @@ notebookStagePipelineController = createNotebookStagePipelineController({
   refreshSidebar,
   requestCellRun,
   revealDataSourceSidebarBrowser,
+  onPipelineNotificationStateChanged: (snapshot) => {
+    renderQueryNotificationMenu();
+    queryRunsController.refreshForMaterializedStagesSnapshot(snapshot);
+  },
   setCellStage,
   setNotebookCells,
   setNotebookPipelinePaths,
@@ -1293,6 +1297,11 @@ const {
       dismissedKeys: dismissedNotificationKeys,
       notificationItemKey,
     }),
+  getPipelineNotificationItems: () =>
+    notebookStagePipelineController?.pipelineNotificationItems?.({
+      dismissedKeys: dismissedNotificationKeys,
+      notificationItemKey,
+    }) ?? [],
   getS3DeleteNotificationItems: () =>
     s3DeleteJobsController.notificationItems({
       dismissedKeys: dismissedNotificationKeys,
@@ -1615,6 +1624,14 @@ const {
     snapshot: downloadJobsSnapshot,
     summary: downloadJobsSummary,
   }),
+  getPipelineNotificationItems: (options = {}) =>
+    notebookStagePipelineController?.pipelineNotificationItems?.(options) ?? [],
+  getPipelineNotificationSummary: () =>
+    notebookStagePipelineController?.pipelineNotificationSummary?.() ?? {
+      version: null,
+      runningCount: 0,
+      totalCount: 0,
+    },
   getS3DeleteState: () => ({
     version: s3DeleteJobsStateVersion,
     snapshot: s3DeleteJobsSnapshot,
@@ -3581,7 +3598,13 @@ function notificationItemKey(type, job) {
     status === "ready" ||
     status === "failed" ||
     status === "cancelled" ||
-    status === "expired"
+    status === "canceled" ||
+    status === "aborted" ||
+    status === "incomplete" ||
+    status === "expired" ||
+    status === "warning" ||
+    status === "warned" ||
+    status === "skipped"
       ? status
       : "active";
   return `${type}:${job?.jobId || ""}:${lifecycleKey}`;

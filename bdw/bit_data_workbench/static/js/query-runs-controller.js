@@ -7,9 +7,10 @@ export function createQueryRunsController(helpers) {
     queryResourceSparklineMarkup,
   } = helpers;
 
-  const terminalStatuses = new Set(["completed", "failed", "cancelled", "canceled", "aborted", "incomplete"]);
+  const terminalStatuses = new Set(["completed", "failed", "cancelled", "canceled", "aborted", "incomplete", "warning", "warned"]);
   const refreshTimers = new WeakMap();
   let latestQueryJobsSnapshot = { jobs: [] };
+  let latestPipelineStageSnapshot = { records: [], activeRuns: [] };
 
   function pageRoot() {
     return document.querySelector("[data-query-runs-page]");
@@ -41,6 +42,9 @@ export function createQueryRunsController(helpers) {
         return "Aborted";
       case "incomplete":
         return "Incomplete";
+      case "warning":
+      case "warned":
+        return "Warning";
       default:
         return "Unknown";
     }
@@ -638,6 +642,120 @@ export function createQueryRunsController(helpers) {
     };
   }
 
+  function pipelineStageRecordStatus(record) {
+    const status = String(record?.status || "").trim().toLowerCase();
+    if (status === "skipped") {
+      return "warning";
+    }
+    return status || "running";
+  }
+
+  function pipelineStageRecordUpdatedMs(record) {
+    return Math.max(
+      runDateMs(record?.updatedAt),
+      runDateMs(record?.completedAt),
+      runDateMs(record?.startedAt)
+    );
+  }
+
+  function latestPipelineStageRecords() {
+    const records = Array.isArray(latestPipelineStageSnapshot?.records)
+      ? latestPipelineStageSnapshot.records
+      : [];
+    const latestByStageRun = new Map();
+    records.forEach((record) => {
+      const runId = String(record?.runId || "").trim();
+      const stageId = String(record?.stageId || "").trim();
+      const cellId = String(record?.cellId || "").trim();
+      const notebookId = String(record?.notebookId || "").trim();
+      if (!runId || !stageId || !cellId || !notebookId) {
+        return;
+      }
+      const key = `${runId}:${stageId}`;
+      const existing = latestByStageRun.get(key);
+      if (!existing || pipelineStageRecordUpdatedMs(record) >= pipelineStageRecordUpdatedMs(existing)) {
+        latestByStageRun.set(key, record);
+      }
+    });
+    return Array.from(latestByStageRun.values());
+  }
+
+  function activeRunForPipelineRecord(record) {
+    const runId = String(record?.runId || "").trim();
+    if (!runId) {
+      return null;
+    }
+    return (Array.isArray(latestPipelineStageSnapshot?.activeRuns) ? latestPipelineStageSnapshot.activeRuns : [])
+      .find((run) => String(run?.runId || "").trim() === runId) || null;
+  }
+
+  function pipelineStageProgressEvents(record) {
+    const status = pipelineStageRecordStatus(record);
+    const stageTitle = String(record?.stageTitle || record?.stageAlias || record?.stageId || "stage").trim();
+    const eventName = terminalStatuses.has(status) || status === "warning"
+      ? `pipeline_stage_${status}`
+      : "pipeline_stage_running";
+    const message = String(record?.error || record?.message || `Materializing ${stageTitle}`).trim();
+    return [
+      {
+        event: eventName,
+        message,
+        occurredAt: record?.updatedAt || record?.startedAt || new Date().toISOString(),
+        displayTime: "",
+      },
+    ];
+  }
+
+  function liveRunFromPipelineStageRecord(record) {
+    const status = pipelineStageRecordStatus(record);
+    const activeRun = activeRunForPipelineRecord(record);
+    const stageTitle = String(record?.stageTitle || record?.stageAlias || record?.stageId || "Pipeline stage").trim();
+    const notebookTitle = String(activeRun?.notebookTitle || stageTitle || record?.notebookId || "Data pipeline").trim();
+    const startedAt = String(record?.startedAt || record?.updatedAt || new Date().toISOString()).trim();
+    const completedAt = String(
+      record?.completedAt || (terminalStatuses.has(status) || status === "warning" ? record?.updatedAt || "" : "") || ""
+    );
+    const durationMs = Number(record?.durationMs);
+    const normalizedDurationMs = Number.isFinite(durationMs) && durationMs >= 0
+      ? durationMs
+      : runDurationMs({ status, startedAt, completedAt });
+    const message = String(
+      record?.error ||
+      record?.message ||
+      (status === "running" ? `Materializing stage ${stageTitle}.` : `Pipeline stage ${stageTitle}.`)
+    ).trim();
+    return {
+      jobId: `pipeline-stage:${record?.runId || ""}:${record?.stageId || ""}`,
+      notebookId: String(record?.notebookId || "").trim(),
+      notebookTitle,
+      cellId: String(record?.cellId || "").trim(),
+      status,
+      startedAt,
+      completedAt,
+      updatedAt: String(record?.updatedAt || completedAt || startedAt).trim(),
+      durationMs: normalizedDurationMs,
+      rowCount: Number(record?.rowCount || 0),
+      rowsShown: 0,
+      sql: String(record?.querySql || record?.queryReference || record?.outputPath || stageTitle).trim(),
+      message,
+      error: String(record?.error || "").trim(),
+      progressEvents: pipelineStageProgressEvents(record),
+      warnings: status === "warning" && message ? [message] : [],
+      timings: Number.isFinite(normalizedDurationMs) && normalizedDurationMs >= 0
+        ? { backendTotalMs: normalizedDurationMs }
+        : {},
+      source: "pipeline-stage",
+    };
+  }
+
+  function pipelineStageRunsForRoot(root) {
+    const liveOnly = queryRunsLiveOnly(root);
+    return latestPipelineStageRecords()
+      .map((record) => liveRunFromPipelineStageRecord(record))
+      .filter((run) => rootMatchesJob(root, run))
+      .filter((run) => !liveOnly || !terminalStatuses.has(String(run?.status || "").trim().toLowerCase()));
+  }
+
   function liveRunsForRoot(root) {
     const jobs = Array.isArray(latestQueryJobsSnapshot?.jobs) ? latestQueryJobsSnapshot.jobs : [];
     const liveOnly = queryRunsLiveOnly(root);
@@ -655,12 +773,14 @@ export function createQueryRunsController(helpers) {
   function runsForRender(root, payload) {
     const recordedRuns = Array.isArray(payload?.runs) ? payload.runs : [];
     const liveRuns = liveRunsForRoot(root);
-    if (!liveRuns.length) {
+    const pipelineStageRuns = pipelineStageRunsForRoot(root);
+    if (!liveRuns.length && !pipelineStageRuns.length) {
       return recordedRuns;
     }
-    const liveIds = new Set(liveRuns.map((run) => String(run?.jobId || "").trim()).filter(Boolean));
+    const liveAndPipelineRuns = [...liveRuns, ...pipelineStageRuns];
+    const liveIds = new Set(liveAndPipelineRuns.map((run) => String(run?.jobId || "").trim()).filter(Boolean));
     return [
-      ...liveRuns,
+      ...liveAndPipelineRuns,
       ...recordedRuns.filter((run) => {
         const jobId = String(run?.jobId || "").trim();
         return !jobId || !liveIds.has(jobId);
@@ -687,7 +807,7 @@ export function createQueryRunsController(helpers) {
         : runs.length
           ? liveOnly
             ? `${runs.length} live query run(s)`
-            : `${runs.length} query run(s)`
+            : `${runs.length} monitored run(s)`
           : emptyMessage(payload);
     }
     if (!runs.length) {
@@ -904,9 +1024,24 @@ export function createQueryRunsController(helpers) {
     });
   }
 
+  function refreshForMaterializedStagesSnapshot(snapshot) {
+    latestPipelineStageSnapshot = snapshot && typeof snapshot === "object" ? snapshot : { records: [], activeRuns: [] };
+    const stageRuns = latestPipelineStageRecords().map((record) => liveRunFromPipelineStageRecord(record));
+    if (!stageRuns.length) {
+      return;
+    }
+    const roots = [pageRoot(), ...notebookRoots(document)].filter(Boolean);
+    roots.forEach((root) => {
+      if (stageRuns.some((run) => rootMatchesJob(root, run))) {
+        renderList(root, root._bdwQueryRunsPayload || { available: true, runs: [] });
+      }
+    });
+  }
+
   return {
     handleClick,
     initializeCurrentPage,
+    refreshForMaterializedStagesSnapshot,
     refreshForQueryJobsSnapshot,
   };
 }

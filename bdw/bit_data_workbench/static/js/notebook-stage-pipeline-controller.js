@@ -14,6 +14,7 @@ export function createNotebookStagePipelineController(helpers) {
     refreshSidebar,
     requestCellRun,
     revealDataSourceSidebarBrowser,
+    onPipelineNotificationStateChanged = null,
     setCellStage,
     setNotebookCells,
     setNotebookPipelinePaths,
@@ -23,6 +24,11 @@ export function createNotebookStagePipelineController(helpers) {
   } = helpers;
 
   let materializedStagesVersion = null;
+  let materializedStagesState = {
+    version: null,
+    records: [],
+    activeRuns: [],
+  };
   const graphByNotebookId = new Map();
   const selectedStageByNotebookId = new Map();
   let contextMenu = null;
@@ -39,7 +45,19 @@ export function createNotebookStagePipelineController(helpers) {
   const pipelineModeTitle =
     "Notebook mode: Pipeline. Click to return to Exploration mode, which keeps cells independent for ad-hoc SQL or Python work.";
   const failedStageStatuses = new Set(["failed", "cancelled", "canceled", "aborted", "incomplete"]);
+  const warningStageStatuses = new Set(["warning", "warned", "skipped"]);
   const terminalStageRunStatuses = new Set(["completed", ...failedStageStatuses]);
+  const terminalPipelineNotificationStatuses = new Set([
+    "completed",
+    "failed",
+    "cancelled",
+    "canceled",
+    "aborted",
+    "incomplete",
+    "warning",
+    "warned",
+    "skipped",
+  ]);
   function stageReferencePattern() {
     return /(^|[^A-Za-z0-9_$])stage\.([A-Za-z_][A-Za-z0-9_$]*)/gi;
   }
@@ -256,6 +274,274 @@ export function createNotebookStagePipelineController(helpers) {
   function timestampMs(value) {
     const parsed = Date.parse(String(value || ""));
     return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  function recordUpdatedMs(record) {
+    return timestampMs(record?.updatedAt) ?? timestampMs(record?.completedAt) ?? timestampMs(record?.startedAt) ?? 0;
+  }
+
+  function runUpdatedMs(run, records) {
+    return Math.max(
+      timestampMs(run?.updatedAt) ?? 0,
+      timestampMs(run?.completedAt) ?? 0,
+      timestampMs(run?.startedAt) ?? 0,
+      ...records.map((record) => recordUpdatedMs(record))
+    );
+  }
+
+  function latestRecordsByStage(records) {
+    const latest = new Map();
+    (Array.isArray(records) ? records : []).forEach((record) => {
+      const stageId = String(record?.stageId || "").trim();
+      if (!stageId) {
+        return;
+      }
+      const existing = latest.get(stageId);
+      if (!existing || recordUpdatedMs(record) >= recordUpdatedMs(existing)) {
+        latest.set(stageId, record);
+      }
+    });
+    return latest;
+  }
+
+  function statusIsPipelineTerminal(status) {
+    return terminalPipelineNotificationStatuses.has(String(status || "").trim().toLowerCase());
+  }
+
+  function stageRecordIsFinished(record) {
+    return statusIsPipelineTerminal(record?.status);
+  }
+
+  function stageRecordIsSuccessful(record) {
+    const status = String(record?.status || "").trim().toLowerCase();
+    return status === "completed" || warningStageStatuses.has(status);
+  }
+
+  function normalizedStageIdsForRun(run, records) {
+    const stageIds = Array.isArray(run?.stageIds)
+      ? run.stageIds.map((item) => String(item || "").trim()).filter(Boolean)
+      : [];
+    if (stageIds.length) {
+      return stageIds;
+    }
+    return Array.from(latestRecordsByStage(records).keys());
+  }
+
+  function pipelineNotificationTitle(run, records) {
+    const notebookTitle = String(run?.notebookTitle || "").trim();
+    if (notebookTitle) {
+      return notebookTitle;
+    }
+    const notebookId = String(run?.notebookId || records[0]?.notebookId || "").trim();
+    if (notebookId) {
+      const metadataTitle = String(getNotebookMetadata(notebookId)?.title || "").trim();
+      if (metadataTitle) {
+        return metadataTitle;
+      }
+    }
+    const stageTitle = String(records[0]?.stageTitle || "").trim();
+    return stageTitle ? `${stageTitle} pipeline` : "Data pipeline";
+  }
+
+  function pipelineNotificationStatus(run, records) {
+    if (run) {
+      const runStatus = String(run.status || "running").trim().toLowerCase();
+      if (run.cancelRequested || runStatus === "cancelling" || runStatus === "canceling") {
+        return "cancelling";
+      }
+      return "running";
+    }
+    const latestRecords = Array.from(latestRecordsByStage(records).values());
+    const statuses = latestRecords.map((record) => String(record?.status || "").trim().toLowerCase());
+    if (!statuses.length) {
+      return "incomplete";
+    }
+    if (statuses.some((status) => status === "failed")) {
+      return "failed";
+    }
+    if (statuses.some((status) => status === "aborted")) {
+      return "aborted";
+    }
+    if (statuses.some((status) => status === "cancelled" || status === "canceled")) {
+      return "cancelled";
+    }
+    if (statuses.some((status) => status === "incomplete")) {
+      return "incomplete";
+    }
+    if (statuses.some((status) => !statusIsPipelineTerminal(status))) {
+      return "incomplete";
+    }
+    if (statuses.some((status) => warningStageStatuses.has(status))) {
+      return "warning";
+    }
+    return "completed";
+  }
+
+  function pipelineNotificationStatusCopy(status) {
+    switch (String(status || "").trim().toLowerCase()) {
+      case "running":
+        return "Running pipeline";
+      case "cancelling":
+      case "canceling":
+        return "Cancelling pipeline";
+      case "completed":
+        return "Pipeline completed";
+      case "warning":
+      case "warned":
+      case "skipped":
+        return "Pipeline warning";
+      case "failed":
+        return "Pipeline failed";
+      case "cancelled":
+      case "canceled":
+        return "Pipeline cancelled";
+      case "aborted":
+        return "Pipeline aborted";
+      case "incomplete":
+        return "Pipeline incomplete";
+      default:
+        return "Pipeline";
+    }
+  }
+
+  function pipelineCurrentStageTitle(run, latestByStage) {
+    const currentStageId = String(run?.currentStageId || "").trim();
+    if (!currentStageId) {
+      return "";
+    }
+    const record = latestByStage.get(currentStageId);
+    return String(record?.stageTitle || record?.stageAlias || currentStageId).trim();
+  }
+
+  function pipelineTerminalMessage(records) {
+    const latestRecords = Array.from(latestRecordsByStage(records).values());
+    const failure = latestRecords.find((record) => statusIsFailure(record?.status));
+    const warning = latestRecords.find((record) => warningStageStatuses.has(String(record?.status || "").toLowerCase()));
+    const selected = failure || warning || latestRecords.slice().reverse().find((record) => record?.error || record?.message);
+    return String(selected?.error || selected?.message || "").trim();
+  }
+
+  function pipelineNotificationCopy(notification) {
+    const latestByStage = latestRecordsByStage(notification.records);
+    const stageIds = notification.stageIds;
+    const totalStages = stageIds.length || latestByStage.size;
+    const finishedCount = stageIds.length
+      ? stageIds.filter((stageId) => stageRecordIsFinished(latestByStage.get(stageId))).length
+      : Array.from(latestByStage.values()).filter((record) => stageRecordIsFinished(record)).length;
+    const successfulCount = stageIds.length
+      ? stageIds.filter((stageId) => stageRecordIsSuccessful(latestByStage.get(stageId))).length
+      : Array.from(latestByStage.values()).filter((record) => stageRecordIsSuccessful(record)).length;
+    const parts = [];
+    if (totalStages > 0) {
+      parts.push(`${finishedCount}/${totalStages} stages finished`);
+      if (!["running", "cancelling"].includes(notification.status)) {
+        parts.push(`${successfulCount}/${totalStages} stages successful`);
+      }
+    }
+    const currentStage = pipelineCurrentStageTitle(notification.run, latestByStage);
+    if (currentStage) {
+      parts.push(`Current: ${currentStage}`);
+    }
+    const terminalMessage = pipelineTerminalMessage(notification.records);
+    if (terminalMessage) {
+      parts.push(terminalMessage);
+    }
+    return parts.join(" | ") || pipelineNotificationStatusCopy(notification.status);
+  }
+
+  function pipelineNotificationTimingCopy(notification) {
+    const startedMs = timestampMs(notification.startedAt);
+    const updatedMs = timestampMs(notification.updatedAt);
+    const startedCopy = startedMs ? `Started ${new Date(startedMs).toLocaleString()}` : "";
+    const updatedCopy = updatedMs ? `Updated ${new Date(updatedMs).toLocaleString()}` : "";
+    return [startedCopy, updatedCopy].filter(Boolean).join(" | ");
+  }
+
+  function pipelineNotificationMarkup(notification) {
+    const running = notification.status === "running" || notification.status === "cancelling";
+    const statusClass = String(notification.status || "unknown").trim().toLowerCase().replace(/[^a-z0-9]+/g, "-") || "unknown";
+    return `
+      <button
+        type="button"
+        class="topbar-notification-item topbar-notification-item-pipeline"
+        data-open-query-notebook="${escapeHtml(notification.notebookId)}"
+        title="Open ${escapeHtml(notification.title)}"
+      >
+        <span class="topbar-notification-item-status topbar-notification-item-status-notice is-${escapeHtml(statusClass)}${running ? " is-live" : ""}">${escapeHtml(
+          pipelineNotificationStatusCopy(notification.status)
+        )}</span>
+        <span class="topbar-notification-item-title">${escapeHtml(notification.title)}</span>
+        <span class="topbar-notification-item-copy">${escapeHtml(pipelineNotificationCopy(notification))}</span>
+        <span class="topbar-notification-item-copy topbar-notification-item-copy-secondary">${escapeHtml(
+          pipelineNotificationTimingCopy(notification)
+        )}</span>
+      </button>
+    `;
+  }
+
+  function pipelineNotificationModels() {
+    const records = Array.isArray(materializedStagesState.records) ? materializedStagesState.records : [];
+    const activeRuns = Array.isArray(materializedStagesState.activeRuns) ? materializedStagesState.activeRuns : [];
+    const recordsByRunId = new Map();
+    records.forEach((record) => {
+      const runId = String(record?.runId || "").trim();
+      if (!runId) {
+        return;
+      }
+      if (!recordsByRunId.has(runId)) {
+        recordsByRunId.set(runId, []);
+      }
+      recordsByRunId.get(runId).push(record);
+    });
+    const activeRunIds = new Set(activeRuns.map((run) => String(run?.runId || "").trim()).filter(Boolean));
+    const models = [];
+
+    activeRuns.forEach((run) => {
+      const runId = String(run?.runId || "").trim();
+      if (!runId) {
+        return;
+      }
+      const runRecords = recordsByRunId.get(runId) || [];
+      const updatedAt = new Date(runUpdatedMs(run, runRecords) || Date.now()).toISOString();
+      models.push({
+        jobId: runId,
+        run,
+        records: runRecords,
+        notebookId: String(run?.notebookId || runRecords[0]?.notebookId || "").trim(),
+        title: pipelineNotificationTitle(run, runRecords),
+        status: pipelineNotificationStatus(run, runRecords),
+        stageIds: normalizedStageIdsForRun(run, runRecords),
+        startedAt: String(run?.startedAt || runRecords[0]?.startedAt || updatedAt),
+        updatedAt,
+      });
+    });
+
+    recordsByRunId.forEach((runRecords, runId) => {
+      if (activeRunIds.has(runId)) {
+        return;
+      }
+      const latestByStage = latestRecordsByStage(runRecords);
+      if (!latestByStage.size) {
+        return;
+      }
+      const updatedAt = new Date(runUpdatedMs(null, runRecords) || Date.now()).toISOString();
+      const model = {
+        jobId: runId,
+        run: null,
+        records: runRecords,
+        notebookId: String(runRecords[0]?.notebookId || "").trim(),
+        title: pipelineNotificationTitle(null, runRecords),
+        status: pipelineNotificationStatus(null, runRecords),
+        stageIds: normalizedStageIdsForRun(null, runRecords),
+        startedAt: String(runRecords[0]?.startedAt || updatedAt),
+        updatedAt,
+      };
+      if (statusIsPipelineTerminal(model.status)) {
+        models.push(model);
+      }
+    });
+
+    return models.sort((left, right) => Date.parse(right.updatedAt || "") - Date.parse(left.updatedAt || ""));
   }
 
   function stageRunDurationMs(node) {
@@ -1638,7 +1924,7 @@ export function createNotebookStagePipelineController(helpers) {
       wholePipelineRunning: !normalizedStartStageId,
     });
     try {
-      await fetchJsonOrThrow("/api/materialized-stages/pipeline/run", {
+      const startSnapshot = await fetchJsonOrThrow("/api/materialized-stages/pipeline/run", {
         method: "POST",
         headers: {
           Accept: "application/json",
@@ -1646,9 +1932,10 @@ export function createNotebookStagePipelineController(helpers) {
         },
         body: JSON.stringify(pipelinePayload(notebookId, { startStageId: normalizedStartStageId })),
       });
+      applyRealtimeState(startSnapshot);
       await refreshGraph(notebookId);
-      const snapshot = await waitForNotebookRunsIdle(notebookId);
-      keepRunningControls = activeRunsForGraph(snapshot).some(
+      const idleSnapshot = await waitForNotebookRunsIdle(notebookId);
+      keepRunningControls = activeRunsForGraph(idleSnapshot).some(
         (run) => String(run?.notebookId || "") === String(notebookId || "")
       );
       const graph = await refreshGraph(notebookId);
@@ -1694,7 +1981,7 @@ export function createNotebookStagePipelineController(helpers) {
   }
 
   async function runStage(notebookId, stageId) {
-    await fetchJsonOrThrow(`/api/materialized-stages/stages/${encodeURIComponent(stageId)}/run`, {
+    const snapshot = await fetchJsonOrThrow(`/api/materialized-stages/stages/${encodeURIComponent(stageId)}/run`, {
       method: "POST",
       headers: {
         Accept: "application/json",
@@ -1702,6 +1989,7 @@ export function createNotebookStagePipelineController(helpers) {
       },
       body: JSON.stringify(pipelinePayload(notebookId)),
     });
+    applyRealtimeState(snapshot);
     await waitForStageTerminal(notebookId, stageId);
     await refreshGraph(notebookId);
   }
@@ -1736,7 +2024,7 @@ export function createNotebookStagePipelineController(helpers) {
   }
 
   async function stopStage(notebookId, stageId) {
-    await fetchJsonOrThrow(`/api/materialized-stages/stages/${encodeURIComponent(stageId)}/stop`, {
+    const snapshot = await fetchJsonOrThrow(`/api/materialized-stages/stages/${encodeURIComponent(stageId)}/stop`, {
       method: "POST",
       headers: {
         Accept: "application/json",
@@ -1744,6 +2032,7 @@ export function createNotebookStagePipelineController(helpers) {
       },
       body: JSON.stringify(pipelinePayload(notebookId)),
     });
+    applyRealtimeState(snapshot);
     await refreshGraph(notebookId);
   }
 
@@ -2192,6 +2481,11 @@ export function createNotebookStagePipelineController(helpers) {
 
   function applyRealtimeState(snapshot) {
     materializedStagesVersion = Number(snapshot?.version ?? 0);
+    materializedStagesState = {
+      version: materializedStagesVersion,
+      records: Array.isArray(snapshot?.records) ? snapshot.records : [],
+      activeRuns: Array.isArray(snapshot?.activeRuns) ? snapshot.activeRuns : [],
+    };
     const completedOutputs = (Array.isArray(snapshot?.records) ? snapshot.records : [])
       .filter((record) => String(record?.status || "").toLowerCase() === "completed")
       .map((record) => `${record.outputBucket || ""}/${record.outputKey || ""}/${record.revisionId || ""}`)
@@ -2210,6 +2504,9 @@ export function createNotebookStagePipelineController(helpers) {
         console.error("Failed to refresh notebook pipeline from realtime state.", error);
       });
     }
+    if (typeof onPipelineNotificationStateChanged === "function") {
+      onPipelineNotificationStateChanged(materializedStagesState);
+    }
   }
 
   async function loadState() {
@@ -2224,6 +2521,31 @@ export function createNotebookStagePipelineController(helpers) {
     return materializedStagesVersion;
   }
 
+  function pipelineNotificationSummary() {
+    const models = pipelineNotificationModels();
+    return {
+      version: materializedStagesVersion,
+      runningCount: models.filter((model) => model.status === "running" || model.status === "cancelling").length,
+      totalCount: models.length,
+    };
+  }
+
+  function pipelineNotificationItems({ dismissedKeys = new Set(), notificationItemKey } = {}) {
+    if (typeof notificationItemKey !== "function") {
+      return [];
+    }
+    return pipelineNotificationModels()
+      .map((model) => ({
+        type: "pipeline",
+        job: model,
+        updatedAt: model.updatedAt,
+        dismissalKey: notificationItemKey("pipeline", model),
+        dismissible: statusIsPipelineTerminal(model.status),
+        markup: pipelineNotificationMarkup(model),
+      }))
+      .filter((item) => !dismissedKeys.has(item.dismissalKey));
+  }
+
   return {
     applyRealtimeState,
     getMaterializedStagesVersion,
@@ -2234,6 +2556,8 @@ export function createNotebookStagePipelineController(helpers) {
     handleRunCellButton,
     initializeCurrentWorkspace,
     loadState,
+    pipelineNotificationItems,
+    pipelineNotificationSummary,
     prepareQuerySqlForCell,
     refreshGraph,
     requestCellRun,

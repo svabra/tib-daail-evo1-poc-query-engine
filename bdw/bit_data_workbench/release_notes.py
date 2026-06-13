@@ -1,9 +1,28 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.8. Keep entries concise and
+# Derived from git history through version 0.10.9. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.9",
+        "releasedAt": "2026-06-13T18:56:21+02:00",
+        "features": [
+            (
+                "Data pipeline runs now appear in the top-right message "
+                "centre with running, progress, completed, cancelled, "
+                "warning, and failure states from the materialized-stage SSE "
+                "stream."
+            ),
+            (
+                "Pipeline stage execution now updates the selected cell's "
+                "Query Monitoring panel immediately with live materialized "
+                "stage rows, so running, completed, warning, and failed "
+                "stage work is visible without waiting for an exploration "
+                "query job."
+            ),
+        ],
+    },
     {
         "version": "0.10.8",
         "releasedAt": "2026-06-13T08:02:57+02:00",

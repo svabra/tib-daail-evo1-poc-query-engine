@@ -3121,9 +3121,11 @@ details:not([open]) > .tree-children {
 .topbar-notification-item-status.is-queued,
 .topbar-notification-item-status.is-running,
 .topbar-notification-item-status.is-finalizing,
+.topbar-notification-item-status.is-cancelling,
 .topbar-notification-item-status-notice.is-queued,
 .topbar-notification-item-status-notice.is-running,
-.topbar-notification-item-status-notice.is-finalizing {
+.topbar-notification-item-status-notice.is-finalizing,
+.topbar-notification-item-status-notice.is-cancelling {
   color: var(--status-blue);
 }
 

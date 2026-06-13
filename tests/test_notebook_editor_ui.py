@@ -205,6 +205,7 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn(".query-run-history-status.is-aborted", css_source)
         self.assertIn(".query-run-history-status.is-incomplete", css_source)
         self.assertIn(".topbar-notification-item-status.is-running", css_source)
+        self.assertIn(".topbar-notification-item-status.is-cancelling", css_source)
         self.assertIn(".topbar-notification-item-status.is-failed", css_source)
         self.assertIn(".ingestion-job-status.is-running", css_source)
         self.assertIn(".ingestion-job-status.is-failed", css_source)
@@ -231,12 +232,81 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("is-${escapeHtml(statusClass)}", ingestion_ui_source)
         self.assertIn("is-${escapeHtml(statusClass)}", download_jobs_source)
         self.assertIn("is-${escapeHtml(", s3_delete_jobs_source)
-        self.assertIn('"completed", "failed", "cancelled", "canceled", "aborted", "incomplete"', query_runs_source)
+        self.assertIn('"completed", "failed", "cancelled", "canceled", "aborted", "incomplete", "warning", "warned"', query_runs_source)
         self.assertIn('case "canceled":', query_state_source)
         self.assertIn('case "aborted":', query_state_source)
         self.assertIn('case "incomplete":', query_state_source)
         self.assertIn('const failedStageStatuses = new Set(["failed", "cancelled", "canceled", "aborted", "incomplete"]);', pipeline_source)
         self.assertIn("statusIsFailure(status)", pipeline_source)
+
+    def test_pipeline_runs_announce_to_message_centre(self) -> None:
+        app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
+        realtime_source = (
+            STATIC_ROOT / "js" / "realtime-controller.js"
+        ).read_text(encoding="utf-8")
+        ingestion_source = (
+            STATIC_ROOT / "js" / "ingestion-controller.js"
+        ).read_text(encoding="utf-8")
+        pipeline_source = (
+            STATIC_ROOT / "js" / "notebook-stage-pipeline-controller.js"
+        ).read_text(encoding="utf-8")
+        css_source = (STATIC_ROOT / "css" / "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("onPipelineNotificationStateChanged: (snapshot) => {", app_source)
+        self.assertIn("queryRunsController.refreshForMaterializedStagesSnapshot(snapshot);", app_source)
+        self.assertIn("getPipelineNotificationItems", app_source)
+        self.assertIn("getPipelineNotificationSummary", app_source)
+        self.assertIn('status === "aborted"', app_source)
+        self.assertIn('status === "incomplete"', app_source)
+        self.assertIn('status === "skipped"', app_source)
+        self.assertIn('case "materialized-stages":', app_source)
+        self.assertIn("notebookStagePipelineController.applyRealtimeState(snapshot);", app_source)
+
+        self.assertIn("getPipelineNotificationItems = () => []", ingestion_source)
+        self.assertIn("const pipelineNotifications = getPipelineNotificationItems();", ingestion_source)
+        self.assertIn("...pipelineNotifications", ingestion_source)
+
+        self.assertIn("getPipelineNotificationItems = () => []", realtime_source)
+        self.assertIn("getPipelineNotificationSummary = () => ({ version: null, runningCount: 0, totalCount: 0 })", realtime_source)
+        self.assertIn('key.startsWith("pipeline:")', realtime_source)
+        self.assertIn("pipelineNotificationSummary?.runningCount", realtime_source)
+        self.assertIn('notificationItemKey("pipeline", model)', pipeline_source)
+
+        self.assertIn("let materializedStagesState = {", pipeline_source)
+        self.assertIn("function pipelineNotificationModels()", pipeline_source)
+        self.assertIn("function pipelineNotificationItems", pipeline_source)
+        self.assertIn("function pipelineNotificationSummary", pipeline_source)
+        self.assertIn("topbar-notification-item-pipeline", pipeline_source)
+        self.assertIn("data-open-query-notebook", pipeline_source)
+        self.assertIn("Pipeline completed", pipeline_source)
+        self.assertIn("Pipeline failed", pipeline_source)
+        self.assertIn("Pipeline cancelled", pipeline_source)
+        self.assertIn("Pipeline warning", pipeline_source)
+        self.assertIn("Pipeline incomplete", pipeline_source)
+        self.assertIn("Current: ${currentStage}", pipeline_source)
+        self.assertIn("applyRealtimeState(startSnapshot);", pipeline_source)
+        self.assertIn("applyRealtimeState(snapshot);", pipeline_source)
+        self.assertIn("onPipelineNotificationStateChanged(materializedStagesState);", pipeline_source)
+        self.assertIn(".topbar-notification-item-status.is-cancelling", css_source)
+        self.assertIn(".topbar-notification-item-status-notice.is-cancelling", css_source)
+
+    def test_pipeline_stage_runs_refresh_cell_query_monitoring(self) -> None:
+        app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
+        query_runs_source = (
+            STATIC_ROOT / "js" / "query-runs-controller.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("queryRunsController.refreshForMaterializedStagesSnapshot(snapshot);", app_source)
+        self.assertIn("let latestPipelineStageSnapshot = { records: [], activeRuns: [] };", query_runs_source)
+        self.assertIn("function latestPipelineStageRecords()", query_runs_source)
+        self.assertIn("function liveRunFromPipelineStageRecord(record)", query_runs_source)
+        self.assertIn("function pipelineStageRunsForRoot(root)", query_runs_source)
+        self.assertIn("const pipelineStageRuns = pipelineStageRunsForRoot(root);", query_runs_source)
+        self.assertIn('jobId: `pipeline-stage:${record?.runId || ""}:${record?.stageId || ""}`', query_runs_source)
+        self.assertIn('source: "pipeline-stage"', query_runs_source)
+        self.assertIn("Pipeline stage ${stageTitle}.", query_runs_source)
+        self.assertIn("function refreshForMaterializedStagesSnapshot(snapshot)", query_runs_source)
+        self.assertIn("refreshForMaterializedStagesSnapshot,", query_runs_source)
 
     def test_shared_notebook_delete_marks_pending_state_in_ui(self) -> None:
         app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")

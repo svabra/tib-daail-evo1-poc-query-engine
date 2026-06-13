@@ -11,6 +11,8 @@ export function createRealtimeController(helpers) {
     formatQueryDuration,
     getDataGenerationState,
     getDownloadState = () => ({ version: null, snapshot: [], summary: {} }),
+    getPipelineNotificationItems = () => [],
+    getPipelineNotificationSummary = () => ({ version: null, runningCount: 0, totalCount: 0 }),
     getS3DeleteState = () => ({ version: null, snapshot: [], summary: {} }),
     getDismissedNotificationKeys,
     getQueryState,
@@ -82,11 +84,17 @@ export function createRealtimeController(helpers) {
     const s3DeleteJobsSnapshot = Array.isArray(s3DeleteJobsState.snapshot)
       ? s3DeleteJobsState.snapshot
       : [];
+    const pipelineNotificationSummary = getPipelineNotificationSummary();
+    const pipelineNotificationItems = getPipelineNotificationItems({
+      dismissedKeys: new Set(),
+      notificationItemKey,
+    });
     const validKeys = new Set([
       ...queryJobsSnapshot.map((job) => notificationItemKey("query", job)),
       ...dataGenerationJobsSnapshot.map((job) => notificationItemKey("ingestion", job)),
       ...downloadJobsSnapshot.map((job) => notificationItemKey("download", job)),
       ...s3DeleteJobsSnapshot.map((job) => notificationItemKey("s3-delete", job)),
+      ...pipelineNotificationItems.map((item) => item.dismissalKey),
     ]);
     const dismissedNotificationKeys = getDismissedNotificationKeys();
     let changed = false;
@@ -102,6 +110,9 @@ export function createRealtimeController(helpers) {
         continue;
       }
       if (key.startsWith("s3-delete:") && s3DeleteJobsState.version === null) {
+        continue;
+      }
+      if (key.startsWith("pipeline:") && pipelineNotificationSummary.version === null) {
         continue;
       }
       if (validKeys.has(key)) {
@@ -300,11 +311,13 @@ export function createRealtimeController(helpers) {
     const { summary: dataGenerationJobsSummary } = dataGenerationState();
     const { summary: downloadJobsSummary } = downloadState();
     const { summary: s3DeleteJobsSummary } = s3DeleteState();
+    const pipelineNotificationSummary = getPipelineNotificationSummary();
     const hasRunningActivity =
       Number(queryJobsSummary.runningCount || 0) > 0 ||
       Number(dataGenerationJobsSummary.runningCount || 0) > 0 ||
       Number(downloadJobsSummary?.runningCount || 0) > 0 ||
-      Number(s3DeleteJobsSummary?.runningCount || 0) > 0;
+      Number(s3DeleteJobsSummary?.runningCount || 0) > 0 ||
+      Number(pipelineNotificationSummary?.runningCount || 0) > 0;
     const badgeCount = visibleNotifications.length;
     countRoot.textContent = String(badgeCount);
     countRoot.hidden = badgeCount === 0;
