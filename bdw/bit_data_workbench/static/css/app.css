@@ -11820,7 +11820,7 @@ details:not([open]) > .tree-children {
 
 .cell-stage-main {
   display: grid;
-  grid-template-columns: minmax(140px, 0.42fr) minmax(220px, 1fr);
+  grid-template-columns: minmax(130px, 0.32fr) minmax(150px, 0.34fr) minmax(220px, 1fr);
   gap: 10px;
 }
 

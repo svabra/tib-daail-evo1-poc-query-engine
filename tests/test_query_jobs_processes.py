@@ -448,6 +448,38 @@ class ProcessQueryJobManagerTests(TestCase):
             any(event.get("event") == "failed" for event in failed.progress_events)
         )
 
+    def test_start_job_accepts_requested_job_id_and_waits_for_terminal_status(self) -> None:
+        def complete_job(job_id: str) -> None:
+            self.manager._finalize_job(
+                job_id,
+                status="completed",
+                duration_ms=1.0,
+                progress=1.0,
+                progress_label="Completed",
+                message="Query completed.",
+                columns=["value"],
+                rows=[(1,)],
+                row_count=1,
+                rows_shown=1,
+            )
+
+        with patch.object(self.manager, "_run_job", side_effect=complete_job):
+            job = self.manager.start_job(
+                sql="select 1 as value",
+                notebook_id="nb",
+                notebook_title="Notebook",
+                cell_id="cell-1",
+                requested_job_id="query-pipeline-test-wait",
+            )
+            completed = self.manager.wait_for_terminal(job.job_id, timeout=2)
+
+        self.assertEqual(job.job_id, "query-pipeline-test-wait")
+        self.assertEqual(completed.status, "completed")
+        self.assertEqual(completed.rows, [(1,)])
+        self.assertTrue(
+            any(event.get("event") == "completed" for event in completed.progress_events)
+        )
+
     def test_unexpected_worker_exit_reports_last_phase_progress_and_code(self) -> None:
         snapshot = QueryJobDefinition(
             job_id="query-worker-exit",

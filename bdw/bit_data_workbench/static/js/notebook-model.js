@@ -89,6 +89,9 @@ export function createNotebookModel(helpers) {
           : "intermediate",
       predecessorStageIds: predecessorStageIds.map((item) => String(item ?? "").trim()).filter(Boolean),
       materialize: source.materialize ?? fallbackSource.materialize ?? true,
+      outputFileName: String(
+        source.outputFileName ?? source.output_file_name ?? fallbackSource.outputFileName ?? ""
+      ).trim(),
     };
   }
 

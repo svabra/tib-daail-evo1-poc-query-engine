@@ -164,6 +164,8 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("let latestQueryJobsSnapshot = { jobs: [] };", query_runs_source)
         self.assertIn("function liveRunsForRoot", query_runs_source)
         self.assertIn("function runsForRender", query_runs_source)
+        self.assertIn("queryJobId", query_runs_source)
+        self.assertIn("realQueryJobIds", query_runs_source)
         self.assertIn("renderList(root, root._bdwQueryRunsPayload || { available: true, runs: [] });", query_runs_source)
 
     def test_status_colors_match_runtime_semantics(self) -> None:
@@ -301,7 +303,9 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("function latestPipelineStageRecords()", query_runs_source)
         self.assertIn("function liveRunFromPipelineStageRecord(record)", query_runs_source)
         self.assertIn("function pipelineStageRunsForRoot(root)", query_runs_source)
-        self.assertIn("const pipelineStageRuns = pipelineStageRunsForRoot(root);", query_runs_source)
+        self.assertIn("const realQueryJobIds = new Set(", query_runs_source)
+        self.assertIn("const pipelineStageRuns = pipelineStageRunsForRoot(root).filter", query_runs_source)
+        self.assertIn("queryJobId", query_runs_source)
         self.assertIn('jobId: `pipeline-stage:${record?.runId || ""}:${record?.stageId || ""}`', query_runs_source)
         self.assertIn('source: "pipeline-stage"', query_runs_source)
         self.assertIn("Pipeline stage ${stageTitle}.", query_runs_source)
@@ -624,6 +628,9 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertNotIn("FROM stage.${node.alias};", controller_source)
         self.assertIn('defaultFirstStageTitle = "my first stage"', controller_source)
         self.assertIn('defaultFirstStageDescription = "This is the stage description"', controller_source)
+        self.assertIn("recommendedStageOutputFileName", controller_source)
+        self.assertIn("data-cell-stage-output-file-input", controller_source)
+        self.assertIn("outputFileName", controller_source)
         self.assertIn("setNotebookPipelineMode(notebookId, nextMode, { rerender: false })", controller_source)
         self.assertIn("updateModeToggle", controller_source)
         self.assertIn('event.target.closest("[data-notebook-mode-toggle]")', controller_source)
@@ -669,6 +676,9 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("table-layout: fixed;", css_source)
         self.assertIn("min-width: 980px;", css_source)
         self.assertIn(".cell-stage-title-input", css_source)
+        self.assertIn("cell-stage-output-file-input", markup_source)
+        self.assertIn("Destination file", markup_source)
+        self.assertIn("outputFileName", model_source)
         self.assertIn("width: auto;", css_source)
         self.assertIn(".pipeline-arrowhead", css_source)
         self.assertIn(".pipeline-table-status", css_source)
@@ -740,6 +750,7 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("workspace-header-toggle-row-paired", workspace_template)
         self.assertIn("data-notebook-mode-toggle", workspace_template)
         self.assertIn("data-cell-stage-title-input", workspace_template)
+        self.assertIn("data-cell-stage-output-file-input", workspace_template)
         self.assertIn("keeps cells independent", workspace_template)
 
     def test_runtime_storage_settings_dialog_has_menu_api_and_delete_wiring(self) -> None:

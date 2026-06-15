@@ -7,6 +7,8 @@ import tempfile
 import threading
 import unittest
 
+import duckdb
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 BDW_ROOT = REPO_ROOT / "bdw"
@@ -93,6 +95,7 @@ class FakeStageManager(import_stage_components()[0]):
         predecessor_records,
         predecessor_revision_ids,
         started_at,
+        query_job_id,
     ):
         _, _, StageRecord, _, _, utc_now_iso = import_stage_components()
         stage_id = str(node["stageId"])
@@ -633,6 +636,156 @@ class NotebookStagePipelineTests(unittest.TestCase):
                     "read_parquet('s3://vat-smoke-test/_bdw_stages/kostenbelege/data.parquet')"
                 ],
             )
+
+    def test_pipeline_stage_runs_kbpo_union_through_query_job_runner_with_custom_output_file(self) -> None:
+        from bit_data_workbench.backend.query_aliases import rewrite_query_aliases
+        from bit_data_workbench.backend.sql_utils import sql_literal
+
+        _, Store, _, _, _, _ = import_stage_components()
+        file_names = [
+            "KBPO_2018undvorher.parquet",
+            "KBPO_2019.parquet",
+            "KBPO2020.parquet",
+            "KBPO2021.parquet",
+            "KBPO2022.parquet",
+            "KBPO2023.parquet",
+            "KBPO2024.parquet",
+            "KBPO2025.parquet",
+        ]
+        query = "\nUNION ALL\n".join(
+            f'SELECT * FROM s3.KBPOimports."{file_name}"'
+            for file_name in file_names
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            parquet_dir = root / "kbpo"
+            parquet_dir.mkdir()
+            alias_map = {}
+            for index, file_name in enumerate(file_names, start=1):
+                parquet_path = parquet_dir / file_name
+                connection = duckdb.connect()
+                try:
+                    connection.execute(
+                        """
+                        CREATE TABLE kbpo(
+                            KBKP_Belegnummer BIGINT,
+                            KBPO_VtgKtoWiederholPos BIGINT,
+                            KBPO_VtgKtoPositionNr BIGINT,
+                            KBPO_Teilposition BIGINT,
+                            PART_Partner BIGINT,
+                            GEFA_GeschaeftFall VARCHAR,
+                            KBPO_BelegDt DATE,
+                            KBPO_HWhrBetrag1 DOUBLE,
+                            KBPO_ErfassDz TIMESTAMP
+                        )
+                        """
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO kbpo VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        [
+                            10_000 + index,
+                            1,
+                            index,
+                            0,
+                            20_000 + index,
+                            f"fall-{index}",
+                            "2025-01-01",
+                            float(index) * 10.5,
+                            "2025-01-01 12:00:00",
+                        ],
+                    )
+                    connection.execute(
+                        f"COPY kbpo TO {sql_literal(parquet_path.as_posix())} (FORMAT PARQUET)"
+                    )
+                finally:
+                    connection.close()
+                alias_map[f's3.KBPOimports."{file_name}"'] = (
+                    f"read_parquet({sql_literal(parquet_path.as_posix())})"
+                )
+
+            query_jobs = []
+            writes = []
+
+            def run_query_job(**kwargs):
+                query_jobs.append(kwargs)
+                connection = duckdb.connect()
+                try:
+                    connection.execute(str(kwargs["execution_sql"]))
+                finally:
+                    connection.close()
+                return {
+                    "jobId": kwargs["requested_job_id"],
+                    "status": "completed",
+                    "progressEvents": [{"event": "completed"}],
+                }
+
+            def write_object(bucket, output_key, local_output, metadata_key, metadata):
+                connection = duckdb.connect()
+                try:
+                    rows = connection.execute(
+                        f"SELECT COUNT(*) FROM read_parquet({sql_literal(local_output.as_posix())})"
+                    ).fetchone()[0]
+                finally:
+                    connection.close()
+                writes.append(
+                    {
+                        "bucket": bucket,
+                        "output_key": output_key,
+                        "metadata_key": metadata_key,
+                        "metadata": dict(metadata),
+                        "rows": rows,
+                    }
+                )
+                return {"bucket": bucket, "key": output_key, "metadataKey": metadata_key}
+
+            manager = import_stage_components()[0](
+                settings=SimpleNamespace(s3_bucket="stage-bucket", shared_notebooks_bucket=None),
+                store=Store(root / "materialized-stages.json"),
+                connection_factory=lambda: duckdb.connect(),
+                source_summaries_provider=lambda _sql, _sources, _options: [
+                    {
+                        "relation": f's3.KBPOimports."{file_name}"',
+                        "bucket": "KBPOimports",
+                        "key": file_name,
+                        "path": f"s3://KBPOimports/{file_name}",
+                        "format": "parquet",
+                        "query_sql": alias_map[f's3.KBPOimports."{file_name}"'],
+                    }
+                    for file_name in file_names
+                ],
+                bootstrap_source_views=lambda _connection, _summaries: None,
+                sql_rewriter=lambda sql, _sources, _options: rewrite_query_aliases(sql, alias_map),
+                metadata_refresher=lambda: None,
+                state_change_callback=lambda _snapshot: None,
+                published_products_for_source=lambda _source: [],
+                object_writer=write_object,
+                query_job_runner=run_query_job,
+            )
+            cell = stage_cell("cell-kbpo", "kbpo_union", query)
+            cell["dataSources"] = ["workspace.s3"]
+            cell["stage"]["outputFileName"] = "kbpo_pipeline_result"
+
+            manager.run_pipeline(notebook_id="nb-kbpo", notebook_title="KBPO", cells=[cell])
+            manager.wait_for_idle()
+
+            records = manager.state_payload()["records"]
+            completed = [record for record in records if record["status"] == "completed"]
+            self.assertEqual(len(completed), 1, records)
+            self.assertEqual(completed[0]["rowCount"], len(file_names))
+            self.assertEqual(completed[0]["outputFileName"], "kbpo_pipeline_result.parquet")
+            self.assertTrue(completed[0]["outputKey"].endswith("/kbpo_pipeline_result.parquet"))
+            self.assertTrue(completed[0]["queryJobId"].startswith("query-pipeline-"))
+            self.assertEqual(writes[0]["rows"], len(file_names))
+            self.assertEqual(writes[0]["metadata"]["outputFileName"], "kbpo_pipeline_result.parquet")
+            self.assertEqual(writes[0]["metadata"]["queryJobId"], completed[0]["queryJobId"])
+            self.assertEqual(len(query_jobs), 1)
+            self.assertEqual(query_jobs[0]["requested_job_id"], completed[0]["queryJobId"])
+            self.assertIn("COPY (", query_jobs[0]["execution_sql"])
+            self.assertIn("kbpo_pipeline_result.parquet", query_jobs[0]["execution_sql"])
+            self.assertEqual(len(query_jobs[0]["source_summaries"]), len(file_names))
 
 
 if __name__ == "__main__":

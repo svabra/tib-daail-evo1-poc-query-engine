@@ -726,6 +726,7 @@ export function createQueryRunsController(helpers) {
     ).trim();
     return {
       jobId: `pipeline-stage:${record?.runId || ""}:${record?.stageId || ""}`,
+      queryJobId: String(record?.queryJobId || "").trim(),
       notebookId: String(record?.notebookId || "").trim(),
       notebookTitle,
       cellId: String(record?.cellId || "").trim(),
@@ -773,7 +774,15 @@ export function createQueryRunsController(helpers) {
   function runsForRender(root, payload) {
     const recordedRuns = Array.isArray(payload?.runs) ? payload.runs : [];
     const liveRuns = liveRunsForRoot(root);
-    const pipelineStageRuns = pipelineStageRunsForRoot(root);
+    const realQueryJobIds = new Set(
+      [...liveRuns, ...recordedRuns]
+        .map((run) => String(run?.jobId || "").trim())
+        .filter(Boolean)
+    );
+    const pipelineStageRuns = pipelineStageRunsForRoot(root).filter((run) => {
+      const queryJobId = String(run?.queryJobId || "").trim();
+      return !queryJobId || !realQueryJobIds.has(queryJobId);
+    });
     if (!liveRuns.length && !pipelineStageRuns.length) {
       return recordedRuns;
     }

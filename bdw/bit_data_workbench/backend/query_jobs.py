@@ -1733,6 +1733,7 @@ class QueryJobManager:
         touched_buckets: list[str] | None = None,
         source_summaries: list[dict[str, object]] | None = None,
         query_options: dict[str, object] | None = None,
+        requested_job_id: str = "",
         client_pre_submit_ms: float | None = None,
         backend_prepare_ms: float | None = None,
     ) -> QueryJobDefinition:
@@ -1787,34 +1788,36 @@ class QueryJobManager:
             timing = _safe_timing_ms(value)
             if timing is not None:
                 timings[key] = timing
-        snapshot = QueryJobDefinition(
-            job_id=f"query-{uuid.uuid4().hex}",
-            notebook_id=notebook_id.strip(),
-            notebook_title=resolved_title,
-            cell_id=cell_id.strip(),
-            sql=sql,
-            execution_sql=normalized_execution_sql,
-            status="queued",
-            started_at=now,
-            updated_at=now,
-            progress=0.0,
-            progress_label="Queued...",
-            message="Waiting to start.",
-            data_sources=source_ids,
-            query_options=dict(query_options or {}),
-            source_types=source_types,
-            touched_relations=normalized_touched_relations,
-            touched_buckets=normalized_touched_buckets,
-            backend_name=backend_name,
-            execution_mode=execution_mode,
-            duckdb_execution_path=duckdb_execution_path,
-            cpu_capacity_cores=self._cpu_capacity_cores,
-            duckdb_thread_limit=duckdb_thread_limit,
-            timings=timings,
-            can_cancel=True,
-        )
+        requested_id = _requested_query_job_id(requested_job_id)
 
         with self._condition:
+            job_id = requested_id if requested_id and requested_id not in self._jobs else f"query-{uuid.uuid4().hex}"
+            snapshot = QueryJobDefinition(
+                job_id=job_id,
+                notebook_id=notebook_id.strip(),
+                notebook_title=resolved_title,
+                cell_id=cell_id.strip(),
+                sql=sql,
+                execution_sql=normalized_execution_sql,
+                status="queued",
+                started_at=now,
+                updated_at=now,
+                progress=0.0,
+                progress_label="Queued...",
+                message="Waiting to start.",
+                data_sources=source_ids,
+                query_options=dict(query_options or {}),
+                source_types=source_types,
+                touched_relations=normalized_touched_relations,
+                touched_buckets=normalized_touched_buckets,
+                backend_name=backend_name,
+                execution_mode=execution_mode,
+                duckdb_execution_path=duckdb_execution_path,
+                cpu_capacity_cores=self._cpu_capacity_cores,
+                duckdb_thread_limit=duckdb_thread_limit,
+                timings=timings,
+                can_cancel=True,
+            )
             self._sort_counter += 1
             record = QueryJobRecord(
                 snapshot=snapshot,
@@ -1929,6 +1932,42 @@ class QueryJobManager:
             if record is None:
                 raise KeyError(f"Unknown query job: {job_id}")
             return record.snapshot
+
+    def wait_for_terminal(
+        self,
+        job_id: str,
+        *,
+        is_cancelled: Callable[[], bool] | None = None,
+        timeout: float | None = None,
+    ) -> QueryJobDefinition:
+        normalized_job_id = str(job_id or "").strip()
+        deadline = time.monotonic() + float(timeout) if timeout is not None else None
+        while True:
+            with self._condition:
+                record = self._jobs.get(normalized_job_id)
+                if record is None:
+                    raise KeyError(f"Unknown query job: {normalized_job_id}")
+                if record.snapshot.status in TERMINAL_QUERY_STATUSES:
+                    return record.snapshot
+
+            if is_cancelled is not None and is_cancelled():
+                with suppress(KeyError):
+                    self.cancel_job(normalized_job_id)
+
+            with self._condition:
+                record = self._jobs.get(normalized_job_id)
+                if record is None:
+                    raise KeyError(f"Unknown query job: {normalized_job_id}")
+                if record.snapshot.status in TERMINAL_QUERY_STATUSES:
+                    return record.snapshot
+                if deadline is not None:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise TimeoutError(f"Timed out waiting for query job {normalized_job_id}.")
+                    wait_seconds = min(0.1, remaining)
+                else:
+                    wait_seconds = 0.1
+                self._condition.wait(timeout=wait_seconds)
 
     def state_payload(self) -> dict[str, Any]:
         with self._condition:

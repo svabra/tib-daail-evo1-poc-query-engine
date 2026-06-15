@@ -628,6 +628,9 @@
           </div>
 
           {% set cell_stage = cell.stage if cell.stage else {} %}
+          {% set stage_output_file = cell_stage.get('outputFileName', cell_stage.get('output_file_name', '')) %}
+          {% set stage_output_stem = (cell_stage.get('alias') or cell_stage.get('title') or 'stage') | lower | replace(' ', '_') %}
+          {% set stage_recommended_output_file = stage_output_stem ~ '.parquet' %}
           <div
             class="cell-stage-strip"
             data-cell-stage-strip
@@ -642,6 +645,18 @@
                   value="{{ cell_stage.get('title', '') }}"
                   placeholder="Stage title"
                   data-cell-stage-title-input
+                  {% if not active_notebook.can_edit %}disabled{% endif %}
+                >
+              </label>
+              <label class="cell-stage-field cell-stage-output-field">
+                <span>Destination file</span>
+                <input
+                  class="cell-stage-output-file-input"
+                  type="text"
+                  value="{{ stage_output_file }}"
+                  placeholder="{{ stage_recommended_output_file }}"
+                  title="Recommended: {{ stage_recommended_output_file }}"
+                  data-cell-stage-output-file-input
                   {% if not active_notebook.can_edit %}disabled{% endif %}
                 >
               </label>

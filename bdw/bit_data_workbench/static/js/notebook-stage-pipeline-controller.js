@@ -72,6 +72,10 @@ export function createNotebookStagePipelineController(helpers) {
     return normalized || "stage";
   }
 
+  function recommendedStageOutputFileName(aliasOrTitle) {
+    return `${stageAlias(aliasOrTitle, "stage")}.parquet`;
+  }
+
   function cellStageDefaults(cell, index) {
     const stage = normalizeCellStage(cell.stage);
     const defaultTitle =
@@ -94,6 +98,7 @@ export function createNotebookStagePipelineController(helpers) {
         (index === 0 ? defaultFirstStageDescription : ""),
       kind: stage.kind || "intermediate",
       materialize: stage.materialize !== false,
+      outputFileName: stage.outputFileName || "",
     };
   }
 
@@ -1282,6 +1287,15 @@ export function createNotebookStagePipelineController(helpers) {
       if (descriptionInput && node && document.activeElement !== descriptionInput) {
         descriptionInput.value = node.description || "";
       }
+      const outputFileInput = strip.querySelector("[data-cell-stage-output-file-input]");
+      if (outputFileInput && node) {
+        const recommendation = node.recommendedOutputFileName || recommendedStageOutputFileName(node.alias || node.title);
+        outputFileInput.placeholder = recommendation;
+        outputFileInput.title = `Recommended: ${recommendation}`;
+        if (document.activeElement !== outputFileInput) {
+          outputFileInput.value = node.outputFileName || "";
+        }
+      }
       const status = strip.querySelector("[data-cell-stage-status]");
       if (status) {
         status.textContent = statusLabel(node?.status);
@@ -2460,7 +2474,8 @@ export function createNotebookStagePipelineController(helpers) {
 
     const titleInput = event.target.closest("[data-cell-stage-title-input]");
     const descriptionInput = event.target.closest("[data-cell-stage-description-input]");
-    if (!titleInput && !descriptionInput) {
+    const outputFileInput = event.target.closest("[data-cell-stage-output-file-input]");
+    if (!titleInput && !descriptionInput && !outputFileInput) {
       return false;
     }
     const notebookId = getCurrentNotebookId();
@@ -2471,7 +2486,9 @@ export function createNotebookStagePipelineController(helpers) {
     }
     const patch = titleInput
       ? { title: titleInput.value, alias: stageAlias(titleInput.value, cellId) }
-      : { description: descriptionInput.value };
+      : descriptionInput
+        ? { description: descriptionInput.value }
+        : { outputFileName: outputFileInput.value };
     setCellStage(notebookId, cellId, patch, { rerender: false });
     refreshGraph(notebookId).catch((error) => {
       console.error("Failed to refresh notebook pipeline after stage edit.", error);

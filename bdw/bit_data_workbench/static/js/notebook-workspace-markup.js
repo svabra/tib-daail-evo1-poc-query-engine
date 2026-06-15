@@ -25,6 +25,16 @@ function normalizeCellLanguage(value) {
   return String(value || "").trim().toLowerCase() === "python" ? "python" : "sql";
 }
 
+function recommendedStageOutputFileName(stage) {
+  const base = String(stage?.alias || stage?.title || "stage")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_") || "stage";
+  return `${base}.parquet`;
+}
+
 export function createNotebookWorkspaceMarkup(helpers) {
   const {
     escapeHtml,
@@ -147,6 +157,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
 
   function cellStageStripMarkup(cell, canEdit, pipelineMode, cellLanguage) {
     const stage = normalizeCellStage(cell.stage);
+    const recommendedOutputFile = recommendedStageOutputFileName(stage);
     const hidden = pipelineMode === "pipeline" && cellLanguage === "sql" ? "" : " hidden";
     return `
       <div class="cell-stage-strip"${hidden} data-cell-stage-strip>
@@ -159,6 +170,18 @@ export function createNotebookWorkspaceMarkup(helpers) {
               value="${escapeHtml(stage.title)}"
               placeholder="Stage title"
               data-cell-stage-title-input
+              ${canEdit ? "" : "disabled"}
+            >
+          </label>
+          <label class="cell-stage-field cell-stage-output-field">
+            <span>Destination file</span>
+            <input
+              class="cell-stage-output-file-input"
+              type="text"
+              value="${escapeHtml(stage.outputFileName)}"
+              placeholder="${escapeHtml(recommendedOutputFile)}"
+              title="Recommended: ${escapeHtml(recommendedOutputFile)}"
+              data-cell-stage-output-file-input
               ${canEdit ? "" : "disabled"}
             >
           </label>

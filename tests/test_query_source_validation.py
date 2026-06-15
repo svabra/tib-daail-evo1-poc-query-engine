@@ -506,6 +506,57 @@ class QuerySourceValidationTests(unittest.TestCase):
         )
         self.assertNotIn(kbpo_reference, execution_sql)
 
+    def test_prepare_and_materialized_stage_rewrite_quoted_mixed_case_s3_file_union(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
+        service._data_source_discovery = SimpleNamespace(s3_relation_specs=lambda: {})
+        file_names = [
+            "KBPO_2018undvorher.parquet",
+            "KBPO_2019.parquet",
+            "KBPO2020.parquet",
+            "KBPO2021.parquet",
+            "KBPO2022.parquet",
+            "KBPO2023.parquet",
+            "KBPO2024.parquet",
+            "KBPO2025.parquet",
+        ]
+        sql = "\nUNION ALL\n".join(
+            f'SELECT * FROM s3.KBPOimports."{file_name}"'
+            for file_name in file_names
+        )
+        query_options = {"validation": {"sourceExistence": "off"}}
+
+        prepared = service.prepare_query_sql(
+            sql=sql,
+            notebook_id="kbpo",
+            data_sources=["workspace.s3"],
+            query_options=query_options,
+        )
+        execution_sql = service._materialized_stage_execution_sql(
+            sql,
+            ["workspace.s3"],
+            query_options,
+        )
+        source_summaries = service._materialized_stage_source_summaries(
+            sql,
+            ["workspace.s3"],
+            query_options,
+        )
+
+        self.assertEqual(prepared["executionSql"], execution_sql)
+        for file_name in file_names:
+            self.assertIn(
+                f"read_parquet('s3://KBPOimports/{file_name}')",
+                execution_sql,
+            )
+            self.assertNotIn(f's3.KBPOimports."{file_name}"', execution_sql)
+        self.assertEqual(len(source_summaries), len(file_names))
+        self.assertEqual(
+            {summary["key"] for summary in source_summaries},
+            set(file_names),
+        )
+
     def test_materialized_stage_rewrites_seeded_problem_full_query_virtual_sources(self) -> None:
         from bit_data_workbench.backend.notebooks import build_restart_seeded_shared_notebooks
         from bit_data_workbench.backend.s3_storage import s3_bucket_schema_name

@@ -1,9 +1,28 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.9. Keep entries concise and
+# Derived from git history through version 0.10.10. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.10",
+        "releasedAt": "2026-06-15T17:11:07+02:00",
+        "features": [
+            (
+                "Pipeline stage materialization now runs through the same "
+                "query-job engine as exploration queries, so Query Monitoring "
+                "shows matching progress events, timings, resource samples, "
+                "and terminal status for pipeline mode."
+            ),
+            (
+                "Pipeline stages now let users choose the destination Parquet "
+                "file name while still recommending a stage-alias based "
+                "default, and quoted mixed-case S3 Parquet file references "
+                "are rewritten consistently for exploration and pipeline "
+                "runs."
+            ),
+        ],
+    },
     {
         "version": "0.10.9",
         "releasedAt": "2026-06-13T18:56:21+02:00",

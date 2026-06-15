@@ -459,6 +459,7 @@ class WorkbenchService:
             published_products_for_source=lambda source: self._data_products.published_products_for_source(
                 source=source
             ),
+            query_job_runner=self._run_materialized_stage_query_job,
         )
         self._service_consumption = ServiceConsumptionMonitor(
             settings,
@@ -2184,6 +2185,45 @@ class WorkbenchService:
                 relation=relation
             )
         return self._rewrite_query_source_aliases(sql, relation_index, local_relation_map=None)
+
+    def _run_materialized_stage_query_job(
+        self,
+        *,
+        requested_job_id: str,
+        display_sql: str,
+        execution_sql: str,
+        notebook_id: str,
+        notebook_title: str,
+        cell_id: str,
+        data_sources: list[str],
+        source_summaries: list[dict[str, object]],
+        touched_relations: list[str],
+        touched_buckets: list[str],
+        query_options: dict[str, object],
+        is_cancelled,
+    ) -> dict[str, object]:
+        snapshot = self._query_jobs.start_job(
+            sql=str(display_sql or execution_sql or ""),
+            execution_sql=str(execution_sql or ""),
+            notebook_id=str(notebook_id or "").strip(),
+            notebook_title=str(notebook_title or "").strip(),
+            cell_id=str(cell_id or "").strip(),
+            data_sources=list(data_sources or []),
+            touched_relations=list(touched_relations or []),
+            touched_buckets=list(touched_buckets or []),
+            source_summaries=[
+                dict(item)
+                for item in (source_summaries or [])
+                if isinstance(item, dict)
+            ],
+            query_options=dict(query_options or {}),
+            requested_job_id=str(requested_job_id or "").strip(),
+        )
+        completed = self._query_jobs.wait_for_terminal(
+            snapshot.job_id,
+            is_cancelled=is_cancelled if callable(is_cancelled) else None,
+        )
+        return completed.payload
 
     def validate_query_sources(
         self,
