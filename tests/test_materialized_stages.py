@@ -785,6 +785,8 @@ class NotebookStagePipelineTests(unittest.TestCase):
             self.assertEqual(query_jobs[0]["requested_job_id"], completed[0]["queryJobId"])
             self.assertIn("COPY (", query_jobs[0]["execution_sql"])
             self.assertIn("kbpo_pipeline_result.parquet", query_jobs[0]["execution_sql"])
+            self.assertIn("read_parquet(", query_jobs[0]["result_preview_sql"])
+            self.assertIn("kbpo_pipeline_result.parquet", query_jobs[0]["result_preview_sql"])
             self.assertEqual(len(query_jobs[0]["source_summaries"]), len(file_names))
 
 

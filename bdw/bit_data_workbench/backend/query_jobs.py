@@ -808,10 +808,14 @@ def _execute_duckdb_query(
     max_result_rows: int,
     event_queue: Any,
     started: float,
+    result_preview_sql: str = "",
 ) -> tuple[QueryResult, float | None, float, float]:
     first_row_ms: float | None = None
     query_started = time.perf_counter()
     cursor = connection.execute(sql)
+    normalized_preview_sql = str(result_preview_sql or "").strip()
+    if normalized_preview_sql:
+        cursor = connection.execute(normalized_preview_sql)
     columns = [column[0] for column in cursor.description] if cursor.description else []
     engine_query_ms = (time.perf_counter() - query_started) * 1000
     _put_worker_event(
@@ -1045,6 +1049,7 @@ def _query_worker_entry(
     notebook_title: str = "",
     cell_id: str = "",
     sql_preview: str = "",
+    result_preview_sql: str = "",
 ) -> None:
     started = time.perf_counter()
     connection: Any = None
@@ -1181,6 +1186,7 @@ def _query_worker_entry(
                         max_result_rows=max_result_rows,
                         event_queue=event_queue,
                         started=started,
+                        result_preview_sql=result_preview_sql,
                     )
             except Exception as exc:
                 execution_error = exc
@@ -1468,6 +1474,7 @@ class QueryJobRecord:
     sort_index: int
     execution_mode: str
     execution_sql: str
+    result_preview_sql: str = ""
     duckdb_execution_path: str = ""
     worker_database_path: str | None = None
     spill_temp_directory: Path | None = None
@@ -1734,6 +1741,7 @@ class QueryJobManager:
         source_summaries: list[dict[str, object]] | None = None,
         query_options: dict[str, object] | None = None,
         requested_job_id: str = "",
+        result_preview_sql: str = "",
         client_pre_submit_ms: float | None = None,
         backend_prepare_ms: float | None = None,
     ) -> QueryJobDefinition:
@@ -1760,6 +1768,7 @@ class QueryJobManager:
             for item in (source_summaries or [])
             if isinstance(item, dict)
         ]
+        normalized_result_preview_sql = str(result_preview_sql or "").strip()
         duckdb_execution_path = self._duckdb_execution_path(
             execution_mode=execution_mode,
             source_ids=source_ids,
@@ -1824,6 +1833,7 @@ class QueryJobManager:
                 sort_index=self._sort_counter,
                 execution_mode=execution_mode,
                 execution_sql=normalized_execution_sql,
+                result_preview_sql=normalized_result_preview_sql,
                 duckdb_execution_path=duckdb_execution_path,
                 worker_database_path=worker_database_path,
                 source_summaries=normalized_source_summaries,
@@ -2543,6 +2553,7 @@ class QueryJobManager:
                     "notebook_title": record.snapshot.notebook_title,
                     "cell_id": record.snapshot.cell_id,
                     "sql_preview": record.snapshot.sql,
+                    "result_preview_sql": record.result_preview_sql,
                     "execution_mode": record.execution_mode,
                     "max_result_rows": self._max_result_rows,
                     "database_path": record.worker_database_path,

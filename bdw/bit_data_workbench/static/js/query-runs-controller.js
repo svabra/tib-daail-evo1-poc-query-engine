@@ -11,6 +11,7 @@ export function createQueryRunsController(helpers) {
   const refreshTimers = new WeakMap();
   let latestQueryJobsSnapshot = { jobs: [] };
   let latestPipelineStageSnapshot = { records: [], activeRuns: [] };
+  let initialMonitorSnapshotsLoaded = false;
 
   function pageRoot() {
     return document.querySelector("[data-query-runs-page]");
@@ -861,6 +862,20 @@ export function createQueryRunsController(helpers) {
     }
   }
 
+  async function loadInitialMonitorSnapshots() {
+    const [queryJobsSnapshot, materializedStagesSnapshot] = await Promise.all([
+      fetchJsonOrThrow("/api/query-jobs").catch(() => null),
+      fetchJsonOrThrow("/api/materialized-stages/state").catch(() => null),
+    ]);
+    if (queryJobsSnapshot && typeof queryJobsSnapshot === "object") {
+      latestQueryJobsSnapshot = queryJobsSnapshot;
+    }
+    if (materializedStagesSnapshot && typeof materializedStagesSnapshot === "object") {
+      latestPipelineStageSnapshot = materializedStagesSnapshot;
+    }
+    initialMonitorSnapshotsLoaded = true;
+  }
+
   function rootMatchesJob(root, job) {
     const notebookId = String(root?.dataset?.queryRunsNotebookId || "").trim();
     const cellId = String(root?.dataset?.queryRunsCellId || "").trim();
@@ -904,6 +919,7 @@ export function createQueryRunsController(helpers) {
   async function initializeCurrentPage(root = document) {
     const globalRoot = pageRoot();
     const roots = [...(globalRoot ? [globalRoot] : []), ...notebookRoots(root)];
+    await loadInitialMonitorSnapshots();
     await Promise.all(roots.map((node) => loadInto(node)));
     window.setTimeout(() => {
       roots.forEach((node) => {
@@ -1016,6 +1032,7 @@ export function createQueryRunsController(helpers) {
   }
 
   function refreshForQueryJobsSnapshot(snapshot) {
+    initialMonitorSnapshotsLoaded = true;
     latestQueryJobsSnapshot = snapshot && typeof snapshot === "object" ? snapshot : { jobs: [] };
     const jobs = Array.isArray(snapshot?.jobs) ? snapshot.jobs : [];
     const terminalJobs = jobs.filter((job) => terminalStatuses.has(String(job?.status || "").trim().toLowerCase()));
@@ -1035,6 +1052,9 @@ export function createQueryRunsController(helpers) {
 
   function refreshForMaterializedStagesSnapshot(snapshot) {
     latestPipelineStageSnapshot = snapshot && typeof snapshot === "object" ? snapshot : { records: [], activeRuns: [] };
+    if (!initialMonitorSnapshotsLoaded) {
+      return;
+    }
     const stageRuns = latestPipelineStageRecords().map((record) => liveRunFromPipelineStageRecord(record));
     if (!stageRuns.length) {
       return;

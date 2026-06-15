@@ -2201,6 +2201,7 @@ class WorkbenchService:
         touched_buckets: list[str],
         query_options: dict[str, object],
         is_cancelled,
+        result_preview_sql: str = "",
     ) -> dict[str, object]:
         snapshot = self._query_jobs.start_job(
             sql=str(display_sql or execution_sql or ""),
@@ -2218,6 +2219,7 @@ class WorkbenchService:
             ],
             query_options=dict(query_options or {}),
             requested_job_id=str(requested_job_id or "").strip(),
+            result_preview_sql=str(result_preview_sql or "").strip(),
         )
         completed = self._query_jobs.wait_for_terminal(
             snapshot.job_id,

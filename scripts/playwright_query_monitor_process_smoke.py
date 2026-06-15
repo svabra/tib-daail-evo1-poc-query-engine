@@ -12,6 +12,11 @@ select sum(sin(i) + random()) as total_value
 from range(2000000000) as source_rows(i)
 """
 
+CANCELLATION_SQL = """
+select sum(sin(i) + random()) as total_value
+from range(20000000000) as source_rows(i)
+"""
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -692,21 +697,116 @@ async def assert_spill_resource_chart_regression(page, timeout_ms: int) -> None:
 
 
 async def cancel_first_query_and_assert_visibility(page, timeout_ms: int) -> None:
-    await page.locator(".query-monitor-item-running [data-cancel-query-job]").first.wait_for(
-        state="attached",
-        timeout=timeout_ms,
-    )
-    await page.evaluate(
-        """
-        () => {
-          const button = document.querySelector(".query-monitor-item-running [data-cancel-query-job]");
-          if (!(button instanceof HTMLButtonElement)) {
-            throw new Error("No query monitor cancel button is attached.");
-          }
-          button.click();
-        }
-        """
-    )
+    async def submit_long_query() -> None:
+        await page.evaluate(
+            """
+            async ({ sql }) => {
+              const cell = Array.from(document.querySelectorAll("[data-query-cell]"))
+                .find((candidate) => candidate instanceof HTMLElement && candidate.offsetParent !== null)
+                || document.querySelector("[data-query-cell]");
+              if (!(cell instanceof HTMLElement)) {
+                throw new Error("No query cell is available for cancellation smoke setup.");
+              }
+              const textarea = cell.querySelector("[data-editor-source]");
+              if (!(textarea instanceof HTMLTextAreaElement)) {
+                throw new Error("A query editor source could not be located.");
+              }
+              textarea.value = sql;
+              textarea.dispatchEvent(new Event("input", { bubbles: true }));
+              textarea.dispatchEvent(new Event("change", { bubbles: true }));
+              const form = cell.querySelector("[data-query-form]");
+              if (!(form instanceof HTMLFormElement)) {
+                throw new Error("A query form could not be located.");
+              }
+              const formData = new FormData(form);
+              const notebookTitle =
+                document.querySelector("[data-notebook-title-display]")?.textContent?.trim() ||
+                "Query Monitor Smoke";
+              formData.set("sql", sql);
+              formData.set("notebook_id", formData.get("notebook_id") || "");
+              formData.set("cell_id", cell.dataset.cellId || "");
+              formData.set("notebook_title", notebookTitle);
+              formData.set("data_sources", "");
+              formData.set("clientRunStartedAt", String(Date.now()));
+              formData.set("clientPreSubmitMs", "0");
+              const response = await fetch("/api/query-jobs", {
+                method: "POST",
+                body: formData,
+                headers: { Accept: "application/json" },
+              });
+              if (!response.ok) {
+                throw new Error(`Query job creation failed with status ${response.status}.`);
+              }
+              return response.json();
+            }
+            """,
+            {"sql": CANCELLATION_SQL},
+        )
+
+    async def click_monitor_cancel(wait_ms: int) -> bool:
+        try:
+            await page.wait_for_function(
+                """
+                () => {
+                  const button = document.querySelector(".query-monitor-item-running [data-cancel-query-job]");
+                  if (!(button instanceof HTMLButtonElement) || button.disabled) {
+                    return false;
+                  }
+                  const bounds = button.getBoundingClientRect();
+                  return bounds.width > 0 && bounds.height > 0;
+                }
+                """,
+                timeout=wait_ms,
+            )
+            return bool(
+                await page.evaluate(
+                    """
+                    () => {
+                      const button = document.querySelector(".query-monitor-item-running [data-cancel-query-job]");
+                      if (!(button instanceof HTMLButtonElement) || button.disabled) {
+                        return false;
+                      }
+                      button.click();
+                      return true;
+                    }
+                    """
+                )
+            )
+        except PlaywrightError:
+            return False
+
+    if not await click_monitor_cancel(min(timeout_ms, 5000)):
+        await submit_long_query()
+        if not await click_monitor_cancel(timeout_ms):
+            state = await page.evaluate(
+                """
+                async () => {
+                  const monitorText = document.querySelector("[data-query-monitor-section]")?.textContent || "";
+                  let jobs = [];
+                  try {
+                    const response = await fetch("/api/query-jobs", { headers: { Accept: "application/json" } });
+                    if (response.ok) {
+                      const payload = await response.json();
+                      jobs = (payload.jobs || []).map((job) => ({
+                        jobId: job.jobId,
+                        status: job.status,
+                        cellId: job.cellId,
+                        message: job.message,
+                      }));
+                    }
+                  } catch (_error) {
+                    jobs = [];
+                  }
+                  return {
+                    runningCards: document.querySelectorAll(".query-monitor-item-running").length,
+                    cancelButtons: document.querySelectorAll(".query-monitor-item-running [data-cancel-query-job]").length,
+                    jobs,
+                    monitorText: monitorText.slice(0, 1000),
+                  };
+                }
+                """
+            )
+            raise RuntimeError(f"No query monitor cancel button became clickable: {state!r}.")
 
     await page.wait_for_function(
         """

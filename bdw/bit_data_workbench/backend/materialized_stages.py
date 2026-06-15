@@ -1491,11 +1491,13 @@ class MaterializedStageManager:
         try:
             try:
                 copy_sql = f"COPY ({execution_sql}) TO {sql_literal(local_output.as_posix())} (FORMAT PARQUET)"
+                result_preview_sql = f"SELECT * FROM read_parquet({sql_literal(local_output.as_posix())})"
                 if self._query_job_runner is not None:
                     query_payload = self._query_job_runner(
                         requested_job_id=query_job_id,
                         display_sql=sql,
                         execution_sql=copy_sql,
+                        result_preview_sql=result_preview_sql,
                         notebook_id=notebook_id,
                         notebook_title=str(graph.get("notebookTitle") or ""),
                         cell_id=str(node.get("cellId") or ""),

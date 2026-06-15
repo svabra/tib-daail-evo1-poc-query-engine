@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import queue
 import sys
 import tempfile
 import threading
@@ -174,6 +175,44 @@ class QueryJobClassifierTests(TestCase):
         )
 
         self.assertEqual(connection.executed_sql, [])
+
+
+class DuckDBQueryExecutionTests(TestCase):
+    def test_copy_query_uses_materialized_parquet_preview_for_monitor_rows(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="bdw-query-preview-") as temp_dir:
+            output_path = Path(temp_dir) / "stage_output.parquet"
+            connection = duckdb.connect()
+            events: queue.Queue[dict[str, object]] = queue.Queue()
+            try:
+                connection.execute("CREATE TABLE source_rows(id INTEGER, label VARCHAR)")
+                connection.execute("INSERT INTO source_rows VALUES (1, 'one'), (2, 'two')")
+                result, _, _, _ = query_jobs_module._execute_duckdb_query(
+                    connection=connection,
+                    sql=(
+                        "COPY (SELECT * FROM source_rows ORDER BY id) "
+                        f"TO '{output_path.as_posix()}' (FORMAT PARQUET)"
+                    ),
+                    result_preview_sql=(
+                        "SELECT * FROM "
+                        f"read_parquet('{output_path.as_posix()}') ORDER BY id"
+                    ),
+                    max_result_rows=10,
+                    event_queue=events,
+                    started=time.perf_counter(),
+                )
+            finally:
+                connection.close()
+
+        self.assertEqual(result.columns, ["id", "label"])
+        self.assertEqual(result.rows, [(1, "one"), (2, "two")])
+        self.assertEqual(result.row_count, 2)
+        emitted = []
+        while not events.empty():
+            emitted.append(events.get_nowait())
+        columns_events = [event for event in emitted if event.get("type") == "columns"]
+        rows_events = [event for event in emitted if event.get("type") == "rows"]
+        self.assertEqual(columns_events[-1]["columns"], ["id", "label"])
+        self.assertEqual(rows_events[-1]["rowCount"], 2)
 
 
 class QueryJobPayloadTests(TestCase):
