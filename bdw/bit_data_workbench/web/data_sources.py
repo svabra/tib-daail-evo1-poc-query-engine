@@ -505,6 +505,13 @@ def home_data_source_context(service: WorkbenchService) -> dict[str, object]:
         if source["status_tone"] == "available"
         or source["source_id"] == "workspace.local"
     ]
+    home_data_flows_provider = getattr(service, "home_data_flows", None)
+    home_data_flows = (
+        home_data_flows_provider()
+        if callable(home_data_flows_provider)
+        else []
+    )
     return {
         "home_data_sources": home_data_sources,
+        "home_data_flows": home_data_flows,
     }

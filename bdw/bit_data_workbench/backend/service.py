@@ -62,6 +62,7 @@ from .data_exchange import (
 )
 from .data_generation_jobs import DataGenerationJobManager
 from .download_jobs import DownloadArtifactStream, DownloadJobManager
+from .home_data_flow import build_home_data_flows
 from .ingestion_types.csv import (
     CsvIngestionManager,
     CsvUploadFileRequest,
@@ -829,6 +830,22 @@ class WorkbenchService:
         base_url: str | None = None,
     ) -> list[dict[str, object]]:
         return self._data_products.list_products(base_url=base_url)
+
+    def home_data_flows(
+        self,
+        *,
+        base_url: str | None = None,
+    ) -> list[dict[str, object]]:
+        return build_home_data_flows(
+            notebooks=self.notebooks(),
+            data_products=self.list_data_products(base_url=base_url),
+            graph_provider=lambda notebook: self.materialized_stage_graph(
+                notebook_id=notebook.notebook_id,
+                notebook_title=notebook.title,
+                cells=notebook.cells_payload,
+                pipeline_paths=notebook.pipeline_paths,
+            ),
+        )
 
     def preview_data_product(
         self,

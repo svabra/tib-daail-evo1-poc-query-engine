@@ -495,6 +495,8 @@ class DataProductsRouteTests(unittest.TestCase):
         body = response.body.decode("utf-8")
         self.assertIn("Published Catalog", body)
         self.assertIn('href="/dataproducts/"', body)
+        self.assertIn('data-home-data-flow', body)
+        self.assertIn('data-home-data-flow-json', body)
         self.assertLess(
             body.index("Data Source Workbench"),
             body.index("Ingestion Workbench"),
