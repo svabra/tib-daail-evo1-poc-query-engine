@@ -34,7 +34,7 @@ class SourceDdlHelperTests(unittest.TestCase):
             ],
             relation="workspace.shared_finance.orders",
             object_name="orders.parquet",
-            source_id="workspace.s3",
+            source_id="s3",
             source_path="s3://shared-finance/orders.parquet",
         )
 

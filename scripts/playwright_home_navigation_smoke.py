@@ -266,7 +266,7 @@ async def verify_inline_browser_for_source(
 async def verify_inline_browsers_for_all_sources(page, args: argparse.Namespace) -> None:
     source_cases = [
         ("workspace.local", "workspace.local"),
-        ("workspace.s3", "workspace.s3"),
+        ("s3", "s3"),
         ("pg_oltp", "pg_oltp"),
         ("pg_olap", "pg_olap"),
         ("pg_oltp_native", "pg_oltp"),

@@ -1,9 +1,27 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.14. Keep entries concise and
+# Derived from git history through version 0.10.15. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.15",
+        "releasedAt": "2026-06-16T11:01:07+02:00",
+        "features": [
+            (
+                "S3 source references now consistently use the canonical "
+                "s3.<bucket>.<object> form across notebooks, source "
+                "selection, ingestion, explorer payloads, and smoke tests; "
+                "the former workspace-prefixed S3 namespace is no longer "
+                "emitted or accepted."
+            ),
+            (
+                "Fully quoted S3 Parquet references such as "
+                '"s3"."bucket"."file.parquet" now use isolated S3 reads and '
+                "avoid waiting on shared DuckDB catalog access."
+            ),
+        ],
+    },
     {
         "version": "0.10.14",
         "releasedAt": "2026-06-16T10:21:59+02:00",

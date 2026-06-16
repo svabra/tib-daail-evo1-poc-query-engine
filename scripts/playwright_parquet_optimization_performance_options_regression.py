@@ -295,9 +295,9 @@ async def upload_case(
     prefix = f"{args.s3_smoke_prefix_root.strip('/')}/{unique_id}/{case.case_id}"
     await open_csv_ingestion(page, args.base_url, args.timeout_ms)
     await close_message_dialog(page, args.timeout_ms)
-    await page.locator('[data-csv-target-option][value="workspace.s3"]').check()
-    await page.locator('[data-csv-config-panel="workspace.s3"] [data-csv-s3-bucket]').fill(args.bucket)
-    await page.locator('[data-csv-config-panel="workspace.s3"] [data-csv-s3-prefix]').fill(prefix)
+    await page.locator('[data-csv-target-option][value="s3"]').check()
+    await page.locator('[data-csv-config-panel="s3"] [data-csv-s3-bucket]').fill(args.bucket)
+    await page.locator('[data-csv-config-panel="s3"] [data-csv-s3-prefix]').fill(prefix)
     await page.locator('[data-csv-s3-storage-format][value="parquet"]').check()
     if case.mode == "recommended":
         await page.locator('[data-csv-parquet-optimization-mode][value="recommended"]').check()
@@ -333,7 +333,7 @@ async def upload_case(
         timeout=args.timeout_ms,
     )
     await close_message_dialog(page, args.timeout_ms)
-    if payload.get("targetId") != "workspace.s3":
+    if payload.get("targetId") != "s3":
         raise RuntimeError(f"Unexpected target in CSV import payload: {payload!r}")
     if payload.get("importedCount") != 1 or payload.get("failedCount") != 0:
         raise RuntimeError(f"Unexpected import counts for {case.case_id}: {payload!r}")
@@ -450,7 +450,7 @@ async def create_notebook_for_case(
                     "cellId": cell_id,
                     "language": "sql",
                     "sql": sql,
-                    "dataSources": ["workspace.s3"],
+                    "dataSources": ["s3"],
                     "queryOptions": query_options,
                 }
             ],
@@ -504,7 +504,7 @@ async def run_query_job(
             "notebook_id": notebook["notebook_id"],
             "notebook_title": f"Parquet Optimization - {notebook['case'].label}",
             "cell_id": notebook["cell_id"],
-            "data_sources": "workspace.s3",
+            "data_sources": "s3",
             "localRelations": "{}",
             "queryOptions": json.dumps(notebook["query_options"]),
         },

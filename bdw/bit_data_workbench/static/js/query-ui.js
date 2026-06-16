@@ -866,7 +866,7 @@ export function createQueryUi(helpers) {
             data-result-export-s3=""
             data-result-job-id="${escapeHtml(normalizedJobId)}"
             title="${escapeHtml(sharedWorkspaceTooltip)}"
-          >Save Results in Shared Workspace (S3) ...</button>
+          >Save Results in S3 Object Storage ...</button>
           <div class="workspace-action-menu-separator"></div>
           <button
             type="button"

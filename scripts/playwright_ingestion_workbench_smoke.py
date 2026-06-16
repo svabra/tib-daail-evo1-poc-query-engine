@@ -57,7 +57,7 @@ async def open_csv_ingestor(page, timeout_ms: int) -> None:
         except PlaywrightTimeoutError:
             await page.wait_for_timeout(500)
     await form.wait_for(state="visible", timeout=timeout_ms)
-    await page.locator('[data-csv-target-option][value="workspace.s3"]').check()
+    await page.locator('[data-csv-target-option][value="s3"]').check()
     for value in ("csv", "parquet", "json"):
         await page.locator(f'[data-csv-s3-storage-format][value="{value}"]').wait_for(
             state="visible",
@@ -272,7 +272,7 @@ async def import_server_csv_with_progress(page, timeout_ms: int) -> None:
             return
         if request.method == "POST" and request.url.endswith("/complete"):
             payload = json.loads(request.post_data or "{}")
-            if payload.get("targetId") != "workspace.s3" or payload.get("storageFormat") != "parquet":
+            if payload.get("targetId") != "s3" or payload.get("storageFormat") != "parquet":
                 await route.fulfill(
                     status=400,
                     content_type="application/json",
@@ -285,11 +285,11 @@ async def import_server_csv_with_progress(page, timeout_ms: int) -> None:
                 content_type="application/json",
                 body=json.dumps(
                     {
-                        "targetId": "workspace.s3",
+                        "targetId": "s3",
                         "importedCount": 1,
                         "failedCount": 0,
                         "firstQuerySource": {
-                            "sourceId": "workspace.s3",
+                            "sourceId": "s3",
                             "catalogName": "workspace",
                             "schemaName": "playwright_progress_bucket",
                             "schemaLabel": "playwright-progress-bucket",
@@ -301,7 +301,7 @@ async def import_server_csv_with_progress(page, timeout_ms: int) -> None:
                                 "fileName": "playwright-progress.csv",
                                 "storedFileName": "playwright-progress.parquet",
                                 "status": "imported",
-                                "destination": "workspace.s3",
+                                "destination": "s3",
                                 "bucket": "playwright-progress-bucket",
                                 "objectKey": "playwright-progress.parquet",
                                 "storageFormat": "parquet",
@@ -316,7 +316,7 @@ async def import_server_csv_with_progress(page, timeout_ms: int) -> None:
 
     await page.route("**/api/ingestion/csv/upload-sessions", handle_create)
     await page.route("**/api/ingestion/csv/upload-sessions/**", handle_session)
-    await page.locator('[data-csv-target-option][value="workspace.s3"]').check()
+    await page.locator('[data-csv-target-option][value="s3"]').check()
     await page.locator("[data-csv-s3-bucket]").fill("playwright-progress-bucket")
     await page.locator('[data-csv-s3-storage-format][value="parquet"]').check()
     await page.locator("[data-csv-file-input]").set_input_files(
@@ -392,7 +392,7 @@ async def import_server_csv_with_progress(page, timeout_ms: int) -> None:
     message_dialog = page.locator("[data-message-dialog]")
     await message_dialog.wait_for(state="visible", timeout=timeout_ms)
     message_text = (await message_dialog.text_content() or "").strip()
-    if "1 file(s) processed for Shared Workspace S3." not in message_text:
+    if "1 file(s) processed for S3 Object Storage." not in message_text:
         raise RuntimeError(f"Expected successful server import count in dialog, got: {message_text!r}")
     await page.locator("[data-csv-import-open-query]").first.wait_for(
         state="visible",
@@ -451,7 +451,7 @@ async def import_server_csv_with_retried_chunk(page, timeout_ms: int) -> None:
             return
         if request.method == "POST" and request.url.endswith("/complete"):
             payload = json.loads(request.post_data or "{}")
-            if payload.get("targetId") != "workspace.s3" or payload.get("storageFormat") != "parquet":
+            if payload.get("targetId") != "s3" or payload.get("storageFormat") != "parquet":
                 await route.fulfill(
                     status=400,
                     content_type="application/json",
@@ -463,7 +463,7 @@ async def import_server_csv_with_retried_chunk(page, timeout_ms: int) -> None:
                 content_type="application/json",
                 body=json.dumps(
                     {
-                        "targetId": "workspace.s3",
+                        "targetId": "s3",
                         "importedCount": 1,
                         "failedCount": 0,
                         "imports": [
@@ -471,7 +471,7 @@ async def import_server_csv_with_retried_chunk(page, timeout_ms: int) -> None:
                                 "fileName": "playwright-large-s3-parquet.csv",
                                 "storedFileName": "playwright-large-s3-parquet.parquet",
                                 "status": "imported",
-                                "destination": "workspace.s3",
+                                "destination": "s3",
                                 "bucket": "playwright-retry-bucket",
                                 "objectKey": "playwright-large-s3-parquet.parquet",
                                 "storageFormat": "parquet",
@@ -487,7 +487,7 @@ async def import_server_csv_with_retried_chunk(page, timeout_ms: int) -> None:
     await page.route("**/api/ingestion/csv/upload-sessions", handle_create)
     await page.route("**/api/ingestion/csv/upload-sessions/**", handle_session)
     try:
-        await page.locator('[data-csv-target-option][value="workspace.s3"]').check()
+        await page.locator('[data-csv-target-option][value="s3"]').check()
         await page.locator("[data-csv-s3-bucket]").fill("playwright-retry-bucket")
         await page.locator('[data-csv-s3-storage-format][value="parquet"]').check()
         await page.locator("[data-csv-file-input]").set_input_files(
@@ -534,7 +534,7 @@ async def import_server_csv_recovers_after_complete_gateway_timeout(page, timeou
         ],
     }
     completed_payload = {
-        "targetId": "workspace.s3",
+        "targetId": "s3",
         "importedCount": 1,
         "failedCount": 0,
         "imports": [
@@ -542,7 +542,7 @@ async def import_server_csv_recovers_after_complete_gateway_timeout(page, timeou
                 "fileName": "playwright-timeout.csv",
                 "storedFileName": "playwright-timeout.parquet",
                 "status": "imported",
-                "destination": "workspace.s3",
+                "destination": "s3",
                 "bucket": "playwright-timeout-bucket",
                 "objectKey": "playwright-timeout.parquet",
                 "storageFormat": "parquet",
@@ -603,7 +603,7 @@ async def import_server_csv_recovers_after_complete_gateway_timeout(page, timeou
     await page.route("**/api/ingestion/csv/upload-sessions", handle_create)
     await page.route("**/api/ingestion/csv/upload-sessions/**", handle_session)
     try:
-        await page.locator('[data-csv-target-option][value="workspace.s3"]').check()
+        await page.locator('[data-csv-target-option][value="s3"]').check()
         await page.locator("[data-csv-s3-bucket]").fill("playwright-timeout-bucket")
         await page.locator('[data-csv-s3-storage-format][value="parquet"]').check()
         await page.locator("[data-csv-file-input]").set_input_files(
@@ -685,7 +685,7 @@ async def reject_server_csv_chunk_failure_with_context(page, timeout_ms: int) ->
     await page.route("**/api/ingestion/csv/upload-sessions", handle_create)
     await page.route("**/api/ingestion/csv/upload-sessions/**", handle_session)
     try:
-        await page.locator('[data-csv-target-option][value="workspace.s3"]').check()
+        await page.locator('[data-csv-target-option][value="s3"]').check()
         await page.locator("[data-csv-s3-bucket]").fill("playwright-failed-chunk-bucket")
         await page.locator('[data-csv-s3-storage-format][value="parquet"]').check()
         await page.locator("[data-csv-file-input]").set_input_files(
@@ -765,7 +765,7 @@ async def reject_server_csv_processing_failure_with_context(page, timeout_ms: in
             return
         if request.method == "POST" and request.url.endswith("/complete"):
             payload = json.loads(request.post_data or "{}")
-            if payload.get("targetId") != "workspace.s3" or payload.get("storageFormat") != "parquet":
+            if payload.get("targetId") != "s3" or payload.get("storageFormat") != "parquet":
                 await route.fulfill(
                     status=400,
                     content_type="application/json",
@@ -784,7 +784,7 @@ async def reject_server_csv_processing_failure_with_context(page, timeout_ms: in
     await page.route("**/api/ingestion/csv/upload-sessions", handle_create)
     await page.route("**/api/ingestion/csv/upload-sessions/**", handle_session)
     try:
-        await page.locator('[data-csv-target-option][value="workspace.s3"]').check()
+        await page.locator('[data-csv-target-option][value="s3"]').check()
         await page.locator("[data-csv-s3-bucket]").fill("playwright-processing-failure-bucket")
         await page.locator('[data-csv-s3-storage-format][value="parquet"]').check()
         await page.locator("[data-csv-file-input]").set_input_files(

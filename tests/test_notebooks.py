@@ -23,6 +23,13 @@ def kostenbelege_3_1_s3_reference(table_name: str) -> str:
     )
 
 
+def mwa_s3_reference(entity_name: str) -> str:
+    return (
+        's3."mwa-test-bucket".'
+        f'"generated/mwa_abrechnung/parquet/{entity_name}/*.parquet"'
+    )
+
+
 def import_notebook_helpers():
     from bit_data_workbench.backend.notebooks import (
         build_generator_notebook_links,
@@ -335,7 +342,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
                 query_reference=pg_source_reference(source_id=source_id, relation=relation),
             )
 
-        def s3_object(name: str, *, schema: str = "workspace_s3"):
+        def s3_object(name: str, *, schema: str = "s3_storage"):
             key = f"generated/{name}/parquet/{name}/part-00001.parquet"
             return source_object_type(
                 name=name,
@@ -406,10 +413,10 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             ),
             source_catalog_type(
                 name="workspace",
-                connection_source_id="workspace.s3",
+                connection_source_id="s3",
                 schemas=[
                     source_schema_type(
-                        name="workspace_s3",
+                        name="s3_storage",
                         objects=[
                             s3_object("vat_smoke"),
                             s3_object("tax_assessment_pg_vs_s3"),
@@ -577,7 +584,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
                             source_object_type(
                                 name="vat_smoke",
                                 kind="view",
-                                relation="workspace.s3.vat_smoke_generated",
+                                relation="s3.vat_smoke_generated",
                                 s3_key="generated/vat_smoke/part-0001.parquet",
                             )
                         ],
@@ -610,7 +617,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
         }
 
         self.assertIn(
-            "FROM workspace.s3.vat_smoke_generated",
+            "FROM s3.vat_smoke_generated",
             notebooks["s3-smoke-test"].cells[0].sql,
         )
         self.assertIn(
@@ -663,6 +670,10 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
                                 name="mwa_abrechnung_entities_parquet",
                                 kind="view",
                                 relation="workspace.mwa.mwa_abrechnung_entities_parquet",
+                                query_reference=mwa_s3_reference("mwa_abrechnung_entities"),
+                                s3_bucket="mwa-test-bucket",
+                                s3_key="generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet",
+                                s3_file_format="parquet",
                             ),
                             source_object_type(
                                 name="mwa_abrechnungs_ziffern_entities_parquet",
@@ -671,6 +682,10 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
                                     "workspace.mwa."
                                     "mwa_abrechnungs_ziffern_entities_parquet"
                                 ),
+                                query_reference=mwa_s3_reference("mwa_abrechnungs_ziffern_entities"),
+                                s3_bucket="mwa-test-bucket",
+                                s3_key="generated/mwa_abrechnung/parquet/mwa_abrechnungs_ziffern_entities/*.parquet",
+                                s3_file_format="parquet",
                             ),
                             source_object_type(
                                 name="mwa_abrechnung_entities_csv",
@@ -728,7 +743,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             notebooks["mwa-abrechnung-pg-native"].cells[0].sql,
         )
         self.assertIn(
-            "FROM workspace.mwa.mwa_abrechnung_entities_parquet",
+            f"FROM {mwa_s3_reference('mwa_abrechnung_entities')}",
             notebooks["mwa-abrechnung-s3-parquet"].cells[0].sql,
         )
         self.assertEqual(len(notebooks["mwa-abrechnung-s3-parquet"].cells), 2)
@@ -741,7 +756,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             notebooks["mwa-abrechnung-s3-parquet"].cells[1].sql,
         )
         self.assertIn(
-            "FROM workspace.mwa.mwa_abrechnung_entities_parquet",
+            f"FROM {mwa_s3_reference('mwa_abrechnung_entities')}",
             notebooks["mwa-abrechnung-s3-parquet"].cells[1].sql,
         )
         self.assertIn(
@@ -785,6 +800,10 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
                                 name="mwa_abrechnung_entities_parquet",
                                 kind="view",
                                 relation="workspace.mwa.mwa_abrechnung_entities_parquet",
+                                query_reference=mwa_s3_reference("mwa_abrechnung_entities"),
+                                s3_bucket="mwa-test-bucket",
+                                s3_key="generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet",
+                                s3_file_format="parquet",
                             ),
                             source_object_type(
                                 name="mwa_abrechnungs_ziffern_entities_parquet",
@@ -793,6 +812,10 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
                                     "workspace.mwa."
                                     "mwa_abrechnungs_ziffern_entities_parquet"
                                 ),
+                                query_reference=mwa_s3_reference("mwa_abrechnungs_ziffern_entities"),
+                                s3_bucket="mwa-test-bucket",
+                                s3_key="generated/mwa_abrechnung/parquet/mwa_abrechnungs_ziffern_entities/*.parquet",
+                                s3_file_format="parquet",
                             ),
                             source_object_type(
                                 name="mwa_abrechnung_entities_csv",
@@ -830,14 +853,20 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             ("PoC Tests", "Performance Evaluation", "Data Pipelines"),
         )
         self.assertEqual(len(notebook.cells), 5)
-        self.assertEqual(notebook.cells[0].data_sources, ["workspace.s3"])
-        self.assertEqual(notebook.cells[1].data_sources, ["workspace.s3"])
+        self.assertEqual(
+            notebook.cells[0].data_sources,
+            [mwa_s3_reference("mwa_abrechnung_entities")],
+        )
+        self.assertEqual(
+            notebook.cells[1].data_sources,
+            [mwa_s3_reference("mwa_abrechnungs_ziffern_entities")],
+        )
         self.assertEqual(notebook.cells[2].data_sources, [])
 
         all_sql = "\n".join(cell.sql for cell in notebook.cells)
-        self.assertIn("workspace.mwa.mwa_abrechnung_entities_parquet", all_sql)
+        self.assertIn(mwa_s3_reference("mwa_abrechnung_entities"), all_sql)
         self.assertIn(
-            "workspace.mwa.mwa_abrechnungs_ziffern_entities_parquet",
+            mwa_s3_reference("mwa_abrechnungs_ziffern_entities"),
             all_sql,
         )
         self.assertNotIn("_csv", all_sql)
@@ -934,9 +963,27 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             ("PoC Tests", "Performance Evaluation", "Data Pipelines"),
         )
         self.assertEqual(len(notebook.cells), 9)
-        self.assertEqual(notebook.cells[0].data_sources, ["workspace.s3"])
-        self.assertEqual(notebook.cells[1].data_sources, ["workspace.s3"])
-        self.assertEqual(notebook.cells[2].data_sources, ["workspace.s3"])
+        self.assertEqual(
+            notebook.cells[0].data_sources,
+            [
+                kostenbelege_3_1_s3_reference("kbkp_2019"),
+                kostenbelege_3_1_s3_reference("dim_kalender"),
+            ],
+        )
+        self.assertEqual(
+            notebook.cells[1].data_sources,
+            [
+                kostenbelege_3_1_s3_reference("kbpo_2019"),
+                kostenbelege_3_1_s3_reference("dim_kalender"),
+            ],
+        )
+        self.assertEqual(
+            notebook.cells[2].data_sources,
+            [
+                kostenbelege_3_1_s3_reference("kbhp_2019"),
+                kostenbelege_3_1_s3_reference("dim_kalender"),
+            ],
+        )
         self.assertTrue(
             all(str(cell.stage.get("description") or "").strip() for cell in notebook.cells)
         )
@@ -975,7 +1022,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
         )
         self.assertEqual(graph["diagnostics"], [])
         self.assertEqual(len(graph["nodes"]), 9)
-        self.assertEqual(len(graph["edges"]), 12)
+        self.assertEqual(len(graph["edges"]), 15)
         self.assertTrue(
             all(
                 node["queryOptions"]["validation"]["sourceExistence"] == "off"
@@ -1083,7 +1130,18 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             "kostenbelege_3_1_multi_source_loader",
         )
         self.assertEqual(len(notebook.cells), 5)
-        self.assertTrue(all(cell.data_sources == ["workspace.s3"] for cell in notebook.cells))
+        all_sources = [
+            kostenbelege_3_1_s3_reference(table_name)
+            for table_name in table_names
+        ]
+        self.assertEqual(notebook.cells[0].data_sources, all_sources)
+        self.assertEqual(
+            notebook.cells[1].data_sources,
+            [kostenbelege_3_1_s3_reference("dim_kalender")],
+        )
+        self.assertTrue(
+            all(cell.data_sources == all_sources for cell in notebook.cells[2:])
+        )
         self.assertTrue(all(cell.processing_hints for cell in notebook.cells))
         self.assertTrue(all(cell.result_expectations for cell in notebook.cells))
         self.assertEqual(
@@ -1408,9 +1466,13 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             f"FROM {kostenbelege_3_1_s3_reference('kbkp_2019')}",
             notebooks["kostenbelege-3-1-s3-parquet"].cells[0].sql,
         )
+        kostenbelege_sources = [
+            kostenbelege_3_1_s3_reference(table_name)
+            for table_name in table_names
+        ]
         self.assertEqual(
             notebooks["kostenbelege-3-1-s3-parquet-optimized"].cells[0].data_sources,
-            ["workspace.s3"],
+            kostenbelege_sources,
         )
         self.assertIn(
             "WITH current_kalender AS",

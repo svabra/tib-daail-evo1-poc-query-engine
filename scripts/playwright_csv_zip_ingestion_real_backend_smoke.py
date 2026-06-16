@@ -18,7 +18,7 @@ from playwright.async_api import async_playwright
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Exercise real browser ZIP CSV ingestion to Shared Workspace S3 and "
+            "Exercise real browser ZIP CSV ingestion to S3 Object Storage and "
             "PostgreSQL. The target app and local dependencies must already be running."
         )
     )
@@ -228,9 +228,9 @@ async def import_zip_to_s3(
     )
 
     await open_csv_ingestion(page, args.base_url, args.timeout_ms)
-    await page.locator('[data-csv-target-option][value="workspace.s3"]').check()
-    await page.locator('[data-csv-config-panel="workspace.s3"] [data-csv-s3-bucket]').fill(args.bucket)
-    await page.locator('[data-csv-config-panel="workspace.s3"] [data-csv-s3-prefix]').fill(prefix)
+    await page.locator('[data-csv-target-option][value="s3"]').check()
+    await page.locator('[data-csv-config-panel="s3"] [data-csv-s3-bucket]').fill(args.bucket)
+    await page.locator('[data-csv-config-panel="s3"] [data-csv-s3-prefix]').fill(prefix)
     await page.locator('[data-csv-s3-storage-format][value="csv"]').check()
     await page.locator("[data-csv-file-input]").set_input_files(
         files=[
@@ -249,7 +249,7 @@ async def import_zip_to_s3(
         args.timeout_ms,
         page.locator("[data-csv-import-submit]"),
     )
-    if payload.get("targetId") != "workspace.s3":
+    if payload.get("targetId") != "s3":
         raise RuntimeError(f"Unexpected S3 target in completion payload: {payload!r}")
     if payload.get("importedCount") != 2 or payload.get("failedCount") != 0:
         raise RuntimeError(f"Unexpected S3 import counts: {payload!r}")
@@ -271,7 +271,7 @@ async def import_zip_to_s3(
     await assert_success_dialog(
         page,
         args.timeout_ms,
-        ["CSV import finished", "2 file(s) processed", "Shared Workspace S3"],
+        ["CSV import finished", "2 file(s) processed", "S3 Object Storage"],
     )
     return prefix, expected_keys
 

@@ -73,7 +73,7 @@ def sample_catalogs() -> list[SourceCatalog]:
     return [
         SourceCatalog(
             name="workspace",
-            connection_source_id="workspace.s3",
+            connection_source_id="s3",
             schemas=[
                 SourceSchema(
                     name="test",
@@ -138,7 +138,7 @@ class QueryExplainServiceTests(unittest.TestCase):
             with self.assertRaises(ValueError) as exc:
                 service.explain_query(
                     sql="select * from missing.schema_table",
-                    data_sources=["workspace.s3"],
+                    data_sources=["s3"],
                     query_options={"validation": {"sourceExistence": "on"}},
                 )
 
@@ -223,7 +223,7 @@ class QueryExplainSummaryTests(unittest.TestCase):
                 "physical_plan": physical_plan,
             },
             text_plans={"physical_plan": "CSV_SCAN"},
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
             touched_relations=["s3.test.large.csv"],
             touched_buckets=["test"],
         )
@@ -251,7 +251,7 @@ class QueryExplainApiTests(unittest.TestCase):
                     "notebookId": "notebook",
                     "notebookTitle": "Notebook",
                     "cellId": "cell-1",
-                    "dataSources": ["workspace.s3"],
+                    "dataSources": ["s3"],
                     "localRelations": {"alias": "physical"},
                     "queryOptions": {
                         "duckdb": {"parquetHivePartitioning": "on"},
@@ -289,7 +289,7 @@ class QueryExplainApiTests(unittest.TestCase):
                     "notebookId": "notebook",
                     "notebookTitle": "Notebook",
                     "cellId": "cell-4",
-                    "dataSources": ["workspace.s3"],
+                    "dataSources": ["s3"],
                     "localRelations": {"local.alias": "physical.alias"},
                     "queryOptions": {
                         "duckdb": {"parquetHivePartitioning": "auto"},

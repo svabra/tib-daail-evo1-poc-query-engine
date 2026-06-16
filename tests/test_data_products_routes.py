@@ -129,7 +129,7 @@ class FakeWorkbenchService:
                 title="Shared Workspace Bucket",
                 source=DataProductSourceDescriptor(
                     source_kind="bucket",
-                    source_id="workspace.s3",
+                    source_id="s3",
                     bucket="shared-finance",
                     source_display_name="shared-finance",
                     source_platform="s3",
@@ -141,7 +141,7 @@ class FakeWorkbenchService:
                 title="Finance Object",
                 source=DataProductSourceDescriptor(
                     source_kind="object",
-                    source_id="workspace.s3",
+                    source_id="s3",
                     bucket="shared-finance",
                     key="exports/orders.csv",
                     source_display_name="orders.csv",

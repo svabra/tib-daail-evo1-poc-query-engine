@@ -16,7 +16,7 @@ SPEC = FileSmokeSpec(
 
 def main() -> int:
     args = parse_args(
-        "Exercise real browser Excel ingestion to Shared Workspace S3 and PostgreSQL.",
+        "Exercise real browser Excel ingestion to S3 Object Storage and PostgreSQL.",
         SPEC.s3_prefix_root,
     )
     return asyncio.run(run_smoke(args, SPEC))

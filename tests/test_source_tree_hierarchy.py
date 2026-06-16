@@ -115,7 +115,7 @@ class SourceTreeHierarchyTests(unittest.TestCase):
 def _workspace_catalog(objects: list[SourceObject]) -> SourceCatalog:
     return SourceCatalog(
         name="workspace",
-        connection_source_id="workspace.s3",
+        connection_source_id="s3",
         schemas=[
             SourceSchema(
                 name="shared-finance",

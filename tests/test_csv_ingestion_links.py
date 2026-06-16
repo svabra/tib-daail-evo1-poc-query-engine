@@ -67,7 +67,7 @@ class CsvIngestionLinkTests(TestCase):
         catalogs = [
             SourceCatalog(
                 name="workspace",
-                connection_source_id="workspace.s3",
+                connection_source_id="s3",
                 schemas=[
                     SourceSchema(
                         name="vat_smoke_test_bucket",
@@ -92,7 +92,7 @@ class CsvIngestionLinkTests(TestCase):
 
         payload = attach_query_sources_to_csv_imports(
             {
-                "targetId": "workspace.s3",
+                "targetId": "s3",
                 "imports": [
                     {
                         "fileName": "vat_smoke.csv",
@@ -104,7 +104,7 @@ class CsvIngestionLinkTests(TestCase):
             catalogs,
         )
 
-        self.assertEqual(payload["firstQuerySource"]["sourceId"], "workspace.s3")
+        self.assertEqual(payload["firstQuerySource"]["sourceId"], "s3")
         self.assertEqual(
             payload["imports"][0]["querySource"]["relation"],
             "vat_smoke_test_bucket.vat_smoke",

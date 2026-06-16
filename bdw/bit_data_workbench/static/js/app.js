@@ -4208,7 +4208,7 @@ function flashSourceNavigationTarget(target) {
 }
 
 async function navigateToPreparedSourceObject(source) {
-  const sourceId = source?.sourceId || (source?.bucket && source?.key ? "workspace.s3" : "");
+  const sourceId = source?.sourceId || (source?.bucket && source?.key ? "s3" : "");
   await revealDataSourceSidebarBrowser(sourceId);
   await refreshSidebar("notebook");
   closeNotebookSidebarSection();
@@ -5704,10 +5704,15 @@ function createEmptyCellState(initial = {}) {
 }
 
 function createSourceQueryCellState(sourceDescriptor, fields = []) {
+  const relation = String(sourceDescriptor?.relation ?? "").trim();
+  const sourceId = String(sourceDescriptor?.sourceId ?? "").trim();
+  const dataSourceId = sourceId === "s3" && relation.toLowerCase().startsWith("s3.")
+    ? relation
+    : sourceId;
   return createEmptyCellState({
     language: "sql",
-    dataSources: sourceDescriptor?.sourceId ? [sourceDescriptor.sourceId] : [],
-    sql: sourceQuerySql(sourceDescriptor?.relation ?? "", fields),
+    dataSources: dataSourceId ? [dataSourceId] : [],
+    sql: sourceQuerySql(relation, fields),
   });
 }
 
@@ -10281,7 +10286,7 @@ function syncResultExportSelectionState() {
       !String(resultExportDialogState.fileName || "").trim();
     submitButton.textContent = resultExportDialogState.saving
       ? "Saving..."
-      : "Save to Shared Workspace (S3)";
+      : "Save to S3 Object Storage";
   }
 
   dialog.querySelectorAll("[data-s3-explorer-node]").forEach((node) => {
@@ -10467,11 +10472,11 @@ async function openResultExportDialog(job, exportFormat = "csv") {
   const titleNode = dialog.querySelector("[data-result-export-title]");
   const copyNode = dialog.querySelector("[data-result-export-copy]");
   if (titleNode) {
-    titleNode.textContent = "Save Results in Shared Workspace (S3) ...";
+    titleNode.textContent = "Save Results in S3 Object Storage ...";
   }
   if (copyNode) {
     copyNode.textContent =
-      "Choose a Shared Workspace (S3) location, then select the export format and any format-specific settings.";
+      "Choose a S3 Object Storage location, then select the export format and any format-specific settings.";
   }
 
   syncResultExportSelectionState();

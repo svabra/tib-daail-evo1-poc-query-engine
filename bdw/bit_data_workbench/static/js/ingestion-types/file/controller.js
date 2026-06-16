@@ -108,7 +108,7 @@ function defaultParquetOptimization() {
 
 function currentParquetOptimization(form) {
   const state = form ? form.__bdwFileIngestionState : null;
-  if (stateKey(form) !== "parquet" || selectedTargetId(form) !== "workspace.s3") {
+  if (stateKey(form) !== "parquet" || selectedTargetId(form) !== "s3") {
     return defaultParquetOptimization();
   }
   const mode = String(
@@ -258,7 +258,7 @@ export function createFileIngestionController(helpers) {
     if (!panel) {
       return;
     }
-    const visible = stateKey(form) === "parquet" && selectedTargetId(form) === "workspace.s3";
+    const visible = stateKey(form) === "parquet" && selectedTargetId(form) === "s3";
     panel.hidden = !visible;
     const manualOptions = panel.querySelector("[data-file-parquet-manual-options]");
     const mode = String(
@@ -461,7 +461,7 @@ export function createFileIngestionController(helpers) {
     return state.selectedFiles
       .map((entry) => {
         const targetCopy =
-          config.targetId === "workspace.s3"
+          config.targetId === "s3"
             ? `s3://${config.bucket || "<bucket>"}/${normalizePrefix(`${config.prefix}/${entry.file.name}`)}`
             : config.targetId === "workspace.local"
               ? localWorkspaceDisplayPath(config.folderPath, entry.file.name)
@@ -478,7 +478,7 @@ export function createFileIngestionController(helpers) {
               ZIP archives are expanded server-side for Shared Workspace and PostgreSQL targets.
             </span>
             ${
-              config.targetId === "workspace.s3" && stateKey(form) === "parquet"
+              config.targetId === "s3" && stateKey(form) === "parquet"
                 ? `<span class="ingestion-csv-review-copy">${escapeHtml(
                     parquetOptimizationLabel(config.parquetOptimization)
                   )}</span>`
@@ -1220,8 +1220,8 @@ export function createFileIngestionController(helpers) {
 }
 
 function targetLabel(targetId) {
-  if (targetId === "workspace.s3") {
-    return "Shared Workspace S3";
+  if (targetId === "s3") {
+    return "S3 Object Storage";
   }
   if (targetId === "pg_oltp") {
     return "PostgreSQL OLTP";

@@ -233,7 +233,7 @@ def _s3_source_record(
 
     return _attach_source_navigation(
         {
-            "source_id": "workspace.s3",
+            "source_id": "s3",
             "name": "Shared Workspace",
             "label": "MinIO / S3",
             "source_type": "Workspace Storage",

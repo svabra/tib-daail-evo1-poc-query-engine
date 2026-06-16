@@ -126,21 +126,24 @@ class QueryJobClassifierTests(TestCase):
             QUERY_EXECUTION_POSTGRES_NATIVE,
         )
 
-    def test_identifies_workspace_s3_glob_relations_as_direct_file_relations(self) -> None:
+    def test_identifies_s3_glob_relations_as_direct_file_relations(self) -> None:
         self.assertTrue(
-            _is_direct_file_relation('workspace.s3."bucket"."path/to/file.parquet"')
+            _is_direct_file_relation('s3."bucket"."path/to/file.parquet"')
         )
         self.assertTrue(
-            _is_direct_file_relation('workspace.s3."bucket"."path/to/*.parquet"')
+            _is_direct_file_relation('s3."bucket"."path/to/*.parquet"')
         )
         self.assertFalse(
-            _is_direct_file_relation("workspace.s3.test")
+            _is_direct_file_relation("s3.test")
         )
         self.assertTrue(
             _is_direct_file_relation('s3."bucket"."path/to/file.parquet"')
         )
         self.assertTrue(
             _is_direct_file_relation('s3."bucket"."path/to/*.parquet"')
+        )
+        self.assertTrue(
+            _is_direct_file_relation('"s3"."bucket"."path/to/file.parquet"')
         )
         self.assertFalse(
             _is_direct_file_relation("s3.test")
@@ -460,7 +463,7 @@ class ProcessQueryJobManagerTests(TestCase):
             notebook_title="Notebook",
             cell_id="cell-1",
             requested_job_id="query-client-preflight-failure",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
             query_options={"validation": {"sourceExistence": "on"}},
             client_pre_submit_ms=12.5,
         )
@@ -828,7 +831,7 @@ class ProcessQueryJobManagerTests(TestCase):
                 notebook_id="notebook-y",
                 notebook_title="Notebook Y",
                 cell_id="cell-x",
-                data_sources=["workspace.s3"],
+                data_sources=['s3.KBPOimports."KBPO2020.parquet"'],
                 touched_relations=["test.sample_csv"],
                 touched_buckets=["test"],
                 client_pre_submit_ms=6.25,
@@ -1178,7 +1181,7 @@ class ProcessQueryJobManagerTests(TestCase):
             notebook_id="nb",
             notebook_title="Notebook",
             cell_id="cell-shared-release-complete",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
             touched_relations=["s3.test.sample_data"],
             touched_buckets=["test"],
         )
@@ -1206,7 +1209,7 @@ class ProcessQueryJobManagerTests(TestCase):
             notebook_id="nb",
             notebook_title="Notebook",
             cell_id="cell-shared-release-cancel",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
             touched_relations=["s3.test.sample_data"],
             touched_buckets=["test"],
         )
@@ -1250,7 +1253,7 @@ class ProcessQueryJobManagerTests(TestCase):
                 notebook_id="nb",
                 notebook_title="Notebook",
                 cell_id="cell-wait",
-                data_sources=["workspace.s3"],
+                data_sources=["s3"],
                 touched_relations=["s3.test.sample_data"],
                 touched_buckets=["test"],
             )
@@ -1285,6 +1288,41 @@ class ProcessQueryJobManagerTests(TestCase):
         self.assertEqual(waiting_events[-1]["duckdb_lock_owner_job_id"], "writer-job")
         self.assertEqual(completed.duckdb_execution_path, "shared-file-read")
 
+    def test_fully_quoted_s3_parquet_file_read_skips_duckdb_access_wait(self) -> None:
+        self.assertTrue(
+            self.manager._access_coordinator.acquire(
+                QUERY_EXECUTION_DUCKDB_WRITE,
+                lambda: False,
+                owner_job_id="writer-job",
+            )
+        )
+        try:
+            job = self.manager.start_job(
+                sql="select 1 as value",
+                notebook_id="nb",
+                notebook_title="Notebook",
+                cell_id="cell-quoted-s3-file",
+                data_sources=["s3"],
+                touched_relations=['"s3"."KBPOimports"."KBPO2020.parquet"'],
+                touched_buckets=["KBPOimports"],
+            )
+            completed = wait_until(
+                lambda: self.manager.snapshot(job.job_id)
+                if self.manager.snapshot(job.job_id).status == "completed"
+                else None,
+                timeout=5,
+            )
+        finally:
+            self.manager._access_coordinator.release(
+                QUERY_EXECUTION_DUCKDB_WRITE,
+                owner_job_id="writer-job",
+            )
+
+        self.assertIsNotNone(completed)
+        self.assertEqual(completed.duckdb_execution_path, "isolated-read")
+        self.assertEqual(completed.timings.get("engineAccessWaitMs"), 0.0)
+        self.assertNotIn("engine_waiting", [event.get("event") for event in completed.progress_events])
+
     def test_materialized_stage_s3_parquet_summary_isolated_read_skips_duckdb_file_lock(self) -> None:
         stage_file = self._create_stage_parquet_fixture()
         query_sql = f"read_parquet('{stage_file.as_posix()}')"
@@ -1304,7 +1342,7 @@ class ProcessQueryJobManagerTests(TestCase):
                 notebook_id="nb",
                 notebook_title="Notebook",
                 cell_id="cell-stage-read",
-                data_sources=["workspace.s3"],
+                data_sources=["s3"],
                 touched_relations=["stage.mwa_joined_abrechnungen"],
                 touched_buckets=["vat-smoke-test"],
                 source_summaries=[
@@ -1363,7 +1401,7 @@ class ProcessQueryJobManagerTests(TestCase):
                 notebook_id="nb",
                 notebook_title="Notebook",
                 cell_id="cell-mwa-glob",
-                data_sources=["workspace.s3"],
+                data_sources=["s3"],
                 touched_relations=touched_relations,
                 touched_buckets=["poc-tests-performance-evaluation-mwa-abrechnung-3-2"],
             )
@@ -1385,7 +1423,7 @@ class ProcessQueryJobManagerTests(TestCase):
         self.assertNotIn("engine_waiting", [event.get("event") for event in completed.progress_events])
         self.assertEqual(len(completed.rows), 3)
 
-    def test_workspace_prefixed_mwa_s3_glob_join_isolated_read_skips_duckdb_file_lock(self) -> None:
+    def test_s3_mwa_glob_join_isolated_read_skips_duckdb_file_lock(self) -> None:
         entities_directory, ziffern_directory = self._create_mwa_parquet_join_fixture()
         entities_pattern = entities_directory / "*.parquet"
         ziffern_pattern = ziffern_directory / "*.parquet"
@@ -1396,8 +1434,8 @@ class ProcessQueryJobManagerTests(TestCase):
             "ON ZIFF.abrechnung_refer = ENTI.id_"
         )
         touched_relations = [
-            'workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"."generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet"',
-            'workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"."generated/mwa_abrechnung/parquet/mwa_abrechnungs_ziffern_entities/*.parquet"',
+            's3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"."generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet"',
+            's3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"."generated/mwa_abrechnung/parquet/mwa_abrechnungs_ziffern_entities/*.parquet"',
         ]
 
         self.assertTrue(
@@ -1412,8 +1450,8 @@ class ProcessQueryJobManagerTests(TestCase):
                 sql=query,
                 notebook_id="nb",
                 notebook_title="Notebook",
-                cell_id="cell-mwa-glob-workspace",
-                data_sources=["workspace.s3"],
+                cell_id="cell-mwa-glob-s3",
+                data_sources=["s3"],
                 touched_relations=touched_relations,
                 touched_buckets=["poc-tests-performance-evaluation-mwa-abrechnung-3-2"],
             )
@@ -1438,7 +1476,7 @@ class ProcessQueryJobManagerTests(TestCase):
         )
         self.assertEqual(len(completed.rows), 3)
 
-    def test_workspace_prefixed_mwa_s3_single_file_join_isolated_read_skips_duckdb_file_lock(self) -> None:
+    def test_s3_mwa_single_file_join_isolated_read_skips_duckdb_file_lock(self) -> None:
         entities_directory, ziffern_directory = self._create_mwa_parquet_join_fixture()
         entities_file = entities_directory / "part-00000.parquet"
         ziffern_file = ziffern_directory / "part-00000.parquet"
@@ -1449,9 +1487,9 @@ class ProcessQueryJobManagerTests(TestCase):
             "ON ZIFF.abrechnung_refer = ENTI.id_"
         )
         touched_relations = [
-            'workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+            's3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
             '."generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/part-00000.parquet"',
-            'workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+            's3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
             '."generated/mwa_abrechnung/parquet/mwa_abrechnungs_ziffern_entities/part-00000.parquet"',
         ]
 
@@ -1468,7 +1506,7 @@ class ProcessQueryJobManagerTests(TestCase):
                 notebook_id="nb",
                 notebook_title="Notebook",
                 cell_id="cell-mwa-single",
-                data_sources=["workspace.s3"],
+                data_sources=["s3"],
                 touched_relations=touched_relations,
                 touched_buckets=["poc-tests-performance-evaluation-mwa-abrechnung-3-2"],
             )
@@ -1521,7 +1559,7 @@ class ProcessQueryJobManagerTests(TestCase):
                 notebook_id="nb",
                 notebook_title="Notebook",
                 cell_id="cell-mwa-glob-plain",
-                data_sources=["workspace.s3"],
+                data_sources=["s3"],
                 touched_relations=touched_relations,
                 touched_buckets=["poc-tests-performance-evaluation-mwa-abrechnung-3-2"],
             )
@@ -1573,7 +1611,7 @@ class ProcessQueryJobManagerTests(TestCase):
                 notebook_id="nb",
                 notebook_title="Notebook",
                 cell_id="cell-isolated",
-                data_sources=["workspace.s3"],
+                data_sources=["s3"],
                 touched_relations=["test.sample_parquet", "test.sample_csv"],
                 touched_buckets=["test"],
                 source_summaries=[
@@ -1625,7 +1663,7 @@ class ProcessQueryJobManagerTests(TestCase):
             notebook_id="nb",
             notebook_title="Notebook",
             cell_id="cell-parquet-release-complete",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
             touched_relations=["stage.sample_data"],
             touched_buckets=["test"],
             source_summaries=[
@@ -1667,7 +1705,7 @@ class ProcessQueryJobManagerTests(TestCase):
             notebook_id="nb",
             notebook_title="Notebook",
             cell_id="cell-parquet-release-cancel",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
             touched_relations=["stage.sample_data"],
             touched_buckets=["test"],
             source_summaries=[
@@ -1712,7 +1750,7 @@ class ProcessQueryJobManagerTests(TestCase):
             notebook_id="nb",
             notebook_title="Notebook",
             cell_id="cell-shared-file-read-bootstrap",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
             touched_relations=["existing_relation", "s3.unused_source"],
             touched_buckets=["test"],
             source_summaries=[
@@ -1776,7 +1814,7 @@ class ProcessQueryJobManagerTests(TestCase):
             notebook_id="nb",
             notebook_title="Notebook",
             cell_id="cell-recovery",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
             touched_relations=["legacy.sample"],
             touched_buckets=["legacy"],
         )

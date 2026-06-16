@@ -1053,7 +1053,7 @@ export function createDataExchangeController(helpers) {
       );
       query("[data-data-exchange-copy-dialog]")?.close();
       await showMessageDialog({
-        title: "Copied to Shared Workspace S3",
+        title: "Copied to S3 Object Storage",
         copy: `${result.importedCount || 0} file(s) copied into queryable storage.`,
       });
     } catch (error) {

@@ -2142,7 +2142,7 @@ export function createNotebookStagePipelineController(helpers) {
       });
       return;
     }
-    await revealDataSourceSidebarBrowser("workspace.s3");
+    await revealDataSourceSidebarBrowser("s3");
     await refreshSidebar("notebook");
     closeNotebookExplorer();
     const selector = `[data-source-object][data-s3-bucket="${CSS.escape(source.bucket)}"][data-s3-key="${CSS.escape(source.key)}"]`;

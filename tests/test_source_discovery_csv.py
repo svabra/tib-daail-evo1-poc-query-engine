@@ -341,7 +341,7 @@ class CsvS3DiscoveryTests(TestCase):
         service._data_source_discovery = SimpleNamespace(
             s3_relation_specs=lambda: specs,
         )
-        metadata = WorkbenchService._workspace_s3_object_metadata(service)
+        metadata = WorkbenchService._s3_storage_object_metadata(service)
         item = next(iter(metadata.values()))
         self.assertEqual(
             item["query_alias"],
@@ -600,7 +600,7 @@ class CsvS3DiscoveryTests(TestCase):
             s3_relation_specs=lambda: specs,
         )
 
-        metadata = WorkbenchService._workspace_s3_object_metadata(service)
+        metadata = WorkbenchService._s3_storage_object_metadata(service)
         by_display_name = {
             value["display_name"]: value
             for value in metadata.values()
@@ -676,7 +676,7 @@ class CsvS3DiscoveryTests(TestCase):
             },
         )
 
-        metadata = WorkbenchService._workspace_s3_object_metadata(service)
+        metadata = WorkbenchService._s3_storage_object_metadata(service)
         item = metadata["kostenbelege.dim_kalender_parquet"]
 
         self.assertEqual(

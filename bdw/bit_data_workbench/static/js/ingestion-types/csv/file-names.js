@@ -43,7 +43,7 @@ export function resolveCsvDestinationFileName(
   } = {}
 ) {
   const sourceUploadFileName = resolveCsvSourceUploadFileName(baseName, fallbackFileName);
-  if (String(targetId || "").trim() !== "workspace.s3") {
+  if (String(targetId || "").trim() !== "s3") {
     return sourceUploadFileName;
   }
   return resolveCsvS3StoredFileName(
@@ -54,7 +54,7 @@ export function resolveCsvDestinationFileName(
 
 export function csvImportNameFieldLabel(targetId = "workspace.local") {
   switch (String(targetId || "").trim()) {
-    case "workspace.s3":
+    case "s3":
       return "Object name";
     case "workspace.local":
       return "Stored file name";
@@ -67,7 +67,7 @@ export function csvImportNameSuffix(
   targetId = "workspace.local",
   storageFormat = "csv"
 ) {
-  if (String(targetId || "").trim() === "workspace.s3") {
+  if (String(targetId || "").trim() === "s3") {
     const normalizedStorageFormat = normalizeCsvS3StorageFormat(storageFormat);
     return normalizedStorageFormat === "json" ? ".jsonl" : `.${normalizedStorageFormat}`;
   }

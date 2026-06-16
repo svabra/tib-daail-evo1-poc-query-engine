@@ -1228,7 +1228,7 @@ class WorkbenchService:
         )
 
     def _complete_s3_delete_job(self, _job_payload: dict[str, Any]) -> None:
-        self._data_source_discovery.sync_source("workspace.s3", emit_event=True)
+        self._data_source_discovery.sync_source("s3", emit_event=True)
 
     def copy_data_exchange_file_to_shared_s3(
         self,
@@ -1247,7 +1247,7 @@ class WorkbenchService:
             file_name=file_name,
         )
         if payload.get("importedCount"):
-            self._data_source_discovery.sync_source("workspace.s3", emit_event=True)
+            self._data_source_discovery.sync_source("s3", emit_event=True)
             payload = self._attach_s3_query_sources_from_discovery(payload)
         return payload
 
@@ -2340,10 +2340,8 @@ class WorkbenchService:
                     if str(source_object.name or "").strip().lower() not in accepted_names:
                         continue
                     query_reference = str(source_object.query_reference or "").strip()
-                    if query_reference.startswith(("s3.", "workspace.s3.")):
+                    if query_reference.startswith("s3."):
                         aliases.add(query_reference)
-                        if query_reference.startswith("s3."):
-                            aliases.add(f"workspace.{query_reference}")
                     if source_object.s3_bucket and source_object.s3_key:
                         source_reference = s3_source_reference(
                             bucket=source_object.s3_bucket,
@@ -2351,7 +2349,6 @@ class WorkbenchService:
                         )
                         if source_reference:
                             aliases.add(source_reference)
-                            aliases.add(f"workspace.{source_reference}")
         return aliases
 
     def _completed_stage_records_by_alias(self, notebook_id: str) -> dict[str, StageRecord]:
@@ -2436,12 +2433,7 @@ class WorkbenchService:
             return None
 
         first = cleaned_parts[0].lower()
-        if first == "workspace":
-            if len(cleaned_parts) < 4 or cleaned_parts[1].lower() != "s3":
-                return None
-            bucket = cleaned_parts[2]
-            object_key = ".".join(cleaned_parts[3:]).strip().lstrip("/")
-        elif first == "s3":
+        if first == "s3":
             if len(cleaned_parts) < 3:
                 return None
             bucket = cleaned_parts[1]
@@ -2506,10 +2498,7 @@ class WorkbenchService:
             if "*" not in object_key and "?" not in object_key:
                 return True
             normalized_relation = normalize_relation_key(relation)
-            if not (
-                normalized_relation.startswith("s3.")
-                or normalized_relation.startswith("workspace.s3.")
-            ):
+            if not normalized_relation.startswith("s3."):
                 return True
             manifest_reference = relation_index.get(normalized_relation)
             if normalized_relation and (
@@ -2549,12 +2538,6 @@ class WorkbenchService:
             )
             relation_index.setdefault(normalized_relation, relation_entry)
 
-            if normalized_relation.startswith("workspace.s3."):
-                normalized_s3_relation = normalize_relation_key(
-                    f"s3.{bucket}.{object_key}"
-                )
-                relation_index.setdefault(normalized_s3_relation, relation_entry)
-
     def _add_s3_discovery_relation_aliases(
         self,
         relation_index: dict[str, KnownRelationReference],
@@ -2566,7 +2549,7 @@ class WorkbenchService:
         specs = s3_relation_specs()
         if not specs:
             return
-        metadata_by_relation = self._workspace_s3_object_metadata()
+        metadata_by_relation = self._s3_storage_object_metadata()
         for relation_id, spec in specs.items():
             relation = str(relation_id or "").strip()
             if not relation:
@@ -2588,7 +2571,7 @@ class WorkbenchService:
             relation_name = str(getattr(spec, "relation_name", "") or "").strip()
             if schema_name and relation_name:
                 aliases.add(f"{schema_name}.{relation_name}")
-            for prefix in ("workspace", "workspace.s3"):
+            for prefix in ("s3",):
                 aliases.add(f"{prefix}.{relation}")
                 if schema_name and relation_name:
                     aliases.add(f"{prefix}.{schema_name}.{relation_name}")
@@ -2628,18 +2611,13 @@ class WorkbenchService:
                 continue
             if not (
                 key.startswith("s3.")
-                or key.startswith("workspace.s3.")
                 or key.startswith("pg.")
                 or key.startswith("stage.")
             ):
                 continue
             replacement = (
                 value.query_sql
-                if (
-                    key.startswith("s3.")
-                    or key.startswith("workspace.s3.")
-                    or key.startswith("stage.")
-                )
+                if (key.startswith("s3.") or key.startswith("stage."))
                 else value.relation
             )
             if str(replacement or "").strip():
@@ -2679,7 +2657,6 @@ class WorkbenchService:
                 continue
             if not (
                 normalized_relation.startswith("s3.")
-                or normalized_relation.startswith("workspace.s3.")
                 or normalized_relation.startswith("stage.")
             ):
                 continue
@@ -2731,7 +2708,7 @@ class WorkbenchService:
         discovery = getattr(self, "_data_source_discovery", None)
         s3_relation_specs = getattr(discovery, "s3_relation_specs", None)
         specs = s3_relation_specs() if callable(s3_relation_specs) else {}
-        metadata_by_relation = self._workspace_s3_object_metadata() if specs else {}
+        metadata_by_relation = self._s3_storage_object_metadata() if specs else {}
         with self._lock:
             catalogs = list(self._catalogs)
         for catalog in catalogs:
@@ -3056,7 +3033,7 @@ class WorkbenchService:
         result = self._s3_plugin.create(
             DataSourceCreateRequest(kind="bucket", name=bucket_name)
         )
-        self._data_source_discovery.sync_source("workspace.s3", emit_event=True)
+        self._data_source_discovery.sync_source("s3", emit_event=True)
         return result.payload
 
     def create_s3_folder(self, *, bucket: str, prefix: str = "", folder_name: str) -> dict[str, object]:
@@ -3143,7 +3120,7 @@ class WorkbenchService:
             return synthetic_source_ddl(
                 fields=fields,
                 object_name=object_name or PurePosixPath(normalized_key).name,
-                source_id=normalized_source_id or "workspace.s3",
+                source_id=normalized_source_id or "s3",
                 source_path=path,
             )
 
@@ -3423,7 +3400,7 @@ class WorkbenchService:
     ) -> dict[str, object]:
         if not payload.get("importedCount"):
             return payload
-        if normalized_target_id == "workspace.s3":
+        if normalized_target_id == "s3":
             return self._finalize_s3_import_payload(payload)
 
         self.refresh_metadata_state()
@@ -3436,7 +3413,7 @@ class WorkbenchService:
     def _finalize_s3_import_payload(self, payload: dict[str, object]) -> dict[str, object]:
         next_payload = payload
         for attempt in range(5):
-            self._data_source_discovery.sync_source("workspace.s3", emit_event=True)
+            self._data_source_discovery.sync_source("s3", emit_event=True)
             next_payload = attach_query_sources_to_csv_imports(
                 next_payload,
                 list(getattr(self, "_catalogs", []) or []),
@@ -3650,7 +3627,7 @@ class WorkbenchService:
                 except ValueError:
                     alias_bucket, alias_key = str(next_item.get("bucket") or ""), ""
                 query_source = {
-                    "sourceId": "workspace.s3",
+                    "sourceId": "s3",
                     "catalogName": "workspace",
                     "schemaName": schema_name,
                     "schemaLabel": str(next_item.get("bucket") or schema_name),
@@ -3769,7 +3746,7 @@ class WorkbenchService:
                     exc_info=True,
                 )
 
-        self._data_source_discovery.sync_source("workspace.s3", emit_event=True)
+        self._data_source_discovery.sync_source("s3", emit_event=True)
         return result.payload
 
     def copy_local_workspace_export_to_s3(
@@ -3791,7 +3768,7 @@ class WorkbenchService:
             bucket=bucket,
             prefix=prefix,
         )
-        self._data_source_discovery.sync_source("workspace.s3", emit_event=True)
+        self._data_source_discovery.sync_source("s3", emit_event=True)
         return result.payload
 
     def source_object_fields(self, relation: str) -> list[SourceField]:
@@ -4198,8 +4175,10 @@ class WorkbenchService:
         normalized_source_id = str(source_id or "").strip().lower()
         if normalized_source_id == "pg_oltp_native":
             return "pg_oltp"
+        if normalized_source_id.startswith("s3."):
+            return "s3"
         if normalized_source_id == "workspace":
-            return "workspace.s3"
+            return "s3"
         if normalized_source_id == "workspace_local":
             return "workspace.local"
         return normalized_source_id
@@ -4245,7 +4224,7 @@ class WorkbenchService:
         sync_source = getattr(self._data_source_discovery, "sync_source", None)
         if not callable(sync_source):
             return
-        sync_source("workspace.s3", emit_event=False)
+        sync_source("s3", emit_event=False)
 
     def _ensure_startup_shared_notebook_seeds(self) -> None:
         with self._lock:
@@ -4389,7 +4368,7 @@ class WorkbenchService:
     @staticmethod
     def _normalize_generated_s3_source_objects(catalogs: list[SourceCatalog]) -> None:
         for catalog in catalogs:
-            if str(catalog.connection_source_id or "").strip() != "workspace.s3":
+            if str(catalog.connection_source_id or "").strip() != "s3":
                 continue
             for schema in catalog.schemas:
                 for source_object in schema.objects:
@@ -5458,7 +5437,7 @@ class WorkbenchService:
 
     def _refresh_state(self, conn: duckdb.DuckDBPyConnection) -> None:
         source_statuses = self._data_source_discovery.source_statuses()
-        workspace_s3_objects = self._workspace_s3_object_metadata()
+        s3_storage_objects = self._s3_storage_object_metadata()
         workspace_rows = conn.execute(
             """
             SELECT
@@ -5479,7 +5458,7 @@ class WorkbenchService:
         }
         workspace_schema_labels: dict[str, str] = {}
 
-        workspace_source_id = "workspace.s3"
+        workspace_source_id = "s3"
         workspace_status = source_statuses.get(workspace_source_id)
         workspace_discovery_enabled = workspace_status is None or workspace_status.state == "connected"
 
@@ -5512,7 +5491,7 @@ class WorkbenchService:
             if catalog in {"pg_oltp", "pg_olap"}:
                 continue
             relation_id = f"{schema}.{table_name}"
-            s3_metadata = workspace_s3_objects.get(relation_id, {})
+            s3_metadata = s3_storage_objects.get(relation_id, {})
             s3_bucket = str(s3_metadata.get("bucket") or "").strip()
             if s3_bucket:
                 workspace_schema_labels.setdefault(schema, s3_bucket)
@@ -5614,7 +5593,7 @@ class WorkbenchService:
         self._completion_schema = build_completion_schema(catalogs)
         self._source_options = build_source_options(catalogs)
 
-    def _workspace_s3_object_metadata(self) -> dict[str, dict[str, object]]:
+    def _s3_storage_object_metadata(self) -> dict[str, dict[str, object]]:
         metadata: dict[str, dict[str, object]] = {}
         alias_candidates: list[tuple[str, str]] = []
         for relation_id, spec in self._data_source_discovery.s3_relation_specs().items():

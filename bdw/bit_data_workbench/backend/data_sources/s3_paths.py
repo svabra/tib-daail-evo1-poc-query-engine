@@ -62,12 +62,6 @@ def _bucket_key_from_reference(value: str) -> tuple[str, str]:
     parts = split_qualified_reference(value)
     if len(parts) == 3 and parts[0].strip().lower() == "s3":
         return parts[1].strip(), parts[2].strip().lstrip("/")
-    if (
-        len(parts) == 4
-        and parts[0].strip().lower() == "workspace"
-        and parts[1].strip().lower() == "s3"
-    ):
-        return parts[2].strip(), parts[3].strip().lstrip("/")
     return "", ""
 
 

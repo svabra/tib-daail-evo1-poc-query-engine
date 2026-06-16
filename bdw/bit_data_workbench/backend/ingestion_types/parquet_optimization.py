@@ -61,10 +61,10 @@ def normalize_parquet_optimization_settings(
     normalized_target = str(target_id or "").strip()
     normalized_format = str(storage_format or "").strip().lower()
     if settings.mode != "off" and (
-        normalized_target != "workspace.s3" or normalized_format != "parquet"
+        normalized_target != "s3" or normalized_format != "parquet"
     ):
         raise ValueError(
-            "Parquet optimization is only available for Shared Workspace S3 imports stored as Parquet."
+            "Parquet optimization is only available for S3 Object Storage imports stored as Parquet."
         )
 
     if settings.mode == "off":

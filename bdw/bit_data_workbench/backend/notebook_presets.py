@@ -27,6 +27,21 @@ KOSTENBELEGE_3_1_PROBLEM_TREE_PATH = (
     "Kostenbelege (3.1)",
 )
 
+
+def _s3_data_sources(*relations: str | None) -> list[str]:
+    sources: list[str] = []
+    seen: set[str] = set()
+    for relation in relations:
+        source = str(relation or "").strip()
+        if not source or not source.lower().startswith("s3."):
+            continue
+        if source in seen:
+            continue
+        seen.add(source)
+        sources.append(source)
+    return sources
+
+
 KOSTENBELEGE_3_1_SOURCE_COLUMNS = {
     "KBKP": (
         "KBKP_Belegnummer",
@@ -795,12 +810,14 @@ def build_mwa_s3_parquet_pipeline_notebook(
     ziffern_relation = (
         mwa_s3_parquet_relations.get("mwa_abrechnungs_ziffern_entities") or ""
     )
+    abrechnung_sources = _s3_data_sources(abrechnung_relation)
+    ziffern_sources = _s3_data_sources(ziffern_relation)
 
     if abrechnung_relation and ziffern_relation:
         cells = [
             NotebookCellDefinition(
                 cell_id="mwa-parquet-pipeline-cell-1",
-                data_sources=["workspace.s3"],
+                data_sources=abrechnung_sources,
                 query_options={"duckdb": {"parquetHivePartitioning": "auto"}},
                 sql=_build_mwa_pipeline_abrechnung_scope_sql(
                     abrechnung_relation=abrechnung_relation,
@@ -814,7 +831,7 @@ def build_mwa_s3_parquet_pipeline_notebook(
             ),
             NotebookCellDefinition(
                 cell_id="mwa-parquet-pipeline-cell-2",
-                data_sources=["workspace.s3"],
+                data_sources=ziffern_sources,
                 query_options={"duckdb": {"parquetHivePartitioning": "auto"}},
                 sql=_build_mwa_pipeline_ziffer_rollup_sql(
                     ziffern_relation=ziffern_relation,
@@ -1839,13 +1856,16 @@ def build_kostenbelege_3_1_s3_parquet_pipeline_notebook(
     kbpo_relation = kostenbelege_3_1_s3_relations.get("kbpo_2019") or ""
     kbhp_relation = kostenbelege_3_1_s3_relations.get("kbhp_2019") or ""
     kalender_relation = kostenbelege_3_1_s3_relations.get("dim_kalender") or ""
+    kbkp_sources = _s3_data_sources(kbkp_relation, kalender_relation)
+    kbpo_sources = _s3_data_sources(kbpo_relation, kalender_relation)
+    kbhp_sources = _s3_data_sources(kbhp_relation, kalender_relation)
 
     if kbkp_relation and kbpo_relation and kbhp_relation and kalender_relation:
         s3_query_options = {"duckdb": {"parquetHivePartitioning": "auto"}}
         cells = [
             NotebookCellDefinition(
                 cell_id="kostenbelege-3-1-pipeline-cell-1",
-                data_sources=["workspace.s3"],
+                data_sources=kbkp_sources,
                 query_options=s3_query_options,
                 sql=_build_kostenbelege_pipeline_headers_sql(
                     kbkp_relation=kbkp_relation,
@@ -1860,7 +1880,7 @@ def build_kostenbelege_3_1_s3_parquet_pipeline_notebook(
             ),
             NotebookCellDefinition(
                 cell_id="kostenbelege-3-1-pipeline-cell-2",
-                data_sources=["workspace.s3"],
+                data_sources=kbpo_sources,
                 query_options=s3_query_options,
                 sql=_build_kostenbelege_pipeline_positions_sql(
                     kbpo_relation=kbpo_relation,
@@ -1875,7 +1895,7 @@ def build_kostenbelege_3_1_s3_parquet_pipeline_notebook(
             ),
             NotebookCellDefinition(
                 cell_id="kostenbelege-3-1-pipeline-cell-3",
-                data_sources=["workspace.s3"],
+                data_sources=kbhp_sources,
                 query_options=s3_query_options,
                 sql=_build_kostenbelege_pipeline_ledger_accounts_sql(
                     kbhp_relation=kbhp_relation,
@@ -2021,6 +2041,13 @@ def build_kostenbelege_3_1_problem_solving_notebook(
     kbpo_relation = kostenbelege_3_1_s3_relations.get("kbpo_2019") or ""
     kbhp_relation = kostenbelege_3_1_s3_relations.get("kbhp_2019") or ""
     kalender_relation = kostenbelege_3_1_s3_relations.get("dim_kalender") or ""
+    all_s3_sources = _s3_data_sources(
+        kbkp_relation,
+        kbpo_relation,
+        kbhp_relation,
+        kalender_relation,
+    )
+    calendar_sources = _s3_data_sources(kalender_relation)
 
     if kbkp_relation and kbpo_relation and kbhp_relation and kalender_relation:
         s3_query_options = {
@@ -2030,7 +2057,7 @@ def build_kostenbelege_3_1_problem_solving_notebook(
         cells = [
             NotebookCellDefinition(
                 cell_id="test-3-1-problem-solving-cell-1",
-                data_sources=["workspace.s3"],
+                data_sources=all_s3_sources,
                 query_options=s3_query_options,
                 processing_hints=(
                     "Confirm KBKP, KBPO, KBHP, and DIM_KALENDER S3 Parquet views "
@@ -2050,7 +2077,7 @@ def build_kostenbelege_3_1_problem_solving_notebook(
             ),
             NotebookCellDefinition(
                 cell_id="test-3-1-problem-solving-cell-2",
-                data_sources=["workspace.s3"],
+                data_sources=calendar_sources,
                 query_options=s3_query_options,
                 processing_hints=(
                     "Inspect how many generated calendar dates participate under "
@@ -2066,7 +2093,7 @@ def build_kostenbelege_3_1_problem_solving_notebook(
             ),
             NotebookCellDefinition(
                 cell_id="test-3-1-problem-solving-cell-3",
-                data_sources=["workspace.s3"],
+                data_sources=all_s3_sources,
                 query_options=s3_query_options,
                 processing_hints=(
                     "Inspect DuckDB binding and planning for the original-semantics "
@@ -2085,7 +2112,7 @@ def build_kostenbelege_3_1_problem_solving_notebook(
             ),
             NotebookCellDefinition(
                 cell_id="test-3-1-problem-solving-cell-4",
-                data_sources=["workspace.s3"],
+                data_sources=all_s3_sources,
                 query_options=s3_query_options,
                 processing_hints=(
                     "Run the original two-branch CTE shape and count rows by "
@@ -2104,7 +2131,7 @@ def build_kostenbelege_3_1_problem_solving_notebook(
             ),
             NotebookCellDefinition(
                 cell_id="test-3-1-problem-solving-cell-5",
-                data_sources=["workspace.s3"],
+                data_sources=all_s3_sources,
                 query_options=s3_query_options,
                 processing_hints=(
                     "Run the complete original SQL shape against the generated S3 "
@@ -2862,6 +2889,32 @@ def build_static_notebooks(
         "-- Optional cleanup when you are done validating OLTP write access.\n"
         f"DROP TABLE IF EXISTS {oltp_write_test_table};"
     )
+    preferred_s3_sources = _s3_data_sources(preferred_s3_relation)
+    cross_source_s3_sources = _s3_data_sources(union_s3_relation)
+    parquet_off_sources = _s3_data_sources(
+        parquet_performance_option_relations.get("federal_tax_parquet_off")
+    )
+    parquet_recommended_sources = _s3_data_sources(
+        parquet_performance_option_relations.get("federal_tax_parquet_recommended")
+    )
+    parquet_manual_partition_sources = _s3_data_sources(
+        parquet_performance_option_relations.get("federal_tax_parquet_manual_partition")
+    )
+    parquet_manual_hive_sources = _s3_data_sources(
+        parquet_performance_option_relations.get("federal_tax_parquet_manual_hive")
+    )
+    parquet_manual_cache_sources = _s3_data_sources(
+        parquet_performance_option_relations.get("federal_tax_parquet_manual_cache")
+    )
+    contest_s3_sources = _s3_data_sources(contest_s3_relation)
+    multi_table_s3_sources = _s3_data_sources(*multi_table_s3_relations.values())
+    kostenbelege_3_1_s3_sources = _s3_data_sources(*kostenbelege_3_1_s3_relations.values())
+    mwa_s3_parquet_sources = _s3_data_sources(*mwa_s3_parquet_relations.values())
+    mwa_s3_parquet_abrechnung_sources = _s3_data_sources(
+        mwa_s3_parquet_relations.get("mwa_abrechnung_entities")
+    )
+    mwa_s3_csv_sources = _s3_data_sources(*mwa_s3_csv_relations.values())
+    mwa_s3_json_sources = _s3_data_sources(*mwa_s3_json_relations.values())
 
     return [
         NotebookDefinition(
@@ -2871,7 +2924,7 @@ def build_static_notebooks(
             cells=[
                 NotebookCellDefinition(
                     cell_id="s3-smoke-test-cell-1",
-                    data_sources=["workspace.s3"],
+                    data_sources=preferred_s3_sources,
                     sql=s3_sql,
                 )
             ],
@@ -3029,7 +3082,7 @@ def build_static_notebooks(
             cells=[
                 NotebookCellDefinition(
                     cell_id="postgres-oltp-s3-union-test-cell-1",
-                    data_sources=["pg_oltp", "workspace.s3"],
+                    data_sources=["pg_oltp", *cross_source_s3_sources],
                     sql=cross_source_union_sql,
                 )
             ],
@@ -3046,7 +3099,7 @@ def build_static_notebooks(
             cells=[
                 NotebookCellDefinition(
                     cell_id="federal-tax-parquet-optimization-off-cell-1",
-                    data_sources=["workspace.s3"],
+                    data_sources=parquet_off_sources,
                     query_options={"duckdb": {"parquetHivePartitioning": "auto"}},
                     sql=federal_tax_parquet_performance_sql(
                         parquet_performance_option_relations.get("federal_tax_parquet_off"),
@@ -3067,7 +3120,7 @@ def build_static_notebooks(
             cells=[
                 NotebookCellDefinition(
                     cell_id="federal-tax-parquet-optimization-recommended-cell-1",
-                    data_sources=["workspace.s3"],
+                    data_sources=parquet_recommended_sources,
                     query_options={"duckdb": {"parquetHivePartitioning": "auto"}},
                     sql=federal_tax_parquet_performance_sql(
                         parquet_performance_option_relations.get("federal_tax_parquet_recommended"),
@@ -3088,7 +3141,7 @@ def build_static_notebooks(
             cells=[
                 NotebookCellDefinition(
                     cell_id="federal-tax-parquet-optimization-manual-no-hive-cell-1",
-                    data_sources=["workspace.s3"],
+                    data_sources=parquet_manual_partition_sources,
                     query_options={"duckdb": {"parquetHivePartitioning": "off"}},
                     sql=federal_tax_parquet_performance_sql(
                         parquet_performance_option_relations.get("federal_tax_parquet_manual_partition"),
@@ -3109,7 +3162,7 @@ def build_static_notebooks(
             cells=[
                 NotebookCellDefinition(
                     cell_id="federal-tax-parquet-optimization-manual-hive-cell-1",
-                    data_sources=["workspace.s3"],
+                    data_sources=parquet_manual_hive_sources,
                     query_options={"duckdb": {"parquetHivePartitioning": "on"}},
                     sql=federal_tax_parquet_performance_sql(
                         parquet_performance_option_relations.get("federal_tax_parquet_manual_hive"),
@@ -3130,7 +3183,7 @@ def build_static_notebooks(
             cells=[
                 NotebookCellDefinition(
                     cell_id="federal-tax-parquet-optimization-manual-cache-cell-1",
-                    data_sources=["workspace.s3"],
+                    data_sources=parquet_manual_cache_sources,
                     query_options={"duckdb": {"parquetHivePartitioning": "auto"}},
                     sql=federal_tax_parquet_performance_sql(
                         federal_tax_parquet_duckdb_cache_relation(
@@ -3141,7 +3194,7 @@ def build_static_notebooks(
                 ),
                 NotebookCellDefinition(
                     cell_id="federal-tax-parquet-optimization-manual-cache-cell-2",
-                    data_sources=["workspace.s3"],
+                    data_sources=parquet_manual_cache_sources,
                     query_options={"duckdb": {"parquetHivePartitioning": "auto"}},
                     sql=federal_tax_parquet_cache_lookup_sql(
                         federal_tax_parquet_duckdb_cache_relation(
@@ -3180,7 +3233,7 @@ def build_static_notebooks(
             cells=[
                 NotebookCellDefinition(
                     cell_id="pg-vs-s3-contest-s3-cell-1",
-                    data_sources=["workspace.s3"],
+                    data_sources=contest_s3_sources,
                     sql=contest_s3_sql,
                 )
             ],
@@ -3231,7 +3284,7 @@ def build_static_notebooks(
             cells=[
                 NotebookCellDefinition(
                     cell_id="pg-vs-s3-multi-table-s3-cell-1",
-                    data_sources=["workspace.s3"],
+                    data_sources=multi_table_s3_sources,
                     sql=multi_table_s3_sql,
                 )
             ],
@@ -3299,7 +3352,7 @@ def build_static_notebooks(
             cells=[
                 NotebookCellDefinition(
                     cell_id="kostenbelege-3-1-s3-parquet-cell-1",
-                    data_sources=["workspace.s3"],
+                    data_sources=kostenbelege_3_1_s3_sources,
                     sql=kostenbelege_3_1_s3_sql,
                 )
             ],
@@ -3316,7 +3369,7 @@ def build_static_notebooks(
             cells=[
                 NotebookCellDefinition(
                     cell_id="kostenbelege-3-1-s3-parquet-optimized-cell-1",
-                    data_sources=["workspace.s3"],
+                    data_sources=kostenbelege_3_1_s3_sources,
                     sql=kostenbelege_3_1_s3_optimized_sql,
                 )
             ],
@@ -3401,12 +3454,12 @@ def build_static_notebooks(
             cells=[
                 NotebookCellDefinition(
                     cell_id="mwa-abrechnung-s3-parquet-cell-1",
-                    data_sources=["workspace.s3"],
+                    data_sources=mwa_s3_parquet_sources,
                     sql=mwa_s3_parquet_sql,
                 ),
                 NotebookCellDefinition(
                     cell_id="mwa-abrechnung-s3-parquet-art-index-cell-2",
-                    data_sources=["workspace.s3"],
+                    data_sources=mwa_s3_parquet_abrechnung_sources,
                     sql=mwa_s3_parquet_art_index_sql,
                 )
             ],
@@ -3423,7 +3476,7 @@ def build_static_notebooks(
             cells=[
                 NotebookCellDefinition(
                     cell_id="mwa-abrechnung-s3-csv-cell-1",
-                    data_sources=["workspace.s3"],
+                    data_sources=mwa_s3_csv_sources,
                     sql=mwa_s3_csv_sql,
                 )
             ],
@@ -3440,7 +3493,7 @@ def build_static_notebooks(
             cells=[
                 NotebookCellDefinition(
                     cell_id="mwa-abrechnung-s3-json-cell-1",
-                    data_sources=["workspace.s3"],
+                    data_sources=mwa_s3_json_sources,
                     sql=mwa_s3_json_sql,
                 )
             ],

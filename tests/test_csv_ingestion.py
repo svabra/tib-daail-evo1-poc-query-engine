@@ -301,7 +301,7 @@ class CsvIngestionManagerTests(TestCase):
                 "sortColumns": ["Invoice Datum"],
                 "indexColumns": ["id_"],
             },
-            target_id="workspace.s3",
+            target_id="s3",
             storage_format="parquet",
         )
 
@@ -317,7 +317,7 @@ class CsvIngestionManagerTests(TestCase):
                     "mode": "manual",
                     "partitionColumns": ["Tax\nYear"],
                 },
-                target_id="workspace.s3",
+                target_id="s3",
                 storage_format="parquet",
             )
 
@@ -335,7 +335,7 @@ class CsvIngestionManagerTests(TestCase):
         ) as ensure_bucket:
             payload = manager.import_csv_files(
                 files=[upload],
-                target_id="workspace.s3",
+                target_id="s3",
                 bucket="csv-imports",
                 prefix="incoming/april",
                 delimiter=",",
@@ -384,7 +384,7 @@ class CsvIngestionManagerTests(TestCase):
         ) as ensure_bucket:
             payload = manager.import_csv_files(
                 files=[upload],
-                target_id="workspace.s3",
+                target_id="s3",
                 bucket=target_bucket,
                 delimiter=",",
                 has_header=True,
@@ -418,7 +418,7 @@ class CsvIngestionManagerTests(TestCase):
         ):
             payload = manager.import_csv_files(
                 files=[upload],
-                target_id="workspace.s3",
+                target_id="s3",
                 bucket="csv-imports",
                 delimiter=",",
                 has_header=True,
@@ -463,7 +463,7 @@ class CsvIngestionManagerTests(TestCase):
             ) as ensure_bucket:
                 payload = manager.import_csv_sources(
                     sources=sources,
-                    target_id="workspace.s3",
+                    target_id="s3",
                     bucket="client-imports",
                     prefix="incoming/batch-001",
                     delimiter=",",
@@ -511,7 +511,7 @@ class CsvIngestionManagerTests(TestCase):
 
         payload = manager.import_csv_files(
             files=[FakeUpload("batch.zip", archive.getvalue())],
-            target_id="workspace.s3",
+            target_id="s3",
             bucket="csv-imports",
             delimiter=",",
             has_header=True,
@@ -535,7 +535,7 @@ class CsvIngestionManagerTests(TestCase):
 
         payload = manager.import_csv_files(
             files=[FakeUpload("batch.zip", archive.getvalue())],
-            target_id="workspace.s3",
+            target_id="s3",
             bucket="csv-imports",
             delimiter=",",
             has_header=True,
@@ -562,7 +562,7 @@ class CsvIngestionManagerTests(TestCase):
                 ):
                     payload = manager.import_csv_sources(
                         sources=[CsvLocalSource(file_name="staged.csv", local_path=csv_path)],
-                        target_id="workspace.s3",
+                        target_id="s3",
                         bucket="csv-imports",
                         delimiter=",",
                         has_header=True,
@@ -586,7 +586,7 @@ class CsvIngestionManagerTests(TestCase):
         ):
             payload = manager.import_csv_files(
                 files=[upload],
-                target_id="workspace.s3",
+                target_id="s3",
                 bucket="csv-imports",
                 prefix="incoming/april",
                 delimiter="",
@@ -621,7 +621,7 @@ class CsvIngestionManagerTests(TestCase):
         ) as ensure_bucket:
             payload = manager.import_csv_files(
                 files=[upload],
-                target_id="workspace.s3",
+                target_id="s3",
                 bucket="csv-imports",
                 delimiter=",",
                 has_header=True,
@@ -647,7 +647,7 @@ class CsvIngestionManagerTests(TestCase):
         ):
             payload = manager.import_csv_files(
                 files=[upload],
-                target_id="workspace.s3",
+                target_id="s3",
                 bucket="csv-imports",
                 prefix="incoming/april",
                 delimiter=",",
@@ -698,7 +698,7 @@ class CsvIngestionManagerTests(TestCase):
         ):
             payload = manager.import_csv_files(
                 files=[FakeUpload("vat_smoke.csv", b"id,name\n1,alpha\n")],
-                target_id="workspace.s3",
+                target_id="s3",
                 bucket="csv-imports",
                 delimiter=",",
                 has_header=True,
@@ -731,7 +731,7 @@ class CsvIngestionManagerTests(TestCase):
         ):
             payload = manager.import_csv_files(
                 files=[upload],
-                target_id="workspace.s3",
+                target_id="s3",
                 bucket="csv-imports",
                 prefix="incoming/april",
                 delimiter=",",
@@ -796,7 +796,7 @@ class CsvIngestionManagerTests(TestCase):
         ):
             payload = manager.import_csv_files(
                 files=[upload],
-                target_id="workspace.s3",
+                target_id="s3",
                 bucket="csv-imports",
                 prefix="incoming/no-hive",
                 delimiter=",",
@@ -845,7 +845,7 @@ class CsvIngestionManagerTests(TestCase):
                         b"taxpayer_id,tax_year,tax_due_chf\n1001,2025,4210.75\n",
                     )
                 ],
-                target_id="workspace.s3",
+                target_id="s3",
                 bucket="csv-imports",
                 prefix="incoming/cache-only",
                 delimiter=",",
@@ -880,7 +880,7 @@ class CsvIngestionManagerTests(TestCase):
         ):
             payload = manager.import_csv_files(
                 files=[upload],
-                target_id="workspace.s3",
+                target_id="s3",
                 bucket="csv-imports",
                 prefix="incoming",
                 delimiter=",",
@@ -920,7 +920,7 @@ class CsvIngestionManagerTests(TestCase):
         ):
             payload = manager.import_csv_files(
                 files=[upload],
-                target_id="workspace.s3",
+                target_id="s3",
                 bucket="csv-imports",
                 prefix="incoming/april",
                 delimiter=",",
@@ -967,7 +967,7 @@ class CsvIngestionManagerTests(TestCase):
         ):
             payload = manager.import_csv_files(
                 files=[upload],
-                target_id="workspace.s3",
+                target_id="s3",
                 bucket="csv-imports",
                 prefix="incoming/april",
                 delimiter=",",
@@ -1009,7 +1009,7 @@ class CsvIngestionManagerTests(TestCase):
         ) as ensure_bucket:
             payload = manager.import_csv_files(
                 files=[upload],
-                target_id="workspace.s3",
+                target_id="s3",
                 bucket="csv-imports",
                 delimiter=",",
                 has_header=True,
@@ -1019,7 +1019,7 @@ class CsvIngestionManagerTests(TestCase):
         ensure_bucket.assert_not_called()
         self.assertEqual(payload["importedCount"], 0)
         self.assertIn(
-            "Shared Workspace S3 storage format must be one of: csv, json, parquet.",
+            "S3 Object Storage format must be one of: csv, json, parquet.",
             payload["imports"][0]["error"],
         )
 
@@ -1296,7 +1296,7 @@ class CsvUploadSessionManagerTests(TestCase):
             self.assertFalse(already_processing["processingStarted"])
 
             result = {
-                "targetId": "workspace.s3",
+                "targetId": "s3",
                 "importedCount": 1,
                 "failedCount": 0,
                 "imports": [{"fileName": "large.csv", "status": "imported"}],

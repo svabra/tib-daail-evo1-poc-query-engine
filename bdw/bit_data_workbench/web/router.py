@@ -214,7 +214,7 @@ def _s3_source_record(
     effective_ca_bundle = settings.effective_s3_ca_cert_file()
 
     return {
-        "source_id": "workspace.s3",
+        "source_id": "s3",
         "name": "Shared Workspace",
         "label": "MinIO / S3",
         "source_type": "Workspace Storage",

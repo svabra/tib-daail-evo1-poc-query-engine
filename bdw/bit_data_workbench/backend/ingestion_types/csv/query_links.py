@@ -27,10 +27,10 @@ def attach_query_sources_to_csv_imports(
                 first_query_source = dict(query_source)
         elif (
             str(next_item.get("status") or "").strip().lower() == "imported"
-            and target_id == "workspace.s3"
+            and target_id == "s3"
         ):
             next_item["queryUnavailableReason"] = (
-                "Saved to Shared Workspace S3, but the query source is not visible yet. "
+                "Saved to S3 Object Storage, but the query source is not visible yet. "
                 "Refresh Data Sources and try again."
             )
         imports.append(next_item)
@@ -62,11 +62,11 @@ def resolve_query_source_for_csv_import(
             relation=source_relation,
         )
 
-    if normalized_target_id == "workspace.s3":
+    if normalized_target_id == "s3":
         path = str(item.get("path") or "").strip()
         if not path:
             return None
-        return _find_query_source(catalogs, source_id="workspace.s3", s3_path=path)
+        return _find_query_source(catalogs, source_id="s3", s3_path=path)
 
     return None
 

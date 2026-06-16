@@ -290,7 +290,7 @@ def graph_payload(
             }
             node["outputSource"] = {
                 "sourceKind": "object",
-                "sourceId": "workspace.s3",
+                "sourceId": "s3",
                 "bucket": "stage-bucket",
                 "key": key,
                 "sourceDisplayName": f"{node['title']} materialized output",
@@ -924,9 +924,9 @@ async def main() -> None:
                   </details>
                   <details data-data-sources-section open>
                     <summary>Data Sources</summary>
-                    <details data-source-catalog data-source-catalog-name="workspace.s3" data-source-catalog-source-id="workspace.s3" open>
+                    <details data-source-catalog data-source-catalog-name="s3" data-source-catalog-source-id="s3" open>
                       <summary>Shared Workspace</summary>
-                      <details data-source-schema data-source-bucket="stage-bucket" data-source-schema-key="workspace.s3:stage-bucket">
+                      <details data-source-schema data-source-bucket="stage-bucket" data-source-schema-key="s3:stage-bucket">
                         <summary>stage-bucket</summary>
                         <ul class="source-object-list">
                           <li
@@ -2002,7 +2002,7 @@ async def main() -> None:
                 () => {
                   const notebook = document.querySelector('[data-notebook-section]');
                   const sources = document.querySelector('[data-data-sources-section]');
-                  const catalog = document.querySelector('[data-source-catalog-source-id="workspace.s3"]');
+                  const catalog = document.querySelector('[data-source-catalog-source-id="s3"]');
                   const bucket = document.querySelector('[data-source-schema][data-source-bucket="stage-bucket"]');
                   const object = document.querySelector('[data-source-object][data-s3-bucket="stage-bucket"][data-s3-key="_bdw_stages/notebook/raw/rev-b/data.parquet"]');
                   const label = object?.querySelector('.source-node-label span');

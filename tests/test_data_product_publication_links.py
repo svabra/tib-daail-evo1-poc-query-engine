@@ -65,7 +65,7 @@ class DataProductPublicationLinkTests(unittest.TestCase):
                     description="",
                     source=DataProductSourceDescriptor(
                         source_kind="bucket",
-                        source_id="workspace.s3",
+                        source_id="s3",
                         bucket="shared-finance",
                     ),
                     public_path="/api/public/data-products/shared-bucket-product",
@@ -79,7 +79,7 @@ class DataProductPublicationLinkTests(unittest.TestCase):
                     description="",
                     source=DataProductSourceDescriptor(
                         source_kind="object",
-                        source_id="workspace.s3",
+                        source_id="s3",
                         bucket="shared-finance",
                         key="exports/orders.csv",
                     ),
@@ -97,14 +97,14 @@ class DataProductPublicationLinkTests(unittest.TestCase):
             bucket_links = manager.published_products_for_source(
                 source={
                     "sourceKind": "bucket",
-                    "sourceId": "workspace.s3",
+                    "sourceId": "s3",
                     "bucket": "shared-finance",
                 }
             )
             object_links = manager.published_products_for_source(
                 source={
                     "sourceKind": "object",
-                    "sourceId": "workspace.s3",
+                    "sourceId": "s3",
                     "bucket": "shared-finance",
                     "key": "exports/orders.csv",
                 }
@@ -139,7 +139,7 @@ class DataProductPublicationLinkTests(unittest.TestCase):
                     description="",
                     source=DataProductSourceDescriptor(
                         source_kind="bucket",
-                        source_id="workspace.s3",
+                        source_id="s3",
                         bucket="shared-finance",
                     ),
                     public_path="/api/public/data-products/shared-bucket-product",
@@ -149,7 +149,7 @@ class DataProductPublicationLinkTests(unittest.TestCase):
             catalogs = [
                 SourceCatalog(
                     name="workspace",
-                    connection_source_id="workspace.s3",
+                    connection_source_id="s3",
                     schemas=[
                         SourceSchema(
                             name="shared-finance",

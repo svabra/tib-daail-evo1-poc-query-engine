@@ -765,7 +765,7 @@ def build_notebook_stage_graph(
         if completed and completed.output_bucket and completed.output_key:
             output_source = {
                 "sourceKind": "object",
-                "sourceId": "workspace.s3",
+                "sourceId": "s3",
                 "bucket": completed.output_bucket,
                 "key": completed.output_key,
                 "sourceDisplayName": f"{stage['title']} materialized output",

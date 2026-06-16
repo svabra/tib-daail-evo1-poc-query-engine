@@ -138,7 +138,7 @@ class DataProductManager:
             if source_id == "workspace.local":
                 continue
 
-            if source_id == "workspace.s3":
+            if source_id == "s3":
                 for schema in catalog.schemas:
                     bucket_name = str(schema.label or schema.name or "").strip()
                     if bucket_name:
@@ -149,7 +149,7 @@ class DataProductManager:
                                 "description": f"s3://{bucket_name}/",
                                 "source": DataProductSourceDescriptor(
                                     source_kind="bucket",
-                                    source_id="workspace.s3",
+                                    source_id="s3",
                                     bucket=bucket_name,
                                     source_display_name=bucket_name,
                                     source_platform="s3",
@@ -178,7 +178,7 @@ class DataProductManager:
                                     or f"s3://{source_object.s3_bucket}/{source_object.s3_key}",
                                     "source": DataProductSourceDescriptor(
                                         source_kind="object",
-                                        source_id="workspace.s3",
+                                        source_id="s3",
                                         bucket=str(source_object.s3_bucket or "").strip(),
                                         key=str(source_object.s3_key or "").strip(),
                                         source_display_name=source_display_name,
@@ -197,7 +197,7 @@ class DataProductManager:
                                     "description": relation,
                                     "source": DataProductSourceDescriptor(
                                         source_kind="relation",
-                                        source_id="workspace.s3",
+                                        source_id="s3",
                                         relation=relation,
                                         source_display_name=source_display_name,
                                         source_platform="s3",
@@ -604,7 +604,7 @@ class DataProductManager:
         if not source_kind:
             if bucket and key:
                 source_kind = "object"
-            elif bucket and source_id == "workspace.s3":
+            elif bucket and source_id == "s3":
                 source_kind = "bucket"
             elif relation:
                 source_kind = "relation"
@@ -708,7 +708,7 @@ class DataProductManager:
             raise ValueError(descriptor.unsupported_reason)
 
         if raw_source_kind == "bucket":
-            if raw_source_id != "workspace.s3":
+            if raw_source_id != "s3":
                 raise ValueError("Bucket publications are only supported for Shared Workspace.")
             if not raw_bucket:
                 raise ValueError("Choose a bucket before publishing it.")
@@ -716,14 +716,14 @@ class DataProductManager:
                 raise ValueError(f"The S3 bucket '{raw_bucket}' is not available.")
             return DataProductSourceDescriptor(
                 source_kind="bucket",
-                source_id="workspace.s3",
+                source_id="s3",
                 bucket=raw_bucket,
                 source_display_name=raw_display_name or raw_bucket,
                 source_platform=raw_platform or "s3",
             )
 
         if raw_source_kind == "object":
-            if raw_source_id != "workspace.s3":
+            if raw_source_id != "s3":
                 raise ValueError("Object publications are only supported for Shared Workspace.")
             if not raw_bucket or not raw_key:
                 raise ValueError("Choose a concrete Shared Workspace object before publishing it.")
@@ -736,7 +736,7 @@ class DataProductManager:
                 ) from exc
             return DataProductSourceDescriptor(
                 source_kind="object",
-                source_id="workspace.s3",
+                source_id="s3",
                 bucket=raw_bucket,
                 key=raw_key,
                 source_display_name=raw_display_name or PurePosixPath(raw_key).name,
@@ -766,7 +766,7 @@ class DataProductManager:
         normalized_source_id = str(source_id or "").strip()
         if normalized_source_id in {"pg_oltp", "pg_olap"}:
             return "postgres"
-        if normalized_source_id == "workspace.s3":
+        if normalized_source_id == "s3":
             return "s3"
         if str(relation or "").startswith(("pg_oltp.", "pg_olap.")):
             return "postgres"
@@ -778,7 +778,7 @@ class DataProductManager:
             return "pg_oltp"
         if normalized_relation.startswith("pg_olap."):
             return "pg_olap"
-        return "workspace.s3"
+        return "s3"
 
     def _response_kind_for_source(self, source: DataProductSourceDescriptor) -> str:
         if source.source_kind == "relation":

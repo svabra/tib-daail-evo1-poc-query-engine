@@ -102,12 +102,13 @@ class PythonKernelRuntime:
             canonical_source_id = str(
                 selected_source.get("canonicalSourceId") or selected_source.get("sourceId") or ""
             )
-            if canonical_source_id.strip().lower() in {"workspace.s3", "workspace.local"}:
+            normalized_source_id = canonical_source_id.strip().lower()
+            if normalized_source_id in {"s3", "workspace.local"} or normalized_source_id.startswith("s3."):
                 return True
 
         for relation_entry in context.get("relations", []) or []:
             source_id = str(relation_entry.get("sourceId") or "").strip().lower()
-            if source_id in {"workspace.s3", "workspace.local"}:
+            if source_id in {"s3", "workspace.local"} or source_id.startswith("s3."):
                 return True
 
         return bool(context.get("localRelationMap"))

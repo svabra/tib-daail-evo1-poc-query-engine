@@ -18,7 +18,7 @@ from playwright.async_api import async_playwright
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Exercise browser download of a Shared Workspace S3 CSV object through "
+            "Exercise browser download of a S3 Object Storage CSV object through "
             "the real API route. The target app and local dependencies must already be running."
         )
     )

@@ -206,7 +206,7 @@ class FileIngestionManager:
         initial_imports: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         normalized_target_id = str(target_id or "").strip()
-        if normalized_target_id not in {"workspace.s3", "pg_oltp", "pg_olap"}:
+        if normalized_target_id not in {"s3", "pg_oltp", "pg_olap"}:
             raise ValueError(f"Unsupported {self._spec.format_label} ingestion target: {target_id}")
         if not sources and not initial_imports:
             raise ValueError(
@@ -288,7 +288,7 @@ class FileIngestionManager:
                 file_name = source.file_name
                 local_path = source.local_path
                 try:
-                    if normalized_target_id == "workspace.s3":
+                    if normalized_target_id == "s3":
                         result = self._import_to_s3(
                             local_path=local_path,
                             file_name=file_name,

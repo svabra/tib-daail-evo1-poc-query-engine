@@ -13,7 +13,7 @@ DEFAULT_NOTEBOOK_PATH = "/notebooks/mwa-abrechnung-s3-parquet"
 FIXTURE_SOURCE_OBJECT = {
     "label": "sample.parquet",
     "kind": "s3-object",
-    "sourceId": "workspace.s3",
+    "sourceId": "s3",
     "relation": "nav_fixture.sample",
     "queryAlias": "s3.nav_fixture.sample.parquet",
     "queryReference": 's3.nav_fixture."sample.parquet"',
@@ -71,9 +71,9 @@ def fixture_sidebar_markup() -> str:
         <span class="sidebar-source-operation-status-copy" data-source-operation-status-copy></span>
       </div>
       <div class="source-tree" data-source-tree data-source-tree-scope="sidebar">
-        <details class="source-catalog" data-source-catalog data-source-catalog-name="workspace" data-source-catalog-source-id="workspace.s3">
-          <summary data-searchable-item="Shared Workspace S3">
-            <span class="source-node-label"><span>Shared Workspace (S3)</span></span>
+        <details class="source-catalog" data-source-catalog data-source-catalog-name="workspace" data-source-catalog-source-id="s3">
+          <summary data-searchable-item="S3 Object Storage">
+            <span class="source-node-label"><span>S3 Object Storage</span></span>
           </summary>
           <details class="source-schema" data-source-schema data-source-schema-key="workspace::nav-fixture" data-source-bucket="nav-fixture" data-source-schema-name="nav-fixture">
             <summary data-searchable-item="nav-fixture">
@@ -91,7 +91,7 @@ def fixture_sidebar_markup() -> str:
                 data-source-object-query-alias="s3.nav_fixture.sample.parquet"
                 data-source-object-query-reference="s3.nav_fixture.&quot;sample.parquet&quot;"
                 data-source-object-query-sql="read_parquet('s3://nav-fixture/sample.parquet')"
-                data-source-option-id="workspace.s3"
+                data-source-option-id="s3"
                 data-s3-bucket="nav-fixture"
                 data-s3-key="sample.parquet"
                 data-s3-path="s3://nav-fixture/sample.parquet"
@@ -138,7 +138,7 @@ async def install_routes(page) -> None:
                 "displaySql": FIXTURE_SQL,
                 "submittedSql": FIXTURE_SQL,
                 "executionSql": "select * from read_parquet('s3://nav-fixture/sample.parquet')",
-                "dataSources": ["workspace.s3"],
+                "dataSources": ["s3"],
                 "queryOptions": {},
                 "touchedRelations": ["nav_fixture.sample"],
                 "touchedBuckets": ["nav-fixture"],
@@ -225,7 +225,7 @@ async def assert_source_navigation(page, timeout_ms: int) -> None:
         """
         () => {
           const sources = document.querySelector('[data-data-sources-section]');
-          const catalog = document.querySelector('[data-source-catalog-source-id="workspace.s3"]');
+          const catalog = document.querySelector('[data-source-catalog-source-id="s3"]');
           const bucket = document.querySelector('[data-source-schema][data-source-bucket="nav-fixture"]');
           const object = document.querySelector('[data-source-object][data-s3-bucket="nav-fixture"][data-s3-key="sample.parquet"]');
           const label = object?.querySelector('.source-node-label > span:last-child') || object?.querySelector('.source-node-label');
@@ -245,7 +245,7 @@ async def assert_source_navigation(page, timeout_ms: int) -> None:
         """
         () => {
           const sources = document.querySelector('[data-data-sources-section]');
-          const catalog = document.querySelector('[data-source-catalog-source-id="workspace.s3"]');
+          const catalog = document.querySelector('[data-source-catalog-source-id="s3"]');
           const bucket = document.querySelector('[data-source-schema][data-source-bucket="nav-fixture"]');
           const object = document.querySelector('[data-source-object][data-s3-bucket="nav-fixture"][data-s3-key="sample.parquet"]');
           const label = object?.querySelector('.source-node-label > span:last-child') || object?.querySelector('.source-node-label');

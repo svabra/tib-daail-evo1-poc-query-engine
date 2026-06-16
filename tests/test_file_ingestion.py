@@ -251,7 +251,7 @@ class FileIngestionManagerTests(TestCase):
                         IngestionLocalSource(file_name="alpha.jsonl", local_path=direct),
                         IngestionLocalSource(file_name="bundle.zip", local_path=archive),
                     ],
-                    target_id="workspace.s3",
+                    target_id="s3",
                     bucket="imports",
                     prefix="stage/json",
                 )
@@ -283,7 +283,7 @@ class FileIngestionManagerTests(TestCase):
             ) as ensure_bucket:
                 payload = manager.import_sources(
                     sources=[IngestionLocalSource(file_name="alpha.jsonl", local_path=source)],
-                    target_id="workspace.s3",
+                    target_id="s3",
                     bucket=target_bucket,
                     prefix="stage/json",
                 )
@@ -312,7 +312,7 @@ class FileIngestionManagerTests(TestCase):
             ):
                 payload = manager.import_sources(
                     sources=[IngestionLocalSource(file_name="alpha.parquet", local_path=source)],
-                    target_id="workspace.s3",
+                    target_id="s3",
                     bucket="imports",
                     prefix="stage/parquet",
                     parquet_optimization={"mode": "recommended"},
@@ -352,7 +352,7 @@ class FileIngestionManagerTests(TestCase):
             ):
                 payload = manager.import_sources(
                     sources=[IngestionLocalSource(file_name="orders.parquet", local_path=source)],
-                    target_id="workspace.s3",
+                    target_id="s3",
                     bucket="imports",
                     prefix="stage/parquet",
                     parquet_optimization={
@@ -413,7 +413,7 @@ class FileIngestionManagerTests(TestCase):
             ):
                 payload = manager.import_sources(
                     sources=[IngestionLocalSource(file_name="orders.parquet", local_path=source)],
-                    target_id="workspace.s3",
+                    target_id="s3",
                     bucket="imports",
                     prefix="stage/no-hive",
                     parquet_optimization={
@@ -463,7 +463,7 @@ class FileIngestionManagerTests(TestCase):
             ):
                 payload = manager.import_sources(
                     sources=[IngestionLocalSource(file_name="mixed.zip", local_path=archive)],
-                    target_id="workspace.s3",
+                    target_id="s3",
                     bucket="imports",
                     prefix="stage/json",
                 )
@@ -532,7 +532,7 @@ class FileIngestionManagerTests(TestCase):
 
                 result = manager.import_sources(
                     sources=[IngestionLocalSource(file_name=file_name, local_path=local_path)],
-                    target_id="workspace.s3",
+                    target_id="s3",
                     bucket="imports",
                 )
 

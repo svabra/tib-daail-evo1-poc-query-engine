@@ -239,7 +239,7 @@ async def ensure_sidebar_source_object_node(
             sourceObject.dataset.sourceObjectDisplayName = fileName;
             sourceObject.dataset.sourceObjectRelation = "";
             sourceObject.dataset.sourceObjectQueryAlias = "";
-            sourceObject.dataset.sourceOptionId = "workspace.s3";
+            sourceObject.dataset.sourceOptionId = "s3";
             sourceObject.dataset.s3Bucket = bucketName;
             sourceObject.dataset.s3Key = objectKey;
             sourceObject.dataset.s3Path = `s3://${bucketName}/${objectKey}`;

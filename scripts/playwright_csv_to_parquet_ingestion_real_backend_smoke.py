@@ -18,7 +18,7 @@ from playwright.async_api import async_playwright
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Exercise real browser CSV ingestion to Shared Workspace S3 as Parquet, "
+            "Exercise real browser CSV ingestion to S3 Object Storage as Parquet, "
             "including a late string value that used to break DuckDB CSV type inference."
         )
     )
@@ -194,9 +194,9 @@ async def import_csv_to_parquet_s3(page, args: argparse.Namespace, unique_id: st
     prefix = f"{args.s3_smoke_prefix_root.strip('/')}/{unique_id}"
     expected_key = f"{prefix}/KBPO2020.parquet"
     await open_csv_ingestion(page, args.base_url, args.timeout_ms)
-    await page.locator('[data-csv-target-option][value="workspace.s3"]').check()
-    await page.locator('[data-csv-config-panel="workspace.s3"] [data-csv-s3-bucket]').fill(args.bucket)
-    await page.locator('[data-csv-config-panel="workspace.s3"] [data-csv-s3-prefix]').fill(prefix)
+    await page.locator('[data-csv-target-option][value="s3"]').check()
+    await page.locator('[data-csv-config-panel="s3"] [data-csv-s3-bucket]').fill(args.bucket)
+    await page.locator('[data-csv-config-panel="s3"] [data-csv-s3-prefix]').fill(prefix)
     await page.locator('[data-csv-s3-storage-format][value="parquet"]').check()
     await page.locator("[data-csv-file-input]").set_input_files(
         files=[
@@ -219,7 +219,7 @@ async def import_csv_to_parquet_s3(page, args: argparse.Namespace, unique_id: st
         args.timeout_ms,
         page.locator("[data-csv-import-submit]"),
     )
-    if payload.get("targetId") != "workspace.s3":
+    if payload.get("targetId") != "s3":
         raise RuntimeError(f"Unexpected S3 target in completion payload: {payload!r}")
     if payload.get("importedCount") != 1 or payload.get("failedCount") != 0:
         raise RuntimeError(f"Unexpected CSV-to-Parquet import counts: {payload!r}")
@@ -240,7 +240,7 @@ async def import_csv_to_parquet_s3(page, args: argparse.Namespace, unique_id: st
     await assert_success_dialog(
         page,
         args.timeout_ms,
-        ["CSV import finished", "1 file(s) processed", "Shared Workspace S3"],
+        ["CSV import finished", "1 file(s) processed", "S3 Object Storage"],
     )
     return prefix, expected_key
 

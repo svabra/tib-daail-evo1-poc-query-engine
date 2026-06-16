@@ -494,7 +494,7 @@ class QueryCacheRouteTests(unittest.TestCase):
 
         payload = QueryCachePayload(
             sql="select * from s3.poc.federal_tax.parquet",
-            dataSources=["workspace.s3"],
+            dataSources=["s3"],
             localRelations={"local.source": "workspace.schema.table"},
             queryOptions=_cache_options(),
         )
@@ -517,7 +517,7 @@ class QueryCacheRouteTests(unittest.TestCase):
             ["preview", "rehydrate", "expire", "delete", "runtime-storage", "runtime-delete"],
         )
         self.assertEqual(calls[0][1]["sql"], payload.sql)
-        self.assertEqual(calls[0][1]["data_sources"], ["workspace.s3"])
+        self.assertEqual(calls[0][1]["data_sources"], ["s3"])
         self.assertEqual(
             calls[0][1]["local_relation_map"],
             {"local.source": "workspace.schema.table"},
@@ -537,7 +537,7 @@ class QueryCacheRouteTests(unittest.TestCase):
             sql="select * from s3.poc.federal_tax.parquet",
             notebookId="notebook-cache",
             cellId="cell-cache",
-            dataSources=["workspace.s3"],
+            dataSources=["s3"],
             queryOptions=_cache_options(),
         )
 

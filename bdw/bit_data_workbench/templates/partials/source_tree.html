@@ -268,7 +268,7 @@
 <div class="source-tree" data-source-tree data-source-tree-scope="{{ source_tree_scope }}">
   {% for catalog in source_tree_catalogs %}
     {% set catalog_source_id = catalog.connection_source_id or catalog.name %}
-    {% set catalog_display_name = "Shared Workspace (S3)" if catalog_source_id == "workspace.s3" else "Local Workspace (IndexDB)" if catalog_source_id == "workspace.local" else catalog.name %}
+    {% set catalog_display_name = "S3 Object Storage" if catalog_source_id == "s3" else "Local Workspace (IndexDB)" if catalog_source_id == "workspace.local" else catalog.name %}
     <details
       class="source-catalog"
       data-source-catalog
@@ -371,7 +371,7 @@
         {% if source_tree_force_source_option_id %}
           {% set source_option_id = source_tree_force_source_option_id %}
         {% elif catalog.name == "workspace" %}
-          {% set source_option_id = "workspace.s3" %}
+          {% set source_option_id = "s3" %}
         {% else %}
           {% set source_option_id = catalog_source_id %}
         {% endif %}

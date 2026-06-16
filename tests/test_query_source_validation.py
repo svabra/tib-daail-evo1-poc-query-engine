@@ -80,7 +80,7 @@ def sample_catalogs() -> list[SourceCatalog]:
         ),
         SourceCatalog(
             name="workspace",
-            connection_source_id="workspace.s3",
+            connection_source_id="s3",
             schemas=[
                 SourceSchema(
                     name="test",
@@ -388,7 +388,7 @@ class QuerySourceValidationTests(unittest.TestCase):
         service._catalogs = [
             SourceCatalog(
                 name="workspace",
-                connection_source_id="workspace.s3",
+                connection_source_id="s3",
                 schemas=[
                     SourceSchema(
                         name="s3_3_1_imports_a08e7385",
@@ -396,7 +396,7 @@ class QuerySourceValidationTests(unittest.TestCase):
                             SourceObject(
                                 name="kbkp_2019",
                                 kind="view",
-                                relation="workspace.s3_3_1_imports_a08e7385.kbkp_2019",
+                                relation="s3_3_1_imports_a08e7385.kbkp_2019",
                             )
                         ],
                     )
@@ -407,7 +407,7 @@ class QuerySourceValidationTests(unittest.TestCase):
         payload = service.prepare_query_sql(
             sql="SELECT COUNT(*) FROM s3_3_1_imports_a08e7385.kbkp_2019 KBKP",
             notebook_id="test-3-1-problem-solving",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
             query_options={"validation": {"sourceExistence": "off"}},
         )
 
@@ -424,7 +424,7 @@ class QuerySourceValidationTests(unittest.TestCase):
         service._catalogs = [
             SourceCatalog(
                 name="workspace",
-                connection_source_id="workspace.s3",
+                connection_source_id="s3",
                 schemas=[
                     SourceSchema(
                         name="poc_tests_performance_evaluation_kostenbelege_3_1",
@@ -453,7 +453,7 @@ class QuerySourceValidationTests(unittest.TestCase):
                 "WHERE KBPO.KBKP_Belegnummer IS NOT NULL"
             ),
             notebook_id="test-3-1-problem-solving",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
             query_options={"validation": {"sourceExistence": "off"}},
         )
 
@@ -481,12 +481,12 @@ class QuerySourceValidationTests(unittest.TestCase):
 
         source_summaries = service._materialized_stage_source_summaries(
             sql,
-            ["workspace.s3"],
+            ["s3"],
             query_options,
         )
         execution_sql = service._materialized_stage_execution_sql(
             sql,
-            ["workspace.s3"],
+            ["s3"],
             query_options,
         )
 
@@ -530,17 +530,17 @@ class QuerySourceValidationTests(unittest.TestCase):
         prepared = service.prepare_query_sql(
             sql=sql,
             notebook_id="kbpo",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
             query_options=query_options,
         )
         execution_sql = service._materialized_stage_execution_sql(
             sql,
-            ["workspace.s3"],
+            ["s3"],
             query_options,
         )
         source_summaries = service._materialized_stage_source_summaries(
             sql,
-            ["workspace.s3"],
+            ["s3"],
             query_options,
         )
 
@@ -566,7 +566,7 @@ class QuerySourceValidationTests(unittest.TestCase):
         catalogs = [
             SourceCatalog(
                 name="workspace",
-                connection_source_id="workspace.s3",
+                connection_source_id="s3",
                 schemas=[
                     SourceSchema(
                         name=schema_name,
@@ -778,7 +778,7 @@ class QuerySourceValidationTests(unittest.TestCase):
             notebook_id="notebook",
             notebook_title="Notebook",
             cell_id="cell-1",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
         )
 
         self.assertEqual(snapshot["jobId"], "query-s3-alias")
@@ -818,7 +818,7 @@ class QuerySourceValidationTests(unittest.TestCase):
         payload = service.prepare_query_sql(
             sql="select * from s3.test.federal_tax_data_10gb.csv",
             notebook_id="notebook",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
         )
 
         self.assertEqual(
@@ -827,7 +827,7 @@ class QuerySourceValidationTests(unittest.TestCase):
                 {
                     "label": "federal_tax_data_10gb",
                     "kind": "s3-object",
-                    "sourceId": "workspace.s3",
+                    "sourceId": "s3",
                     "relation": "test.federal_tax_data_10gb",
                     "queryAlias": "s3.test.federal_tax_data_10gb.csv",
                     "queryReference": 's3.test."federal_tax_data_10gb.csv"',
@@ -851,7 +851,7 @@ class QuerySourceValidationTests(unittest.TestCase):
                 ")"
             ),
             notebook_id="notebook",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
         )
 
         self.assertEqual(
@@ -860,7 +860,7 @@ class QuerySourceValidationTests(unittest.TestCase):
                 {
                     "label": "*.parquet",
                     "kind": "s3-object",
-                    "sourceId": "workspace.s3",
+                    "sourceId": "s3",
                     "relation": "s3://direct-source-bucket/generated/entities/*.parquet",
                     "queryAlias": "",
                     "queryReference": "",
@@ -884,7 +884,7 @@ class QuerySourceValidationTests(unittest.TestCase):
         service._catalogs = [
             SourceCatalog(
                 name="workspace",
-                connection_source_id="workspace.s3",
+                connection_source_id="s3",
                 schemas=[
                     SourceSchema(
                         name="test",
@@ -927,7 +927,7 @@ class QuerySourceValidationTests(unittest.TestCase):
                 "dim_kalender/part-00001.parquet')"
             ),
             notebook_id="notebook",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
         )
 
         self.assertEqual(len(payload["sourceObjects"]), 1)
@@ -956,7 +956,7 @@ class QuerySourceValidationTests(unittest.TestCase):
             notebook_id="notebook",
             notebook_title="Notebook",
             cell_id="cell-1",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
         )
 
         self.assertEqual(snapshot["jobId"], "query-display-sql-routing")
@@ -982,7 +982,7 @@ class QuerySourceValidationTests(unittest.TestCase):
         result = service.validate_query_sources(
             sql="select * from stage.mwa_joined_abrechnungen",
             notebook_id="notebook",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
         )
 
         self.assertEqual(result["status"], QUERY_SOURCE_VALID)
@@ -999,7 +999,7 @@ class QuerySourceValidationTests(unittest.TestCase):
         result = service.validate_query_sources(
             sql="select * from stage.mwa_joined_abrechnungen",
             notebook_id="notebook",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
         )
 
         self.assertEqual(result["status"], QUERY_SOURCE_INVALID)
@@ -1017,7 +1017,7 @@ class QuerySourceValidationTests(unittest.TestCase):
             sql="select * from stage.mwa_joined_abrechnungen",
             display_sql="select * from stage.mwa_joined_abrechnungen",
             notebook_id="notebook",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
         )
 
         self.assertEqual(
@@ -1033,7 +1033,7 @@ class QuerySourceValidationTests(unittest.TestCase):
                 {
                     "label": "mwa_joined_abrechnungen",
                     "kind": "s3-object",
-                    "sourceId": "workspace.s3",
+                    "sourceId": "s3",
                     "relation": "stage.mwa_joined_abrechnungen",
                     "queryAlias": "",
                     "queryReference": "",
@@ -1068,7 +1068,7 @@ class QuerySourceValidationTests(unittest.TestCase):
             notebook_id="notebook",
             notebook_title="Notebook",
             cell_id="cell-4",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
         )
 
         self.assertEqual(snapshot["jobId"], "query-stage-read")
@@ -1081,7 +1081,7 @@ class QuerySourceValidationTests(unittest.TestCase):
         self.assertEqual(captured["source_summaries"][0]["relation"], "stage.mwa_joined_abrechnungen")
         self.assertEqual(captured["source_summaries"][0]["query_sql"], completed_stage_record()["querySql"])
 
-    def test_validate_workspace_s3_virtual_glob_without_discovery_metadata(self) -> None:
+    def test_validate_s3_storage_virtual_glob_without_discovery_metadata(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)
         service._lock = threading.RLock()
         service._catalogs = []
@@ -1090,18 +1090,18 @@ class QuerySourceValidationTests(unittest.TestCase):
         result = service.validate_query_sources(
             sql=(
                 'SELECT ENTI.*, ZIFF.* '
-                'FROM workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                'FROM s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
                 '."generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet" AS ENTI '
-                'JOIN workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                'JOIN s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
                 '."generated/mwa_abrechnung/parquet/mwa_abrechnungs_ziffern_entities/*.parquet" AS ZIFF '
                 "ON ZIFF.abrechnung_refer = ENTI.id_"
             ),
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
         )
 
         self.assertEqual(result["status"], QUERY_SOURCE_VALID)
         self.assertEqual(result["missingReferences"], [])
-        self.assertIn("workspace.s3.", result["references"][0])
+        self.assertIn("s3.", result["references"][0])
 
     def test_validate_plain_s3_virtual_glob_without_discovery_metadata(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)
@@ -1118,7 +1118,7 @@ class QuerySourceValidationTests(unittest.TestCase):
                 '."generated/mwa_abrechnung/parquet/mwa_abrechnungs_ziffern_entities/*.parquet" AS ZIFF '
                 "ON ZIFF.abrechnung_refer = ENTI.id_"
             ),
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
         )
 
         self.assertEqual(result["status"], QUERY_SOURCE_VALID)
@@ -1161,7 +1161,7 @@ class QuerySourceValidationTests(unittest.TestCase):
             notebook_id="nb",
             notebook_title="Notebook",
             cell_id="cell-mwa-virtual-plain",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
         )
 
         self.assertEqual(snapshot["jobId"], "query-s3-plain-virtual-direct")
@@ -1211,7 +1211,7 @@ class QuerySourceValidationTests(unittest.TestCase):
             notebook_id="nb",
             notebook_title="Notebook",
             cell_id="cell-mwa-virtual-plain-2",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
         )
 
         self.assertEqual(snapshot["jobId"], "query-s3-plain-virtual-no-discovery")
@@ -1221,7 +1221,7 @@ class QuerySourceValidationTests(unittest.TestCase):
             captured["execution_sql"],
         )
 
-    def test_start_query_job_rewrites_workspace_s3_virtual_glob_relations_without_discovery(self) -> None:
+    def test_start_query_job_rewrites_s3_storage_virtual_glob_relations_without_discovery(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)
         service._lock = threading.RLock()
         service._catalogs = []
@@ -1235,9 +1235,9 @@ class QuerySourceValidationTests(unittest.TestCase):
         service._query_jobs = SimpleNamespace(start_job=record_start)
         service._analyze_query = lambda _sql, **_kwargs: SimpleNamespace(
             touched_relations=[
-                'workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                's3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
                 '."generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet"',
-                'workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                's3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
                 '."generated/mwa_abrechnung/parquet/mwa_abrechnungs_ziffern_entities/*.parquet"',
             ],
             touched_buckets=[
@@ -1248,23 +1248,23 @@ class QuerySourceValidationTests(unittest.TestCase):
         snapshot = service.start_query_job(
             sql=(
                 'SELECT ENTI.*, ZIFF.* '
-                'FROM workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                'FROM s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
                 '."generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet" AS ENTI '
-                'JOIN workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                'JOIN s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
                 '."generated/mwa_abrechnung/parquet/mwa_abrechnungs_ziffern_entities/*.parquet" AS ZIFF '
                 "ON ZIFF.abrechnung_refer = ENTI.id_"
             ),
             notebook_id="nb",
             notebook_title="Notebook",
             cell_id="cell-mwa-virtual",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
         )
 
         self.assertEqual(snapshot["jobId"], "query-s3-virtual-direct")
         self.assertIn("read_parquet('s3://poc-tests-performance-evaluation-mwa-abrechnung-3-2/generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet')", captured["execution_sql"])
         self.assertIn("read_parquet('s3://poc-tests-performance-evaluation-mwa-abrechnung-3-2/generated/mwa_abrechnung/parquet/mwa_abrechnungs_ziffern_entities/*.parquet')", captured["execution_sql"])
 
-    def test_start_query_job_uses_workspace_s3_glob_relation_without_discovery_call(self) -> None:
+    def test_start_query_job_uses_s3_storage_glob_relation_without_discovery_call(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)
         service._lock = threading.RLock()
         service._catalogs = []
@@ -1284,7 +1284,7 @@ class QuerySourceValidationTests(unittest.TestCase):
         service._query_jobs = SimpleNamespace(start_job=record_start)
         service._analyze_query = lambda _sql, **_kwargs: SimpleNamespace(
             touched_relations=[
-                'workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                's3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
                 '."generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet"',
             ],
             touched_buckets=[
@@ -1295,13 +1295,13 @@ class QuerySourceValidationTests(unittest.TestCase):
         snapshot = service.start_query_job(
             sql=(
                 'SELECT * '
-                'FROM workspace.s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
+                'FROM s3."poc-tests-performance-evaluation-mwa-abrechnung-3-2"'
                 '."generated/mwa_abrechnung/parquet/mwa_abrechnung_entities/*.parquet"'
             ),
             notebook_id="nb",
             notebook_title="Notebook",
             cell_id="cell-mwa-virtual-2",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
         )
 
         self.assertEqual(snapshot["jobId"], "query-s3-virtual-direct-nodisco")
@@ -1318,7 +1318,7 @@ class QuerySourceValidationTests(unittest.TestCase):
         service._catalogs = [
             SourceCatalog(
                 name="workspace",
-                connection_source_id="workspace.s3",
+                connection_source_id="s3",
                 schemas=[
                     SourceSchema(
                         name="test",
@@ -1366,7 +1366,7 @@ class QuerySourceValidationTests(unittest.TestCase):
             notebook_id="notebook",
             notebook_title="Notebook",
             cell_id="cell-1",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
             query_options={"duckdb": {"parquetHivePartitioning": "off"}},
         )
 
@@ -1397,7 +1397,7 @@ class QuerySourceValidationTests(unittest.TestCase):
 
         result = service.validate_query_sources(
             sql="select * from s3.kbpoimports.kbpo2020.parquet",
-            data_sources=["workspace.s3"],
+            data_sources=["s3"],
         )
 
         self.assertEqual(result["status"], QUERY_SOURCE_VALID)
@@ -1429,7 +1429,7 @@ class QuerySourceValidationTests(unittest.TestCase):
             service.settings = SimpleNamespace(query_cache_dir=raw_tmp)
             preview = service.query_cache_preview(
                 sql="select * from s3.kbpoimports.kbpo2020.parquet",
-                data_sources=["workspace.s3"],
+                data_sources=["s3"],
                 query_options={
                     "duckdb": {
                         "parquetHivePartitioning": "auto",

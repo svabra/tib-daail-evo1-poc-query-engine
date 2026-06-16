@@ -393,7 +393,7 @@ class SqlSourceDiscoverer(DataSourceDiscoverer):
 
 class S3DataSourceDiscoverer(DataSourceDiscoverer):
     source_type = "s3"
-    source_id = "workspace.s3"
+    source_id = "s3"
     source_label = "MinIO / S3"
     poll_interval_seconds = 2.0
     manual_connection_control = True
@@ -1426,9 +1426,9 @@ class DataSourceDiscoveryManager:
         *,
         emit_event: bool = True,
     ) -> dict[str, Any]:
-        discoverer = self._discoverers_by_source_id.get("workspace.s3")
+        discoverer = self._discoverers_by_source_id.get("s3")
         if not isinstance(discoverer, S3DataSourceDiscoverer):
-            raise KeyError("Unknown data source: workspace.s3")
+            raise KeyError("Unknown data source: s3")
 
         connection: duckdb.DuckDBPyConnection | None = None
         with self._sync_lock:
@@ -1454,13 +1454,13 @@ class DataSourceDiscoveryManager:
         return self.state_payload()
 
     def s3_relation_spec(self, relation_id: str) -> DiscoveredRelationSpec | None:
-        discoverer = self._discoverers_by_source_id.get("workspace.s3")
+        discoverer = self._discoverers_by_source_id.get("s3")
         if not isinstance(discoverer, S3DataSourceDiscoverer):
             return None
         return discoverer.spec_for_relation(relation_id)
 
     def s3_relation_specs(self) -> dict[str, DiscoveredRelationSpec]:
-        discoverer = self._discoverers_by_source_id.get("workspace.s3")
+        discoverer = self._discoverers_by_source_id.get("s3")
         if not isinstance(discoverer, S3DataSourceDiscoverer):
             return {}
         return discoverer.specs_snapshot()

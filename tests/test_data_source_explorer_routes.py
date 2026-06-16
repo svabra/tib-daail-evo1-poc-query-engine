@@ -90,7 +90,7 @@ class FakeWorkbenchService:
         return [
             SourceCatalog(
                 name="workspace",
-                connection_source_id="workspace.s3",
+                connection_source_id="s3",
                 connection_status="connected",
                 connection_label="Connected",
                 connection_detail="Shared Workspace is connected.",
@@ -345,9 +345,9 @@ class FakeWorkbenchService:
                 ],
             }
 
-        if normalized_source_id == "workspace.s3":
+        if normalized_source_id == "s3":
             return {
-                "sourceId": "workspace.s3",
+                "sourceId": "s3",
                 "explorerKind": "s3",
                 "snapshot": {
                     "bucket": bucket,
@@ -428,7 +428,7 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
     def test_management_full_page_hides_global_sidebar(self) -> None:
         response = query_workbench_data_sources(
             request=build_request("/data-sources"),
-            source_id="workspace.s3",
+            source_id="s3",
             service=FakeWorkbenchService(),
         )
 
@@ -438,7 +438,7 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
 
     def test_browse_mode_renders_inline_browser_for_each_source(self) -> None:
         cases = [
-            ("workspace.s3", "workspace.s3"),
+            ("s3", "s3"),
             ("workspace.local", "workspace.local"),
             ("pg_oltp", "pg_oltp"),
             ("pg_olap", "pg_olap"),
@@ -488,7 +488,7 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.body.decode("utf-8")
         self.assertIn('data-data-sources-section', body)
-        self.assertIn('data-source-catalog-source-id="workspace.s3"', body)
+        self.assertIn('data-source-catalog-source-id="s3"', body)
         self.assertIn('data-source-catalog-source-id="pg_oltp"', body)
         self.assertIn('data-source-catalog-source-id="pg_olap"', body)
         self.assertIn('data-source-object-query-alias="s3.shared_finance.exports.orders.csv"', body)
@@ -600,7 +600,7 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
     def test_s3_explorer_payload_uses_discovered_query_alias_for_prefixed_file(self) -> None:
         payload = build_data_source_explorer_payload(
             FakeWorkbenchService(),
-            source_id="workspace.s3",
+            source_id="s3",
             bucket="shared-finance",
             prefix="exports/",
         )
@@ -633,7 +633,7 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
     def test_s3_explorer_payload_renders_generated_dataset_prefix_as_leaf(self) -> None:
         payload = build_data_source_explorer_payload(
             FakeWorkbenchService(),
-            source_id="workspace.s3",
+            source_id="s3",
             bucket="shared-finance",
             prefix="generated/kostenbelege_3_1/parquet/",
         )

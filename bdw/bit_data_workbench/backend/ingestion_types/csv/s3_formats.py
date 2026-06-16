@@ -52,7 +52,7 @@ def normalize_csv_s3_storage_format(value: str) -> str:
     normalized_value = str(value or "").strip().lower() or "csv"
     if normalized_value not in SUPPORTED_CSV_S3_STORAGE_FORMATS:
         raise ValueError(
-            "Shared Workspace S3 storage format must be one of: csv, json, parquet."
+            "S3 Object Storage format must be one of: csv, json, parquet."
         )
     return normalized_value
 

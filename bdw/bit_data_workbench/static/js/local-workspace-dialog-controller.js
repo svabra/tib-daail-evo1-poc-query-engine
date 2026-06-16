@@ -425,7 +425,7 @@ export function createLocalWorkspaceDialogController(helpers) {
     const selectedLabelNode = localWorkspaceMoveSelectedLabelNode();
     if (selectedLabelNode) {
       selectedLabelNode.textContent = movingToSharedWorkspace
-        ? "Selected Shared Workspace (S3) destination"
+        ? "Selected S3 Object Storage destination"
         : "Selected Local Workspace (IndexDB) destination";
     }
 
@@ -459,8 +459,8 @@ export function createLocalWorkspaceDialogController(helpers) {
     if (actionCopyNode) {
       actionCopyNode.textContent = movingToSharedWorkspace
         ? state.operationKind === "copy"
-          ? "Upload the stored file to Shared Workspace (S3) and keep the browser-local copy in IndexedDB."
-          : "Upload the stored file to Shared Workspace (S3) and remove it from this browser's Local Workspace."
+          ? "Upload the stored file to S3 Object Storage and keep the browser-local copy in IndexedDB."
+          : "Upload the stored file to S3 Object Storage and remove it from this browser's Local Workspace."
         : state.operationKind === "copy"
           ? "Create a second Local Workspace file in this browser and keep the current one unchanged."
           : "Move the stored file within this browser's Local Workspace.";
@@ -686,8 +686,8 @@ export function createLocalWorkspaceDialogController(helpers) {
     if (copyNode) {
       copyNode.textContent =
         state.operationKind === "copy"
-          ? `Copy ${entry.fileName} to another Local Workspace folder in this browser or to Shared Workspace (S3), and optionally rename the copied file.`
-          : `Move ${entry.fileName} to another Local Workspace folder in this browser or to Shared Workspace (S3), and optionally rename it.`;
+          ? `Copy ${entry.fileName} to another Local Workspace folder in this browser or to S3 Object Storage, and optionally rename the copied file.`
+          : `Move ${entry.fileName} to another Local Workspace folder in this browser or to S3 Object Storage, and optionally rename it.`;
     }
 
     syncLocalWorkspaceMoveDialogState();

@@ -278,7 +278,7 @@ export function createSourceTreeController(helpers) {
       sourcesRoot.open = true;
     }
 
-    const workspaceCatalog = sourceCatalogNode("workspace.s3");
+    const workspaceCatalog = sourceCatalogNode("s3");
     if (workspaceCatalog instanceof HTMLDetailsElement) {
       workspaceCatalog.open = true;
     }
@@ -289,7 +289,7 @@ export function createSourceTreeController(helpers) {
     }
 
     schemaNode.open = true;
-    blinkSourceCatalog("workspace.s3");
+    blinkSourceCatalog("s3");
     blinkSourceSchemaBucket(normalizedBucketName);
     schemaNode.scrollIntoView({ block: "nearest" });
   }

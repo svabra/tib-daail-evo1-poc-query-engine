@@ -343,11 +343,11 @@ async def set_target_and_file(
         f'[data-file-ingestion-form][data-file-ingestor-id="{spec.ingestor_id}"]'
     )
     await form.locator(f'[data-file-target-option][value="{target_id}"]').check()
-    if target_id == "workspace.s3":
-        await form.locator('[data-file-config-panel="workspace.s3"] [data-file-s3-bucket]').fill(
+    if target_id == "s3":
+        await form.locator('[data-file-config-panel="s3"] [data-file-s3-bucket]').fill(
             args.bucket
         )
-        await form.locator('[data-file-config-panel="workspace.s3"] [data-file-s3-prefix]').fill(
+        await form.locator('[data-file-config-panel="s3"] [data-file-s3-prefix]').fill(
             prefix_or_table_prefix
         )
     else:
@@ -393,7 +393,7 @@ async def import_to_s3(
         page,
         args,
         spec,
-        "workspace.s3",
+        "s3",
         prefix,
         payload_name,
         payload,
@@ -413,7 +413,7 @@ async def import_to_s3(
             raise RuntimeError(f"ZIP preview did not report two files: {preview_text!r}")
 
     result = await expect_complete_payload(page, args, spec)
-    if result.get("targetId") != "workspace.s3":
+    if result.get("targetId") != "s3":
         raise RuntimeError(f"Unexpected S3 target: {result!r}")
     if result.get("importedCount") != len(expected) or result.get("failedCount") != 0:
         raise RuntimeError(f"Unexpected S3 import counts: {result!r}")
@@ -431,7 +431,7 @@ async def import_to_s3(
     await assert_success_dialog(
         page,
         args.timeout_ms,
-        [f"{spec.label} import finished", f"{len(expected)} file(s) processed", "Shared Workspace S3"],
+        [f"{spec.label} import finished", f"{len(expected)} file(s) processed", "S3 Object Storage"],
     )
     return prefix, expected
 

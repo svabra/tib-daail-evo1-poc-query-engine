@@ -13,7 +13,7 @@ def build_source_tree_s3_hierarchy(
 
     for catalog in catalogs:
         catalog_source_id = str(catalog.connection_source_id or catalog.name or "").strip()
-        if catalog_source_id != "workspace.s3":
+        if catalog_source_id != "s3":
             continue
         for schema in catalog.schemas:
             schema_key = f"{catalog.name}::{schema.name}"

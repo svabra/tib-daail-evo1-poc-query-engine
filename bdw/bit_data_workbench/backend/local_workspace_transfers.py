@@ -29,7 +29,7 @@ def normalize_local_workspace_transfer_filename(
 
 
 @dataclass(slots=True)
-class LocalWorkspaceS3MoveResult:
+class LocalWorkspaceToS3MoveResult:
     entry_id: str
     bucket: str
     key: str
@@ -63,7 +63,7 @@ class LocalWorkspaceTransferManager:
         file_bytes: bytes,
         bucket: str,
         prefix: str = "",
-    ) -> LocalWorkspaceS3MoveResult:
+    ) -> LocalWorkspaceToS3MoveResult:
         return self._upload_to_s3(
             entry_id=entry_id,
             file_name=file_name,
@@ -85,7 +85,7 @@ class LocalWorkspaceTransferManager:
         file_bytes: bytes,
         bucket: str,
         prefix: str = "",
-    ) -> LocalWorkspaceS3MoveResult:
+    ) -> LocalWorkspaceToS3MoveResult:
         return self._upload_to_s3(
             entry_id=entry_id,
             file_name=file_name,
@@ -108,7 +108,7 @@ class LocalWorkspaceTransferManager:
         bucket: str,
         prefix: str = "",
         operation_label: str,
-    ) -> LocalWorkspaceS3MoveResult:
+    ) -> LocalWorkspaceToS3MoveResult:
         normalized_entry_id = str(entry_id or "").strip()
         if not normalized_entry_id:
             raise ValueError(
@@ -154,7 +154,7 @@ class LocalWorkspaceTransferManager:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
         path = f"{s3_path(normalized_bucket, normalized_prefix)}{normalized_file_name}"
-        return LocalWorkspaceS3MoveResult(
+        return LocalWorkspaceToS3MoveResult(
             entry_id=normalized_entry_id,
             bucket=normalized_bucket,
             key=key,

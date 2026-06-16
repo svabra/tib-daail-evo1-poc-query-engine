@@ -313,7 +313,7 @@ export function createCsvIngestionController(helpers) {
     const storageFormat = normalizeCsvS3StorageFormat(
       document.querySelector("[data-csv-s3-storage-format]:checked")?.value || "csv"
     );
-    if (selectedTargetId() !== "workspace.s3" || storageFormat !== "parquet") {
+    if (selectedTargetId() !== "s3" || storageFormat !== "parquet") {
       return defaultParquetOptimization();
     }
     const mode = String(
@@ -555,7 +555,7 @@ export function createCsvIngestionController(helpers) {
 
   function resolvedS3ObjectKey(entry, config = currentConfig()) {
     const prefix = config.prefix ? `${config.prefix}/` : "";
-    return `${prefix}${resolvedDestinationFileName(entry, "workspace.s3", config)}`;
+    return `${prefix}${resolvedDestinationFileName(entry, "s3", config)}`;
   }
 
   function s3LocationSummaryMarkup({
@@ -600,7 +600,7 @@ export function createCsvIngestionController(helpers) {
     if (targetId === "workspace.local") {
       return localWorkspaceDisplayPath(config.folderPath, resolvedDestinationFileName(entry, targetId, config));
     }
-    if (targetId === "workspace.s3") {
+    if (targetId === "s3") {
       const bucket = config.bucket || "<bucket>";
       return `s3://${bucket}/${resolvedS3ObjectKey(entry, config)}`;
     }
@@ -612,8 +612,8 @@ export function createCsvIngestionController(helpers) {
 
   function targetLabel(targetId = selectedTargetId()) {
     switch (targetId) {
-      case "workspace.s3":
-        return "Shared Workspace S3";
+      case "s3":
+        return "S3 Object Storage";
       case "pg_oltp":
         return "PostgreSQL OLTP";
       case "pg_olap":
@@ -631,7 +631,7 @@ export function createCsvIngestionController(helpers) {
     const baseLabel = `${delimiterLabel} delimiter, ${
       config.hasHeader ? "header row" : "no header row"
     }`;
-    if (targetId !== "workspace.s3") {
+    if (targetId !== "s3") {
       return baseLabel;
     }
     const storageLabel = csvS3StorageFormatDefinition(config.s3StorageFormat).reviewLabel;
@@ -695,7 +695,7 @@ export function createCsvIngestionController(helpers) {
               csvSettingsLabel(config, targetId)
             )}</span>
             ${
-              targetId === "workspace.s3"
+              targetId === "s3"
                 ? `
                   <span class="ingestion-csv-review-copy">
                     S3 stores a bucket, an optional key prefix, and an object name. The prefix is not a directory.
@@ -711,7 +711,7 @@ export function createCsvIngestionController(helpers) {
                 : ""
             }
             ${
-              targetId === "workspace.s3"
+              targetId === "s3"
                 ? ""
                 : `<code class="ingestion-csv-review-path">${escapeHtml(
                     resolvedDestinationCopy(entry, targetId, config)
@@ -912,7 +912,7 @@ export function createCsvIngestionController(helpers) {
               s3LocationDetails
                 ? `
                   <span class="ingestion-csv-result-copy">
-                    Shared Workspace S3 stores this import as an object, not a directory entry.
+                    S3 Object Storage stores this import as an object, not a directory entry.
                   </span>
                   ${s3LocationSummaryMarkup({
                     bucket: s3LocationDetails.bucket,
@@ -944,7 +944,7 @@ export function createCsvIngestionController(helpers) {
             ${
               item.storageFormat
                 ? `<span class="ingestion-csv-result-copy">${escapeHtml(
-                    `${targetLabel("workspace.s3")}: ${
+                    `${targetLabel("s3")}: ${
                       csvS3StorageFormatDefinition(item.storageFormat).reviewLabel
                     }. DuckDB will query that stored object format directly.`
                   )}</span>`
@@ -1090,7 +1090,7 @@ export function createCsvIngestionController(helpers) {
       const copy = replaceExistingRow.querySelector("span");
       if (copy) {
         copy.textContent =
-          targetId === "workspace.s3"
+          targetId === "s3"
             ? "Overwrite the object if the resolved key already exists"
             : "Replace the target table if it already exists";
       }
@@ -1106,7 +1106,7 @@ export function createCsvIngestionController(helpers) {
     const storageFormat = normalizeCsvS3StorageFormat(
       document.querySelector("[data-csv-s3-storage-format]:checked")?.value || "csv"
     );
-    const visible = selectedTargetId() === "workspace.s3" && storageFormat === "parquet";
+    const visible = selectedTargetId() === "s3" && storageFormat === "parquet";
     panel.hidden = !visible;
     const manualOptions = panel.querySelector("[data-csv-parquet-manual-options]");
     const mode = String(

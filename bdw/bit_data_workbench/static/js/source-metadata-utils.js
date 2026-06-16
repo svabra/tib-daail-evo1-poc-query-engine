@@ -23,7 +23,11 @@ export function normalizeDataSources(sources) {
     if (!sourceId || seen.has(sourceId)) {
       continue;
     }
-    if (knownSourceIds.size > 0 && !knownSourceIds.has(sourceId)) {
+    if (
+      knownSourceIds.size > 0 &&
+      !knownSourceIds.has(sourceId) &&
+      !sourceId.toLowerCase().startsWith("s3.")
+    ) {
       continue;
     }
     seen.add(sourceId);
@@ -59,12 +63,16 @@ function sourceOptionForId(sourceId) {
   return readSourceOptions().find((option) => option.source_id === sourceId) ?? null;
 }
 
+function isS3ObjectSourceId(sourceId) {
+  return String(sourceId || "").trim().toLowerCase().startsWith("s3.");
+}
+
 function sourceLabelForId(sourceId) {
   return sourceOptionForId(sourceId)?.label ?? sourceId;
 }
 
 function sourceClassificationForId(sourceId) {
-  return sourceOptionForId(sourceId)?.classification ?? "Internal";
+  return sourceOptionForId(sourceId)?.classification ?? (isS3ObjectSourceId(sourceId) ? "Workspace Storage" : "Internal");
 }
 
 function sourceComputationModeForId(sourceId) {
@@ -72,7 +80,7 @@ function sourceComputationModeForId(sourceId) {
 }
 
 function sourceStorageTooltipForId(sourceId) {
-  return sourceOptionForId(sourceId)?.storage_tooltip ?? "";
+  return sourceOptionForId(sourceId)?.storage_tooltip ?? (isS3ObjectSourceId(sourceId) ? "Stored in S3 Object Storage." : "");
 }
 
 export function sourceLabelsForIds(sourceIds) {
@@ -376,7 +384,7 @@ export function dataProductSourceDescriptorFromSourceSchema(sourceSchemaRoot) {
 
   return {
     sourceKind: "bucket",
-    sourceId: "workspace.s3",
+    sourceId: "s3",
     bucket: descriptor.bucket,
     sourceDisplayName: descriptor.name,
     sourcePlatform: "s3",
@@ -432,8 +440,8 @@ export function sourceQuerySql(relation, fields = []) {
 function s3RelationPrefixFromIdentifier(value) {
   const relation = String(value || "").trim();
   const lower = relation.toLowerCase();
-  if (lower.startsWith("workspace.s3.")) {
-    return "workspace.s3";
+  if (lower.startsWith("s3.")) {
+    return "s3";
   }
   if (lower.startsWith("s3.")) {
     return "s3";
@@ -517,10 +525,10 @@ export function dataProductSourceDescriptorFromSourceObject(sourceObjectRoot) {
     };
   }
 
-  if (sourceId === "workspace.s3" && s3Downloadable && s3Bucket && s3Key) {
+  if (sourceId === "s3" && s3Downloadable && s3Bucket && s3Key) {
     return {
       sourceKind: "object",
-      sourceId: "workspace.s3",
+      sourceId: "s3",
       bucket: s3Bucket,
       key: s3Key,
       sourceDisplayName,
@@ -540,9 +548,9 @@ export function dataProductSourceDescriptorFromSourceObject(sourceObjectRoot) {
         ? "pg_oltp"
         : relation.startsWith("pg_olap.")
           ? "pg_olap"
-          : "workspace.s3"),
+          : "s3"),
     relation,
     sourceDisplayName,
-    sourcePlatform: sourceId === "workspace.s3" ? "s3" : "postgres",
+    sourcePlatform: sourceId === "s3" ? "s3" : "postgres",
   };
 }

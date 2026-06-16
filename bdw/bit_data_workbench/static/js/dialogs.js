@@ -555,7 +555,7 @@ export function ensureLocalWorkspaceMoveDialog() {
           <div class="result-export-dialog-copy">
             <h2 class="modal-title" data-local-workspace-move-title>Move Local Workspace file</h2>
             <p class="modal-copy" data-local-workspace-move-copy>
-              Choose whether to move the file within this browser or to Shared Workspace (S3), then optionally rename it.
+              Choose whether to move the file within this browser or to S3 Object Storage, then optionally rename it.
             </p>
           </div>
           <div class="result-export-dialog-toolbar">
@@ -616,7 +616,7 @@ export function ensureLocalWorkspaceMoveDialog() {
               <span class="result-export-field-label">Move to</span>
               <select class="modal-input" data-local-workspace-move-destination>
                 <option value="local">Local Workspace (IndexDB)</option>
-                <option value="s3">Shared Workspace (S3)</option>
+                <option value="s3">S3 Object Storage</option>
               </select>
             </label>
             <div class="result-export-target-card">

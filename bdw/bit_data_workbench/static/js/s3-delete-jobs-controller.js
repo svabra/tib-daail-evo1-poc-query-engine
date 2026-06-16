@@ -253,7 +253,7 @@ export function createS3DeleteJobsController(helpers) {
       if (context.refreshSidebarAfter) {
         await refreshSidebar(currentWorkspaceMode());
         if (job.entryKind === "bucket") {
-          blinkSourceCatalog("workspace.s3");
+          blinkSourceCatalog("s3");
         }
       }
       await refreshActiveDataSourceViews();

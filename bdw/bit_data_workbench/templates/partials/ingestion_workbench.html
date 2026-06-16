@@ -3,7 +3,7 @@
     <div class="workspace-title-block ingestion-workbench-page-copy">
       <h2>Ingestion Workbench</h2>
       <p class="workspace-summary">
-        Choose a user-driven ingestion flow, then move external files into PostgreSQL, Shared Workspace S3, or the browser-local Local Workspace (IndexDB).
+        Choose a user-driven ingestion flow, then move external files into PostgreSQL, S3 Object Storage, or the browser-local Local Workspace (IndexDB).
       </p>
     </div>
   </header>
@@ -183,9 +183,9 @@
               <span class="ingestion-csv-target-copy">Store the raw CSV files in this browser using IndexedDB.</span>
             </label>
             <label class="ingestion-csv-target-card">
-              <input type="radio" name="target_id" value="workspace.s3" data-csv-target-option>
-              <span class="ingestion-csv-target-title">Shared Workspace S3</span>
-              <span class="ingestion-csv-target-copy">Upload into a bucket and optional object key prefix in Shared Workspace S3.</span>
+              <input type="radio" name="target_id" value="s3" data-csv-target-option>
+              <span class="ingestion-csv-target-title">S3 Object Storage</span>
+              <span class="ingestion-csv-target-copy">Upload into a bucket and optional object key prefix in S3 Object Storage.</span>
             </label>
             <label class="ingestion-csv-target-card">
               <input type="radio" name="target_id" value="pg_oltp" data-csv-target-option>
@@ -218,7 +218,7 @@
                 >
               </label>
             </div>
-            <div class="ingestion-csv-config-panel" data-csv-config-panel="workspace.s3" hidden>
+            <div class="ingestion-csv-config-panel" data-csv-config-panel="s3" hidden>
               <label class="result-export-field">
                 <span class="result-export-field-label">Bucket</span>
                 <input
@@ -632,9 +632,9 @@
               <span class="ingestion-csv-target-copy">Store the raw files in this browser using IndexedDB.</span>
             </label>
             <label class="ingestion-csv-target-card">
-              <input type="radio" name="{{ ingestor.id }}_target_id" value="workspace.s3" data-file-target-option>
-              <span class="ingestion-csv-target-title">Shared Workspace S3</span>
-              <span class="ingestion-csv-target-copy">Upload into a bucket and optional object key prefix in Shared Workspace S3.</span>
+              <input type="radio" name="{{ ingestor.id }}_target_id" value="s3" data-file-target-option>
+              <span class="ingestion-csv-target-title">S3 Object Storage</span>
+              <span class="ingestion-csv-target-copy">Upload into a bucket and optional object key prefix in S3 Object Storage.</span>
             </label>
             <label class="ingestion-csv-target-card">
               <input type="radio" name="{{ ingestor.id }}_target_id" value="pg_oltp" data-file-target-option>
@@ -661,7 +661,7 @@
                 <input class="modal-input" type="text" data-file-folder-path placeholder="optional/subfolder">
               </label>
             </div>
-            <div class="ingestion-csv-config-panel" data-file-config-panel="workspace.s3" hidden>
+            <div class="ingestion-csv-config-panel" data-file-config-panel="s3" hidden>
               <label class="result-export-field">
                 <span class="result-export-field-label">Bucket</span>
                 <input class="modal-input" type="text" data-file-s3-bucket placeholder="file-imports">
@@ -684,7 +684,7 @@
                   <span>Optimization</span>
                   <span
                     class="info-badge"
-                    title="Shown only for Shared Workspace S3 Parquet imports. ART indexes are local DuckDB cache indexes, not native S3 indexes."
+                    title="Shown only for S3 Object Storage Parquet imports. ART indexes are local DuckDB cache indexes, not native S3 indexes."
                     aria-label="Parquet optimization guidance"
                   >
                     ?

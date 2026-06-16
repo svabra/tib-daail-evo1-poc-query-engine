@@ -143,7 +143,7 @@ def _s3_object_executable_relation(source_object: SourceObject) -> str | None:
         return query_sql
 
     query_reference = str(source_object.query_reference or "").strip()
-    if query_reference.startswith(("s3.", "workspace.s3.")):
+    if query_reference.startswith(("s3.", "s3.")):
         return query_reference
 
     bucket = str(source_object.s3_bucket or "").strip()
@@ -691,8 +691,20 @@ def _source_option(
     }
 
 
+def _s3_source_option_id(source_object: SourceObject) -> str:
+    query_reference = str(source_object.query_reference or "").strip()
+    if query_reference.startswith("s3."):
+        return query_reference
+    bucket = str(source_object.s3_bucket or "").strip()
+    key = str(source_object.s3_key or "").strip()
+    if bucket and key:
+        return s3_source_reference(bucket=bucket, key=key)
+    return ""
+
+
 def build_source_options(catalogs: list[SourceCatalog]) -> list[dict[str, str]]:
     options: list[dict[str, str]] = []
+    seen_s3_options: set[str] = set()
 
     for catalog in catalogs:
         if catalog.connection_source_id == "workspace.local":
@@ -711,18 +723,28 @@ def build_source_options(catalogs: list[SourceCatalog]) -> list[dict[str, str]]:
             continue
 
         if catalog.name == "workspace":
-            if catalog.schemas:
-                options.append(
-                    _source_option(
-                        "workspace.s3",
-                        "Shared Workspace",
-                        classification="Workspace Storage",
-                        storage_tooltip=(
-                            "Stored in the configured MinIO / S3 bucket and "
-                            "available to the running workbench instance."
-                        ),
+            for schema in catalog.schemas:
+                for source_object in schema.objects:
+                    source_id = _s3_source_option_id(source_object)
+                    if not source_id or source_id in seen_s3_options:
+                        continue
+                    seen_s3_options.add(source_id)
+                    label = str(
+                        source_object.display_name
+                        or source_object.name
+                        or source_id
+                    ).strip()
+                    bucket = str(source_object.s3_bucket or schema.label or schema.name or "").strip()
+                    key = str(source_object.s3_key or "").strip()
+                    location = f"s3://{bucket}/{key}" if bucket and key else source_id
+                    options.append(
+                        _source_option(
+                            source_id,
+                            label,
+                            classification="Workspace Storage",
+                            storage_tooltip=f"Stored in S3 Object Storage at {location}.",
+                        )
                     )
-                )
             continue
 
         if catalog.name == "pg_oltp":

@@ -55,7 +55,7 @@ class FakeWorkbenchService:
             kind="view",
             name="abcdefghijklmnopqrstuvwxabcdefghijklmnop_relation",
             display_name="abcdefghijklmnopqrstuvwxabcdefghijklmnop.csv",
-            relation="workspace.s3.csv_imports.abcdefghijklmnopqrstuvwx",
+            relation="s3.csv_imports.abcdefghijklmnopqrstuvwx",
             s3_bucket="csv-imports",
             s3_key="prefix/abcdefghijklmnopqrstuvwxabcdefghijklmnop.csv",
             s3_path="s3://csv-imports/prefix/abcdefghijklmnopqrstuvwxabcdefghijklmnop.csv",
@@ -71,7 +71,7 @@ class FakeWorkbenchService:
         return [
             SimpleNamespace(
                 name="workspace",
-                connection_source_id="workspace.s3",
+                connection_source_id="s3",
                 connection_label="Connected",
                 connection_status="connected",
                 connection_detail="Ready",
@@ -121,7 +121,7 @@ class SidebarLabelTests(unittest.TestCase):
         body = response.body.decode("utf-8")
         self.assertIn("abcdefghijklmnopqrstuvwxa[..].csv", body)
         self.assertIn(
-            'title="abcdefghijklmnopqrstuvwxabcdefghijklmnop.csv | Source reference: workspace.s3.csv_imports.abcdefghijklmnopqrstuvwx"',
+            'title="abcdefghijklmnopqrstuvwxabcdefghijklmnop.csv | Source reference: s3.csv_imports.abcdefghijklmnopqrstuvwx"',
             body,
         )
         self.assertIn("CSV", body)

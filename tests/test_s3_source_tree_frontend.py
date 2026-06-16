@@ -22,12 +22,12 @@ class S3SourceTreeFrontendTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
 
         self.assertIn(
-            '.source-catalog[data-source-catalog-source-id="workspace.s3"] > .source-schema,\n'
+            '.source-catalog[data-source-catalog-source-id="s3"] > .source-schema,\n'
             ".source-s3-folder {\n  margin-left: 8px;",
             css_source,
         )
         self.assertIn(
-            '.source-catalog[data-source-catalog-source-id="workspace.s3"] .source-object-list {\n'
+            '.source-catalog[data-source-catalog-source-id="s3"] .source-object-list {\n'
             "  margin-left: 15px;",
             css_source,
         )

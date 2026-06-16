@@ -241,7 +241,7 @@ class SharedNotebookServiceTests(unittest.TestCase):
                     "dataSources": [
                         " pg_oltp.public.tax_assessment ",
                         "",
-                        "workspace.s3.vat_smoke",
+                        "s3.vat_smoke",
                     ],
                     "queryOptions": {
                         "duckdb": {"parquetHivePartitioning": "on"},
@@ -266,7 +266,7 @@ class SharedNotebookServiceTests(unittest.TestCase):
                             "sql": "select 2",
                             "processingHints": "Replay saved VAT staging tables.",
                             "resultExpectations": "One saved smoke-test row.",
-                            "dataSources": [" workspace.s3.vat_smoke ", ""],
+                            "dataSources": [" s3.vat_smoke ", ""],
                             "queryOptions": {
                                 "duckdb": {"parquetHivePartitioning": "off"},
                             },
@@ -297,7 +297,7 @@ class SharedNotebookServiceTests(unittest.TestCase):
         self.assertEqual(notebook["createdAt"], "2026-04-14T10:00:00+00:00")
         self.assertEqual(
             notebook["cells"][0]["dataSources"],
-            ["pg_oltp.public.tax_assessment", "workspace.s3.vat_smoke"],
+            ["pg_oltp.public.tax_assessment", "s3.vat_smoke"],
         )
         self.assertEqual(
             notebook["cells"][0]["queryOptions"]["duckdb"]["parquetHivePartitioning"],
@@ -323,7 +323,7 @@ class SharedNotebookServiceTests(unittest.TestCase):
         self.assertEqual(notebook["versions"][0]["tags"], ["saved"])
         self.assertEqual(
             notebook["versions"][0]["cells"][0]["dataSources"],
-            ["workspace.s3.vat_smoke"],
+            ["s3.vat_smoke"],
         )
         self.assertEqual(
             notebook["versions"][0]["cells"][0]["queryOptions"]["duckdb"][
@@ -947,7 +947,7 @@ class SharedNotebookServiceTests(unittest.TestCase):
         service._sync_startup_seed_data_sources()
         service._ensure_startup_shared_notebook_seeds()
 
-        self.assertEqual(discovery.calls, [("workspace.s3", False)])
+        self.assertEqual(discovery.calls, [("s3", False)])
         seeded = service._shared_notebook_store.list_notebooks()[0]
         self.assertEqual(len(seeded.cells), 5)
         self.assertNotIn(
@@ -981,7 +981,7 @@ class SharedNotebookServiceTests(unittest.TestCase):
                 notebook_cell_type(
                     cell_id="cell-1",
                     sql=f"select * from {legacy_alias}",
-                    data_sources=["workspace.s3"],
+                    data_sources=["s3"],
                 )
             ],
             saved_versions=[
@@ -1001,7 +1001,7 @@ class SharedNotebookServiceTests(unittest.TestCase):
         service._catalogs = [
             SourceCatalog(
                 name="workspace",
-                connection_source_id="workspace.s3",
+                connection_source_id="s3",
                 schemas=[
                     SourceSchema(
                         name="vat_smoke_test",

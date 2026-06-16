@@ -765,7 +765,7 @@ class NotebookStagePipelineTests(unittest.TestCase):
                 query_job_runner=run_query_job,
             )
             cell = stage_cell("cell-kbpo", "kbpo_union", query)
-            cell["dataSources"] = ["workspace.s3"]
+            cell["dataSources"] = ["s3"]
             cell["stage"]["outputFileName"] = "kbpo_pipeline_result"
 
             manager.run_pipeline(notebook_id="nb-kbpo", notebook_title="KBPO", cells=[cell])

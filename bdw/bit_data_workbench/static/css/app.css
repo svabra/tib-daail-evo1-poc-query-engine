@@ -2304,7 +2304,7 @@ details:not([open]) > .tree-children {
   margin-left: 16px;
 }
 
-.source-catalog[data-source-catalog-source-id="workspace.s3"] > .source-schema,
+.source-catalog[data-source-catalog-source-id="s3"] > .source-schema,
 .source-s3-folder {
   margin-left: 8px;
 }
@@ -2336,7 +2336,7 @@ details:not([open]) > .tree-children {
   gap: 6px;
 }
 
-.source-catalog[data-source-catalog-source-id="workspace.s3"] .source-object-list {
+.source-catalog[data-source-catalog-source-id="s3"] .source-object-list {
   margin-left: 15px;
 }
 

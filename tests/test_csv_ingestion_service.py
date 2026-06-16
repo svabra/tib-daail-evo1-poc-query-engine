@@ -44,7 +44,7 @@ class CsvIngestionServiceTests(TestCase):
     def test_upload_complete_payload_accepts_recommended_parquet_optimization(self) -> None:
         payload = CsvUploadSessionCompletePayload.model_validate(
             {
-                "targetId": "workspace.s3",
+                "targetId": "s3",
                 "storageFormat": "parquet",
                 "parquetOptimization": {"mode": "recommended"},
             }
@@ -69,7 +69,7 @@ class CsvIngestionServiceTests(TestCase):
         def import_csv_files(**kwargs):
             captured_kwargs.update(kwargs)
             return {
-                "targetId": "workspace.s3",
+                "targetId": "s3",
                 "importedCount": 0,
                 "failedCount": 0,
                 "imports": [],
@@ -82,7 +82,7 @@ class CsvIngestionServiceTests(TestCase):
 
         service.import_csv_files(
             files=[],
-            target_id="workspace.s3",
+            target_id="s3",
             storage_format="parquet",
         )
 
@@ -92,7 +92,7 @@ class CsvIngestionServiceTests(TestCase):
         service = WorkbenchService.__new__(WorkbenchService)
         service._csv_ingestion = SimpleNamespace(
             import_csv_files=lambda **_kwargs: {
-                "targetId": "workspace.s3",
+                "targetId": "s3",
                 "importedCount": 1,
                 "failedCount": 0,
                 "imports": [
@@ -107,7 +107,7 @@ class CsvIngestionServiceTests(TestCase):
         service._catalogs = [
             SourceCatalog(
                 name="workspace",
-                connection_source_id="workspace.s3",
+                connection_source_id="s3",
                 schemas=[
                     SourceSchema(
                         name="vat_smoke_test",
@@ -136,15 +136,15 @@ class CsvIngestionServiceTests(TestCase):
 
         payload = service.import_csv_files(
             files=[],
-            target_id="workspace.s3",
+            target_id="s3",
             bucket="vat-smoke-test",
             prefix="incoming",
             has_header=True,
             storage_format="parquet",
         )
 
-        self.assertEqual(calls, [("workspace.s3", True)])
-        self.assertEqual(payload["firstQuerySource"]["sourceId"], "workspace.s3")
+        self.assertEqual(calls, [("s3", True)])
+        self.assertEqual(payload["firstQuerySource"]["sourceId"], "s3")
         self.assertEqual(
             payload["imports"][0]["querySource"]["relation"],
             "vat_smoke_test.vat_smoke",
@@ -154,7 +154,7 @@ class CsvIngestionServiceTests(TestCase):
         service = WorkbenchService.__new__(WorkbenchService)
         service._csv_ingestion = SimpleNamespace(
             import_csv_files=lambda **_kwargs: {
-                "targetId": "workspace.s3",
+                "targetId": "s3",
                 "importedCount": 1,
                 "failedCount": 0,
                 "imports": [
@@ -184,14 +184,14 @@ class CsvIngestionServiceTests(TestCase):
 
         payload = service.import_csv_files(
             files=[],
-            target_id="workspace.s3",
+            target_id="s3",
             bucket="vat-smoke-test",
             prefix="incoming",
             storage_format="parquet",
         )
 
-        self.assertEqual(calls, [("workspace.s3", True)])
-        self.assertEqual(payload["firstQuerySource"]["sourceId"], "workspace.s3")
+        self.assertEqual(calls, [("s3", True)])
+        self.assertEqual(payload["firstQuerySource"]["sourceId"], "s3")
         self.assertEqual(
             payload["imports"][0]["querySource"]["relation"],
             "vat_smoke_test.vat_smoke",
@@ -206,7 +206,7 @@ class CsvIngestionServiceTests(TestCase):
         service = WorkbenchService.__new__(WorkbenchService)
         service._csv_ingestion = SimpleNamespace(
             import_csv_files=lambda **_kwargs: {
-                "targetId": "workspace.s3",
+                "targetId": "s3",
                 "importedCount": 1,
                 "failedCount": 0,
                 "imports": [
@@ -242,13 +242,13 @@ class CsvIngestionServiceTests(TestCase):
         with patch("bit_data_workbench.backend.service.time.sleep", lambda _seconds: None):
             payload = service.import_csv_files(
                 files=[],
-                target_id="workspace.s3",
+                target_id="s3",
                 bucket="test",
                 storage_format="csv",
             )
 
-        self.assertEqual(calls, [("workspace.s3", True), ("workspace.s3", True)])
-        self.assertEqual(payload["firstQuerySource"]["sourceId"], "workspace.s3")
+        self.assertEqual(calls, [("s3", True), ("s3", True)])
+        self.assertEqual(payload["firstQuerySource"]["sourceId"], "s3")
         self.assertEqual(
             payload["imports"][0]["querySource"]["relation"],
             "test.federal_tax_data_10gb",

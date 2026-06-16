@@ -220,9 +220,9 @@ async def run_query_and_assert_result(page, timeout_ms: int) -> str:
         raise RuntimeError(
             "The query export menu does not expose the Local Workspace (IndexDB) export action."
         )
-    if "Save Results in Shared Workspace (S3) ..." not in export_text:
+    if "Save Results in S3 Object Storage ..." not in export_text:
         raise RuntimeError(
-            "The query export menu does not expose the Shared Workspace (S3) export action."
+            "The query export menu does not expose the S3 Object Storage export action."
         )
     if "Download Results as ..." not in export_text:
         raise RuntimeError(

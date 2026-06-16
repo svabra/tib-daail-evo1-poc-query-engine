@@ -400,11 +400,11 @@ class DataExchangeManager:
         record = self._require_file_password(file_id, file_password)
         extension = queryable_extension(record.file_name)
         if not extension:
-            raise ValueError("Only queryable formats can be copied from DataExchange to Shared Workspace S3.")
+            raise ValueError("Only queryable formats can be copied from DataExchange to S3 Object Storage.")
 
         target_bucket = str(bucket or "").strip() or str(self._settings.s3_bucket or "").strip()
         if not target_bucket:
-            raise ValueError("Choose a Shared Workspace S3 bucket.")
+            raise ValueError("Choose a S3 Object Storage bucket.")
         target_name = safe_storage_file_name(file_name or record.file_name)
         normalized_prefix = "/".join(
             segment.strip()
@@ -431,7 +431,7 @@ class DataExchangeManager:
             MetadataDirective="REPLACE",
         )
         return {
-            "targetId": "workspace.s3",
+            "targetId": "s3",
             "importedCount": 1,
             "failedCount": 0,
             "imports": [

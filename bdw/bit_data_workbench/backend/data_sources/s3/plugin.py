@@ -11,7 +11,7 @@ class S3DataSourcePlugin(DataSourcePlugin):
 
     @property
     def source_id(self) -> str:
-        return "workspace.s3"
+        return "s3"
 
     @property
     def source_label(self) -> str:

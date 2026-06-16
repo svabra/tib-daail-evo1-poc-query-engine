@@ -384,7 +384,7 @@ async def open_s3_explorer_file(
     timeout_ms: int,
 ) -> None:
     await page.goto(
-        f"{base_url.rstrip('/')}/data-sources/browser?source_id=workspace.s3",
+        f"{base_url.rstrip('/')}/data-sources/browser?source_id=s3",
         wait_until="domcontentloaded",
         timeout=timeout_ms,
     )

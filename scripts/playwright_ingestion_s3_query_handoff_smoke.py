@@ -15,7 +15,7 @@ from playwright.async_api import async_playwright
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Exercise the CSV import to Shared Workspace S3 handoff into the "
+            "Exercise the CSV import to S3 Object Storage handoff into the "
             "Query Workbench. The target app must already be running."
         )
     )
@@ -89,9 +89,9 @@ async def import_csv_to_s3(page, args: argparse.Namespace) -> tuple[str, str, st
         ]
     )
 
-    await page.locator('[data-csv-target-option][value="workspace.s3"]').check()
-    await page.locator('[data-csv-config-panel="workspace.s3"] [data-csv-s3-bucket]').fill(args.bucket)
-    await page.locator('[data-csv-config-panel="workspace.s3"] [data-csv-s3-prefix]').fill(prefix)
+    await page.locator('[data-csv-target-option][value="s3"]').check()
+    await page.locator('[data-csv-config-panel="s3"] [data-csv-s3-bucket]').fill(args.bucket)
+    await page.locator('[data-csv-config-panel="s3"] [data-csv-s3-prefix]').fill(prefix)
     await page.locator('[data-csv-s3-storage-format][value="json"]').check()
     await page.locator("[data-csv-file-input]").set_input_files(
         files=[
@@ -195,7 +195,7 @@ async def assert_query_handoff(
         raise RuntimeError(f"Expected Query Workbench URL after handoff, got {page.url}.")
 
     selected_source = page.locator(
-        f'[data-source-object].is-selected[data-source-option-id="workspace.s3"][data-source-object-relation="{expected_relation}"]'
+        f'[data-source-object].is-selected[data-source-option-id="s3"][data-source-object-relation="{expected_relation}"]'
     )
     await selected_source.wait_for(state="visible", timeout=timeout_ms)
     actual_alias = (await selected_source.get_attribute("data-source-object-query-alias") or "").strip()

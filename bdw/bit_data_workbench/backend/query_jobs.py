@@ -341,7 +341,7 @@ def infer_source_types(data_sources: list[str]) -> list[str]:
             source_type = "postgres-native"
         elif normalized.startswith("pg_"):
             source_type = "postgres"
-        elif normalized.endswith(".s3") or normalized == "workspace.s3":
+        elif normalized == "s3" or normalized.startswith("s3."):
             source_type = "s3"
         elif normalized.startswith("workspace"):
             source_type = "workspace"
@@ -950,21 +950,13 @@ def _normalize_relation_segment(value: object) -> str:
 
 def _is_s3_file_pattern_relation(relation: str) -> bool:
     normalized = str(relation or "").strip()
-    normalized_lower = normalized.lower()
-    if not (
-        normalized_lower.startswith("s3.")
-        or normalized_lower.startswith("workspace.s3.")
-    ):
-        return False
-
     parts = [
         _normalize_relation_segment(part)
         for part in _split_relation_parts_quoted(normalized)
     ]
-    if normalized_lower.startswith("s3."):
+    normalized_parts = [part.lower() for part in parts]
+    if normalized_parts[:1] == ["s3"]:
         s3_index = 0
-    elif normalized_lower.startswith("workspace.s3."):
-        s3_index = 1
     else:
         return False
     if len(parts) < s3_index + 3:

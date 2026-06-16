@@ -72,7 +72,7 @@ def _source_object_payload_from_summary(
                 path = path or query_path
             except ValueError:
                 pass
-    source_id = "workspace.s3" if bucket and key else ""
+    source_id = "s3" if bucket and key else ""
     if not source_id and relation.startswith("workspace_local_"):
         source_id = "workspace.local"
     return {
@@ -107,7 +107,7 @@ def _source_object_payload_from_s3_path(path: str) -> dict[str, object] | None:
     return {
         "label": _source_object_display_label(bucket=bucket, key=key),
         "kind": "s3-object",
-        "sourceId": "workspace.s3",
+        "sourceId": "s3",
         "relation": normalized_path,
         "queryAlias": "",
         "queryReference": "",
@@ -149,7 +149,7 @@ def _source_object_payload_from_catalog(
 ) -> dict[str, object]:
     source_id = str(catalog.connection_source_id or catalog.name or "").strip()
     if catalog.name == "workspace" and not source_id:
-        source_id = "workspace.s3"
+        source_id = "s3"
     bucket = str(source_object.s3_bucket or "").strip()
     key = str(source_object.s3_key or "").strip()
     relation = str(source_object.relation or "").strip()
@@ -186,7 +186,7 @@ def _catalog_s3_payload_for_reference(
 
     generated_match: tuple[SourceCatalog, SourceObject] | None = None
     for catalog in catalogs or []:
-        if str(catalog.connection_source_id or "").strip() != "workspace.s3":
+        if str(catalog.connection_source_id or "").strip() != "s3":
             continue
         for schema in catalog.schemas:
             for source_object in schema.objects:

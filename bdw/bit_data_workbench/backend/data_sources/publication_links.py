@@ -15,7 +15,7 @@ def schema_publication_source(
     schema: SourceSchema,
 ) -> dict[str, object] | None:
     source_id = catalog_source_id(catalog)
-    if source_id != "workspace.s3":
+    if source_id != "s3":
         return None
 
     bucket = str(schema.label or schema.name or "").strip()
@@ -24,7 +24,7 @@ def schema_publication_source(
 
     return {
         "sourceKind": "bucket",
-        "sourceId": "workspace.s3",
+        "sourceId": "s3",
         "bucket": bucket,
         "sourceDisplayName": bucket,
         "sourcePlatform": "s3",
@@ -38,13 +38,13 @@ def object_publication_source(
     source_id = catalog_source_id(catalog)
     relation = str(source_object.relation or "").strip()
 
-    if source_id == "workspace.s3":
+    if source_id == "s3":
         bucket = str(source_object.s3_bucket or "").strip()
         key = str(source_object.s3_key or "").strip()
         if source_object.s3_downloadable and bucket and key:
             return {
                 "sourceKind": "object",
-                "sourceId": "workspace.s3",
+                "sourceId": "s3",
                 "bucket": bucket,
                 "key": key,
                 "sourceDisplayName": str(
@@ -56,7 +56,7 @@ def object_publication_source(
         if relation:
             return {
                 "sourceKind": "relation",
-                "sourceId": "workspace.s3",
+                "sourceId": "s3",
                 "relation": relation,
                 "sourceDisplayName": str(
                     source_object.display_name or source_object.name or relation

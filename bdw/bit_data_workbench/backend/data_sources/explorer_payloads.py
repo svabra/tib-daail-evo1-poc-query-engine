@@ -30,7 +30,7 @@ def explorer_kind_for_source(source_id: str) -> str:
     normalized_source_id = canonical_explorer_source_id(source_id)
     if normalized_source_id in {"pg_oltp", "pg_olap"}:
         return "postgres"
-    if normalized_source_id == "workspace.s3":
+    if normalized_source_id == "s3":
         return "s3"
     if normalized_source_id == "workspace.local":
         return "local-workspace"
@@ -68,20 +68,20 @@ def _source_object_payload(
     relation = str(source_object.relation or "").strip()
     publication_source: dict[str, object] | None = None
 
-    if source_id == "workspace.s3":
+    if source_id == "s3":
         bucket = str(source_object.s3_bucket or "").strip()
         key = str(source_object.s3_key or "").strip()
         if source_object.s3_downloadable and bucket and key:
             publication_source = {
                 "sourceKind": "object",
-                "sourceId": "workspace.s3",
+                "sourceId": "s3",
                 "bucket": bucket,
                 "key": key,
             }
         elif relation:
             publication_source = {
                 "sourceKind": "relation",
-                "sourceId": "workspace.s3",
+                "sourceId": "s3",
                 "relation": relation,
             }
     elif relation:
@@ -114,18 +114,18 @@ def _s3_query_hierarchy(bucket: str, prefix: str = "") -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class _WorkspaceS3SourceObjectIndex:
+class _S3SourceObjectIndex:
     exact: dict[tuple[str, str], tuple[SourceObject, S3SourceObjectLocation]]
     datasets: dict[tuple[str, str], tuple[SourceObject, S3SourceObjectLocation]]
 
 
-def _workspace_s3_source_objects(
+def _s3_storage_source_objects(
     service: WorkbenchService,
-) -> _WorkspaceS3SourceObjectIndex:
+) -> _S3SourceObjectIndex:
     exact: dict[tuple[str, str], tuple[SourceObject, S3SourceObjectLocation]] = {}
     datasets: dict[tuple[str, str], tuple[SourceObject, S3SourceObjectLocation]] = {}
     for catalog in service.catalogs():
-        if str(catalog.connection_source_id or "").strip() != "workspace.s3":
+        if str(catalog.connection_source_id or "").strip() != "s3":
             continue
         for schema in catalog.schemas:
             for source_object in schema.objects:
@@ -141,7 +141,7 @@ def _workspace_s3_source_objects(
                         source_object,
                         location,
                     )
-    return _WorkspaceS3SourceObjectIndex(exact=exact, datasets=datasets)
+    return _S3SourceObjectIndex(exact=exact, datasets=datasets)
 
 
 def _is_virtual_dataset_source(
@@ -163,14 +163,14 @@ def _source_object_publication_source(
     if source_object.s3_downloadable and not location.is_wildcard:
         return {
             "sourceKind": "object",
-            "sourceId": "workspace.s3",
+            "sourceId": "s3",
             "bucket": location.bucket,
             "key": location.key,
         }
     if relation:
         return {
             "sourceKind": "relation",
-            "sourceId": "workspace.s3",
+            "sourceId": "s3",
             "relation": relation,
         }
     return None
@@ -243,7 +243,7 @@ def _annotate_s3_snapshot(
     bucket = str(annotated_snapshot.get("bucket") or "").strip()
     prefix = str(annotated_snapshot.get("prefix") or "").strip()
     annotated_entries: list[dict[str, object]] = []
-    s3_source_objects = _workspace_s3_source_objects(service)
+    s3_source_objects = _s3_storage_source_objects(service)
 
     annotated_snapshot["queryPath"] = _s3_query_hierarchy(bucket, prefix)
     annotated_snapshot["breadcrumbs"] = _annotate_s3_breadcrumbs(
@@ -264,7 +264,7 @@ def _annotate_s3_snapshot(
                 entry["queryPath"] = _s3_query_hierarchy(entry_bucket)
                 publication_source = {
                     "sourceKind": "bucket",
-                    "sourceId": "workspace.s3",
+                    "sourceId": "s3",
                     "bucket": entry_bucket,
                 }
         elif entry_kind == "file":
@@ -285,7 +285,7 @@ def _annotate_s3_snapshot(
                 else:
                     publication_source = {
                         "sourceKind": "object",
-                        "sourceId": "workspace.s3",
+                        "sourceId": "s3",
                         "bucket": entry_bucket,
                         "key": entry_key,
                     }
@@ -318,7 +318,7 @@ def _annotate_s3_snapshot(
         service.published_data_products_for_source(
             source={
                 "sourceKind": "bucket",
-                "sourceId": "workspace.s3",
+                "sourceId": "s3",
                 "bucket": bucket,
             }
         )

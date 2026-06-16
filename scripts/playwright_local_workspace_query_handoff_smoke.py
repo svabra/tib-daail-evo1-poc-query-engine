@@ -183,11 +183,11 @@ async def assert_local_query_notebook(
         )
 
     shared_workspace_label = page.locator(
-        '[data-source-catalog-source-id="workspace.s3"] > summary .source-node-label span'
+        '[data-source-catalog-source-id="s3"] > summary .source-node-label span'
     ).first
     await shared_workspace_label.wait_for(state="visible", timeout=timeout_ms)
     shared_workspace_text = (await shared_workspace_label.text_content() or "").strip()
-    if shared_workspace_text != "Shared Workspace (S3)":
+    if shared_workspace_text != "S3 Object Storage":
         raise RuntimeError(
             f"Unexpected Shared Workspace sidebar label: {shared_workspace_text!r}"
         )

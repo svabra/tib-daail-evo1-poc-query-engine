@@ -68,7 +68,7 @@ export function createS3DataSourceExplorer(helpers) {
       name: selectedEntry.name,
       displayName: selectedEntry.displayName || selectedEntry.name,
       kind: "file",
-      sourceOptionId: "workspace.s3",
+      sourceOptionId: "s3",
       s3Bucket: selectedEntry.bucket,
       s3Key: selectedEntry.prefix,
       s3Path: selectedEntry.path,
@@ -261,7 +261,7 @@ export function createS3DataSourceExplorer(helpers) {
           "data-source-object-query-alias": entry.queryAlias || "",
           "data-source-object-query-reference": entry.queryReference || entry.queryPath || "",
           "data-source-object-query-sql": entry.querySql || "",
-          "data-source-option-id": "workspace.s3",
+          "data-source-option-id": "s3",
           "data-s3-bucket": entry.bucket || "",
           "data-s3-key": entry.prefix || "",
           "data-s3-path": entry.path || "",
@@ -531,7 +531,7 @@ export function createS3DataSourceExplorer(helpers) {
     }
 
     const payload = await fetchJsonOrThrow(
-      `/api/data-sources/workspace.s3/explorer${params.toString() ? `?${params.toString()}` : ""}`
+      `/api/data-sources/s3/explorer${params.toString() ? `?${params.toString()}` : ""}`
     );
     state.snapshot = payload?.snapshot || null;
     state.selectedEntry = null;

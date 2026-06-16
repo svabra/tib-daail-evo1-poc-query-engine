@@ -293,7 +293,7 @@ async def main() -> None:
             await page.locator("[data-data-exchange-copy-file-name]").fill(csv_name)
             await page.locator("[data-data-exchange-copy-form]").evaluate("form => form.requestSubmit()")
             copy_message = await close_message_dialog(page, args.timeout_ms)
-            if "Copied to Shared Workspace S3" not in copy_message:
+            if "Copied to S3 Object Storage" not in copy_message:
                 raise RuntimeError(f"Unexpected copy success message: {copy_message!r}")
             copied_body = client.get_object(Bucket=args.bucket, Key=copied_key)["Body"].read().decode("utf-8")
             if copied_body != "id,name\n1,alpha\n":

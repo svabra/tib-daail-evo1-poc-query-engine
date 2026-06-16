@@ -192,7 +192,7 @@ class PythonExecutionContextTests(unittest.TestCase):
             ),
             SourceCatalog(
                 name="workspace",
-                connection_source_id="workspace.s3",
+                connection_source_id="s3",
                 schemas=[
                     SourceSchema(
                         name="s3",
@@ -200,7 +200,7 @@ class PythonExecutionContextTests(unittest.TestCase):
                             SourceObject(
                                 name="vat_smoke",
                                 kind="view",
-                                relation="workspace.s3.vat_smoke_generated",
+                                relation="s3.vat_smoke_generated",
                             )
                         ],
                     )
@@ -209,7 +209,7 @@ class PythonExecutionContextTests(unittest.TestCase):
         ]
         service._source_options = [
             {"source_id": "pg_oltp", "label": "PostgreSQL OLTP", "classification": "Internal", "computation_mode": "VMTP"},
-            {"source_id": "workspace.s3", "label": "Workspace S3", "classification": "Internal", "computation_mode": "MPP"},
+            {"source_id": "s3", "label": "S3 Object Storage", "classification": "Internal", "computation_mode": "MPP"},
         ]
         service.source_object_fields = lambda relation: []
 
@@ -270,8 +270,8 @@ class PythonKernelRuntimeTests(unittest.TestCase):
         context = {
             "selectedSources": [
                 {
-                    "sourceId": "workspace.s3",
-                    "canonicalSourceId": "workspace.s3",
+                    "sourceId": "s3",
+                    "canonicalSourceId": "s3",
                 }
             ],
             "relations": [],
