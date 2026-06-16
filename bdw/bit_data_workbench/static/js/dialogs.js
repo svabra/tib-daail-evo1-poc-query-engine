@@ -93,7 +93,7 @@ export function ensureMessageDialog() {
     <dialog class="modal-dialog" data-message-dialog>
       <form method="dialog" class="modal-card" data-message-form>
         <h2 class="modal-title" data-message-title>Notice</h2>
-        <p class="modal-copy" data-message-copy>Done.</p>
+        <div class="modal-copy" data-message-copy>Done.</div>
         <div class="modal-link-list" data-message-links hidden></div>
         <menu class="modal-actions">
           <button class="modal-button" type="submit" value="confirm" data-message-submit>

@@ -617,6 +617,85 @@ class QuerySourceValidationTests(unittest.TestCase):
             set(file_names),
         )
 
+    def test_materialized_stage_rewrites_lowercase_s3_aliases_to_catalog_object_case(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        file_names = [
+            "KBPO_2018undvorher.parquet",
+            "KBPO_2019.parquet",
+            "KBPO2020.parquet",
+        ]
+        service._catalogs = [
+            SourceCatalog(
+                name="workspace",
+                connection_source_id="s3",
+                schemas=[
+                    SourceSchema(
+                        name="KBPOimports",
+                        objects=[
+                            SourceObject(
+                                name=file_name,
+                                kind="file",
+                                relation=f"KBPOimports.{file_name.replace('.', '_')}",
+                                s3_bucket="KBPOimports",
+                                s3_key=file_name,
+                                s3_file_format="parquet",
+                            )
+                            for file_name in file_names
+                        ],
+                    )
+                ],
+            )
+        ]
+        service._data_source_discovery = SimpleNamespace(s3_relation_specs=lambda: {})
+        sql = "\nUNION ALL\n".join(
+            f'SELECT * FROM s3.kbpoimports."{file_name.lower()}"'
+            for file_name in file_names
+        )
+        query_options = {"validation": {"sourceExistence": "off"}}
+
+        execution_sql = service._materialized_stage_execution_sql(
+            sql,
+            ["s3"],
+            query_options,
+        )
+        source_summaries = service._materialized_stage_source_summaries(
+            sql,
+            ["s3"],
+            query_options,
+        )
+
+        for file_name in file_names:
+            self.assertIn(
+                f"read_parquet('s3://KBPOimports/{file_name}')",
+                execution_sql,
+            )
+            self.assertNotIn(
+                f"read_parquet('s3://kbpoimports/{file_name.lower()}')",
+                execution_sql,
+            )
+        self.assertEqual(
+            {summary["path"] for summary in source_summaries},
+            {f"s3://KBPOimports/{file_name}" for file_name in file_names},
+        )
+
+    def test_source_validation_rejects_unverified_direct_s3_fallback(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
+        service._data_source_discovery = SimpleNamespace(s3_relation_specs=lambda: {})
+
+        result = service.validate_query_sources(
+            sql='select * from s3.kbpoimports."kbpo_2018undvorher.parquet"',
+            data_sources=["s3"],
+        )
+
+        self.assertEqual(result["status"], QUERY_SOURCE_INVALID)
+        self.assertEqual(
+            result["missingReferences"],
+            ['s3.kbpoimports."kbpo_2018undvorher.parquet"'],
+        )
+
     def test_materialized_stage_rewrites_seeded_problem_full_query_virtual_sources(self) -> None:
         from bit_data_workbench.backend.notebooks import build_restart_seeded_shared_notebooks
         from bit_data_workbench.backend.s3_storage import s3_bucket_schema_name
@@ -851,7 +930,7 @@ class QuerySourceValidationTests(unittest.TestCase):
                     "query_reference": 's3.test."federal_tax_data_10gb.csv"',
                     "bucket": "test",
                     "key": "federal_tax_data_10gb.csv",
-                    "path": "",
+                    "path": "s3://test/federal_tax_data_10gb.csv",
                     "format": "csv",
                     "query_sql": "read_csv_auto('s3://test/federal_tax_data_10gb.csv')",
                     "size_bytes": 0,

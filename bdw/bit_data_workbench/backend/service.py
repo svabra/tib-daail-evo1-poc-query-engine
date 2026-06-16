@@ -148,6 +148,7 @@ from .notebooks import (
     build_notebooks,
     build_restart_seeded_shared_notebooks,
     build_source_options,
+    kostenbelege_3_1_generated_parquet_key,
     kostenbelege_3_1_loader_virtual_relation,
     kostenbelege_3_1_loader_query_sql,
     merge_restart_seeded_shared_notebook,
@@ -2304,6 +2305,7 @@ class WorkbenchService:
             entry = KnownRelationReference(
                 relation=virtual_relation,
                 bucket=KOSTENBELEGE_3_1_GENERATED_BUCKET,
+                key=kostenbelege_3_1_generated_parquet_key(table_name),
                 query_sql=query_sql,
             )
             aliases = {
@@ -2417,6 +2419,7 @@ class WorkbenchService:
             entry = KnownRelationReference(
                 relation=relation,
                 bucket=str(record.output_bucket or "").strip(),
+                key=str(record.output_key or "").strip(),
                 query_sql=query_sql,
             )
             for candidate in {relation, f"stage.{alias}"}:
@@ -2541,7 +2544,9 @@ class WorkbenchService:
             relation_entry = KnownRelationReference(
                 relation=str(relation).strip(),
                 bucket=str(bucket).strip(),
+                key=str(object_key).strip(),
                 query_sql=s3_table_function_sql(bucket=bucket, key=object_key),
+                verified=("*" in object_key or "?" in object_key),
             )
             relation_index.setdefault(normalized_relation, relation_entry)
 
@@ -2566,6 +2571,7 @@ class WorkbenchService:
             entry = KnownRelationReference(
                 relation=relation,
                 bucket=bucket,
+                key=str(metadata.get("key") or "").strip(),
                 query_sql=str(metadata.get("query_sql") or "").strip(),
             )
             aliases = {
@@ -2670,15 +2676,16 @@ class WorkbenchService:
             relation_key = str(reference.relation or "").strip()
             if not relation_key:
                 continue
-            normalized_bucket_key = self._normalized_s3_relation_reference(relation_key)
-            bucket_name = ""
-            object_key = ""
-            if normalized_bucket_key:
-                bucket_name, object_key = normalized_bucket_key
-            else:
-                parsed = self._normalized_s3_relation_reference(relation)
-                if parsed:
-                    bucket_name, object_key = parsed
+            bucket_name = str(reference.bucket or "").strip()
+            object_key = str(reference.key or "").strip()
+            if not bucket_name or not object_key:
+                normalized_bucket_key = self._normalized_s3_relation_reference(relation_key)
+                if normalized_bucket_key:
+                    bucket_name, object_key = normalized_bucket_key
+                else:
+                    parsed = self._normalized_s3_relation_reference(relation)
+                    if parsed:
+                        bucket_name, object_key = parsed
             if normalized_relation.startswith("stage."):
                 bucket_name = str(reference.bucket or bucket_name or "").strip()
             normalized_format = infer_s3_reference_format(key=object_key)
@@ -2729,20 +2736,31 @@ class WorkbenchService:
                         continue
                     summarized_keys.add(normalized_relation)
                     spec = specs.get(relation)
-                    query_sql = str(getattr(spec, "query_sql", "") or source_object.query_sql or "").strip()
+                    reference = (relation_index or {}).get(normalized_relation)
+                    query_sql = str(
+                        getattr(spec, "query_sql", "")
+                        or getattr(reference, "query_sql", "")
+                        or source_object.query_sql
+                        or ""
+                    ).strip()
                     if spec is not None:
                         query_sql = self._s3_source_query_sql_for_options(
                             spec=spec,
                             query_options=normalized_query_options,
                         )
+                    bucket_name = str(source_object.s3_bucket or "").strip()
+                    object_key = str(source_object.s3_key or "").strip()
+                    object_path = str(source_object.s3_path or "").strip()
+                    if not object_path and bucket_name and object_key:
+                        object_path = f"s3://{bucket_name}/{object_key}"
                     summaries.append(
                         {
                             "relation": relation,
                             "query_alias": str(source_object.query_alias or "").strip(),
                             "query_reference": str(source_object.query_reference or "").strip(),
-                            "bucket": str(source_object.s3_bucket or "").strip(),
-                            "key": str(source_object.s3_key or "").strip(),
-                            "path": str(source_object.s3_path or "").strip(),
+                            "bucket": bucket_name,
+                            "key": object_key,
+                            "path": object_path,
                             "format": str(source_object.s3_file_format or "").strip(),
                             "size_bytes": int(
                                 getattr(spec, "size_bytes", 0) or source_object.size_bytes or 0

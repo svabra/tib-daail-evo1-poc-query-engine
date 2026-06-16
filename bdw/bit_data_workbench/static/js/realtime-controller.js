@@ -236,6 +236,16 @@ export function createRealtimeController(helpers) {
       node.textContent = formatQueryDuration(queryJobElapsedMs(job));
     });
 
+    document.querySelectorAll("[data-query-timing-current-step]").forEach((node) => {
+      const job = jobsById.get(node.dataset.jobId || "");
+      if (!job) {
+        return;
+      }
+      const completedMs = Number(node.dataset.queryTimingCompletedMs);
+      const safeCompletedMs = Number.isFinite(completedMs) && completedMs >= 0 ? completedMs : 0;
+      node.textContent = formatQueryDuration(Math.max(0, queryJobElapsedMs(job) - safeCompletedMs));
+    });
+
     document.querySelectorAll("[data-query-monitor-duration]").forEach((node) => {
       const job = jobsById.get(node.dataset.jobId || "");
       if (!job) {

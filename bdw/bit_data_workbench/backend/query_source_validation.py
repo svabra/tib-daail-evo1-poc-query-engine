@@ -167,7 +167,7 @@ def validate_query_sources(
     missing: list[str] = []
     for reference in references:
         known_relation = relation_index.get(normalize_relation_key(reference))
-        if known_relation is None:
+        if known_relation is None or not known_relation.verified:
             missing.append(reference)
             continue
         matched.append(

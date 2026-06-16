@@ -10,6 +10,7 @@ from .source_references import (
     normalize_qualified_name,
     pg_source_reference,
     s3_source_reference,
+    s3_table_function_sql,
 )
 
 
@@ -56,7 +57,9 @@ class SqlToken:
 class KnownRelationReference:
     relation: str
     bucket: str = ""
+    key: str = ""
     query_sql: str = ""
+    verified: bool = True
 
 
 @dataclass(slots=True)
@@ -83,10 +86,20 @@ def build_relation_index(catalogs: Iterable[SourceCatalog]) -> dict[str, KnownRe
                 canonical_relation = str(source_object.relation or "").strip()
                 if not canonical_relation:
                     continue
+                s3_bucket = str(source_object.s3_bucket or "").strip()
+                s3_key = str(source_object.s3_key or "").strip()
+                query_sql = str(getattr(source_object, "query_sql", "") or "").strip()
+                if not query_sql and s3_bucket and s3_key:
+                    query_sql = s3_table_function_sql(
+                        bucket=s3_bucket,
+                        key=s3_key,
+                        file_format=str(source_object.s3_file_format or "").strip(),
+                    )
                 entry = KnownRelationReference(
                     relation=canonical_relation,
-                    bucket=str(source_object.s3_bucket or "").strip(),
-                    query_sql=str(getattr(source_object, "query_sql", "") or "").strip(),
+                    bucket=s3_bucket,
+                    key=s3_key,
+                    query_sql=query_sql,
                 )
                 aliases = {
                     normalize_relation_key(canonical_relation),

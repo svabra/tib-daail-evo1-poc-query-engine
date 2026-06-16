@@ -127,6 +127,7 @@ export function showMessageDialog({
   copy,
   actionLabel = "OK",
   links = [],
+  preformatted = false,
 }) {
   const dialog = ensureMessageDialog();
   const titleNode = dialog.querySelector("[data-message-title]");
@@ -136,7 +137,16 @@ export function showMessageDialog({
   const submit = dialog.querySelector("[data-message-submit]");
 
   titleNode.textContent = title;
-  copyNode.textContent = copy;
+  const normalizedCopy = normalizedMessageCopy(copy);
+  copyNode.classList.toggle("modal-copy-preformatted", Boolean(preformatted));
+  if (preformatted) {
+    const pre = document.createElement("pre");
+    pre.className = "modal-preformatted-copy";
+    pre.textContent = normalizedCopy;
+    copyNode.replaceChildren(pre);
+  } else {
+    copyNode.textContent = normalizedCopy;
+  }
   submit.textContent = actionLabel;
   if (linksNode) {
     linksNode.replaceChildren();
@@ -166,6 +176,7 @@ export function showMessageDialog({
 
     const onClose = () => {
       form.removeEventListener("submit", onSubmit);
+      copyNode.classList.remove("modal-copy-preformatted");
       if (linksNode) {
         linksNode.replaceChildren();
         linksNode.hidden = true;
@@ -177,4 +188,11 @@ export function showMessageDialog({
     dialog.addEventListener("close", onClose, { once: true });
     dialog.showModal();
   });
+}
+
+function normalizedMessageCopy(copy) {
+  return String(copy ?? "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim() || "Done.";
 }

@@ -1,9 +1,39 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.18. Keep entries concise and
+# Derived from git history through version 0.10.19. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.19",
+        "releasedAt": "2026-06-16T14:57:43+02:00",
+        "features": [
+            (
+                "S3 source resolution now preserves the actual bucket and "
+                "object-key casing for catalog-backed Parquet files, so "
+                "lowercase SQL aliases such as s3.kbpoimports.\"kbpo2020.parquet\" "
+                "rewrite to the discovered physical S3 object instead of a "
+                "case-mismatched URL."
+            ),
+            (
+                "Read and stage materialization source checks now distinguish "
+                "verified source metadata from syntactic direct-S3 fallbacks, "
+                "so unresolved single-file aliases fail during preparation "
+                "instead of surfacing a late DuckDB 404."
+            ),
+            (
+                "Result timing now uses compact left-to-right breadcrumb "
+                "arrow blocks with completed and active steps highlighted in "
+                "blue, a fixed-width elapsed clock, and live active-step "
+                "timing updates that do not shift the row."
+            ),
+            (
+                "Stage and pipeline failure dialogs now render multiline "
+                "DuckDB errors in a bounded preformatted block, preserving "
+                "SQL line and caret context without breaking the popup layout."
+            ),
+        ],
+    },
     {
         "version": "0.10.18",
         "releasedAt": "2026-06-16T13:58:40+02:00",

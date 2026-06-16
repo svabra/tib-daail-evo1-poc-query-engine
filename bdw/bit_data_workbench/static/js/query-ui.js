@@ -68,14 +68,14 @@ export function createQueryUi(helpers) {
           "Total elapsed is the main runtime for this cell run: from the Run Cell click until the completed, failed, or cancelled job update reaches this browser. "
           + "Use this number when comparing runs. It includes backend preparation, any shared DuckDB access wait, worker startup, source setup such as S3 Parquet view creation or cache hydration, DuckDB execution, result fetching, and delivery back to the browser. "
           + "When the cell finishes, this number will not move backward; if backend timing or the resource chart observed a longer elapsed time, the result keeps that longer elapsed time. "
-          + "The timing pill next to it shows backend phase measurements. Those sub-times are diagnostics and can differ slightly because they are measured on different clocks and rounded."
+          + "The timing breadcrumb next to it shows backend phase measurements. Those sub-times are diagnostics and can differ slightly because they are measured on different clocks and rounded."
         );
     const jobId = job?.jobId || "";
     const durationControl = job
       ? `
         <button
           type="button"
-          class="result-meta result-duration-toggle"
+          class="result-meta result-duration-toggle result-duration-value"
           data-query-duration
           data-query-duration-details-toggle
           data-job-id="${escapeHtml(jobId)}"
@@ -87,7 +87,7 @@ export function createQueryUi(helpers) {
       `
       : `
         <strong
-          class="result-meta"
+          class="result-meta result-duration-value"
           data-query-duration
           data-job-id=""
           title="${escapeHtml(tooltip)}"
@@ -298,6 +298,125 @@ export function createQueryUi(helpers) {
       }
     }
     return rows;
+  }
+
+  function queryTimingStepDefinitions(job) {
+    if (!job) {
+      return [];
+    }
+
+    const totalMs = queryJobElapsedMs(job);
+    const backendTotalMs = queryTimingValue(job, "backendTotalMs");
+    const deliveryMs =
+      Number.isFinite(totalMs) && backendTotalMs !== null
+        ? Math.max(0, Number(totalMs) - backendTotalMs)
+        : null;
+    const fetchMs =
+      queryTimingValue(job, "resultFetchMs") ??
+      (Number.isFinite(Number(job?.fetchMs)) && Number(job.fetchMs) >= 0 ? Number(job.fetchMs) : null);
+    const steps = [
+      { key: "prepare", label: "Prepare", valueMs: queryTimingValue(job, "backendPrepareMs") },
+      { key: "shared-duckdb-wait", label: "Shared DuckDB wait", valueMs: queryTimingValue(job, "engineAccessWaitMs") },
+      { key: "startup", label: "Startup", valueMs: queryTimingValue(job, "workerStartupMs") },
+      { key: "source-setup", label: "Source setup", valueMs: queryTimingValue(job, "sourceBootstrapMs") },
+      { key: "query", label: "Query", valueMs: queryTimingValue(job, "engineQueryMs") },
+      { key: "fetch", label: "Fetch", valueMs: fetchMs },
+      { key: "delivery", label: "Delivery", valueMs: deliveryMs },
+    ];
+    const measuredStepTotalMs = steps.reduce(
+      (sum, step) => sum + (step.valueMs !== null && Number.isFinite(Number(step.valueMs)) ? Number(step.valueMs) : 0),
+      0
+    );
+    if (Number.isFinite(totalMs)) {
+      const overheadMs = Number(totalMs) - measuredStepTotalMs;
+      const running = Boolean(queryJobIsRunning(job));
+      const allMeasuredStepsComplete = steps.every((step) => step.valueMs !== null);
+      steps.push({
+        key: "overhead",
+        label: "Overhead",
+        valueMs: (!running || allMeasuredStepsComplete) && overheadMs > 1 ? overheadMs : null,
+      });
+    }
+    return steps;
+  }
+
+  function queryTimingBreadcrumbSteps(job) {
+    if (!job) {
+      return [];
+    }
+
+    const running = Boolean(queryJobIsRunning(job));
+    const totalMs = queryJobElapsedMs(job);
+    const rawSteps = queryTimingStepDefinitions(job);
+    const visibleSteps = running ? rawSteps : rawSteps.filter((step) => step.valueMs !== null);
+    if (!visibleSteps.length) {
+      return [];
+    }
+
+    const lastMeasuredIndex = visibleSteps.reduce(
+      (lastIndex, step, index) => (step.valueMs !== null ? index : lastIndex),
+      -1
+    );
+    const currentIndex = running ? Math.min(lastMeasuredIndex + 1, visibleSteps.length - 1) : -1;
+    let completedBeforeMs = 0;
+
+    return visibleSteps.map((step, index) => {
+      const state = !running
+        ? "completed"
+        : index < currentIndex
+          ? "completed"
+          : index === currentIndex
+            ? "current"
+            : "pending";
+      const previousCompletedMs = completedBeforeMs;
+      let displayMs = null;
+
+      if (state === "completed") {
+        displayMs = step.valueMs !== null && Number.isFinite(Number(step.valueMs)) ? Number(step.valueMs) : 0;
+        completedBeforeMs += displayMs;
+      } else if (state === "current" && Number.isFinite(totalMs)) {
+        displayMs = Math.max(0, Number(totalMs) - completedBeforeMs);
+      }
+
+      return {
+        ...step,
+        state,
+        displayMs,
+        completedBeforeMs: previousCompletedMs,
+      };
+    });
+  }
+
+  function queryTimingBreadcrumbMarkup(job) {
+    const steps = queryTimingBreadcrumbSteps(job);
+    if (!steps.length) {
+      return "";
+    }
+
+    return `
+      <ol class="query-timing-breadcrumb" aria-label="Query timing progress">
+        ${steps
+          .map((step) => {
+            const valueCopy = step.displayMs === null ? "-" : formatQueryDuration(step.displayMs);
+            const currentAttributes = step.state === "current"
+              ? ` data-query-timing-current-step data-job-id="${escapeHtml(job.jobId || "")}" data-query-timing-completed-ms="${escapeHtml(String(Math.max(0, step.completedBeforeMs || 0)))}"`
+              : "";
+            return `
+              <li
+                class="query-timing-step is-${escapeHtml(step.state)}"
+                data-query-timing-step
+                data-query-timing-step-state="${escapeHtml(step.state)}"
+                data-query-timing-step-key="${escapeHtml(step.key)}"
+                title="${escapeHtml(`${step.label}: ${valueCopy}`)}"
+              >
+                <span class="query-timing-step-label">${escapeHtml(step.label)}</span>
+                <span class="query-timing-step-value"${currentAttributes}>${escapeHtml(valueCopy)}</span>
+              </li>
+            `;
+          })
+          .join("")}
+      </ol>
+    `;
   }
 
   function queryTimingClipboardTable(job) {
@@ -885,14 +1004,12 @@ export function createQueryUi(helpers) {
     }
 
     const metricPills = [];
+    const timingBreadcrumb = queryTimingBreadcrumbMarkup(job);
     if (job.comparisonInsights?.previous) {
       metricPills.push(queryInsightPillMarkup(job.comparisonInsights.previous));
     }
     if (job.comparisonInsights?.median) {
       metricPills.push(queryInsightPillMarkup(job.comparisonInsights.median));
-    }
-    if (job.timingInsights) {
-      metricPills.push(queryInsightPillMarkup(job.timingInsights));
     }
     if (job.cacheInsights) {
       metricPills.push(queryInsightPillMarkup(job.cacheInsights));
@@ -901,7 +1018,7 @@ export function createQueryUi(helpers) {
       metricPills.push(queryInsightPillMarkup(job.footprintInsights));
     }
 
-    if (!metricPills.length) {
+    if (!timingBreadcrumb && !metricPills.length) {
       return "";
     }
 
@@ -910,7 +1027,7 @@ export function createQueryUi(helpers) {
       ? ` data-copy-query-timings data-query-timing-table="${escapeHtml(encodeURIComponent(timingTable))}" role="button" tabindex="0" title="Copy timing table"`
       : "";
 
-    return `<div class="result-metric-strip"${timingAttributes}>${metricPills.join("")}</div>`;
+    return `<div class="result-metric-strip"${timingAttributes}>${timingBreadcrumb}${metricPills.join("")}</div>`;
   }
 
   function queryMonitorInsightStripMarkup(job) {

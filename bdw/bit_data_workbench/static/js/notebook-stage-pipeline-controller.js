@@ -1839,6 +1839,7 @@ export function createNotebookStagePipelineController(helpers) {
     await showMessageDialog({
       title,
       copy: message,
+      preformatted: true,
     });
   }
 
