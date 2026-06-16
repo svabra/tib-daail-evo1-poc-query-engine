@@ -186,6 +186,10 @@ let queryJobsStateVersion = null;
 let queryJobsSnapshot = [];
 let queryJobsSummary = { runningCount: 0, totalCount: 0 };
 let queryPerformanceState = { recent: [], stats: {} };
+let queryJobsReconcileHandle = null;
+let queryJobsReconcileInFlight = false;
+const queryJobsReconcileInitialDelayMs = 1500;
+const queryJobsReconcilePollMs = 4000;
 const collapsedQueryResultKeys = new Set();
 const visibleQueryResultChartKeys = new Set();
 const visibleQueryTimingDetailKeys = new Set();
@@ -1676,6 +1680,7 @@ const {
     queryJobsSnapshot = nextState.snapshot;
     queryJobsSummary = nextState.summary;
     queryPerformanceState = nextState.performance;
+    syncQueryJobsReconciliation();
   },
   sidebarQueryCounts,
   syncCellCacheHydrationJobState,
@@ -7382,6 +7387,63 @@ async function loadDataGenerationJobsState() {
 
 async function loadQueryJobsState() {
   await requestQueryJobsState({ applyQueryJobsState });
+}
+
+function queryJobsNeedReconciliation() {
+  return queryJobsSnapshot.some((job) => queryJobIsRunning(job));
+}
+
+function clearQueryJobsReconciliation() {
+  if (queryJobsReconcileHandle !== null) {
+    window.clearTimeout(queryJobsReconcileHandle);
+    queryJobsReconcileHandle = null;
+  }
+}
+
+function scheduleQueryJobsReconciliation({ delayMs = queryJobsReconcileInitialDelayMs } = {}) {
+  if (!queryJobsNeedReconciliation()) {
+    clearQueryJobsReconciliation();
+    return;
+  }
+  if (queryJobsReconcileInFlight) {
+    return;
+  }
+  if (queryJobsReconcileHandle !== null) {
+    return;
+  }
+
+  queryJobsReconcileHandle = window.setTimeout(refreshQueryJobsForReconciliation, delayMs);
+}
+
+async function refreshQueryJobsForReconciliation() {
+  queryJobsReconcileHandle = null;
+  if (!queryJobsNeedReconciliation()) {
+    return;
+  }
+  if (queryJobsReconcileInFlight) {
+    scheduleQueryJobsReconciliation({ delayMs: queryJobsReconcilePollMs });
+    return;
+  }
+
+  queryJobsReconcileInFlight = true;
+  try {
+    await loadQueryJobsState();
+  } catch (error) {
+    console.warn("Failed to reconcile live query jobs.", error);
+  } finally {
+    queryJobsReconcileInFlight = false;
+    if (queryJobsNeedReconciliation()) {
+      scheduleQueryJobsReconciliation({ delayMs: queryJobsReconcilePollMs });
+    }
+  }
+}
+
+function syncQueryJobsReconciliation() {
+  if (queryJobsNeedReconciliation()) {
+    scheduleQueryJobsReconciliation();
+  } else {
+    clearQueryJobsReconciliation();
+  }
 }
 
 function setCellLanguage(notebookId, cellId, language) {

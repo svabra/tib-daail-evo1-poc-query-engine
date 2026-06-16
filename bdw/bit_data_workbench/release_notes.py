@@ -1,9 +1,21 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.11. Keep entries concise and
+# Derived from git history through version 0.10.12. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.12",
+        "releasedAt": "2026-06-16T09:37:13+02:00",
+        "features": [
+            (
+                "SQL query results now reconcile live job status while a run "
+                "is active, so fast count-style queries that already show "
+                "rows automatically switch from queued or running to "
+                "completed even if the final realtime event is delayed."
+            ),
+        ],
+    },
     {
         "version": "0.10.11",
         "releasedAt": "2026-06-15T20:26:14+02:00",
