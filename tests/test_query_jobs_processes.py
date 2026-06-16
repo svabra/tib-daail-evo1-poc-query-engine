@@ -22,6 +22,8 @@ if str(BDW_ROOT) not in sys.path:
 
 from bit_data_workbench.backend import query_jobs as query_jobs_module  # noqa: E402
 from bit_data_workbench.backend.query_jobs import (  # noqa: E402
+    DUCKDB_EXECUTION_PATH_ISOLATED_WRITE,
+    DUCKDB_EXECUTION_PATH_SHARED_FILE_WRITE,
     _bootstrap_duckdb_source_views,
     _is_direct_file_relation,
     QUERY_EXECUTION_DUCKDB_READ,
@@ -34,6 +36,7 @@ from bit_data_workbench.backend.query_jobs import (  # noqa: E402
     classify_query_execution,
     utc_now_iso,
 )
+from bit_data_workbench.backend.sql_utils import sql_literal  # noqa: E402
 from bit_data_workbench.config import Settings  # noqa: E402
 from bit_data_workbench.models import QueryJobDefinition, QueryResourceSample  # noqa: E402
 from bit_data_workbench.version_info import current_repo_version  # noqa: E402
@@ -1677,6 +1680,111 @@ class ProcessQueryJobManagerTests(TestCase):
         self.assertEqual(completed.duckdb_execution_path, "isolated-read")
         self.assertGreaterEqual(completed.timings.get("engineQueryMs", -1), 0)
         self._assert_file_can_be_replaced(stage_file)
+
+    def test_stage_copy_artifact_write_runs_isolated_when_shared_duckdb_is_locked(self) -> None:
+        stage_file = self._create_stage_parquet_fixture()
+        output_path = self.root / "stage-output" / "merge_all.parquet"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        source_query_sql = (
+            f"SELECT * FROM read_parquet({sql_literal(stage_file.as_posix())})"
+        )
+        copy_sql = (
+            "COPY (SELECT * FROM stage.sample_data ORDER BY id_) "
+            f"TO {sql_literal(output_path.as_posix())} (FORMAT PARQUET)"
+        )
+        preview_sql = (
+            "SELECT * FROM "
+            f"read_parquet({sql_literal(output_path.as_posix())}) ORDER BY id_"
+        )
+        locked_connection = duckdb.connect(str(self.settings.duckdb_database))
+        try:
+            locked_connection.execute("CREATE TABLE lock_holder AS SELECT 1 AS value")
+            self.assertTrue(
+                self.manager._access_coordinator.acquire(
+                    QUERY_EXECUTION_DUCKDB_WRITE,
+                    lambda: False,
+                    owner_job_id="writer-job",
+                )
+            )
+            try:
+                job = self.manager.start_job(
+                    sql="SELECT * FROM stage.sample_data",
+                    execution_sql=copy_sql,
+                    result_preview_sql=preview_sql,
+                    notebook_id="nb",
+                    notebook_title="Notebook",
+                    cell_id="cell-stage-copy",
+                    data_sources=["s3"],
+                    touched_relations=["stage.sample_data"],
+                    touched_buckets=["test"],
+                    source_summaries=[
+                        {
+                            "relation": "stage.sample_data",
+                            "bucket": "test",
+                            "path": f"s3://test/{stage_file.name}",
+                            "format": "parquet",
+                            "query_sql": source_query_sql,
+                        }
+                    ],
+                    duckdb_execution_path_override=DUCKDB_EXECUTION_PATH_ISOLATED_WRITE,
+                )
+                completed = wait_until(
+                    lambda: self.manager.snapshot(job.job_id)
+                    if self.manager.snapshot(job.job_id).status == "completed"
+                    else None,
+                    timeout=20,
+                )
+            finally:
+                self.manager._access_coordinator.release(
+                    QUERY_EXECUTION_DUCKDB_WRITE,
+                    owner_job_id="writer-job",
+                )
+        finally:
+            locked_connection.close()
+
+        self.assertIsNotNone(completed)
+        self.assertEqual(completed.execution_mode, QUERY_EXECUTION_DUCKDB_WRITE)
+        self.assertEqual(completed.duckdb_execution_path, DUCKDB_EXECUTION_PATH_ISOLATED_WRITE)
+        self.assertEqual(completed.timings.get("engineAccessWaitMs"), 0.0)
+        self.assertNotIn("engine_waiting", [event.get("event") for event in completed.progress_events])
+        self.assertEqual(completed.rows, [(1, "A"), (2, "B")])
+        self._assert_file_can_be_replaced(output_path)
+
+    def test_isolated_write_override_rejects_shared_catalog_mutation(self) -> None:
+        with self.assertRaisesRegex(ValueError, "COPY .* TO"):
+            self.manager.start_job(
+                sql="CREATE TABLE should_not_be_isolated AS SELECT 1 AS value",
+                notebook_id="nb",
+                notebook_title="Notebook",
+                cell_id="cell-create-table",
+                data_sources=[],
+                duckdb_execution_path_override=DUCKDB_EXECUTION_PATH_ISOLATED_WRITE,
+            )
+
+    def test_shared_catalog_write_still_uses_shared_file_write_path(self) -> None:
+        job = self.manager.start_job(
+            sql="CREATE TABLE shared_catalog_relation AS SELECT 1 AS value",
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-shared-write",
+            data_sources=[],
+        )
+
+        with self.manager._condition:
+            record = self.manager._jobs[job.job_id]
+            worker_database_path = record.worker_database_path
+
+        self.assertEqual(job.duckdb_execution_path, DUCKDB_EXECUTION_PATH_SHARED_FILE_WRITE)
+        self.assertIsNone(worker_database_path)
+        completed = wait_until(
+            lambda: self.manager.snapshot(job.job_id)
+            if self.manager.snapshot(job.job_id).status == "completed"
+            else None,
+            timeout=20,
+        )
+
+        self.assertIsNotNone(completed)
+        self.assertEqual(completed.duckdb_execution_path, DUCKDB_EXECUTION_PATH_SHARED_FILE_WRITE)
 
     def test_parquet_source_file_is_released_after_cancelled_query(self) -> None:
         stage_file = self._create_stage_parquet_fixture()

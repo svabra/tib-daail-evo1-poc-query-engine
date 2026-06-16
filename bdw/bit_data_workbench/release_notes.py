@@ -1,9 +1,33 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.17. Keep entries concise and
+# Derived from git history through version 0.10.18. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.18",
+        "releasedAt": "2026-06-16T13:58:40+02:00",
+        "features": [
+            (
+                "Pipeline stage materialization now runs Parquet artifact "
+                "exports as isolated in-memory DuckDB writes, so COPY ... "
+                "TO stage output files no longer waits for or opens the "
+                "shared workspace.duckdb catalog."
+            ),
+            (
+                "True shared DuckDB catalog mutations still use the "
+                "serialized shared-file-write path, while stage exports keep "
+                "the existing isolated S3, PostgreSQL, stage, and local "
+                "workspace source bootstrapping."
+            ),
+            (
+                "Regression coverage now reproduces the production lock "
+                "scenario with a held shared DuckDB file, verifies "
+                "engineAccessWaitMs stays at zero for isolated stage writes, "
+                "and confirms normal shared catalog writes remain serialized."
+            ),
+        ],
+    },
     {
         "version": "0.10.17",
         "releasedAt": "2026-06-16T13:17:26+02:00",

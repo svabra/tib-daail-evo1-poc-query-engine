@@ -31,6 +31,9 @@ from bit_data_workbench.backend.query_source_validation import (  # noqa: E402
     extract_select_source_references,
     validate_query_sources,
 )
+from bit_data_workbench.backend.query_jobs import (  # noqa: E402
+    DUCKDB_EXECUTION_PATH_ISOLATED_WRITE,
+)
 from bit_data_workbench.backend.source_discovery import (  # noqa: E402
     DiscoveredRelationSpec,
     build_s3_query,
@@ -1132,6 +1135,52 @@ class QuerySourceValidationTests(unittest.TestCase):
         self.assertEqual(captured["touched_relations"], ["stage.mwa_joined_abrechnungen"])
         self.assertEqual(captured["source_summaries"][0]["relation"], "stage.mwa_joined_abrechnungen")
         self.assertEqual(captured["source_summaries"][0]["query_sql"], completed_stage_record()["querySql"])
+
+    def test_materialized_stage_query_job_requests_isolated_write_path(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        captured: dict[str, object] = {}
+
+        def record_start(**kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(job_id="query-stage-copy")
+
+        def wait_for_terminal(job_id, **_kwargs):
+            return SimpleNamespace(payload={"jobId": job_id, "status": "completed"})
+
+        service._query_jobs = SimpleNamespace(
+            start_job=record_start,
+            wait_for_terminal=wait_for_terminal,
+        )
+
+        payload = service._run_materialized_stage_query_job(
+            requested_job_id="query-stage-copy",
+            display_sql="SELECT count(*) FROM stage.sample_data",
+            execution_sql=(
+                "COPY (SELECT count(*) FROM stage.sample_data) "
+                "TO '/tmp/merge_all.parquet' (FORMAT PARQUET)"
+            ),
+            result_preview_sql="SELECT * FROM read_parquet('/tmp/merge_all.parquet')",
+            notebook_id="notebook",
+            notebook_title="Notebook",
+            cell_id="cell-stage",
+            data_sources=["s3"],
+            source_summaries=[
+                {
+                    "relation": "stage.sample_data",
+                    "query_sql": "SELECT * FROM read_parquet('s3://bucket/data.parquet')",
+                }
+            ],
+            touched_relations=["stage.sample_data"],
+            touched_buckets=["bucket"],
+            query_options={},
+            is_cancelled=lambda: False,
+        )
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(
+            captured["duckdb_execution_path_override"],
+            DUCKDB_EXECUTION_PATH_ISOLATED_WRITE,
+        )
 
     def test_validate_s3_storage_virtual_glob_without_discovery_metadata(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)

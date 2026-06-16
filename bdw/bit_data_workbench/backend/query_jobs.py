@@ -60,6 +60,7 @@ QUERY_EXECUTION_DUCKDB_READ = "duckdb-read"
 QUERY_EXECUTION_DUCKDB_WRITE = "duckdb-write"
 QUERY_EXECUTION_POSTGRES_NATIVE = "postgres-native"
 DUCKDB_EXECUTION_PATH_ISOLATED_READ = "isolated-read"
+DUCKDB_EXECUTION_PATH_ISOLATED_WRITE = "isolated-write"
 DUCKDB_EXECUTION_PATH_SHARED_FILE_WRITE = "shared-file-write"
 DUCKDB_EXECUTION_PATH_POSTGRES_NATIVE = "postgres-native"
 READ_ONLY_START_KEYWORDS = {"select", "with", "values", "describe", "show", "summarize"}
@@ -528,6 +529,16 @@ def classify_query_execution(sql: str, data_sources: list[str] | None = None) ->
     if first_keyword in WRITE_START_KEYWORDS:
         return QUERY_EXECUTION_DUCKDB_WRITE
     return QUERY_EXECUTION_DUCKDB_WRITE
+
+
+def _is_isolated_artifact_write_sql(sql: str) -> bool:
+    statements = _split_sql_statements(sql)
+    if len(statements) != 1:
+        return False
+    statement = statements[0] if statements else str(sql or "")
+    if _first_keyword(statement) != "copy":
+        return False
+    return any(token == "to" for token in _sql_code_tokens(statement))
 
 
 def _duckdb_query_progress(connection: duckdb.DuckDBPyConnection) -> float | None:
@@ -1589,6 +1600,7 @@ class QueryJobManager:
         source_summaries: list[dict[str, object]] | None = None,
         query_options: dict[str, object] | None = None,
         backend_prepare_ms: float | None = None,
+        duckdb_execution_path_override: str = "",
     ) -> QueryJobDefinition:
         normalized_sql = str(sql or "").strip()
         if not normalized_sql:
@@ -1619,6 +1631,12 @@ class QueryJobManager:
             touched_relations=normalized_touched_relations,
             touched_buckets=normalized_touched_buckets,
             source_summaries=normalized_source_summaries,
+        )
+        duckdb_execution_path = self._validated_duckdb_execution_path_override(
+            requested_path=duckdb_execution_path_override,
+            default_path=duckdb_execution_path,
+            execution_mode=execution_mode,
+            execution_sql=normalized_execution_sql,
         )
         worker_database_path = self._worker_database_path(
             execution_mode=execution_mode,
@@ -1724,6 +1742,7 @@ class QueryJobManager:
         result_preview_sql: str = "",
         client_pre_submit_ms: float | None = None,
         backend_prepare_ms: float | None = None,
+        duckdb_execution_path_override: str = "",
     ) -> QueryJobDefinition:
         normalized_sql = sql.strip()
         if not normalized_sql:
@@ -1755,6 +1774,12 @@ class QueryJobManager:
             touched_relations=normalized_touched_relations,
             touched_buckets=normalized_touched_buckets,
             source_summaries=normalized_source_summaries,
+        )
+        duckdb_execution_path = self._validated_duckdb_execution_path_override(
+            requested_path=duckdb_execution_path_override,
+            default_path=duckdb_execution_path,
+            execution_mode=execution_mode,
+            execution_sql=normalized_execution_sql,
         )
         worker_database_path = self._worker_database_path(
             execution_mode=execution_mode,
@@ -2629,14 +2654,37 @@ class QueryJobManager:
         return DUCKDB_EXECUTION_PATH_SHARED_FILE_WRITE
 
     @staticmethod
+    def _validated_duckdb_execution_path_override(
+        *,
+        requested_path: str,
+        default_path: str,
+        execution_mode: str,
+        execution_sql: str,
+    ) -> str:
+        normalized = str(requested_path or "").strip()
+        if not normalized:
+            return default_path
+        if normalized != DUCKDB_EXECUTION_PATH_ISOLATED_WRITE:
+            raise ValueError(f"Unsupported DuckDB execution path override: {normalized}")
+        if execution_mode != QUERY_EXECUTION_DUCKDB_WRITE:
+            raise ValueError("isolated-write can only be used for DuckDB write statements.")
+        if not _is_isolated_artifact_write_sql(execution_sql):
+            raise ValueError("isolated-write requires a single COPY ... TO artifact statement.")
+        return normalized
+
+    @staticmethod
     def _worker_database_path(
         *,
         execution_mode: str,
         duckdb_execution_path: str,
     ) -> str | None:
-        if execution_mode != QUERY_EXECUTION_DUCKDB_READ:
-            return None
-        return ":memory:"
+        del execution_mode
+        if duckdb_execution_path in {
+            DUCKDB_EXECUTION_PATH_ISOLATED_READ,
+            DUCKDB_EXECUTION_PATH_ISOLATED_WRITE,
+        }:
+            return ":memory:"
+        return None
 
     def _drain_worker_events(self, job_id: str) -> None:
         with self._condition:

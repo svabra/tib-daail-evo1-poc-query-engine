@@ -115,6 +115,7 @@ from .query_options import (
 )
 from .query_jobs import (
     DUCKDB_EXECUTION_PATH_ISOLATED_READ,
+    DUCKDB_EXECUTION_PATH_ISOLATED_WRITE,
     DuckDBQueryAccessCoordinator,
     QUERY_EXECUTION_DUCKDB_READ,
     QUERY_EXECUTION_DUCKDB_WRITE,
@@ -2225,6 +2226,7 @@ class WorkbenchService:
             query_options=dict(query_options or {}),
             requested_job_id=str(requested_job_id or "").strip(),
             result_preview_sql=str(result_preview_sql or "").strip(),
+            duckdb_execution_path_override=DUCKDB_EXECUTION_PATH_ISOLATED_WRITE,
         )
         completed = self._query_jobs.wait_for_terminal(
             snapshot.job_id,
