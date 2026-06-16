@@ -627,6 +627,33 @@ class ProcessQueryJobManagerTests(TestCase):
             )
         return stage_file
 
+    def _assert_duckdb_access_released(self) -> None:
+        state = self.manager._access_coordinator.state()
+        self.assertEqual(state["active_reads"], 0, state)
+        self.assertFalse(state["active_write"], state)
+        self.assertEqual(state["read_owner_job_ids"], [], state)
+
+        started = time.monotonic()
+        acquired = self.manager._access_coordinator.acquire(
+            QUERY_EXECUTION_DUCKDB_WRITE,
+            lambda: time.monotonic() - started > 0.5,
+            owner_job_id="post-terminal-lock-probe",
+        )
+        try:
+            self.assertTrue(acquired, self.manager._access_coordinator.state())
+        finally:
+            if acquired:
+                self.manager._access_coordinator.release(
+                    QUERY_EXECUTION_DUCKDB_WRITE,
+                    owner_job_id="post-terminal-lock-probe",
+                )
+
+    def _assert_file_can_be_replaced(self, path: Path) -> None:
+        replacement = path.with_name(f"{path.stem}-released{path.suffix}")
+        replacement.unlink(missing_ok=True)
+        path.replace(replacement)
+        replacement.replace(path)
+
     def test_process_metrics_sample_once_per_second(self) -> None:
         self.assertEqual(QUERY_METRICS_SAMPLE_SECONDS, 1.0)
 
@@ -1145,6 +1172,70 @@ class ProcessQueryJobManagerTests(TestCase):
         for key in ("workerStartupMs", "engineQueryMs", "resultFetchMs", "backendTotalMs"):
             self.assertGreaterEqual(completed.timings.get(key, -1), 0)
 
+    def test_shared_file_read_releases_duckdb_access_after_completion(self) -> None:
+        job = self.manager.start_job(
+            sql="select 1 as value",
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-shared-release-complete",
+            data_sources=["workspace.s3"],
+            touched_relations=["s3.test.sample_data"],
+            touched_buckets=["test"],
+        )
+
+        completed = wait_until(
+            lambda: self.manager.snapshot(job.job_id)
+            if self.manager.snapshot(job.job_id).status == "completed"
+            else None,
+            timeout=20,
+        )
+
+        self.assertIsNotNone(completed)
+        self.assertEqual(completed.duckdb_execution_path, DUCKDB_EXECUTION_PATH_SHARED_FILE_READ)
+        self.assertGreaterEqual(completed.timings.get("engineQueryMs", -1), 0)
+        wait_until(
+            lambda: self.manager._access_coordinator.state()["active_reads"] == 0,
+            timeout=2,
+            interval=0.01,
+        )
+        self._assert_duckdb_access_released()
+
+    def test_shared_file_read_releases_duckdb_access_after_cancel(self) -> None:
+        job = self.manager.start_job(
+            sql=LONG_QUERY,
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-shared-release-cancel",
+            data_sources=["workspace.s3"],
+            touched_relations=["s3.test.sample_data"],
+            touched_buckets=["test"],
+        )
+        started = wait_until(
+            lambda: self.manager.snapshot(job.job_id)
+            if self.manager.snapshot(job.job_id).status == "running"
+            and self.manager.snapshot(job.job_id).process_id
+            else None,
+            timeout=20,
+        )
+        self.assertIsNotNone(started)
+        self.assertEqual(started.duckdb_execution_path, DUCKDB_EXECUTION_PATH_SHARED_FILE_READ)
+
+        self.manager.cancel_job(job.job_id)
+        cancelled = wait_until(
+            lambda: self.manager.snapshot(job.job_id)
+            if self.manager.snapshot(job.job_id).status == "cancelled"
+            else None,
+            timeout=20,
+        )
+
+        self.assertIsNotNone(cancelled)
+        wait_until(
+            lambda: self.manager._access_coordinator.state()["active_reads"] == 0,
+            timeout=2,
+            interval=0.01,
+        )
+        self._assert_duckdb_access_released()
+
     def test_file_backed_read_reports_duckdb_access_wait(self) -> None:
         self.assertTrue(
             self.manager._access_coordinator.acquire(
@@ -1524,6 +1615,90 @@ class ProcessQueryJobManagerTests(TestCase):
         self.assertEqual(completed.timings.get("engineAccessWaitMs"), 0.0)
         self.assertGreaterEqual(completed.timings.get("sourceBootstrapMs", -1), 0)
         self.assertNotIn("engine_waiting", [event.get("event") for event in completed.progress_events])
+
+    def test_parquet_source_file_is_released_after_completed_query(self) -> None:
+        stage_file = self._create_stage_parquet_fixture()
+        query_sql = f"SELECT * FROM read_parquet('{stage_file.as_posix()}')"
+        job = self.manager.start_job(
+            sql="SELECT count(*) AS row_count FROM stage.sample_data",
+            execution_sql="SELECT count(*) AS row_count FROM stage.sample_data",
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-parquet-release-complete",
+            data_sources=["workspace.s3"],
+            touched_relations=["stage.sample_data"],
+            touched_buckets=["test"],
+            source_summaries=[
+                {
+                    "relation": "stage.sample_data",
+                    "bucket": "test",
+                    "path": f"s3://test/{stage_file.name}",
+                    "format": "parquet",
+                    "query_sql": query_sql,
+                }
+            ],
+        )
+
+        completed = wait_until(
+            lambda: self.manager.snapshot(job.job_id)
+            if self.manager.snapshot(job.job_id).status == "completed"
+            else None,
+            timeout=20,
+        )
+
+        self.assertIsNotNone(completed)
+        self.assertEqual(completed.rows, [(2,)])
+        self.assertEqual(completed.duckdb_execution_path, "isolated-read")
+        self.assertGreaterEqual(completed.timings.get("engineQueryMs", -1), 0)
+        self._assert_file_can_be_replaced(stage_file)
+
+    def test_parquet_source_file_is_released_after_cancelled_query(self) -> None:
+        stage_file = self._create_stage_parquet_fixture()
+        query_sql = f"SELECT * FROM read_parquet('{stage_file.as_posix()}')"
+        query = """
+        SELECT sum(source_rows.id_ * a.i * b.j) AS total_value
+        FROM stage.sample_data AS source_rows
+        CROSS JOIN range(2000000) AS a(i)
+        CROSS JOIN range(2000) AS b(j)
+        """
+        job = self.manager.start_job(
+            sql=query,
+            execution_sql=query,
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-parquet-release-cancel",
+            data_sources=["workspace.s3"],
+            touched_relations=["stage.sample_data"],
+            touched_buckets=["test"],
+            source_summaries=[
+                {
+                    "relation": "stage.sample_data",
+                    "bucket": "test",
+                    "path": f"s3://test/{stage_file.name}",
+                    "format": "parquet",
+                    "query_sql": query_sql,
+                }
+            ],
+        )
+        started = wait_until(
+            lambda: self.manager.snapshot(job.job_id)
+            if self.manager.snapshot(job.job_id).status == "running"
+            and self.manager.snapshot(job.job_id).process_id
+            else None,
+            timeout=20,
+        )
+        self.assertIsNotNone(started)
+
+        self.manager.cancel_job(job.job_id)
+        cancelled = wait_until(
+            lambda: self.manager.snapshot(job.job_id)
+            if self.manager.snapshot(job.job_id).status == "cancelled"
+            else None,
+            timeout=20,
+        )
+
+        self.assertIsNotNone(cancelled)
+        self._assert_file_can_be_replaced(stage_file)
 
     def test_shared_file_read_does_not_bootstrap_sources_in_read_only_workspace(self) -> None:
         connection = duckdb.connect(str(self.settings.duckdb_database))

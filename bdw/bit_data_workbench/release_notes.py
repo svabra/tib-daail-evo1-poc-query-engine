@@ -1,9 +1,20 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.13. Keep entries concise and
+# Derived from git history through version 0.10.14. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.14",
+        "releasedAt": "2026-06-16T10:21:59+02:00",
+        "features": [
+            (
+                "Query process regression coverage now verifies that shared "
+                "DuckDB access and Parquet source file handles are released "
+                "after both completed and cancelled query runs."
+            ),
+        ],
+    },
     {
         "version": "0.10.13",
         "releasedAt": "2026-06-16T10:07:05+02:00",
