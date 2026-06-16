@@ -35,6 +35,15 @@ function recommendedStageOutputFileName(stage) {
   return `${base}.parquet`;
 }
 
+function runCellButtonLabel(pipelineMode, cellLanguage) {
+  return pipelineMode === "pipeline" && cellLanguage === "sql" ? "Run Stage" : "Run Cell";
+}
+
+function cellOrdinalLabel(pipelineMode, cellLanguage, index) {
+  const prefix = pipelineMode === "pipeline" && cellLanguage === "sql" ? "Stage" : "Cell";
+  return `${prefix} ${index + 1}`;
+}
+
 export function createNotebookWorkspaceMarkup(helpers) {
   const {
     escapeHtml,
@@ -301,7 +310,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
           <input type="hidden" name="cell_id" value="${escapeHtml(cell.cellId)}">
           <div class="cell-toolbar">
             <div class="cell-heading">
-              <span class="cell-label">Cell ${index + 1}</span>
+              <span class="cell-label">${escapeHtml(cellOrdinalLabel(pipelineMode, cellLanguage, index))}</span>
               <div class="cell-language-toggle" data-cell-language-toggle>
                 <button
                   type="button"
@@ -329,7 +338,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
             </div>
             <div class="cell-actions">
               <div class="cell-run-actions">
-                <button class="run-button" type="submit" title="Run with Ctrl/Cmd + Enter" data-run-cell>Run Cell</button>
+                <button class="run-button" type="submit" title="Run with Ctrl/Cmd + Enter" data-run-cell>${escapeHtml(runCellButtonLabel(pipelineMode, cellLanguage))}</button>
                 <button class="explain-button" type="button" title="Explain this SQL cell without running it." data-explain-cell ${cellLanguage === "sql" ? "" : "hidden"}>Explain</button>
                 <button class="query-cancel-button" type="button" data-cancel-query hidden>Cancel</button>
               </div>

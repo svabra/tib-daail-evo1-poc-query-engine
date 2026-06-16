@@ -6782,7 +6782,13 @@ function applyWorkspaceCellState(workspaceRoot, cell, index, editable, totalCell
 
   const label = cellRoot.querySelector(".cell-label");
   if (label) {
-    label.textContent = `Cell ${index + 1}`;
+    const pipelineMode = normalizeNotebookPipelineMode(
+      workspaceRoot?.dataset?.defaultPipelineMode ||
+        workspaceRoot?.querySelector?.("[data-notebook-meta]")?.dataset?.defaultPipelineMode ||
+        notebookMetadata(notebookId).pipelineMode
+    );
+    const labelPrefix = pipelineMode === "pipeline" && cellLanguage === "sql" ? "Stage" : "Cell";
+    label.textContent = `${labelPrefix} ${index + 1}`;
   }
 
   const accessBadge = cellRoot.querySelector("[data-cell-access-badge]");

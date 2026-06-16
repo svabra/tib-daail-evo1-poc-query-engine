@@ -46,6 +46,18 @@ function sourceReferencesNeedValidation(sql) {
   return /\b(from|join|table)\b/i.test(String(sql || ""));
 }
 
+function runCellButtonLabelForCell(cellRoot, cellLanguageForCellRoot) {
+  const workspaceRoot = cellRoot?.closest?.("[data-workspace-notebook]");
+  const mode = String(
+    workspaceRoot?.dataset?.defaultPipelineMode ||
+      workspaceRoot?.querySelector?.("[data-notebook-meta]")?.dataset?.defaultPipelineMode ||
+      ""
+  )
+    .trim()
+    .toLowerCase();
+  return mode === "pipeline" && cellLanguageForCellRoot(cellRoot) === "sql" ? "Run Stage" : "Run Cell";
+}
+
 function validationMessageFor(result, runtimePhase = "") {
   const status = normalizedStatus(result?.status || runtimePhase);
   if (runtimePhase === "checking") {
@@ -335,7 +347,7 @@ export function createQuerySourceValidationController(helpers) {
     runButton.disabled = false;
     runButton.title = runTooltipFor(result, runtimePhase);
     if (!runButton.classList.contains("is-running")) {
-      runButton.textContent = "Run Cell";
+      runButton.textContent = runCellButtonLabelForCell(cellRoot, cellLanguageForCellRoot);
     }
   }
 

@@ -1,9 +1,20 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.12. Keep entries concise and
+# Derived from git history through version 0.10.13. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.13",
+        "releasedAt": "2026-06-16T10:07:05+02:00",
+        "features": [
+            (
+                "Pipeline mode now labels SQL work as stages in both the "
+                "cell header and primary run action, while exploration mode "
+                "continues to show Run Cell."
+            ),
+        ],
+    },
     {
         "version": "0.10.12",
         "releasedAt": "2026-06-16T09:37:13+02:00",

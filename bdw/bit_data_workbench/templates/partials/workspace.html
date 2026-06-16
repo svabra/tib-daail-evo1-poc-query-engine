@@ -356,7 +356,7 @@
           <input type="hidden" name="cell_id" value="{{ cell.cell_id }}">
           <div class="cell-toolbar">
             <div class="cell-heading">
-              <span class="cell-label">Cell {{ loop.index }}</span>
+              <span class="cell-label">{{ ("Stage " if notebook_pipeline_enabled and cell_language == 'sql' else "Cell ") ~ loop.index }}</span>
               <div class="cell-language-toggle" data-cell-language-toggle>
                 <button
                   type="button"
@@ -523,7 +523,7 @@
             </div>
             <div class="cell-actions">
               <div class="cell-run-actions">
-                <button class="run-button" type="submit" title="Run with Ctrl/Cmd + Enter" data-run-cell>Run Cell</button>
+                <button class="run-button" type="submit" title="Run with Ctrl/Cmd + Enter" data-run-cell>{{ "Run Stage" if notebook_pipeline_enabled and cell_language == 'sql' else "Run Cell" }}</button>
                 <button
                   class="explain-button"
                   type="button"

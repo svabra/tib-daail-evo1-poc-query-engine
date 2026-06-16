@@ -61,6 +61,26 @@ export function createRealtimeController(helpers) {
     return getQueryState();
   }
 
+  function runCellButtonLabelForCell(cellRoot) {
+    const cellLanguage = String(
+      cellRoot?.dataset?.defaultCellLanguage ||
+        cellRoot?.querySelector?.("[data-editor-root]")?.dataset?.editorLanguage ||
+        cellRoot?.querySelector?.("[data-editor-source]")?.dataset?.editorLanguage ||
+        "sql"
+    )
+      .trim()
+      .toLowerCase();
+    const workspaceRoot = cellRoot?.closest?.("[data-workspace-notebook]");
+    const mode = String(
+      workspaceRoot?.dataset?.defaultPipelineMode ||
+        workspaceRoot?.querySelector?.("[data-notebook-meta]")?.dataset?.defaultPipelineMode ||
+        ""
+    )
+      .trim()
+      .toLowerCase();
+    return mode === "pipeline" && cellLanguage !== "python" ? "Run Stage" : "Run Cell";
+  }
+
   function dataGenerationState() {
     return getDataGenerationState();
   }
@@ -376,7 +396,7 @@ export function createRealtimeController(helpers) {
       } else {
         runButton.disabled = false;
         runButton.classList.remove("is-running");
-        runButton.textContent = "Run Cell";
+        runButton.textContent = runCellButtonLabelForCell(cellRoot);
       }
     }
 

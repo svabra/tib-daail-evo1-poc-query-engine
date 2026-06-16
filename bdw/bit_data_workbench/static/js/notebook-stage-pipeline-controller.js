@@ -671,6 +671,39 @@ export function createNotebookStagePipelineController(helpers) {
     ).trim();
   }
 
+  function runCellButtonLabelForCell(cellRoot) {
+    const notebookId = notebookIdForCellRoot(cellRoot);
+    return pipelineEnabled(notebookId) && normalizeCellLanguage(cellRoot?.dataset?.defaultCellLanguage) === "sql"
+      ? "Run Stage"
+      : "Run Cell";
+  }
+
+  function cellOrdinalLabelForCell(cellRoot, index) {
+    const notebookId = notebookIdForCellRoot(cellRoot);
+    const prefix = pipelineEnabled(notebookId) && normalizeCellLanguage(cellRoot?.dataset?.defaultCellLanguage) === "sql"
+      ? "Stage"
+      : "Cell";
+    return `${prefix} ${index + 1}`;
+  }
+
+  function refreshRunCellButtonLabels(workspaceRoot) {
+    workspaceRoot?.querySelectorAll("[data-query-cell]").forEach((cellRoot) => {
+      const button = cellRoot.querySelector("[data-run-cell]");
+      if (button && !button.classList.contains("is-running")) {
+        button.textContent = runCellButtonLabelForCell(cellRoot);
+      }
+    });
+  }
+
+  function refreshCellLabels(workspaceRoot) {
+    workspaceRoot?.querySelectorAll("[data-query-cell]").forEach((cellRoot, index) => {
+      const label = cellRoot.querySelector(".cell-label");
+      if (label) {
+        label.textContent = cellOrdinalLabelForCell(cellRoot, index);
+      }
+    });
+  }
+
   function stageAliasReferences(sql) {
     const seen = new Set();
     const references = [];
@@ -1414,6 +1447,8 @@ export function createNotebookStagePipelineController(helpers) {
       button.classList.toggle("is-active", active);
       button.setAttribute("aria-pressed", active ? "true" : "false");
     });
+    refreshCellLabels(workspaceRoot);
+    refreshRunCellButtonLabels(workspaceRoot);
   }
 
   async function refreshGraph(notebookId = getCurrentNotebookId()) {
@@ -1871,7 +1906,7 @@ export function createNotebookStagePipelineController(helpers) {
     }
     button.disabled = Boolean(busy);
     button.classList.toggle("is-running", Boolean(busy));
-    button.textContent = busy ? "Run Stage" : "Run Cell";
+    button.textContent = busy ? "Run Stage" : runCellButtonLabelForCell(cellRoot);
   }
 
   async function materializedStageState() {
