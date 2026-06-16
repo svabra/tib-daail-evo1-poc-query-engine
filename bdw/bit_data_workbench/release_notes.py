@@ -1,9 +1,33 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.19. Keep entries concise and
+# Derived from git history through version 0.10.20. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.20",
+        "releasedAt": "2026-06-16T16:25:08+02:00",
+        "features": [
+            (
+                "The DuckDB SQL preview now includes the actual pipeline "
+                "stage COPY ... TO parquet wrapper for materialized stages, "
+                "so Run Stage users see the same write-shaped SQL that the "
+                "backend submits to DuckDB instead of only the inner SELECT."
+            ),
+            (
+                "Pipeline stage previews keep canonical DuckDB S3 URIs such "
+                "as s3://bucket/key and clearly expose the runtime-local "
+                "Parquet COPY target pattern, avoiding misleading HTTP "
+                "endpoint rewrites that can produce false 404 paths."
+            ),
+            (
+                "Regression coverage now exercises materialized pipeline "
+                "COPY TO execution end to end, including rewritten S3 "
+                "aliases, sanitized output filenames, parquet artifact "
+                "readback, isolated-write routing, and preview/API/UI wiring."
+            ),
+        ],
+    },
     {
         "version": "0.10.19",
         "releasedAt": "2026-06-16T14:57:43+02:00",

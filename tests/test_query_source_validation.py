@@ -617,6 +617,105 @@ class QuerySourceValidationTests(unittest.TestCase):
             set(file_names),
         )
 
+    def test_prepare_query_sql_wraps_pipeline_stage_preview_in_copy_to_parquet(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
+        service._data_source_discovery = SimpleNamespace(s3_relation_specs=lambda: {})
+
+        payload = service.prepare_query_sql(
+            sql='SELECT * FROM s3.kbpoimports."KBPO2020.parquet"',
+            display_sql='SELECT * FROM s3.kbpoimports."KBPO2020.parquet"',
+            notebook_id="notebook",
+            notebook_title="Pipeline Notebook",
+            cell_id="cell-stage-1",
+            data_sources=["s3"],
+            query_options={"validation": {"sourceExistence": "off"}},
+            stage={
+                "enabled": True,
+                "stageId": "stage-merge-all",
+                "alias": "merge all",
+                "materialize": True,
+                "outputFileName": "merge_all.parquet",
+            },
+        )
+
+        expected_target = (
+            Path(tempfile.gettempdir()) / "bdw-stage-<run>" / "merge_all.parquet"
+        ).as_posix()
+        self.assertEqual(payload["duckdbExecutionPath"], DUCKDB_EXECUTION_PATH_ISOLATED_WRITE)
+        self.assertEqual(payload["stageOutputFileName"], "merge_all.parquet")
+        self.assertEqual(payload["stageDuckdbCopyTarget"], expected_target)
+        self.assertTrue(payload["stageDuckdbCopyTargetIsRuntimePattern"])
+        self.assertEqual(
+            payload["executionSql"],
+            "COPY (SELECT * FROM read_parquet('s3://kbpoimports/KBPO2020.parquet')) "
+            f"TO '{expected_target}' (FORMAT PARQUET)",
+        )
+        self.assertNotIn("https://", payload["executionSql"])
+        self.assertNotIn('s3.kbpoimports."KBPO2020.parquet"', payload["executionSql"])
+
+    def test_prepare_query_sql_pipeline_stage_preview_normalizes_table_function_copy_target(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
+
+        payload = service.prepare_query_sql(
+            sql="read_parquet('s3://kbpoimports/KBPO2020.parquet');",
+            display_sql="read_parquet('s3://kbpoimports/KBPO2020.parquet');",
+            notebook_id="notebook",
+            notebook_title="Pipeline Notebook",
+            cell_id="cell-stage-2",
+            data_sources=["s3"],
+            query_options={"validation": {"sourceExistence": "off"}},
+            stage={
+                "enabled": True,
+                "stageId": "stage-unsafe-output",
+                "alias": "unsafe output",
+                "materialize": True,
+                "outputFileName": "../unsafe output",
+            },
+        )
+
+        expected_target = (
+            Path(tempfile.gettempdir()) / "bdw-stage-<run>" / "unsafe_output.parquet"
+        ).as_posix()
+        self.assertEqual(payload["duckdbExecutionPath"], DUCKDB_EXECUTION_PATH_ISOLATED_WRITE)
+        self.assertEqual(payload["stageOutputFileName"], "unsafe_output.parquet")
+        self.assertEqual(
+            payload["executionSql"],
+            "COPY (SELECT * FROM read_parquet('s3://kbpoimports/KBPO2020.parquet')) "
+            f"TO '{expected_target}' (FORMAT PARQUET)",
+        )
+
+    def test_prepare_query_sql_does_not_copy_wrap_non_materialized_stage_preview(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
+        service._data_source_discovery = SimpleNamespace(s3_relation_specs=lambda: {})
+
+        payload = service.prepare_query_sql(
+            sql='SELECT * FROM s3.kbpoimports."KBPO2020.parquet"',
+            display_sql='SELECT * FROM s3.kbpoimports."KBPO2020.parquet"',
+            notebook_id="notebook",
+            data_sources=["s3"],
+            query_options={"validation": {"sourceExistence": "off"}},
+            stage={
+                "enabled": True,
+                "stageId": "stage-preview-only",
+                "alias": "preview_only",
+                "materialize": False,
+                "outputFileName": "preview_only.parquet",
+            },
+        )
+
+        self.assertEqual(
+            payload["executionSql"],
+            "SELECT * FROM read_parquet('s3://kbpoimports/KBPO2020.parquet')",
+        )
+        self.assertEqual(payload["duckdbExecutionPath"], "isolated-read")
+        self.assertNotIn("stageDuckdbCopyTarget", payload)
+
     def test_materialized_stage_rewrites_lowercase_s3_aliases_to_catalog_object_case(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)
         service._lock = threading.RLock()

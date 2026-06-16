@@ -810,6 +810,27 @@ export function createNotebookStagePipelineController(helpers) {
     });
   }
 
+  function stagePayloadForCell(cellRoot) {
+    const notebookId = notebookIdForCellRoot(cellRoot);
+    const cellId = String(cellRoot?.dataset?.cellId || "").trim();
+    if (!notebookId || !cellId || !pipelineEnabled(notebookId)) {
+      return null;
+    }
+    const node = stageNodeForCell(notebookId, cellId);
+    if (!node) {
+      return null;
+    }
+    return {
+      enabled: node.enabled !== false,
+      stageId: String(node.stageId || "").trim(),
+      alias: String(node.alias || "").trim(),
+      title: String(node.title || "").trim(),
+      materialize: node.materialize !== false,
+      outputFileName: String(node.outputFileName || node.resolvedOutputFileName || "").trim(),
+      resolvedOutputFileName: String(node.resolvedOutputFileName || node.outputFileName || "").trim(),
+    };
+  }
+
   function graphNodeIcon(node) {
     return `
       <svg class="pipeline-node-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -2614,6 +2635,7 @@ export function createNotebookStagePipelineController(helpers) {
     prepareQuerySqlForCell,
     refreshGraph,
     requestCellRun,
+    stagePayloadForCell,
     validateStageAliasesForCell,
   };
 }

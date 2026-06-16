@@ -295,6 +295,11 @@ class QueryExplainApiTests(unittest.TestCase):
                     "queryOptions": {
                         "duckdb": {"parquetHivePartitioning": "auto"},
                     },
+                    "stage": {
+                        "stageId": "stage-4",
+                        "alias": "merge_all",
+                        "outputFileName": "merge_all.parquet",
+                    },
                 }
             ),
             service=FakeWorkbenchService(),
@@ -305,6 +310,14 @@ class QueryExplainApiTests(unittest.TestCase):
         self.assertEqual(captured["notebook_id"], "notebook")
         self.assertEqual(captured["cell_id"], "cell-4")
         self.assertEqual(captured["local_relation_map"], {"local.alias": "physical.alias"})
+        self.assertEqual(
+            captured["stage"],
+            {
+                "stageId": "stage-4",
+                "alias": "merge_all",
+                "outputFileName": "merge_all.parquet",
+            },
+        )
 
 
 if __name__ == "__main__":

@@ -3964,13 +3964,18 @@ async function prepareSqlSubmissionForCell(cellRoot, originalSql) {
   };
 }
 
-function sqlPreparationCacheKey(cellRoot, preparedSubmission) {
+function stageSqlPreviewPayloadForCell(cellRoot) {
+  return notebookStagePipelineController?.stagePayloadForCell?.(cellRoot) ?? null;
+}
+
+function sqlPreparationCacheKey(cellRoot, preparedSubmission, stagePayload = null) {
   return JSON.stringify({
     sql: preparedSubmission.originalSql,
     executionSql: preparedSubmission.executionSql,
     dataSources: preparedSubmission.dataSources,
     localRelations: preparedSubmission.localRelationMap,
     queryOptions: preparedSubmission.queryOptions,
+    stage: stagePayload,
     materializedStagesVersion:
       notebookStagePipelineController?.getMaterializedStagesVersion?.() ?? null,
   });
@@ -3990,7 +3995,8 @@ async function prepareDuckdbSqlForCell(cellRoot) {
 
   const originalSql = currentEditorSql(editorRoot);
   const preparedSubmission = await prepareSqlSubmissionForCell(cellRoot, originalSql);
-  const cacheKey = sqlPreparationCacheKey(cellRoot, preparedSubmission);
+  const stagePayload = stageSqlPreviewPayloadForCell(cellRoot);
+  const cacheKey = sqlPreparationCacheKey(cellRoot, preparedSubmission, stagePayload);
   const cached = preparedSqlViewCache.get(cellRoot);
   if (cached?.key === cacheKey && cached.payload) {
     return cached.payload;
@@ -4011,6 +4017,7 @@ async function prepareDuckdbSqlForCell(cellRoot) {
       dataSources: preparedSubmission.dataSources,
       localRelations: preparedSubmission.localRelationMap,
       queryOptions: preparedSubmission.queryOptions,
+      stage: stagePayload,
     }),
   });
 

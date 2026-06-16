@@ -218,7 +218,7 @@ class QueryExplainPayload(BaseModel):
 
 
 class QuerySqlPreparePayload(QueryExplainPayload):
-    pass
+    stage: dict[str, object] | None = None
 
 
 class QueryCachePayload(BaseModel):
@@ -1465,6 +1465,7 @@ def prepare_query_sql(
                 if str(key).strip() and str(value).strip()
             },
             query_options=payload.query_options,
+            stage=payload.stage,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

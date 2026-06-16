@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from tempfile import TemporaryDirectory
+from tempfile import TemporaryDirectory, gettempdir
 from threading import RLock, Thread
 from typing import Any, Callable
 
@@ -82,6 +82,8 @@ from .materialized_stages import (
     MaterializedStageManager,
     MaterializedStageStore,
     StageRecord,
+    materialized_stage_query_sql,
+    normalize_stage_output_file_name,
     sql_stage_alias_references,
 )
 from .python_execution import KernelSessionManager, PythonJobManager
@@ -1738,16 +1740,82 @@ class WorkbenchService:
         data_sources: list[str] | None = None,
         local_relation_map: dict[str, str] | None = None,
         query_options: dict[str, object] | None = None,
+        stage: dict[str, object] | None = None,
     ) -> dict[str, object]:
-        del notebook_title, cell_id
-        return self._prepare_exploration_query(
+        prepared = self._prepare_exploration_query(
             sql=sql,
             display_sql=display_sql,
             notebook_id=notebook_id,
             data_sources=data_sources,
             local_relation_map=local_relation_map,
             query_options=query_options,
+        )
+        return self._prepare_query_sql_payload(
+            prepared,
+            stage=stage,
+            notebook_title=notebook_title,
+            cell_id=cell_id,
+        )
+
+    def _prepare_query_sql_payload(
+        self,
+        prepared: PreparedQuery,
+        *,
+        stage: dict[str, object] | None,
+        notebook_title: str,
+        cell_id: str,
+    ) -> dict[str, object]:
+        stage_payload = normalize_notebook_cell_stage(stage)
+        if not self._is_materialized_stage_prepare_payload(stage_payload):
+            return prepared.payload
+
+        stage_alias = (
+            str(stage_payload.get("alias") or "").strip()
+            or str(stage_payload.get("title") or "").strip()
+            or str(notebook_title or "").strip()
+            or str(cell_id or "").strip()
+            or "stage"
+        )
+        output_file_name = normalize_stage_output_file_name(
+            stage_payload.get("resolvedOutputFileName")
+            or stage_payload.get("outputFileName")
+            or stage_payload.get("output_file_name"),
+            alias=stage_alias,
+        )
+        preview_temp_path = (
+            Path(gettempdir()) / f"bdw-stage-<run>" / output_file_name
+        ).as_posix()
+        execution_sql = materialized_stage_query_sql(prepared.execution_sql)
+        copy_sql = f"COPY ({execution_sql}) TO {sql_literal(preview_temp_path)} (FORMAT PARQUET)"
+        payload = replace(
+            prepared,
+            execution_sql=copy_sql,
+            execution_mode=QUERY_EXECUTION_DUCKDB_WRITE,
+            duckdb_execution_path=DUCKDB_EXECUTION_PATH_ISOLATED_WRITE,
         ).payload
+        payload["stageOutputFileName"] = output_file_name
+        payload["stageDuckdbCopyTarget"] = preview_temp_path
+        payload["stageDuckdbCopyTargetIsRuntimePattern"] = True
+        return payload
+
+    @staticmethod
+    def _is_materialized_stage_prepare_payload(stage: dict[str, object]) -> bool:
+        if not stage:
+            return False
+        if stage.get("enabled") is False or stage.get("materialize") is False:
+            return False
+        return any(
+            str(stage.get(key) or "").strip()
+            for key in (
+                "stageId",
+                "stage_id",
+                "alias",
+                "title",
+                "outputFileName",
+                "output_file_name",
+                "resolvedOutputFileName",
+            )
+        )
 
     def start_query_job(
         self,

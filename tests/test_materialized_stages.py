@@ -789,6 +789,143 @@ class NotebookStagePipelineTests(unittest.TestCase):
             self.assertIn("kbpo_pipeline_result.parquet", query_jobs[0]["result_preview_sql"])
             self.assertEqual(len(query_jobs[0]["source_summaries"]), len(file_names))
 
+    def test_pipeline_stage_copy_runner_payload_is_exact_rewritten_and_sanitized(self) -> None:
+        from bit_data_workbench.backend.query_aliases import rewrite_query_aliases
+        from bit_data_workbench.backend.sql_utils import sql_literal
+
+        _, Store, _, _, _, _ = import_stage_components()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            source_path = root / "KBPO2020.parquet"
+            connection = duckdb.connect()
+            try:
+                connection.execute(
+                    f"""
+                    COPY (
+                        SELECT *
+                        FROM (VALUES (2, 'B'), (1, 'A')) AS source(id_, code)
+                    )
+                    TO {sql_literal(source_path.as_posix())} (FORMAT PARQUET)
+                    """
+                )
+            finally:
+                connection.close()
+
+            source_relation = 's3.KBPOimports."KBPO2020.parquet"'
+            source_query_sql = f"read_parquet({sql_literal(source_path.as_posix())})"
+            alias_map = {source_relation: source_query_sql}
+            query_jobs = []
+            writes = []
+
+            def run_query_job(**kwargs):
+                query_jobs.append(kwargs)
+                copy_connection = duckdb.connect()
+                try:
+                    copy_connection.execute(str(kwargs["execution_sql"]))
+                finally:
+                    copy_connection.close()
+                return {
+                    "jobId": kwargs["requested_job_id"],
+                    "status": "completed",
+                    "progressEvents": [{"event": "completed"}],
+                }
+
+            def write_object(bucket, output_key, local_output, metadata_key, metadata):
+                read_connection = duckdb.connect()
+                try:
+                    rows = read_connection.execute(
+                        f"SELECT id_, code FROM read_parquet({sql_literal(local_output.as_posix())}) ORDER BY id_"
+                    ).fetchall()
+                finally:
+                    read_connection.close()
+                writes.append(
+                    {
+                        "bucket": bucket,
+                        "output_key": output_key,
+                        "metadata_key": metadata_key,
+                        "metadata": dict(metadata),
+                        "rows": rows,
+                    }
+                )
+                return {"bucket": bucket, "key": output_key, "metadataKey": metadata_key}
+
+            manager = import_stage_components()[0](
+                settings=SimpleNamespace(s3_bucket="stage-bucket", shared_notebooks_bucket=None),
+                store=Store(root / "materialized-stages.json"),
+                connection_factory=lambda: duckdb.connect(),
+                source_summaries_provider=lambda _sql, _sources, _options: [
+                    {
+                        "relation": source_relation,
+                        "bucket": "KBPOimports",
+                        "key": "KBPO2020.parquet",
+                        "path": "s3://KBPOimports/KBPO2020.parquet",
+                        "format": "parquet",
+                        "query_sql": source_query_sql,
+                    }
+                ],
+                bootstrap_source_views=lambda _connection, _summaries: None,
+                sql_rewriter=lambda sql, _sources, _options: rewrite_query_aliases(sql, alias_map),
+                metadata_refresher=lambda: None,
+                state_change_callback=lambda _snapshot: None,
+                published_products_for_source=lambda _source: [],
+                object_writer=write_object,
+                query_job_runner=run_query_job,
+            )
+            cell = stage_cell(
+                "cell-copy",
+                "copy_stage",
+                f"SELECT * FROM {source_relation} ORDER BY id_",
+            )
+            cell["dataSources"] = ["s3"]
+            cell["queryOptions"] = {"duckdb": {"parquetHivePartitioning": "auto"}}
+            cell["stage"]["outputFileName"] = "../unsafe result"
+
+            manager.run_pipeline(notebook_id="nb-copy", notebook_title="Copy Stage", cells=[cell])
+            manager.wait_for_idle()
+
+            records = manager.state_payload()["records"]
+            completed = [record for record in records if record["status"] == "completed"]
+            self.assertEqual(len(completed), 1, records)
+            self.assertEqual(completed[0]["rowCount"], 2)
+            self.assertEqual(completed[0]["outputFileName"], "unsafe_result.parquet")
+            self.assertTrue(completed[0]["outputKey"].endswith("/unsafe_result.parquet"))
+            self.assertEqual(writes[0]["rows"], [(1, "A"), (2, "B")])
+            self.assertEqual(writes[0]["metadata"]["outputFileName"], "unsafe_result.parquet")
+            self.assertEqual(len(query_jobs), 1)
+
+            runner_payload = query_jobs[0]
+            copy_prefix = f"COPY (SELECT * FROM {source_query_sql} ORDER BY id_) TO "
+            self.assertTrue(
+                runner_payload["execution_sql"].startswith(copy_prefix),
+                runner_payload["execution_sql"],
+            )
+            self.assertTrue(
+                str(runner_payload["execution_sql"]).endswith("/unsafe_result.parquet' (FORMAT PARQUET)"),
+                runner_payload["execution_sql"],
+            )
+            copy_target = str(runner_payload["execution_sql"])[
+                len(copy_prefix) + 1 : -len("' (FORMAT PARQUET)")
+            ]
+            self.assertEqual(
+                runner_payload["result_preview_sql"],
+                f"SELECT * FROM read_parquet({sql_literal(copy_target)})",
+            )
+            self.assertEqual(runner_payload["display_sql"], f"SELECT * FROM {source_relation} ORDER BY id_")
+            self.assertEqual(runner_payload["data_sources"], ["s3"])
+            self.assertEqual(
+                runner_payload["query_options"]["duckdb"]["parquetHivePartitioning"],
+                "auto",
+            )
+            self.assertEqual(
+                runner_payload["query_options"]["validation"]["sourceExistence"],
+                "off",
+            )
+            self.assertEqual(runner_payload["touched_relations"], [source_relation])
+            self.assertEqual(runner_payload["touched_buckets"], ["KBPOimports"])
+            self.assertEqual(runner_payload["source_summaries"][0]["query_sql"], source_query_sql)
+            self.assertNotIn(source_relation, runner_payload["execution_sql"])
+            self.assertNotIn("https://", runner_payload["execution_sql"])
+
 
 if __name__ == "__main__":
     unittest.main()
