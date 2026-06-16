@@ -1955,6 +1955,11 @@ class WorkbenchService:
             local_relation_map=local_relation_map,
             query_options=normalized_query_options,
         )
+        self._validate_isolated_read_sources(
+            execution_mode=execution_mode,
+            touched_relations=query_analysis.touched_relations,
+            source_summaries=source_summaries,
+        )
         with self._lock:
             catalogs = list(self._catalogs)
         source_objects = query_source_objects(
@@ -2771,6 +2776,81 @@ class WorkbenchService:
             )
         )
         return summaries
+
+    @classmethod
+    def _validate_isolated_read_sources(
+        cls,
+        *,
+        execution_mode: str,
+        touched_relations: list[str] | None,
+        source_summaries: list[dict[str, object]] | None,
+    ) -> None:
+        if execution_mode != QUERY_EXECUTION_DUCKDB_READ:
+            return
+        unresolved = cls._unresolved_isolated_read_relations(
+            touched_relations=touched_relations,
+            source_summaries=source_summaries,
+        )
+        if not unresolved:
+            return
+        joined = ", ".join(unresolved)
+        raise ValueError(
+            "Read queries no longer wait for shared DuckDB file access. "
+            "The following relation(s) are not isolated query sources: "
+            f"{joined}. Use an S3 source reference, PostgreSQL source, "
+            "materialized stage, or local workspace source."
+        )
+
+    @classmethod
+    def _unresolved_isolated_read_relations(
+        cls,
+        *,
+        touched_relations: list[str] | None,
+        source_summaries: list[dict[str, object]] | None,
+    ) -> list[str]:
+        summary_keys: set[str] = set()
+        for summary in source_summaries or []:
+            if not isinstance(summary, dict) or not str(summary.get("query_sql") or "").strip():
+                continue
+            for key in ("relation", "query_alias", "query_reference"):
+                normalized = normalize_query_alias_key(summary.get(key))
+                if normalized:
+                    summary_keys.add(normalized)
+
+        unresolved: list[str] = []
+        for relation in touched_relations or []:
+            normalized_relation = normalize_query_alias_key(relation)
+            if not normalized_relation:
+                continue
+            if normalized_relation in summary_keys:
+                continue
+            if cls._is_isolated_builtin_relation(normalized_relation):
+                continue
+            if cls._is_direct_s3_path_relation(relation):
+                continue
+            parsed = cls._normalized_s3_relation_reference(str(relation or ""))
+            if parsed is not None:
+                bucket, object_key = parsed
+                if cls._is_direct_s3_relation(bucket=bucket, object_key=object_key):
+                    continue
+            unresolved.append(str(relation).strip())
+        return unresolved
+
+    @staticmethod
+    def _is_isolated_builtin_relation(normalized_relation: str) -> bool:
+        relation = str(normalized_relation or "").strip().lower()
+        return relation.startswith(
+            (
+                "pg_oltp.",
+                "pg_olap.",
+                "information_schema.",
+                "pg_catalog.",
+            )
+        )
+
+    @staticmethod
+    def _is_direct_s3_path_relation(relation: object) -> bool:
+        return str(relation or "").strip().lower().startswith("s3://")
 
     @staticmethod
     def _s3_source_query_sql_for_options(

@@ -355,7 +355,63 @@ class QuerySourceValidationTests(unittest.TestCase):
         self.assertIn("missing.schema_table", payload["error"])
         self.assertIn("missing.schema_table", fake_query_jobs.failed_error)
 
-    def test_prepare_query_sql_skips_source_validation_when_option_off(self) -> None:
+    def test_start_query_job_records_unisolated_read_as_failed_preflight(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = sample_catalogs()
+        service.validate_query_sources = lambda **_kwargs: self.fail(
+            "source validation should be skipped"
+        )
+        service._analyze_query = lambda _sql, **_kwargs: SimpleNamespace(
+            touched_relations=["missing.schema_table"],
+            touched_buckets=[],
+        )
+        fake_query_jobs = SimpleNamespace(
+            prepared_called=False,
+            failed_error="",
+        )
+
+        def start_preflight(**kwargs):
+            return SimpleNamespace(job_id=kwargs.get("requested_job_id") or "query-preflight")
+
+        def start_prepared(*_args, **_kwargs):
+            fake_query_jobs.prepared_called = True
+            return SimpleNamespace(payload={"jobId": "query-preflight", "status": "queued"})
+
+        def fail_preflight(job_id, *, error, message, backend_prepare_ms=None):
+            fake_query_jobs.failed_error = str(error)
+            return SimpleNamespace(
+                payload={
+                    "jobId": job_id,
+                    "status": "failed",
+                    "message": message,
+                    "error": str(error),
+                    "timings": {"backendPrepareMs": backend_prepare_ms},
+                }
+            )
+
+        fake_query_jobs.start_preflight_job = start_preflight
+        fake_query_jobs.start_prepared_job = start_prepared
+        fake_query_jobs.fail_preflight_job = fail_preflight
+        service._query_jobs = fake_query_jobs
+
+        payload = service.start_query_job(
+            sql="select * from missing.schema_table",
+            notebook_id="notebook",
+            notebook_title="Notebook",
+            cell_id="cell-1",
+            data_sources=[],
+            query_options={"validation": {"sourceExistence": "off"}},
+            client_job_id="query-client-unisolated-reference",
+        )
+
+        self.assertFalse(fake_query_jobs.prepared_called)
+        self.assertEqual(payload["jobId"], "query-client-unisolated-reference")
+        self.assertEqual(payload["status"], "failed")
+        self.assertIn("Read queries no longer wait for shared DuckDB file access", payload["error"])
+        self.assertIn("missing.schema_table", fake_query_jobs.failed_error)
+
+    def test_prepare_query_sql_fails_fast_for_unisolated_read_when_source_validation_off(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)
         service._lock = threading.RLock()
         service._catalogs = sample_catalogs()
@@ -367,15 +423,16 @@ class QuerySourceValidationTests(unittest.TestCase):
             touched_buckets=[],
         )
 
-        payload = service.prepare_query_sql(
-            sql="select * from missing.schema_table",
-            notebook_id="notebook",
-            data_sources=[],
-            query_options={"validation": {"sourceExistence": "off"}},
-        )
+        with self.assertRaises(ValueError) as exc:
+            service.prepare_query_sql(
+                sql="select * from missing.schema_table",
+                notebook_id="notebook",
+                data_sources=[],
+                query_options={"validation": {"sourceExistence": "off"}},
+            )
 
-        self.assertEqual(payload["executionSql"], "select * from missing.schema_table")
-        self.assertEqual(payload["queryOptions"]["validation"]["sourceExistence"], "off")
+        self.assertIn("Read queries no longer wait for shared DuckDB file access", str(exc.exception))
+        self.assertIn("missing.schema_table", str(exc.exception))
 
     def test_prepare_query_sql_rewrites_relation_only_loader_schema_alias(self) -> None:
         bucket = "poc-tests-performance-evaluation-kostenbelege-3-1"
@@ -630,6 +687,7 @@ class QuerySourceValidationTests(unittest.TestCase):
             data_sources=["pg_oltp"],
         )
 
+        self.assertEqual(payload["duckdbExecutionPath"], "isolated-read")
         self.assertEqual(
             payload["sourceObjects"],
             [
@@ -648,7 +706,7 @@ class QuerySourceValidationTests(unittest.TestCase):
             ],
         )
 
-    def test_start_query_job_skips_source_validation_when_option_off(self) -> None:
+    def test_start_query_job_fails_fast_for_unisolated_read_when_source_validation_off(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)
         service._lock = threading.RLock()
         service._catalogs = sample_catalogs()
@@ -659,28 +717,22 @@ class QuerySourceValidationTests(unittest.TestCase):
             touched_relations=["missing.schema_table"],
             touched_buckets=[],
         )
-        captured: dict[str, object] = {}
-
-        def record_start(**kwargs):
-            captured.update(kwargs)
-            return SimpleNamespace(payload={"jobId": "query-skip-source-check"})
-
-        service._query_jobs = SimpleNamespace(start_job=record_start)
-
-        snapshot = service.start_query_job(
-            sql="select * from missing.schema_table",
-            notebook_id="notebook",
-            notebook_title="Notebook",
-            cell_id="cell-1",
-            data_sources=[],
-            query_options={"validation": {"sourceExistence": "off"}},
+        service._query_jobs = SimpleNamespace(
+            start_job=lambda **_kwargs: self.fail("query should fail during prepare")
         )
 
-        self.assertEqual(snapshot["jobId"], "query-skip-source-check")
-        self.assertEqual(
-            captured["query_options"]["validation"]["sourceExistence"],
-            "off",
-        )
+        with self.assertRaises(ValueError) as exc:
+            service.start_query_job(
+                sql="select * from missing.schema_table",
+                notebook_id="notebook",
+                notebook_title="Notebook",
+                cell_id="cell-1",
+                data_sources=[],
+                query_options={"validation": {"sourceExistence": "off"}},
+            )
+
+        self.assertIn("Read queries no longer wait for shared DuckDB file access", str(exc.exception))
+        self.assertIn("missing.schema_table", str(exc.exception))
 
     def test_start_query_job_allows_synced_local_workspace_relation_map(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)

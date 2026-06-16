@@ -216,7 +216,7 @@ export function createQueryRunsController(helpers) {
     return [
       ["total", totalMs],
       ["prepare", valueFor("backendPrepareMs")],
-      ["file lock", valueFor("engineAccessWaitMs")],
+      ["shared duckdb wait", valueFor("engineAccessWaitMs")],
       ["startup", valueFor("workerStartupMs")],
       ["source setup", valueFor("sourceBootstrapMs")],
       ["query", valueFor("engineQueryMs")],
@@ -234,8 +234,8 @@ export function createQueryRunsController(helpers) {
       switch (label) {
         case "total":
           return "Total elapsed";
-        case "file lock":
-          return "File lock";
+        case "shared duckdb wait":
+          return "Shared DuckDB wait";
         case "source setup":
           return "Source setup";
         default:

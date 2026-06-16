@@ -242,7 +242,7 @@ export function createQueryInsights({
     const measuredParts = [
       backendTotalMs !== null ? ["backend reported", backendTotalMs] : ["total", totalMs],
       ["prepare", timingValue("backendPrepareMs")],
-      ["file lock", timingValue("engineAccessWaitMs")],
+      ["shared duckdb wait", timingValue("engineAccessWaitMs")],
       ["startup", timingValue("workerStartupMs")],
       ["source setup", timingValue("sourceBootstrapMs")],
       ["query", timingValue("engineQueryMs")],
@@ -266,7 +266,7 @@ export function createQueryInsights({
         value: parts.map(([label, value]) => `${label} ${formatQueryDuration(value)}`).join(" | "),
         tone: "neutral",
         title:
-          "Timing details explain the headline Total elapsed value shown under Result. Total elapsed is measured from the Run Cell click until the terminal job update reaches this browser, when this browser started the run. Backend reported is measured inside the server and can differ slightly because it uses a different clock and includes server-side bookkeeping. Prepare validates and rewrites the cell before execution. File lock is time waiting for shared DuckDB access. Startup creates the isolated worker. Source setup creates temporary views and may hydrate cache tables. Query is DuckDB execution time only; it is not the full runtime. Fetch returns result rows to the UI. Delivery is browser/network time when measured. Overhead is remaining measured time such as scheduling, worker monitoring, profiling, finalization, and metrics collection that is not assigned to one named slice. Rounded sub-times may not add up exactly to Total elapsed.",
+          "Timing details explain the headline Total elapsed value shown under Result. Total elapsed is measured from the Run Cell click until the terminal job update reaches this browser, when this browser started the run. Backend reported is measured inside the server and can differ slightly because it uses a different clock and includes server-side bookkeeping. Prepare validates and rewrites the cell before execution. Shared DuckDB wait is time waiting for exclusive shared DuckDB access, which should only be needed by write/materialization work. Startup creates the isolated worker. Source setup creates temporary views and may hydrate cache tables. Query is DuckDB execution time only; it is not the full runtime. Fetch returns result rows to the UI. Delivery is browser/network time when measured. Overhead is remaining measured time such as scheduling, worker monitoring, profiling, finalization, and metrics collection that is not assigned to one named slice. Rounded sub-times may not add up exactly to Total elapsed.",
       };
     }
 

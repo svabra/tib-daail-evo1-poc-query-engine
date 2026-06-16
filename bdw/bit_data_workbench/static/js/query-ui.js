@@ -62,11 +62,11 @@ export function createQueryUi(helpers) {
     const tooltip = running
       ? (
           "Running elapsed is the wall-clock time since this cell was submitted. "
-          + "It keeps increasing while the backend prepares sources, waits for a DuckDB file lock if needed, starts the worker, runs DuckDB, and fetches rows for the UI."
+          + "It keeps increasing while the backend prepares sources, waits for shared DuckDB access if needed, starts the worker, runs DuckDB, and fetches rows for the UI."
         )
       : (
           "Total elapsed is the main runtime for this cell run: from the Run Cell click until the completed, failed, or cancelled job update reaches this browser. "
-          + "Use this number when comparing runs. It includes backend preparation, any DuckDB file-lock wait, worker startup, source setup such as S3 Parquet view creation or cache hydration, DuckDB execution, result fetching, and delivery back to the browser. "
+          + "Use this number when comparing runs. It includes backend preparation, any shared DuckDB access wait, worker startup, source setup such as S3 Parquet view creation or cache hydration, DuckDB execution, result fetching, and delivery back to the browser. "
           + "When the cell finishes, this number will not move backward; if backend timing or the resource chart observed a longer elapsed time, the result keeps that longer elapsed time. "
           + "The timing pill next to it shows backend phase measurements. Those sub-times are diagnostics and can differ slightly because they are measured on different clocks and rounded."
         );
@@ -280,7 +280,7 @@ export function createQueryUi(helpers) {
       ["Total elapsed", Number.isFinite(totalMs) ? totalMs : null],
       ["Backend reported", backendTotalMs],
       ["Prepare", queryTimingValue(job, "backendPrepareMs")],
-      ["File lock", queryTimingValue(job, "engineAccessWaitMs")],
+      ["Shared DuckDB wait", queryTimingValue(job, "engineAccessWaitMs")],
       ["Startup", queryTimingValue(job, "workerStartupMs")],
       ["Source setup", queryTimingValue(job, "sourceBootstrapMs")],
       ["Query", queryTimingValue(job, "engineQueryMs")],

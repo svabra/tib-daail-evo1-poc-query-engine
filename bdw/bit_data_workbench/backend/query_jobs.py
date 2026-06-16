@@ -60,7 +60,6 @@ QUERY_EXECUTION_DUCKDB_READ = "duckdb-read"
 QUERY_EXECUTION_DUCKDB_WRITE = "duckdb-write"
 QUERY_EXECUTION_POSTGRES_NATIVE = "postgres-native"
 DUCKDB_EXECUTION_PATH_ISOLATED_READ = "isolated-read"
-DUCKDB_EXECUTION_PATH_SHARED_FILE_READ = "shared-file-read"
 DUCKDB_EXECUTION_PATH_SHARED_FILE_WRITE = "shared-file-write"
 DUCKDB_EXECUTION_PATH_POSTGRES_NATIVE = "postgres-native"
 READ_ONLY_START_KEYWORDS = {"select", "with", "values", "describe", "show", "summarize"}
@@ -976,21 +975,10 @@ def _is_s3_file_pattern_relation(relation: str) -> bool:
     return bool(re.search(r"\.[a-z0-9_]{1,12}$", filename.lower()))
 
 
-def _normalize_relation_key(value: object) -> str:
-    return ".".join(part.lower() for part in _relation_parts(value))
-
-
 def _is_direct_file_relation(value: object) -> bool:
     normalized = str(value or "").strip().lower()
     return normalized.startswith(("s3://", "http://", "https://", "file://")) or _is_s3_file_pattern_relation(
         normalized
-    )
-
-
-def _source_summary_has_query_sql(summary: dict[str, object]) -> bool:
-    return bool(
-        str(summary.get("relation") or "").strip()
-        and str(summary.get("query_sql") or "").strip()
     )
 
 
@@ -2433,10 +2421,9 @@ class QueryJobManager:
                 record.snapshot.message = "Preparing query execution."
                 self._touch_locked()
 
-            requires_duckdb_file_access = record.duckdb_execution_path in {
-                DUCKDB_EXECUTION_PATH_SHARED_FILE_READ,
-                DUCKDB_EXECUTION_PATH_SHARED_FILE_WRITE,
-            }
+            requires_duckdb_file_access = (
+                record.duckdb_execution_path == DUCKDB_EXECUTION_PATH_SHARED_FILE_WRITE
+            )
             if requires_duckdb_file_access:
                 wait_started = time.monotonic()
                 wait_reported = False
@@ -2451,7 +2438,7 @@ class QueryJobManager:
                         if waiting_record is None or waiting_record.snapshot.status in TERMINAL_QUERY_STATUSES:
                             return
                         waiting_record.snapshot.progress_label = "Waiting for DuckDB access..."
-                        waiting_record.snapshot.message = "Waiting for DuckDB file access to become available."
+                        waiting_record.snapshot.message = "Waiting for shared DuckDB access to become available."
                         self._apply_coordinator_state_locked(waiting_record, self._access_coordinator.state())
                         waiting_record.last_wait_coordinator_fields = dict(wait_fields)
                         waiting_record.snapshot.updated_at = utc_now_iso()
@@ -2634,33 +2621,12 @@ class QueryJobManager:
         touched_buckets: list[str] | None,
         source_summaries: list[dict[str, object]] | None,
     ) -> str:
+        del source_ids, touched_relations, touched_buckets, source_summaries
         if execution_mode == QUERY_EXECUTION_POSTGRES_NATIVE:
             return DUCKDB_EXECUTION_PATH_POSTGRES_NATIVE
-        if execution_mode != QUERY_EXECUTION_DUCKDB_READ:
-            return DUCKDB_EXECUTION_PATH_SHARED_FILE_WRITE
-
-        normalized_touched_relations = [
-            str(relation or "").strip()
-            for relation in (touched_relations or [])
-            if str(relation or "").strip()
-        ]
-        if not source_ids and not normalized_touched_relations and not touched_buckets:
+        if execution_mode == QUERY_EXECUTION_DUCKDB_READ:
             return DUCKDB_EXECUTION_PATH_ISOLATED_READ
-
-        relation_manifest = {
-            _normalize_relation_key(summary.get("relation"))
-            for summary in (source_summaries or [])
-            if isinstance(summary, dict) and _source_summary_has_query_sql(summary)
-        }
-        missing_relations = [
-            relation
-            for relation in normalized_touched_relations
-            if not _is_direct_file_relation(relation)
-            and _normalize_relation_key(relation) not in relation_manifest
-        ]
-        if missing_relations:
-            return DUCKDB_EXECUTION_PATH_SHARED_FILE_READ
-        return DUCKDB_EXECUTION_PATH_ISOLATED_READ
+        return DUCKDB_EXECUTION_PATH_SHARED_FILE_WRITE
 
     @staticmethod
     def _worker_database_path(
@@ -2670,9 +2636,7 @@ class QueryJobManager:
     ) -> str | None:
         if execution_mode != QUERY_EXECUTION_DUCKDB_READ:
             return None
-        if duckdb_execution_path == DUCKDB_EXECUTION_PATH_ISOLATED_READ:
-            return ":memory:"
-        return None
+        return ":memory:"
 
     def _drain_worker_events(self, job_id: str) -> None:
         with self._condition:

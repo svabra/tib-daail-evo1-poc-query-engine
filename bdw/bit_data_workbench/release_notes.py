@@ -1,9 +1,32 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.16. Keep entries concise and
+# Derived from git history through version 0.10.17. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.17",
+        "releasedAt": "2026-06-16T13:17:26+02:00",
+        "features": [
+            (
+                "DuckDB read queries no longer enter the shared-file-read "
+                "path; they run in isolated in-memory workers or fail during "
+                "preparation when a relation cannot be resolved as an "
+                "isolated S3, PostgreSQL, stage, or local workspace source."
+            ),
+            (
+                "The former File lock timing is now shown as Shared DuckDB "
+                "wait, making clear that this wait belongs to exclusive "
+                "shared DuckDB write/materialization access and should not "
+                "appear for read-only analytical queries."
+            ),
+            (
+                "Regression coverage now verifies that read jobs skip shared "
+                "DuckDB waits even while a writer holds the coordinator, and "
+                "that unisolated read relations fail fast instead of waiting."
+            ),
+        ],
+    },
     {
         "version": "0.10.16",
         "releasedAt": "2026-06-16T12:37:20+02:00",

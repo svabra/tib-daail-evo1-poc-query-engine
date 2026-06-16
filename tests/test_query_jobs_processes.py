@@ -24,7 +24,6 @@ from bit_data_workbench.backend import query_jobs as query_jobs_module  # noqa: 
 from bit_data_workbench.backend.query_jobs import (  # noqa: E402
     _bootstrap_duckdb_source_views,
     _is_direct_file_relation,
-    DUCKDB_EXECUTION_PATH_SHARED_FILE_READ,
     QUERY_EXECUTION_DUCKDB_READ,
     QUERY_EXECUTION_DUCKDB_WRITE,
     QUERY_EXECUTION_POSTGRES_NATIVE,
@@ -1175,7 +1174,7 @@ class ProcessQueryJobManagerTests(TestCase):
         for key in ("workerStartupMs", "engineQueryMs", "resultFetchMs", "backendTotalMs"):
             self.assertGreaterEqual(completed.timings.get(key, -1), 0)
 
-    def test_shared_file_read_releases_duckdb_access_after_completion(self) -> None:
+    def test_duckdb_read_with_sources_skips_duckdb_access_after_completion(self) -> None:
         job = self.manager.start_job(
             sql="select 1 as value",
             notebook_id="nb",
@@ -1194,7 +1193,9 @@ class ProcessQueryJobManagerTests(TestCase):
         )
 
         self.assertIsNotNone(completed)
-        self.assertEqual(completed.duckdb_execution_path, DUCKDB_EXECUTION_PATH_SHARED_FILE_READ)
+        self.assertEqual(completed.duckdb_execution_path, "isolated-read")
+        self.assertEqual(completed.timings.get("engineAccessWaitMs"), 0.0)
+        self.assertNotIn("engine_waiting", [event.get("event") for event in completed.progress_events])
         self.assertGreaterEqual(completed.timings.get("engineQueryMs", -1), 0)
         wait_until(
             lambda: self.manager._access_coordinator.state()["active_reads"] == 0,
@@ -1203,7 +1204,7 @@ class ProcessQueryJobManagerTests(TestCase):
         )
         self._assert_duckdb_access_released()
 
-    def test_shared_file_read_releases_duckdb_access_after_cancel(self) -> None:
+    def test_duckdb_read_with_sources_skips_duckdb_access_after_cancel(self) -> None:
         job = self.manager.start_job(
             sql=LONG_QUERY,
             notebook_id="nb",
@@ -1221,7 +1222,7 @@ class ProcessQueryJobManagerTests(TestCase):
             timeout=20,
         )
         self.assertIsNotNone(started)
-        self.assertEqual(started.duckdb_execution_path, DUCKDB_EXECUTION_PATH_SHARED_FILE_READ)
+        self.assertEqual(started.duckdb_execution_path, "isolated-read")
 
         self.manager.cancel_job(job.job_id)
         cancelled = wait_until(
@@ -1239,7 +1240,7 @@ class ProcessQueryJobManagerTests(TestCase):
         )
         self._assert_duckdb_access_released()
 
-    def test_file_backed_read_reports_duckdb_access_wait(self) -> None:
+    def test_file_backed_read_skips_duckdb_access_wait(self) -> None:
         self.assertTrue(
             self.manager._access_coordinator.acquire(
                 QUERY_EXECUTION_DUCKDB_WRITE,
@@ -1257,36 +1258,23 @@ class ProcessQueryJobManagerTests(TestCase):
                 touched_relations=["s3.test.sample_data"],
                 touched_buckets=["test"],
             )
-            waiting = wait_until(
+            completed = wait_until(
                 lambda: self.manager.snapshot(job.job_id)
-                if self.manager.snapshot(job.job_id).progress_label == "Waiting for DuckDB access..."
+                if self.manager.snapshot(job.job_id).status == "completed"
                 else None,
                 timeout=5,
             )
-            self.assertIsNotNone(waiting)
-            time.sleep(0.2)
         finally:
             self.manager._access_coordinator.release(
                 QUERY_EXECUTION_DUCKDB_WRITE,
                 owner_job_id="writer-job",
             )
 
-        completed = wait_until(
-            lambda: self.manager.snapshot(job.job_id)
-            if self.manager.snapshot(job.job_id).status == "completed"
-            else None,
-            timeout=20,
-        )
-
         self.assertIsNotNone(completed)
-        self.assertGreater(completed.timings.get("engineAccessWaitMs", 0), 0)
+        self.assertEqual(completed.timings.get("engineAccessWaitMs"), 0.0)
         events = completed.progress_events
-        self.assertIn("engine_waiting", [event.get("event") for event in events])
-        waiting_events = [event for event in events if event.get("event") == "engine_waiting"]
-        self.assertTrue(waiting_events)
-        self.assertIn("duckdb_coordinator_active_write", waiting_events[-1])
-        self.assertEqual(waiting_events[-1]["duckdb_lock_owner_job_id"], "writer-job")
-        self.assertEqual(completed.duckdb_execution_path, "shared-file-read")
+        self.assertNotIn("engine_waiting", [event.get("event") for event in events])
+        self.assertEqual(completed.duckdb_execution_path, "isolated-read")
 
     def test_fully_quoted_s3_parquet_file_read_skips_duckdb_access_wait(self) -> None:
         self.assertTrue(
@@ -1738,7 +1726,7 @@ class ProcessQueryJobManagerTests(TestCase):
         self.assertIsNotNone(cancelled)
         self._assert_file_can_be_replaced(stage_file)
 
-    def test_shared_file_read_does_not_bootstrap_sources_in_read_only_workspace(self) -> None:
+    def test_duckdb_read_does_not_fall_back_to_shared_workspace_file(self) -> None:
         connection = duckdb.connect(str(self.settings.duckdb_database))
         try:
             connection.execute("CREATE TABLE existing_relation AS SELECT 1 AS value")
@@ -1749,7 +1737,7 @@ class ProcessQueryJobManagerTests(TestCase):
             sql="SELECT value FROM existing_relation",
             notebook_id="nb",
             notebook_title="Notebook",
-            cell_id="cell-shared-file-read-bootstrap",
+            cell_id="cell-isolated-read-no-shared-workspace",
             data_sources=["s3"],
             touched_relations=["existing_relation", "s3.unused_source"],
             touched_buckets=["test"],
@@ -1774,10 +1762,10 @@ class ProcessQueryJobManagerTests(TestCase):
         )
 
         self.assertIsNotNone(completed)
-        self.assertEqual(completed.status, "completed", completed.error)
-        self.assertEqual(completed.rows, [(1,)])
-        self.assertEqual(completed.duckdb_execution_path, DUCKDB_EXECUTION_PATH_SHARED_FILE_READ)
-        self.assertNotIn("sourceBootstrapMs", completed.timings)
+        self.assertEqual(completed.status, "failed")
+        self.assertIn("existing_relation", completed.error)
+        self.assertEqual(completed.duckdb_execution_path, "isolated-read")
+        self.assertEqual(completed.timings.get("engineAccessWaitMs"), 0.0)
 
     def test_stale_duckdb_lock_owner_is_recovered(self) -> None:
         stale_snapshot = QueryJobDefinition(
@@ -1810,13 +1798,11 @@ class ProcessQueryJobManagerTests(TestCase):
         )
 
         job = self.manager.start_job(
-            sql="select 1 as value",
+            sql="create table recovered_relation as select 1 as value",
             notebook_id="nb",
             notebook_title="Notebook",
             cell_id="cell-recovery",
-            data_sources=["s3"],
-            touched_relations=["legacy.sample"],
-            touched_buckets=["legacy"],
+            data_sources=[],
         )
         completed = wait_until(
             lambda: self.manager.snapshot(job.job_id)
@@ -1826,7 +1812,11 @@ class ProcessQueryJobManagerTests(TestCase):
         )
 
         self.assertIsNotNone(completed)
-        self.assertEqual(completed.rows, [(1,)])
+        wait_until(
+            lambda: not self.manager._access_coordinator.state()["active_write"],
+            timeout=2,
+            interval=0.01,
+        )
         self.assertFalse(self.manager._access_coordinator.state()["active_write"])
         self.assertIn("duckdb_lock_recovered", [event.get("event") for event in completed.progress_events])
 

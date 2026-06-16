@@ -152,7 +152,7 @@ class QueryExplainServiceTests(unittest.TestCase):
 
         self.assertIn("Query plan could not be generated", str(exc.exception))
 
-    def test_local_workspace_alias_is_rewritten_before_explain(self) -> None:
+    def test_shared_duckdb_local_alias_is_rejected_before_explain(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
             settings = make_settings(Path(tmp))
             settings.duckdb_database.parent.mkdir(parents=True, exist_ok=True)
@@ -164,17 +164,18 @@ class QueryExplainServiceTests(unittest.TestCase):
                 connection.close()
 
             service = make_service(settings)
-            payload = service.explain_query(
-                sql="select * from local.test.sample.csv",
-                display_sql="select * from local.test.sample.csv",
-                data_sources=["workspace.local"],
-                local_relation_map={
-                    "local.test.sample.csv": "client_browser_abc.entry_1",
-                },
-            )
+            with self.assertRaises(ValueError) as exc:
+                service.explain_query(
+                    sql="select * from local.test.sample.csv",
+                    display_sql="select * from local.test.sample.csv",
+                    data_sources=["workspace.local"],
+                    local_relation_map={
+                        "local.test.sample.csv": "client_browser_abc.entry_1",
+                    },
+                )
 
-        self.assertEqual(payload["status"], "completed")
-        self.assertIn("client_browser_abc.entry_1", payload["touchedRelations"])
+        self.assertIn("Read queries no longer wait for shared DuckDB file access", str(exc.exception))
+        self.assertIn("client_browser_abc.entry_1", str(exc.exception))
 
     def test_display_sql_does_not_override_runnable_sql_for_explain(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
