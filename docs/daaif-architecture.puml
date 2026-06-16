@@ -1,0 +1,101 @@
+@startuml
+title DAAIF / DAAIFL Data Workbench - Architekturuebersicht
+
+left to right direction
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam wrapWidth 220
+skinparam maxMessageSize 120
+skinparam defaultFontName Arial
+skinparam package {
+  BorderColor #7b8794
+  BackgroundColor #f8fafc
+}
+skinparam component {
+  BorderColor #52616f
+  BackgroundColor #ffffff
+}
+skinparam database {
+  BorderColor #52616f
+  BackgroundColor #fff7ed
+}
+skinparam cloud {
+  BorderColor #52616f
+  BackgroundColor #eff6ff
+}
+
+actor "Fachanwender /\nAnalyst" as User
+
+package "Client" {
+  component "Browser UI\nSQL Notebooks, Pipeline-Stages,\nData Sources, Ingestion,\nDataExchange" as Browser
+  database "Local Workspace\nIndexedDB" as IndexedDB
+}
+
+package "DAAIF Workbench App\nFastAPI Pod / lokaler Dev-Prozess" {
+  component "FastAPI Web/API\nHTML, REST-Endpunkte,\nAuth-/Request-Kontext" as FastAPI
+  component "Realtime Event Hub\n1 multiplexed SSE stream\n/api/events/stream" as Realtime
+  component "Notebook & Pipeline Orchestrierung\nRun-State, Monitoring,\nResult-Metadaten" as Orchestrator
+  component "Query Execution\nDuckDB Worker,\nCancel/Completion,\nAccess-Koordination" as QueryExecution
+  component "Ingestion & DataExchange\nUpload, Import, Download,\nDelete/Publish Jobs" as Ingestion
+  component "Source Registry\ns3.*, pg_oltp.*,\npg_olap.*, virtual sources" as SourceRegistry
+  database "DuckDB Engine\nSQL, httpfs, postgres,\njson extensions" as DuckDB
+  folder "Workspace Volume\nNotebooks, Run-State,\nTemp/Cache, lokale DuckDB DB" as WorkspaceVolume
+}
+
+package "Datenplattform" {
+  cloud "S3 Object Storage\nMinIO lokal / RHOS ECS\ncanonical: s3.<bucket>.<object>" as S3
+  database "PostgreSQL OLTP\npg_oltp.*" as PgOltp
+  database "PostgreSQL OLAP\npg_olap.*" as PgOlap
+}
+
+package "Runtime Configuration" {
+  component "ConfigMaps / Secrets\nS3 Credentials, PG DSNs,\nCA Bundle, Feature Flags,\nImage Version" as RuntimeConfig
+}
+
+User --> Browser : bedient Workbench
+Browser --> FastAPI : HTTPS\nPages + REST API
+FastAPI --> Browser : HTML/JSON\ninitiale Daten
+Realtime --> Browser : SSE Events\nrun status, progress,\nresource metrics, results
+Browser --> IndexedDB : lokale Drafts /\nClient Workspace
+
+FastAPI --> Orchestrator : Notebook-, Stage-\nund Source-Aktionen
+FastAPI --> Realtime : Events publizieren
+Orchestrator --> Realtime : Run-/Progress-Events
+Orchestrator --> SourceRegistry : Quellen aufloesen\nund validieren
+Orchestrator --> QueryExecution : SQL ausfuehren /\nabbrechen
+Orchestrator --> Ingestion : Daten laden,\nexportieren, loeschen
+
+QueryExecution --> DuckDB : SQL Execution\nCOUNT, SELECT, CTAS,\nPipeline Materialisierung
+DuckDB --> S3 : read_parquet/read_csv/read_json\nueber httpfs
+DuckDB --> PgOltp : postgres extension
+DuckDB --> PgOlap : postgres extension
+Ingestion --> S3 : Upload/Download,\nParquet/CSV/JSON/XML/XLSX
+Ingestion --> PgOltp : Tabellenimport /\nValidierung
+Ingestion --> PgOlap : Tabellenimport /\nValidierung
+
+Orchestrator --> WorkspaceVolume : Notebooks,\nRun-Historie,\nResult-Metadaten
+DuckDB --> WorkspaceVolume : lokale DB,\nTemp/Cache
+RuntimeConfig --> FastAPI : env / settings
+RuntimeConfig --> DuckDB : S3 secret,\nextensions,\nTLS/CA
+RuntimeConfig --> SourceRegistry : erlaubte Quellen /\nAliases
+
+note right of S3
+  S3-Quellen verwenden nur noch das kanonische Schema:
+  s3.<bucket>.<object>
+
+  Kein workspace.s3 Namespace.
+end note
+
+note bottom of QueryExecution
+  Direkte Datei-/Glob-Reads aus S3 werden als Query-Arbeit
+  ueber DuckDB ausgefuehrt. Completion, Cancel und File-Release
+  muessen im Run-Lifecycle sichtbar werden.
+end note
+
+note bottom of Realtime
+  Der Browser erwartet einen abgeschlossenen Run ueber Events.
+  Result Rows koennen frueh angezeigt werden, aber der Run bleibt
+  aktiv, bis Completion/Cancel im Backend finalisiert wurde.
+end note
+
+@enduml

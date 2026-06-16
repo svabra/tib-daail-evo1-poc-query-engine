@@ -1,9 +1,33 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.15. Keep entries concise and
+# Derived from git history through version 0.10.16. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.16",
+        "releasedAt": "2026-06-16T12:37:20+02:00",
+        "features": [
+            (
+                "DuckDB spill now uses a dedicated OpenShift emptyDir "
+                "volume at /workspace/tmp/duckdb-spill, keeping query "
+                "cache, uploads, and workspace files from consuming the "
+                "configured DuckDB temp quota during large joins and "
+                "aggregations."
+            ),
+            (
+                "Regression coverage now verifies effective DuckDB runtime "
+                "settings, the configured spill quota, and that the "
+                "Kubernetes spill volume is larger than the DuckDB "
+                "max_temp_directory_size."
+            ),
+            (
+                "A PlantUML and SVG DAAIF architecture sketch documents the "
+                "Workbench UI, FastAPI/SSE layer, query execution, ingestion, "
+                "DuckDB, S3, PostgreSQL, and runtime configuration."
+            ),
+        ],
+    },
     {
         "version": "0.10.15",
         "releasedAt": "2026-06-16T11:01:07+02:00",

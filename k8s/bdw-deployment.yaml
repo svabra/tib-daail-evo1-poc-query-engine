@@ -20,7 +20,7 @@ spec:
       serviceAccountName: evo1-bdw
       containers:
         - name: bdw
-          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.10.15
+          image: docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.10.16
           imagePullPolicy: Always
           ports:
             - name: http
@@ -104,6 +104,8 @@ spec:
           volumeMounts:
             - name: workspace
               mountPath: /workspace
+            - name: duckdb-spill
+              mountPath: /workspace/tmp/duckdb-spill
             - name: bit-ros-trusted-certs
               mountPath: /myconfigmap/daai-brs-d/bit-ros-trusted-certs
               readOnly: true
@@ -139,6 +141,9 @@ spec:
         - name: workspace
           emptyDir:
             sizeLimit: 100Gi
+        - name: duckdb-spill
+          emptyDir:
+            sizeLimit: 128Gi
         - name: bit-ros-trusted-certs
           configMap:
             name: bit-ros-trusted-certs

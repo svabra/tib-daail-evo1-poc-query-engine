@@ -136,3 +136,36 @@ class DuckDBWorkerConnectionRetryTests(TestCase):
             )
             self.assertTrue(query_spill_dir.exists())
             self.assertTrue(configured_spill_dir.exists())
+
+    def test_apply_duckdb_runtime_settings_sets_effective_duckdb_spill_quota(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            spill_dir = Path(raw_tmp) / "duckdb-spill"
+            settings = SimpleNamespace(
+                duckdb_memory_limit="20GiB",
+                duckdb_threads=8,
+                duckdb_temp_directory=spill_dir,
+                duckdb_max_temp_directory_size="96GiB",
+                duckdb_preserve_insertion_order=False,
+            )
+            connection = duckdb.connect(":memory:")
+            try:
+                runtime_connections.apply_duckdb_runtime_settings(connection, settings)  # type: ignore[arg-type]
+
+                effective_settings = connection.execute(
+                    """
+                    SELECT
+                        current_setting('memory_limit'),
+                        current_setting('threads'),
+                        current_setting('preserve_insertion_order'),
+                        current_setting('temp_directory'),
+                        current_setting('max_temp_directory_size')
+                    """
+                ).fetchone()
+            finally:
+                connection.close()
+
+            self.assertEqual(effective_settings[0], "20.0 GiB")
+            self.assertEqual(effective_settings[1], 8)
+            self.assertFalse(effective_settings[2])
+            self.assertEqual(effective_settings[3], spill_dir.as_posix())
+            self.assertEqual(effective_settings[4], "96.0 GiB")

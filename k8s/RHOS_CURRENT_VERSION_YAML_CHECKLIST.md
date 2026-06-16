@@ -6,6 +6,9 @@ This checklist matches the current `evo1-bdw` deployment manifests in `k8s/`.
 
 - Use `serviceAccountName: evo1-bdw`.
 - Keep `/workspace` as an `emptyDir`; do not mount an application PVC.
+- Mount DuckDB spill as its own `emptyDir` at `/workspace/tmp/duckdb-spill`.
+- Keep the DuckDB spill `emptyDir.sizeLimit` above `BDW_DUCKDB_MAX_TEMP_DIRECTORY_SIZE`
+  so query cache, uploads, and notebook workspace files cannot consume the spill quota.
 - Do not set `BDW_APP_STORAGE_PVC_NAME`.
 - Set `BDW_SERVICE_CONSUMPTION_CPU_MEMORY_INTERVAL_SECONDS` to `"60"`.
 - Set `BDW_SERVICE_CONSUMPTION_S3_INTERVAL_SECONDS` to `"3600"`.
