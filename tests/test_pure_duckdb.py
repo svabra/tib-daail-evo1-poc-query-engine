@@ -272,12 +272,23 @@ class PureDuckDBPageTests(unittest.TestCase):
         for cell in PURE_DUCKDB_CELLS:
             self.assertNotRegex(cell.sql, r"\bs3\.[A-Za-z0-9_\"]")
             self.assertNotIn("s3://n_3_1_imports/", cell.sql)
-            self.assertNotIn("s3://3_1_imports/", cell.sql)
+            self.assertNotIn("s3://3-1-imports/", cell.sql)
+            self.assertNotIn("s3://core/kbkpfull.parquet", cell.sql)
+            self.assertNotIn("s3://core/kbhpfull.parquet", cell.sql)
+            self.assertNotIn("s3://kbpoimports/", cell.sql)
             self.assertTrue(
                 "read_parquet('s3://" in cell.sql
                 or "read_parquet([\n" in cell.sql
                 or "TO 's3://" in cell.sql
             )
+        self.assertIn("read_parquet('s3://CORE/KBKPfull.parquet')", PURE_DUCKDB_CELLS[0].sql)
+        self.assertIn("read_parquet('s3://CORE/KBHPfull.parquet')", PURE_DUCKDB_CELLS[0].sql)
+        self.assertIn(
+            "read_parquet('s3://3_1_imports/DIM_Kalender.parquet')",
+            PURE_DUCKDB_CELLS[0].sql,
+        )
+        self.assertIn("'s3://KBPOimports/KBPO_2018undvorher.parquet'", PURE_DUCKDB_CELLS[0].sql)
+        self.assertIn("'s3://KBPOimports/KBPO2025.parquet'", PURE_DUCKDB_CELLS[0].sql)
         self.assertIn("union_by_name = true", PURE_DUCKDB_CELLS[0].sql)
         self.assertIn("union_by_name = true", PURE_DUCKDB_CELLS[1].sql)
 

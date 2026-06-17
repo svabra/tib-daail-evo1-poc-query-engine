@@ -8,18 +8,18 @@ from .sql_utils import sql_literal
 
 FACT_BUPO_TARGET = "s3://core/fact_bupo.parquet"
 KBKP_TODAY_TARGET = "s3://core/kbkp_today.parquet"
-KBKP_FULL_PATH = "s3://core/kbkpfull.parquet"
-KBHP_FULL_PATH = "s3://core/kbhpfull.parquet"
-KALENDER_PATH = "s3://3-1-imports/dim_kalender.parquet"
+KBKP_FULL_PATH = "s3://CORE/KBKPfull.parquet"
+KBHP_FULL_PATH = "s3://CORE/KBHPfull.parquet"
+KALENDER_PATH = "s3://3_1_imports/DIM_Kalender.parquet"
 KBPO_PATHS = (
-    "s3://kbpoimports/kbpo_2018undvorher.parquet",
-    "s3://kbpoimports/kbpo_2019.parquet",
-    "s3://kbpoimports/kbpo2020.parquet",
-    "s3://kbpoimports/kbpo2021.parquet",
-    "s3://kbpoimports/kbpo2022.parquet",
-    "s3://kbpoimports/kbpo2023.parquet",
-    "s3://kbpoimports/kbpo2024.parquet",
-    "s3://kbpoimports/kbpo2025.parquet",
+    "s3://KBPOimports/KBPO_2018undvorher.parquet",
+    "s3://KBPOimports/KBPO_2019.parquet",
+    "s3://KBPOimports/KBPO2020.parquet",
+    "s3://KBPOimports/KBPO2021.parquet",
+    "s3://KBPOimports/KBPO2022.parquet",
+    "s3://KBPOimports/KBPO2023.parquet",
+    "s3://KBPOimports/KBPO2024.parquet",
+    "s3://KBPOimports/KBPO2025.parquet",
 )
 
 

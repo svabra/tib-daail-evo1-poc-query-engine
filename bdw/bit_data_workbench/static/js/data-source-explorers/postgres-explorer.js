@@ -15,6 +15,7 @@ export function createPostgresDataSourceExplorer(helpers) {
   const {
     escapeHtml,
     fetchJsonOrThrow,
+    copySourceDuckdbReference,
     copySourceQueryPath,
     openDataProductPublishDialog,
     querySourceInCurrentNotebook,
@@ -126,6 +127,12 @@ export function createPostgresDataSourceExplorer(helpers) {
           action: "copy-query-path",
           attrs: { "data-copy-query-path": true },
           title: "Copy the SQL source reference for this source",
+        },
+        {
+          label: "Copy source reference - DuckDB",
+          action: "copy-duckdb-source-reference",
+          attrs: { "data-copy-duckdb-source-reference": true },
+          title: "Copy the DuckDB source reference for this source",
         },
         {
           label: "Create data product ...",
@@ -251,6 +258,7 @@ export function createPostgresDataSourceExplorer(helpers) {
           actionButtonMarkup("Query In Current Notebook", "query-current", escapeHtml),
           actionButtonMarkup("Query In New Notebook", "query-new", escapeHtml),
           actionButtonMarkup("Copy source reference", "copy-query-path", escapeHtml),
+          actionButtonMarkup("Copy source reference - DuckDB", "copy-duckdb-source-reference", escapeHtml),
           actionButtonMarkup("Create Data Product ...", "create-data-product", escapeHtml),
           actionButtonMarkup("Download DDL", "download-ddl", escapeHtml),
         ].join(""),
@@ -393,6 +401,16 @@ export function createPostgresDataSourceExplorer(helpers) {
           await showMessageDialog({
             title: "Source reference unavailable",
             copy: "This PostgreSQL relation does not expose a source reference.",
+          });
+        }
+        return true;
+      }
+
+      if (action === "copy-duckdb-source-reference") {
+        if ((await copySourceDuckdbReference?.(selectedElement)) === false) {
+          await showMessageDialog({
+            title: "DuckDB source reference unavailable",
+            copy: "This PostgreSQL relation does not expose a DuckDB source reference.",
           });
         }
         return true;

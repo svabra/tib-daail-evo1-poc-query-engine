@@ -162,6 +162,7 @@ import {
   sourceObjectS3GeneratedDownloadDescriptor,
   sourceObjectS3DeleteDescriptor,
   sourceObjectS3DownloadDescriptor,
+  sourceDuckdbReference,
   sourceQueryDescriptor,
   sourceQuerySql,
   sourceSchemaS3BucketDescriptor,
@@ -846,6 +847,7 @@ const s3DeleteJobsController = createS3DeleteJobsController({
 
 const dataSourceExplorerController = createDataSourceExplorerController({
   allLocalWorkspaceFolderPaths,
+  copySourceDuckdbReference,
   copySourceQueryPath,
   downloadLocalWorkspaceExportFromSource,
   downloadSourceObjectDdl,
@@ -1009,6 +1011,7 @@ const {
   closeResultActionMenus,
   closeS3ExplorerActionMenus,
   closeSourceActionMenus,
+  copySourceDuckdbReference,
   copySourceQueryPath,
   createLocalWorkspaceFolder,
   createLocalWorkspaceFolderFromDialog,
@@ -4377,6 +4380,24 @@ async function copySourceQueryPath(sourceObjectRoot) {
       tone: "success",
       title: "Query path copied",
       copy: descriptor.relation,
+    },
+    { autoClearMs: 2500 }
+  );
+  return true;
+}
+
+async function copySourceDuckdbReference(sourceObjectRoot) {
+  const reference = sourceDuckdbReference(sourceObjectRoot);
+  if (!reference) {
+    return false;
+  }
+
+  await writeTextToClipboard(reference);
+  setSidebarSourceOperationStatus(
+    {
+      tone: "success",
+      title: "DuckDB source reference copied",
+      copy: reference,
     },
     { autoClearMs: 2500 }
   );

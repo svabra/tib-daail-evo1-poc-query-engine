@@ -3,6 +3,7 @@ export function createSourceSidebarClickController(helpers) {
     closeResultActionMenus,
     closeS3ExplorerActionMenus,
     closeSourceActionMenus,
+    copySourceDuckdbReference,
     copySourceQueryPath,
     cleanupDataGenerationJob,
     cancelDataGenerationJob,
@@ -100,6 +101,32 @@ export function createSourceSidebarClickController(helpers) {
             error instanceof Error
               ? error.message
               : "The query path could not be copied to the clipboard.",
+        });
+      }
+      return true;
+    }
+
+    const copyDuckdbSourceReferenceButton = event.target.closest("[data-copy-duckdb-source-reference]");
+    if (copyDuckdbSourceReferenceButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      const sourceObjectRoot = copyDuckdbSourceReferenceButton.closest("[data-source-object]");
+      closeSourceActionMenus();
+      try {
+        if ((await copySourceDuckdbReference?.(sourceObjectRoot)) === false) {
+          await showMessageDialog({
+            title: "DuckDB source reference unavailable",
+            copy: "This source does not expose a DuckDB source reference yet.",
+          });
+        }
+      } catch (error) {
+        console.error("Failed to copy the DuckDB source reference.", error);
+        await showMessageDialog({
+          title: "Copy DuckDB source reference failed",
+          copy:
+            error instanceof Error
+              ? error.message
+              : "The DuckDB source reference could not be copied to the clipboard.",
         });
       }
       return true;

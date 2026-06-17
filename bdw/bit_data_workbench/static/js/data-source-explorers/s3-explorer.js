@@ -15,6 +15,7 @@ export function createS3DataSourceExplorer(helpers) {
     escapeHtml,
     fetchJsonOrThrow,
     formatByteCount,
+    copySourceDuckdbReference,
     copySourceQueryPath,
     openDataProductPublishDialog,
     querySourceInCurrentNotebook,
@@ -122,6 +123,7 @@ export function createS3DataSourceExplorer(helpers) {
     const queryable = Boolean(String(entry.queryReference || entry.queryAlias || entry.relation || "").trim());
     const isCsv = String(entry.fileFormat || "").trim().toLowerCase() === "csv";
     const canDownloadObject = entryFlag(entry.s3Downloadable, true);
+    const canCopyDuckdbReference = Boolean(entry.querySql || (entry.bucket && entry.prefix) || queryable);
     const canDownloadMerged = entryFlag(entry.s3MergeDownloadable);
     const canDownloadZip = entryFlag(entry.s3ZipDownloadable);
     const downloadItems = [
@@ -197,6 +199,15 @@ export function createS3DataSourceExplorer(helpers) {
             ? "Copy the SQL source reference for this object"
             : "This object is not queryable yet.",
           disabled: !queryable,
+        },
+        {
+          label: "Copy source reference - DuckDB",
+          action: "copy-duckdb-source-reference",
+          attrs: { "data-copy-duckdb-source-reference": true },
+          title: canCopyDuckdbReference
+            ? "Copy the DuckDB source reference for this object"
+            : "This object is not queryable yet.",
+          disabled: !canCopyDuckdbReference,
         },
         {
           label: "Create data product ...",
@@ -432,6 +443,12 @@ export function createS3DataSourceExplorer(helpers) {
                 ? "Copy the SQL source reference for this object"
                 : "This object is not queryable yet.",
             }),
+            actionButtonMarkup("Copy source reference - DuckDB", "copy-duckdb-source-reference", escapeHtml, {
+              disabled: !(state.selectedEntry.querySql || state.selectedEntry.bucket),
+              title: state.selectedEntry.querySql || state.selectedEntry.bucket
+                ? "Copy the DuckDB source reference for this object"
+                : "This object is not queryable yet.",
+            }),
             canDownloadObject ? actionButtonMarkup("Download", "download", escapeHtml) : "",
             canDownloadObject && canPrepareZip ? actionButtonMarkup("Prepare ZIP download", "prepare-zip", escapeHtml) : "",
             canDownloadMerged
@@ -656,6 +673,20 @@ export function createS3DataSourceExplorer(helpers) {
           await showMessageDialog({
             title: "Source reference unavailable",
             copy: "This Shared Workspace object does not expose a source reference yet.",
+          });
+        }
+        return true;
+      }
+
+      if (action === "copy-duckdb-source-reference") {
+        const descriptor = selectedFileDescriptor(state);
+        if (
+          !(descriptor instanceof Element) ||
+          (await copySourceDuckdbReference?.(descriptor)) === false
+        ) {
+          await showMessageDialog({
+            title: "DuckDB source reference unavailable",
+            copy: "This Shared Workspace object does not expose a DuckDB source reference yet.",
           });
         }
         return true;

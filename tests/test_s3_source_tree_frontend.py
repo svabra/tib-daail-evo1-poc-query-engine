@@ -56,6 +56,83 @@ class S3SourceTreeFrontendTests(unittest.TestCase):
         self.assertIn("download-generated-zip", explorer_source)
         self.assertIn("entryFlag(entry.s3Downloadable, true)", explorer_source)
 
+    def test_source_object_menus_expose_duckdb_source_reference_copy(self) -> None:
+        template_source = (
+            REPO_ROOT
+            / "bdw"
+            / "bit_data_workbench"
+            / "templates"
+            / "partials"
+            / "source_tree.html"
+        ).read_text(encoding="utf-8")
+        local_sidebar_source = (
+            REPO_ROOT
+            / "bdw"
+            / "bit_data_workbench"
+            / "static"
+            / "js"
+            / "local-workspace-sidebar.js"
+        ).read_text(encoding="utf-8")
+        explorer_sources = [
+            (
+                REPO_ROOT
+                / "bdw"
+                / "bit_data_workbench"
+                / "static"
+                / "js"
+                / "data-source-explorers"
+                / name
+            ).read_text(encoding="utf-8")
+            for name in (
+                "s3-explorer.js",
+                "postgres-explorer.js",
+                "local-workspace-explorer.js",
+            )
+        ]
+
+        self.assertIn("data-copy-duckdb-source-reference", template_source)
+        self.assertIn("Copy source reference - DuckDB", template_source)
+        self.assertIn("data-copy-duckdb-source-reference", local_sidebar_source)
+        self.assertIn("Copy source reference - DuckDB", local_sidebar_source)
+        for explorer_source in explorer_sources:
+            self.assertIn("copySourceDuckdbReference", explorer_source)
+            self.assertIn("copy-duckdb-source-reference", explorer_source)
+            self.assertIn("data-copy-duckdb-source-reference", explorer_source)
+            self.assertIn("Copy source reference - DuckDB", explorer_source)
+
+    def test_duckdb_source_reference_copy_uses_final_duckdb_expression(self) -> None:
+        metadata_source = (
+            REPO_ROOT
+            / "bdw"
+            / "bit_data_workbench"
+            / "static"
+            / "js"
+            / "source-metadata-utils.js"
+        ).read_text(encoding="utf-8")
+        app_source = (
+            REPO_ROOT / "bdw" / "bit_data_workbench" / "static" / "js" / "app.js"
+        ).read_text(encoding="utf-8")
+        sidebar_controller_source = (
+            REPO_ROOT
+            / "bdw"
+            / "bit_data_workbench"
+            / "static"
+            / "js"
+            / "source-sidebar-click-controller.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("export function sourceDuckdbReference", metadata_source)
+        self.assertIn("dataset.sourceObjectQuerySql", metadata_source)
+        self.assertIn("select\\s+\\*\\s+from", metadata_source)
+        self.assertIn("read_parquet(${sqlStringLiteral(path)})", metadata_source)
+        self.assertIn("read_csv_auto(${sqlStringLiteral(path)})", metadata_source)
+        self.assertIn("read_json_auto(${sqlStringLiteral(path)})", metadata_source)
+        self.assertIn("function copySourceDuckdbReference", app_source)
+        self.assertIn("sourceDuckdbReference(sourceObjectRoot)", app_source)
+        self.assertIn("DuckDB source reference copied", app_source)
+        self.assertIn("[data-copy-duckdb-source-reference]", sidebar_controller_source)
+        self.assertIn("copySourceDuckdbReference?.(sourceObjectRoot)", sidebar_controller_source)
+
 
 if __name__ == "__main__":
     unittest.main()

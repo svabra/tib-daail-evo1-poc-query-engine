@@ -1,9 +1,36 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.28. Keep entries concise and
+# Derived from git history through version 0.10.29. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.29",
+        "releasedAt": "2026-06-17T22:06:26+02:00",
+        "features": [
+            (
+                "Data source object action menus now include Copy source "
+                "reference - DuckDB, copying the final DuckDB table "
+                "function or relation reference for direct DuckDB SQL use."
+            ),
+            (
+                "Shared Workspace S3 objects prefer catalog-provided "
+                "query SQL and fall back to read_parquet, read_csv_auto, "
+                "or read_json_auto with s3:// paths when copying DuckDB "
+                "source references."
+            ),
+            (
+                "Pure DuckDB Kostenbelege input references now preserve "
+                "the case-sensitive Dell ECS S3 bucket and object names "
+                "for CORE, KBPOimports, and DIM_Kalender sources."
+            ),
+            (
+                "Regression coverage now asserts DuckDB source reference "
+                "menu wiring and executes all Pure DuckDB presets against "
+                "tiny local Parquet fixtures with the corrected S3 casing."
+            ),
+        ],
+    },
     {
         "version": "0.10.28",
         "releasedAt": "2026-06-17T17:33:41+02:00",

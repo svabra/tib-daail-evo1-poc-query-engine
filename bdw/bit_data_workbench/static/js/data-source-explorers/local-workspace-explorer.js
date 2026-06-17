@@ -12,6 +12,7 @@ import { localWorkspaceQueryAliases } from "../query-alias-utils.js";
 export function createLocalWorkspaceDataSourceExplorer(helpers) {
   const {
     allLocalWorkspaceFolderPaths,
+    copySourceDuckdbReference,
     copySourceQueryPath,
     escapeHtml,
     formatByteCount,
@@ -142,6 +143,12 @@ export function createLocalWorkspaceDataSourceExplorer(helpers) {
           action: "copy-query-path",
           attrs: { "data-copy-query-path": true },
           title: "Copy the SQL query path for this Local Workspace file",
+        },
+        {
+          label: "Copy source reference - DuckDB",
+          action: "copy-duckdb-source-reference",
+          attrs: { "data-copy-duckdb-source-reference": true },
+          title: "Copy the DuckDB source reference for this Local Workspace file",
         },
         {
           label: "Create data product ...",
@@ -316,6 +323,7 @@ export function createLocalWorkspaceDataSourceExplorer(helpers) {
           actionButtonMarkup("Query In Current Notebook", "query-current", escapeHtml),
           actionButtonMarkup("Query In New Notebook", "query-new", escapeHtml),
           actionButtonMarkup("Copy query path", "copy-query-path", escapeHtml),
+          actionButtonMarkup("Copy source reference - DuckDB", "copy-duckdb-source-reference", escapeHtml),
           actionButtonMarkup("Create Data Product ...", "create-data-product", escapeHtml),
           actionButtonMarkup("Download", "download", escapeHtml),
           actionButtonMarkup("Download DDL", "download-ddl", escapeHtml),
@@ -429,6 +437,16 @@ export function createLocalWorkspaceDataSourceExplorer(helpers) {
           await showMessageDialog({
             title: "Query path unavailable",
             copy: "This Local Workspace file does not expose a query path.",
+          });
+        }
+        return true;
+      }
+
+      if (action === "copy-duckdb-source-reference") {
+        if ((await copySourceDuckdbReference?.(descriptor)) === false) {
+          await showMessageDialog({
+            title: "DuckDB source reference unavailable",
+            copy: "This Local Workspace file does not expose a DuckDB source reference.",
           });
         }
         return true;

@@ -11,6 +11,7 @@ import {
 export function createDataSourceExplorerController(helpers) {
   const {
     allLocalWorkspaceFolderPaths,
+    copySourceDuckdbReference,
     copySourceQueryPath,
     downloadJobsController,
     downloadLocalWorkspaceExportFromSource,
@@ -39,6 +40,7 @@ export function createDataSourceExplorerController(helpers) {
     postgres: createPostgresDataSourceExplorer({
       escapeHtml,
       fetchJsonOrThrow,
+      copySourceDuckdbReference,
       copySourceQueryPath,
       openDataProductPublishDialog,
       querySourceInCurrentNotebook,
@@ -55,6 +57,7 @@ export function createDataSourceExplorerController(helpers) {
       escapeHtml,
       fetchJsonOrThrow,
       formatByteCount,
+      copySourceDuckdbReference,
       copySourceQueryPath,
       openDataProductPublishDialog,
       querySourceInCurrentNotebook,
@@ -65,6 +68,7 @@ export function createDataSourceExplorerController(helpers) {
     }),
     "local-workspace": createLocalWorkspaceDataSourceExplorer({
       allLocalWorkspaceFolderPaths,
+      copySourceDuckdbReference,
       copySourceQueryPath,
       downloadLocalWorkspaceExportFromSource,
       escapeHtml,

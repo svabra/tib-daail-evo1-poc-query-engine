@@ -209,6 +209,15 @@
           <button
             type="button"
             class="workspace-action-menu-item"
+            data-copy-duckdb-source-reference
+            title="Copy the DuckDB source reference for this source"
+            {% if not (source_object.query_sql or source_object_query_path or source_object.relation or (source_object.s3_bucket and source_object.s3_key)) %}disabled{% endif %}
+          >
+            Copy source reference - DuckDB
+          </button>
+          <button
+            type="button"
+            class="workspace-action-menu-item"
             data-create-data-product
             title="Publish this source as a managed data product"
           >

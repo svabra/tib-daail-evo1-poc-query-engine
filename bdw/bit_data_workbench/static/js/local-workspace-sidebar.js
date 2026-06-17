@@ -145,6 +145,14 @@ export function createLocalWorkspaceSidebarUi(helpers) {
               <button
                 type="button"
                 class="workspace-action-menu-item"
+                data-copy-duckdb-source-reference
+                title="Copy the DuckDB source reference for this Local Workspace file"
+              >
+                Copy source reference - DuckDB
+              </button>
+              <button
+                type="button"
+                class="workspace-action-menu-item"
                 data-create-data-product
                 title="Start the managed publication flow for this file"
               >

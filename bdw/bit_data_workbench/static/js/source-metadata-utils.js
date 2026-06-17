@@ -437,6 +437,69 @@ export function sourceQuerySql(relation, fields = []) {
   ].join("\n");
 }
 
+function sqlStringLiteral(value) {
+  return `'${String(value || "").replace(/'/g, "''")}'`;
+}
+
+function sourceDuckdbFunctionForS3Object(sourceObjectRoot) {
+  const bucket = String(sourceObjectRoot?.dataset.s3Bucket || "").trim();
+  const key = String(sourceObjectRoot?.dataset.s3Key || "").trim().replace(/^\/+/, "");
+  if (!bucket || !key) {
+    return "";
+  }
+
+  const path = `s3://${bucket}/${key}`;
+  const format = String(sourceObjectRoot?.dataset.s3FileFormat || "")
+    .trim()
+    .toLowerCase();
+  if (format === "csv") {
+    return `read_csv_auto(${sqlStringLiteral(path)})`;
+  }
+  if (format === "json" || format === "jsonl" || format === "ndjson") {
+    return `read_json_auto(${sqlStringLiteral(path)})`;
+  }
+  return `read_parquet(${sqlStringLiteral(path)})`;
+}
+
+function normalizeDuckdbSourceSql(querySql) {
+  const sql = String(querySql || "").trim().replace(/;\s*$/, "");
+  if (!sql) {
+    return "";
+  }
+
+  const selectAllMatch = sql.match(/^select\s+\*\s+from\s+([\s\S]+)$/i);
+  if (selectAllMatch) {
+    return selectAllMatch[1].trim();
+  }
+
+  if (/^(select|with|values)\b/i.test(sql)) {
+    return `(${sql})`;
+  }
+
+  return sql;
+}
+
+export function sourceDuckdbReference(sourceObjectRoot) {
+  if (!(sourceObjectRoot instanceof Element)) {
+    return "";
+  }
+
+  const querySqlReference = normalizeDuckdbSourceSql(
+    sourceObjectRoot.dataset.sourceObjectQuerySql
+  );
+  if (querySqlReference) {
+    return querySqlReference;
+  }
+
+  const s3FunctionReference = sourceDuckdbFunctionForS3Object(sourceObjectRoot);
+  if (s3FunctionReference) {
+    return s3FunctionReference;
+  }
+
+  const descriptor = sourceQueryDescriptor(sourceObjectRoot);
+  return descriptor?.relation || "";
+}
+
 function s3RelationPrefixFromIdentifier(value) {
   const relation = String(value || "").trim();
   const lower = relation.toLowerCase();
