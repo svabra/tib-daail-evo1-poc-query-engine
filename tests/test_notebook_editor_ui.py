@@ -805,6 +805,26 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("overflow-wrap: anywhere;", css_source)
         self.assertIn("max-height: min(52vh, 360px);", css_source)
 
+    def test_pipeline_stage_cell_run_waits_instead_of_failing_on_running_status(self) -> None:
+        controller_source = (
+            STATIC_ROOT / "js" / "notebook-stage-pipeline-controller.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            'const activeStageStatuses = new Set(["planned", "queued", "running", "cancelling"]);',
+            controller_source,
+        )
+        self.assertIn("function statusIsTerminalProblem(value)", controller_source)
+        self.assertIn("function stageRunErrorMessage(node, status = \"\")", controller_source)
+        self.assertIn("function waitForStageValidForCellRun(notebookId, stageId)", controller_source)
+        self.assertIn('if (status === "valid")', controller_source)
+        self.assertIn("if (statusIsTerminalProblem(status))", controller_source)
+        self.assertIn("throw new Error(stageRunErrorMessage(latestNode, status));", controller_source)
+        self.assertIn("waitForValid: true", controller_source)
+        self.assertIn("Stage run was cancelled.", controller_source)
+        self.assertIn("Stage run failed. Review the stage run details.", controller_source)
+        self.assertNotIn("Stage finished with status ${statusLabel(status)}", controller_source)
+
     def test_runtime_storage_settings_dialog_has_menu_api_and_delete_wiring(self) -> None:
         app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
         navigation_source = (
@@ -853,13 +873,17 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("queryTimingBreadcrumbMarkup", query_ui_source)
         self.assertIn("queryTimingBreadcrumbSteps", query_ui_source)
         self.assertIn("queryTimingStepDefinitions", query_ui_source)
+        self.assertIn("function activeTimingStepKey(job, steps)", query_ui_source)
         self.assertIn("data-query-duration-total", query_ui_source)
         self.assertIn("data-query-timing-step", query_ui_source)
         self.assertIn("data-query-timing-step-state", query_ui_source)
         self.assertIn("data-query-timing-current-step", query_ui_source)
         self.assertIn("data-query-timing-completed-ms", query_ui_source)
         self.assertIn('state === "current"', query_ui_source)
-        self.assertIn("lastMeasuredIndex + 1", query_ui_source)
+        self.assertIn("const activeKey = activeTimingStepKey(job, visibleSteps);", query_ui_source)
+        self.assertIn('combined.includes("duckdb")', query_ui_source)
+        self.assertIn('combined.includes("fetch")', query_ui_source)
+        self.assertIn('!running && Number.isFinite(totalMs) && backendTotalMs !== null', query_ui_source)
         self.assertIn("Number(totalMs) - completedBeforeMs", query_ui_source)
         self.assertIn("Same value shown by Total elapsed", query_ui_source)
         self.assertIn('title="${escapeHtml(tooltip)}"', query_ui_source)
@@ -911,19 +935,41 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn(".result-duration-help", css_source)
         self.assertIn(".query-timing-breadcrumb", css_source)
         self.assertIn(".query-timing-step", css_source)
+        self.assertIn(
+            ".result-meta-row {\n"
+            "  display: grid;\n"
+            "  align-items: center;\n"
+            "  grid-template-columns: minmax(0, 1fr);\n"
+            "  gap: 6px;",
+            css_source,
+        )
+        self.assertIn(".result-metric-strip {\n  width: 100%;", css_source)
         self.assertIn("--query-timing-arrow-depth", css_source)
         self.assertIn("clip-path: polygon", css_source)
         self.assertIn("margin-right: calc(var(--query-timing-arrow-depth) * -0.72);", css_source)
         self.assertIn("gap: 6px 0;", css_source)
+        self.assertIn("flex: 1 1 100%;", css_source)
         self.assertIn(".query-timing-step:first-child", css_source)
         self.assertIn(".query-timing-step:last-child", css_source)
         self.assertIn(".query-timing-step:only-child", css_source)
         self.assertIn(".query-timing-step.is-completed,\n.query-timing-step.is-current", css_source)
         self.assertIn(".query-timing-step.is-completed", css_source)
         self.assertIn(".query-timing-step.is-current", css_source)
+        self.assertIn("background: rgba(11, 68, 121, 0.24);", css_source)
+        self.assertIn("box-shadow: inset 0 0 0 1px var(--status-blue-border);", css_source)
         self.assertIn(".query-timing-step.is-pending", css_source)
         self.assertIn(".query-timing-table", css_source)
         self.assertIn(".query-resource-sparkline-help", css_source)
+        self.assertIn(".workspace-query-runs-cell {\n  margin-top: 10px;", css_source)
+        self.assertIn(".workspace-query-runs,\n.query-runs-page {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr);", css_source)
+        self.assertIn("overflow: hidden;", css_source)
+        self.assertIn(".workspace-query-runs-cell .query-run-history-list", css_source)
+        self.assertIn(".query-run-history-list {\n  width: 100%;", css_source)
+        self.assertIn("overflow-x: auto;", css_source)
+        self.assertIn(".workspace-query-runs-cell .query-run-history-table {\n  table-layout: fixed;", css_source)
+        self.assertIn("min-width: 760px;", css_source)
+        self.assertIn(".workspace-query-runs-cell .query-run-history-message", css_source)
+        self.assertIn("overflow-wrap: anywhere;", css_source)
 
     def test_sql_completion_uses_simple_s3_and_pg_source_references(self) -> None:
         app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")

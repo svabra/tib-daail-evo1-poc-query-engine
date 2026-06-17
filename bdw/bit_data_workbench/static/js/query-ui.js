@@ -267,10 +267,11 @@ export function createQueryUi(helpers) {
       return [];
     }
 
+    const running = Boolean(queryJobIsRunning(job));
     const totalMs = queryJobElapsedMs(job);
     const backendTotalMs = queryTimingValue(job, "backendTotalMs");
     const deliveryMs =
-      Number.isFinite(totalMs) && backendTotalMs !== null
+      !running && Number.isFinite(totalMs) && backendTotalMs !== null
         ? Math.max(0, Number(totalMs) - backendTotalMs)
         : null;
     const fetchMs =
@@ -305,10 +306,11 @@ export function createQueryUi(helpers) {
       return [];
     }
 
+    const running = Boolean(queryJobIsRunning(job));
     const totalMs = queryJobElapsedMs(job);
     const backendTotalMs = queryTimingValue(job, "backendTotalMs");
     const deliveryMs =
-      Number.isFinite(totalMs) && backendTotalMs !== null
+      !running && Number.isFinite(totalMs) && backendTotalMs !== null
         ? Math.max(0, Number(totalMs) - backendTotalMs)
         : null;
     const fetchMs =
@@ -329,7 +331,6 @@ export function createQueryUi(helpers) {
     );
     if (Number.isFinite(totalMs)) {
       const overheadMs = Number(totalMs) - measuredStepTotalMs;
-      const running = Boolean(queryJobIsRunning(job));
       const allMeasuredStepsComplete = steps.every((step) => step.valueMs !== null);
       steps.push({
         key: "overhead",
@@ -338,6 +339,60 @@ export function createQueryUi(helpers) {
       });
     }
     return steps;
+  }
+
+  function activeTimingStepKey(job, steps) {
+    if (!job || !queryJobIsRunning(job)) {
+      return "";
+    }
+
+    const stepKeys = new Set((steps || []).map((step) => step.key));
+    const progressLabel = String(job.progressLabel || "").toLowerCase();
+    const message = String(job.message || "").toLowerCase();
+    const combined = `${progressLabel} ${message}`;
+    const hasStep = (key) => stepKeys.has(key);
+
+    if (job.status === "queued" || combined.includes("preparing query")) {
+      return hasStep("prepare") ? "prepare" : "";
+    }
+    if (combined.includes("waiting for duckdb") || combined.includes("shared duckdb")) {
+      return hasStep("shared-duckdb-wait") ? "shared-duckdb-wait" : "";
+    }
+    if (combined.includes("starting isolated query worker") || combined.includes("worker process")) {
+      return hasStep("startup") ? "startup" : "";
+    }
+    if (
+      combined.includes("preparing query sources") ||
+      combined.includes("preparing isolated query sources") ||
+      combined.includes("cache hydration")
+    ) {
+      return hasStep("source-setup") ? "source-setup" : "";
+    }
+    if (
+      combined.includes("fetch") ||
+      combined.includes("streaming rows") ||
+      combined.includes("query is fetching rows") ||
+      combined.includes("finalizing") ||
+      Number(job.rowsShown || 0) > 0 ||
+      Number(job.firstRowMs || 0) > 0
+    ) {
+      return hasStep("fetch") ? "fetch" : "";
+    }
+    if (
+      combined.includes("query") ||
+      combined.includes("duckdb") ||
+      combined.includes("running") ||
+      Number.isFinite(Number(job.progress))
+    ) {
+      return hasStep("query") ? "query" : "";
+    }
+    if (queryTimingValue(job, "workerStartupMs") !== null) {
+      return hasStep("query") ? "query" : "";
+    }
+    if (queryTimingValue(job, "engineAccessWaitMs") !== null) {
+      return hasStep("startup") ? "startup" : "";
+    }
+    return hasStep("prepare") ? "prepare" : "";
   }
 
   function queryTimingBreadcrumbSteps(job) {
@@ -353,11 +408,17 @@ export function createQueryUi(helpers) {
       return [];
     }
 
-    const lastMeasuredIndex = visibleSteps.reduce(
-      (lastIndex, step, index) => (step.valueMs !== null ? index : lastIndex),
-      -1
-    );
-    const currentIndex = running ? Math.min(lastMeasuredIndex + 1, visibleSteps.length - 1) : -1;
+    const activeKey = activeTimingStepKey(job, visibleSteps);
+    let currentIndex = running
+      ? visibleSteps.findIndex((step) => step.key === activeKey)
+      : -1;
+    if (running && currentIndex < 0) {
+      const lastMeasuredIndex = visibleSteps.reduce(
+        (lastIndex, step, index) => (step.valueMs !== null ? index : lastIndex),
+        -1
+      );
+      currentIndex = Math.min(lastMeasuredIndex + 1, visibleSteps.length - 1);
+    }
     let completedBeforeMs = 0;
 
     return visibleSteps.map((step, index) => {

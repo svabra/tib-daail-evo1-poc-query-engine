@@ -1,9 +1,40 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.21. Keep entries concise and
+# Derived from git history through version 0.10.22. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.22",
+        "releasedAt": "2026-06-17T10:01:33+02:00",
+        "features": [
+            (
+                "Result timing now keeps the elapsed clock on its own row "
+                "and renders the timing breadcrumb below it, preventing "
+                "small screens from pushing the live timing strip into a "
+                "line-break-heavy layout."
+            ),
+            (
+                "The timing breadcrumb now derives the active phase from "
+                "backend progress messages instead of assuming the next "
+                "unmeasured step, so long-running DuckDB execution is shown "
+                "as Query rather than Delivery until result delivery has "
+                "actually begun."
+            ),
+            (
+                "Pipeline stage cell runs now wait while a stage is still "
+                "planned, queued, running, or cancelling, removing the false "
+                "'Stage finished with status Running' modal and preserving "
+                "clear terminal errors for real failures."
+            ),
+            (
+                "Query Monitoring history is constrained to its result "
+                "panel with an internal horizontal scroll when needed, and "
+                "Playwright regressions now cover the timing layout, active "
+                "breadcrumb phase, and running-stage modal behavior."
+            ),
+        ],
+    },
     {
         "version": "0.10.21",
         "releasedAt": "2026-06-17T07:20:10+02:00",

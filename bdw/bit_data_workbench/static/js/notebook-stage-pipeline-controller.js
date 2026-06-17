@@ -44,6 +44,7 @@ export function createNotebookStagePipelineController(helpers) {
     "Notebook mode: Exploration. Click to enable Pipeline mode, which links SQL cells into staged materialized data products with dependency-aware runs.";
   const pipelineModeTitle =
     "Notebook mode: Pipeline. Click to return to Exploration mode, which keeps cells independent for ad-hoc SQL or Python work.";
+  const activeStageStatuses = new Set(["planned", "queued", "running", "cancelling"]);
   const failedStageStatuses = new Set(["failed", "cancelled", "canceled", "aborted", "incomplete"]);
   const warningStageStatuses = new Set(["warning", "warned", "skipped"]);
   const terminalStageRunStatuses = new Set(["completed", ...failedStageStatuses]);
@@ -167,6 +168,52 @@ export function createNotebookStagePipelineController(helpers) {
 
   function statusIsFailure(value) {
     return failedStageStatuses.has(String(value || "").trim().toLowerCase());
+  }
+
+  function statusIsActive(value) {
+    return activeStageStatuses.has(String(value || "").trim().toLowerCase());
+  }
+
+  function statusIsTerminalProblem(value) {
+    const status = String(value || "").trim().toLowerCase();
+    return Boolean(status) && status !== "valid" && !statusIsActive(status);
+  }
+
+  function stageNodeById(graph, stageId) {
+    const normalizedStageId = String(stageId || "").trim();
+    return (
+      (graph?.nodes || []).find(
+        (node) => String(node?.stageId || "") === normalizedStageId
+      ) || null
+    );
+  }
+
+  function stageRunErrorMessage(node, status = "") {
+    const normalizedStatus = String(status || node?.status || "").trim().toLowerCase();
+    const latestRun = node?.latestRun || {};
+    const backendMessage = String(latestRun.error || latestRun.message || "").trim();
+    if (backendMessage) {
+      return backendMessage;
+    }
+    if (["cancelled", "canceled", "aborted"].includes(normalizedStatus)) {
+      return "Stage run was cancelled.";
+    }
+    if (normalizedStatus === "skipped") {
+      return "Stage was skipped because a dependency did not complete.";
+    }
+    if (normalizedStatus === "obsolete") {
+      return "Stage output is obsolete. Run the stage again.";
+    }
+    if (normalizedStatus === "incomplete") {
+      return "Stage did not finish completely. Review the stage run details.";
+    }
+    if (normalizedStatus === "failed") {
+      return "Stage run failed. Review the stage run details.";
+    }
+    if (normalizedStatus) {
+      return `Stage did not finish successfully. Final status: ${statusLabel(normalizedStatus)}.`;
+    }
+    return "Stage did not finish successfully.";
   }
 
   function pipelineTooltipAttributes(label) {
@@ -1961,11 +2008,9 @@ export function createNotebookStagePipelineController(helpers) {
     let latestNode = null;
     while (Date.now() < deadline) {
       const graph = await refreshGraph(notebookId);
-      latestNode = (graph?.nodes || []).find(
-        (node) => String(node?.stageId || "") === normalizedStageId
-      );
+      latestNode = stageNodeById(graph, normalizedStageId);
       const status = String(latestNode?.status || "").toLowerCase();
-      if (status && !["planned", "queued", "running"].includes(status)) {
+      if (status && !statusIsActive(status)) {
         return latestNode;
       }
       const snapshot = await materializedStageState();
@@ -1975,9 +2020,29 @@ export function createNotebookStagePipelineController(helpers) {
           String(run?.notebookId || "") === String(notebookId || "") &&
           (run?.stageIds || []).map((item) => String(item)).includes(normalizedStageId)
       );
-      if (!active && status && status !== "planned") {
+      if (!active && status && !statusIsActive(status)) {
         return latestNode;
       }
+      await sleep(450);
+    }
+    return latestNode;
+  }
+
+  async function waitForStageValidForCellRun(notebookId, stageId) {
+    const normalizedStageId = String(stageId || "").trim();
+    let latestNode = null;
+    while (pipelineEnabled(notebookId)) {
+      const graph = await refreshGraph(notebookId);
+      latestNode = stageNodeById(graph, normalizedStageId);
+      const status = String(latestNode?.status || "").trim().toLowerCase();
+      if (status === "valid") {
+        return latestNode;
+      }
+      if (statusIsTerminalProblem(status)) {
+        throw new Error(stageRunErrorMessage(latestNode, status));
+      }
+      const snapshot = await materializedStageState();
+      applyRealtimeState(snapshot);
       await sleep(450);
     }
     return latestNode;
@@ -2051,7 +2116,7 @@ export function createNotebookStagePipelineController(helpers) {
     }
   }
 
-  async function runStage(notebookId, stageId) {
+  async function runStage(notebookId, stageId, { waitForValid = false } = {}) {
     const snapshot = await fetchJsonOrThrow(`/api/materialized-stages/stages/${encodeURIComponent(stageId)}/run`, {
       method: "POST",
       headers: {
@@ -2061,8 +2126,16 @@ export function createNotebookStagePipelineController(helpers) {
       body: JSON.stringify(pipelinePayload(notebookId)),
     });
     applyRealtimeState(snapshot);
-    await waitForStageTerminal(notebookId, stageId);
-    await refreshGraph(notebookId);
+    const waitedNode = waitForValid
+      ? await waitForStageValidForCellRun(notebookId, stageId)
+      : await waitForStageTerminal(notebookId, stageId);
+    const graph = await refreshGraph(notebookId);
+    const updatedNode = stageNodeById(graph, stageId) || waitedNode;
+    const status = String(updatedNode?.status || "").trim().toLowerCase();
+    if (statusIsTerminalProblem(status)) {
+      throw new Error(stageRunErrorMessage(updatedNode, status));
+    }
+    return updatedNode;
   }
 
   function setStageTransientStatus(notebookId, stageId, status) {
@@ -2264,18 +2337,12 @@ export function createNotebookStagePipelineController(helpers) {
     }
     setCellRunStageBusy(cellId, true);
     try {
-      await runStage(notebookId, String(node.stageId || ""));
-      const graph = await refreshGraph(notebookId);
-      const updatedNode = (graph?.nodes || []).find(
-        (item) => String(item?.stageId || "") === String(node.stageId || "")
-      );
+      const updatedNode = await runStage(notebookId, String(node.stageId || ""), {
+        waitForValid: true,
+      });
       const status = String(updatedNode?.status || "").toLowerCase();
       if (status !== "valid") {
-        throw new Error(
-          updatedNode?.latestRun?.error ||
-            updatedNode?.latestRun?.message ||
-            `Stage finished with status ${statusLabel(status)}.`
-        );
+        throw new Error(stageRunErrorMessage(updatedNode, status));
       }
       passThroughCellRuns.add(cellId);
       requestCellRun(cellId);
