@@ -133,13 +133,30 @@ def fixture_html(css_url: str) -> str:
 
 async def assert_layout(page, width: int, timeout_ms: int) -> None:
     await page.set_viewport_size({"width": width, "height": 760})
-    await page.wait_for_load_state("networkidle", timeout=timeout_ms)
+    await page.wait_for_function(
+        """
+        () => {
+          const breadcrumb = document.querySelector(".query-timing-breadcrumb");
+          return Boolean(
+            breadcrumb
+            && window.getComputedStyle(breadcrumb).display.includes("flex")
+            && document.querySelectorAll(".query-timing-step").length > 0
+          );
+        }
+        """,
+        timeout=timeout_ms,
+    )
     metrics = await page.evaluate(
         """
         () => {
           const doc = document.documentElement;
           const duration = document.querySelector(".result-duration-group").getBoundingClientRect();
-          const breadcrumb = document.querySelector(".query-timing-breadcrumb").getBoundingClientRect();
+          const breadcrumbNode = document.querySelector(".query-timing-breadcrumb");
+          const breadcrumb = breadcrumbNode.getBoundingClientRect();
+          const breadcrumbStyle = window.getComputedStyle(breadcrumbNode);
+          const stepRects = Array.from(document.querySelectorAll(".query-timing-step"))
+            .map((node) => node.getBoundingClientRect());
+          const insight = document.querySelector(".result-metric-strip .query-insight-pill").getBoundingClientRect();
           const resultRow = document.querySelector(".result-meta-row").getBoundingClientRect();
           const host = document.querySelector(".layout-regression-host").getBoundingClientRect();
           const monitor = document.querySelector(".workspace-query-runs-cell").getBoundingClientRect();
@@ -151,6 +168,11 @@ async def assert_layout(page, width: int, timeout_ms: int) -> None:
             scrollWidth: doc.scrollWidth,
             durationBottom: duration.bottom,
             breadcrumbTop: breadcrumb.top,
+            breadcrumbBottom: breadcrumb.bottom,
+            breadcrumbFlexWrap: breadcrumbStyle.flexWrap,
+            stepTopMin: Math.min(...stepRects.map((rect) => rect.top)),
+            stepTopMax: Math.max(...stepRects.map((rect) => rect.top)),
+            insightTop: insight.top,
             resultRowLeft: resultRow.left,
             resultRowRight: resultRow.right,
             hostRight: host.right,
@@ -165,6 +187,12 @@ async def assert_layout(page, width: int, timeout_ms: int) -> None:
     )
     if metrics["breadcrumbTop"] < metrics["durationBottom"] - 1:
         raise RuntimeError(f"Timing breadcrumb is not below elapsed time at {width}px: {metrics}")
+    if metrics["breadcrumbFlexWrap"] != "nowrap":
+        raise RuntimeError(f"Timing breadcrumb is allowed to wrap at {width}px: {metrics}")
+    if metrics["stepTopMax"] > metrics["stepTopMin"] + 1:
+        raise RuntimeError(f"Timing breadcrumb steps wrapped onto multiple rows at {width}px: {metrics}")
+    if metrics["insightTop"] < metrics["breadcrumbBottom"] - 1:
+        raise RuntimeError(f"Timing breadcrumb shares its row with another metric at {width}px: {metrics}")
     if metrics["scrollWidth"] > metrics["clientWidth"] + 1:
         raise RuntimeError(f"Document has horizontal overflow at {width}px: {metrics}")
     if metrics["monitorRight"] > metrics["hostRight"] + 1:

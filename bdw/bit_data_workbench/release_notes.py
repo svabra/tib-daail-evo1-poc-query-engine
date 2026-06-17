@@ -1,9 +1,30 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.22. Keep entries concise and
+# Derived from git history through version 0.10.23. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.23",
+        "releasedAt": "2026-06-17T10:46:36+02:00",
+        "features": [
+            (
+                "Result timing breadcrumbs now occupy one dedicated line "
+                "below the elapsed clock and never share that line with "
+                "comparison, cache, or footprint metric pills."
+            ),
+            (
+                "Timing breadcrumb arrow steps no longer wrap onto multiple "
+                "rows on compact screens; the breadcrumb keeps a single "
+                "horizontal track with internal overflow when needed."
+            ),
+            (
+                "Regression coverage now asserts the single-line breadcrumb "
+                "contract, separated metric rows, and narrow-screen internal "
+                "overflow behavior in both static UI checks and Playwright."
+            ),
+        ],
+    },
     {
         "version": "0.10.22",
         "releasedAt": "2026-06-17T10:01:33+02:00",

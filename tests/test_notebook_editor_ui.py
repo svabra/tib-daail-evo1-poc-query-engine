@@ -943,12 +943,27 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
             "  gap: 6px;",
             css_source,
         )
-        self.assertIn(".result-metric-strip {\n  width: 100%;", css_source)
+        self.assertIn(
+            ".result-metric-strip {\n"
+            "  display: flex;\n"
+            "  align-items: center;\n"
+            "  flex-wrap: wrap;\n"
+            "  width: 100%;\n"
+            "  overflow: hidden;",
+            css_source,
+        )
         self.assertIn("--query-timing-arrow-depth", css_source)
         self.assertIn("clip-path: polygon", css_source)
         self.assertIn("margin-right: calc(var(--query-timing-arrow-depth) * -0.72);", css_source)
         self.assertIn("gap: 6px 0;", css_source)
-        self.assertIn("flex: 1 1 100%;", css_source)
+        self.assertIn("flex: 0 0 100%;", css_source)
+        self.assertIn("flex-wrap: nowrap;", css_source)
+        self.assertIn("overflow-x: auto;", css_source)
+        self.assertIn("scrollbar-width: thin;", css_source)
+        self.assertIn(".query-timing-step-label,\n.query-timing-step-value", css_source)
+        self.assertIn("white-space: nowrap;", css_source)
+        self.assertIn("flex: 0 0 auto;", css_source)
+        self.assertIn("flex: 0 0 138px;", css_source)
         self.assertIn(".query-timing-step:first-child", css_source)
         self.assertIn(".query-timing-step:last-child", css_source)
         self.assertIn(".query-timing-step:only-child", css_source)

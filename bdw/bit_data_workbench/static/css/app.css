@@ -492,7 +492,11 @@ body.sidebar-collapsed .sidebar-resizer::before {
 }
 
 .result-metric-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
   width: 100%;
+  overflow: hidden;
 }
 
 .query-monitor-item-insights {
@@ -532,14 +536,18 @@ body.sidebar-collapsed .sidebar-resizer::before {
   --query-timing-arrow-depth: 12px;
   display: inline-flex;
   align-items: stretch;
-  flex: 1 1 100%;
-  flex-wrap: wrap;
+  flex: 0 0 100%;
+  flex-wrap: nowrap;
   gap: 6px 0;
   min-width: 0;
   width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
   margin: 0;
-  padding: 0;
+  padding: 0 0 2px;
   list-style: none;
+  scrollbar-width: thin;
 }
 
 .query-timing-step {
@@ -548,6 +556,7 @@ body.sidebar-collapsed .sidebar-resizer::before {
   grid-template-columns: minmax(0, 1fr) max-content;
   align-items: baseline;
   gap: 3px 7px;
+  flex: 0 0 auto;
   min-height: 26px;
   min-width: 78px;
   max-width: 174px;
@@ -569,6 +578,11 @@ body.sidebar-collapsed .sidebar-resizer::before {
     var(--query-timing-arrow-depth) 50%
   );
   isolation: isolate;
+}
+
+.query-timing-step-label,
+.query-timing-step-value {
+  white-space: nowrap;
 }
 
 .query-timing-step:first-child {
@@ -10837,11 +10851,12 @@ details:not([open]) > .tree-children {
 
   .query-timing-breadcrumb {
     flex-basis: 100%;
+    flex-wrap: nowrap;
   }
 
   .query-timing-step {
-    flex: 1 1 138px;
-    max-width: none;
+    flex: 0 0 138px;
+    max-width: 174px;
   }
 
   .topbar-actions {
