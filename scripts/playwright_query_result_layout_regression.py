@@ -2,9 +2,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from urllib.parse import urljoin
+from pathlib import Path
 
 from playwright.async_api import async_playwright
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+APP_CSS_PATH = REPO_ROOT / "bdw" / "bit_data_workbench" / "static" / "css" / "app.css"
 
 
 def parse_args() -> argparse.Namespace:
@@ -21,7 +25,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def fixture_html(css_url: str) -> str:
+def fixture_html(css_source: str) -> str:
     timing_steps = "".join(
         f"""
         <li class="query-timing-step is-{state}" data-query-timing-step data-query-timing-step-state="{state}">
@@ -71,8 +75,8 @@ def fixture_html(css_url: str) -> str:
       <head>
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
-        <link rel="stylesheet" href="{css_url}" />
         <style>
+          {css_source}
           body {{ margin: 0; padding: 16px; background: #f5f7fa; }}
           .layout-regression-host {{ width: min(100%, 760px); box-sizing: border-box; }}
           .query-run-history-table-wrap {{ outline: 1px solid rgba(170, 37, 20, 0.22); }}
@@ -131,6 +135,64 @@ def fixture_html(css_url: str) -> str:
     """
 
 
+async def collect_layout_metrics(page):
+    return await page.evaluate(
+        """
+        () => {
+          const doc = document.documentElement;
+          const duration = document.querySelector(".result-duration-group").getBoundingClientRect();
+          const breadcrumbNode = document.querySelector(".query-timing-breadcrumb");
+          const breadcrumb = breadcrumbNode.getBoundingClientRect();
+          const breadcrumbStyle = window.getComputedStyle(breadcrumbNode);
+          const stepData = Array.from(document.querySelectorAll(".query-timing-step"))
+            .map((node) => {
+              const rect = node.getBoundingClientRect();
+              const label = node.querySelector(".query-timing-step-label").getBoundingClientRect();
+              const value = node.querySelector(".query-timing-step-value").getBoundingClientRect();
+              return {
+                top: rect.top,
+                width: rect.width,
+                labelTop: label.top,
+                labelBottom: label.bottom,
+                valueTop: value.top,
+              };
+            });
+          const insight = document.querySelector(".result-metric-strip .query-insight-pill").getBoundingClientRect();
+          const resultRow = document.querySelector(".result-meta-row").getBoundingClientRect();
+          const host = document.querySelector(".layout-regression-host").getBoundingClientRect();
+          const monitor = document.querySelector(".workspace-query-runs-cell").getBoundingClientRect();
+          const list = document.querySelector(".query-run-history-list").getBoundingClientRect();
+          const tableWrapNode = document.querySelector(".query-run-history-table-wrap");
+          const tableWrap = tableWrapNode.getBoundingClientRect();
+          return {
+            clientWidth: doc.clientWidth,
+            scrollWidth: doc.scrollWidth,
+            durationBottom: duration.bottom,
+            breadcrumbTop: breadcrumb.top,
+            breadcrumbBottom: breadcrumb.bottom,
+            breadcrumbWidth: breadcrumb.width,
+            breadcrumbScrollWidth: breadcrumbNode.scrollWidth,
+            breadcrumbFlexWrap: breadcrumbStyle.flexWrap,
+            stepCount: stepData.length,
+            stepWidths: stepData.map((item) => item.width),
+            stepTopMin: Math.min(...stepData.map((item) => item.top)),
+            stepTopMax: Math.max(...stepData.map((item) => item.top)),
+            stackedStepCount: stepData.filter((item) => item.valueTop >= item.labelBottom - 2).length,
+            insightTop: insight.top,
+            resultRowLeft: resultRow.left,
+            resultRowRight: resultRow.right,
+            hostRight: host.right,
+            monitorRight: monitor.right,
+            listRight: list.right,
+            tableWrapRight: tableWrap.right,
+            tableWrapClientWidth: tableWrapNode.clientWidth,
+            tableWrapScrollWidth: tableWrapNode.scrollWidth,
+          };
+        }
+        """
+    )
+
+
 async def assert_layout(page, width: int, timeout_ms: int) -> None:
     await page.set_viewport_size({"width": width, "height": 760})
     await page.wait_for_function(
@@ -146,51 +208,15 @@ async def assert_layout(page, width: int, timeout_ms: int) -> None:
         """,
         timeout=timeout_ms,
     )
-    metrics = await page.evaluate(
-        """
-        () => {
-          const doc = document.documentElement;
-          const duration = document.querySelector(".result-duration-group").getBoundingClientRect();
-          const breadcrumbNode = document.querySelector(".query-timing-breadcrumb");
-          const breadcrumb = breadcrumbNode.getBoundingClientRect();
-          const breadcrumbStyle = window.getComputedStyle(breadcrumbNode);
-          const stepRects = Array.from(document.querySelectorAll(".query-timing-step"))
-            .map((node) => node.getBoundingClientRect());
-          const insight = document.querySelector(".result-metric-strip .query-insight-pill").getBoundingClientRect();
-          const resultRow = document.querySelector(".result-meta-row").getBoundingClientRect();
-          const host = document.querySelector(".layout-regression-host").getBoundingClientRect();
-          const monitor = document.querySelector(".workspace-query-runs-cell").getBoundingClientRect();
-          const list = document.querySelector(".query-run-history-list").getBoundingClientRect();
-          const tableWrapNode = document.querySelector(".query-run-history-table-wrap");
-          const tableWrap = tableWrapNode.getBoundingClientRect();
-          return {
-            clientWidth: doc.clientWidth,
-            scrollWidth: doc.scrollWidth,
-            durationBottom: duration.bottom,
-            breadcrumbTop: breadcrumb.top,
-            breadcrumbBottom: breadcrumb.bottom,
-            breadcrumbFlexWrap: breadcrumbStyle.flexWrap,
-            stepTopMin: Math.min(...stepRects.map((rect) => rect.top)),
-            stepTopMax: Math.max(...stepRects.map((rect) => rect.top)),
-            insightTop: insight.top,
-            resultRowLeft: resultRow.left,
-            resultRowRight: resultRow.right,
-            hostRight: host.right,
-            monitorRight: monitor.right,
-            listRight: list.right,
-            tableWrapRight: tableWrap.right,
-            tableWrapClientWidth: tableWrapNode.clientWidth,
-            tableWrapScrollWidth: tableWrapNode.scrollWidth,
-          };
-        }
-        """
-    )
+    metrics = await collect_layout_metrics(page)
     if metrics["breadcrumbTop"] < metrics["durationBottom"] - 1:
         raise RuntimeError(f"Timing breadcrumb is not below elapsed time at {width}px: {metrics}")
     if metrics["breadcrumbFlexWrap"] != "nowrap":
         raise RuntimeError(f"Timing breadcrumb is allowed to wrap at {width}px: {metrics}")
     if metrics["stepTopMax"] > metrics["stepTopMin"] + 1:
         raise RuntimeError(f"Timing breadcrumb steps wrapped onto multiple rows at {width}px: {metrics}")
+    if metrics["stackedStepCount"] != metrics["stepCount"]:
+        raise RuntimeError(f"Timing breadcrumb values are not on a second line at {width}px: {metrics}")
     if metrics["insightTop"] < metrics["breadcrumbBottom"] - 1:
         raise RuntimeError(f"Timing breadcrumb shares its row with another metric at {width}px: {metrics}")
     if metrics["scrollWidth"] > metrics["clientWidth"] + 1:
@@ -202,15 +228,52 @@ async def assert_layout(page, width: int, timeout_ms: int) -> None:
     if width <= 520 and metrics["tableWrapScrollWidth"] <= metrics["tableWrapClientWidth"]:
         raise RuntimeError(f"Compact Query Monitoring did not keep overflow internal at {width}px: {metrics}")
 
+    await page.evaluate(
+        """
+        () => {
+          const values = [
+            "999 ms",
+            "1m 11s 888 ms",
+            "12s 345 ms",
+            "2m 03s 004 ms",
+            "59s 999 ms",
+            "123 ms",
+            "8s 765 ms",
+            "-"
+          ];
+          document.querySelectorAll(".query-timing-step-value").forEach((node, index) => {
+            node.textContent = values[index] || "0 ms";
+          });
+        }
+        """
+    )
+    changed_metrics = await collect_layout_metrics(page)
+    if abs(changed_metrics["breadcrumbWidth"] - metrics["breadcrumbWidth"]) > 1:
+        raise RuntimeError(
+            f"Timing breadcrumb width changed when values changed at {width}px: "
+            f"before={metrics} after={changed_metrics}"
+        )
+    if abs(changed_metrics["breadcrumbScrollWidth"] - metrics["breadcrumbScrollWidth"]) > 1:
+        raise RuntimeError(
+            f"Timing breadcrumb scroll width changed when values changed at {width}px: "
+            f"before={metrics} after={changed_metrics}"
+        )
+    for index, (before, after) in enumerate(zip(metrics["stepWidths"], changed_metrics["stepWidths"])):
+        if abs(after - before) > 1:
+            raise RuntimeError(
+                f"Timing step {index} width changed when values changed at {width}px: "
+                f"before={metrics} after={changed_metrics}"
+            )
+
 
 async def main() -> None:
     args = parse_args()
-    css_url = urljoin(args.base_url.rstrip("/") + "/", "static/css/app.css")
+    css_source = APP_CSS_PATH.read_text(encoding="utf-8")
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=args.headless)
         page = await browser.new_page()
         try:
-            await page.set_content(fixture_html(css_url), wait_until="domcontentloaded", timeout=args.timeout_ms)
+            await page.set_content(fixture_html(css_source), wait_until="domcontentloaded", timeout=args.timeout_ms)
             await assert_layout(page, 900, args.timeout_ms)
             await assert_layout(page, 390, args.timeout_ms)
         finally:

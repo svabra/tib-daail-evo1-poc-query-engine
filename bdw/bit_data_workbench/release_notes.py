@@ -1,9 +1,31 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.23. Keep entries concise and
+# Derived from git history through version 0.10.24. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.24",
+        "releasedAt": "2026-06-17T11:01:22+02:00",
+        "features": [
+            (
+                "Timing breadcrumb steps now use fixed-width arrow blocks "
+                "with the step label on the first line and the duration on "
+                "a second line, so live timing values no longer resize the "
+                "progress bar."
+            ),
+            (
+                "Duration text keeps tabular digits and ellipsis handling "
+                "inside each fixed step, preserving the single-line "
+                "breadcrumb track while long values update."
+            ),
+            (
+                "The Playwright layout regression now mutates breadcrumb "
+                "duration values and asserts that the breadcrumb, scroll "
+                "track, and every step width remain stable."
+            ),
+        ],
+    },
     {
         "version": "0.10.23",
         "releasedAt": "2026-06-17T10:46:36+02:00",

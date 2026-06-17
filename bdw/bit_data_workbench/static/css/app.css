@@ -534,6 +534,7 @@ body.sidebar-collapsed .sidebar-resizer::before {
 
 .query-timing-breadcrumb {
   --query-timing-arrow-depth: 12px;
+  --query-timing-step-width: 148px;
   display: inline-flex;
   align-items: stretch;
   flex: 0 0 100%;
@@ -553,13 +554,16 @@ body.sidebar-collapsed .sidebar-resizer::before {
 .query-timing-step {
   position: relative;
   display: inline-grid;
-  grid-template-columns: minmax(0, 1fr) max-content;
-  align-items: baseline;
-  gap: 3px 7px;
-  flex: 0 0 auto;
-  min-height: 26px;
-  min-width: 78px;
-  max-width: 174px;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-content: center;
+  align-items: center;
+  gap: 1px;
+  flex: 0 0 var(--query-timing-step-width);
+  width: var(--query-timing-step-width);
+  min-height: 38px;
+  min-width: var(--query-timing-step-width);
+  max-width: var(--query-timing-step-width);
   margin-right: calc(var(--query-timing-arrow-depth) * -0.72);
   padding: 4px calc(var(--query-timing-arrow-depth) + 8px) 4px
     calc(var(--query-timing-arrow-depth) + 4px);
@@ -622,13 +626,20 @@ body.sidebar-collapsed .sidebar-resizer::before {
   min-width: 0;
   color: inherit;
   font-weight: 800;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .query-timing-step-value {
+  display: block;
+  min-width: 0;
+  width: 100%;
   color: var(--text);
   font-variant-numeric: tabular-nums;
   font-feature-settings: "tnum" 1;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -10855,8 +10866,7 @@ details:not([open]) > .tree-children {
   }
 
   .query-timing-step {
-    flex: 0 0 138px;
-    max-width: 174px;
+    --query-timing-step-width: 138px;
   }
 
   .topbar-actions {
