@@ -196,6 +196,11 @@
       "enabledByDefault": false
     },
     {
+      "id": "pipeline-copy-comment-regression",
+      "script": "playwright_pipeline_copy_comment_regression.py",
+      "enabledByDefault": true
+    },
+    {
       "id": "pipeline-sample-graph",
       "script": "playwright_pipeline_sample_graph_regression.py",
       "enabledByDefault": false

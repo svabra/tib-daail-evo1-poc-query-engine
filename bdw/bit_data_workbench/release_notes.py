@@ -1,9 +1,33 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.20. Keep entries concise and
+# Derived from git history through version 0.10.21. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.21",
+        "releasedAt": "2026-06-17T07:20:10+02:00",
+        "features": [
+            (
+                "Pipeline stage COPY TO SQL is now generated with the "
+                "closing parenthesis and TO clause on fresh lines, so "
+                "user SQL ending in a DuckDB -- line comment can no longer "
+                "comment out the artifact write wrapper."
+            ),
+            (
+                "The DuckDB SQL preview and the real materialized-stage "
+                "runner now share the same COPY TO parquet builder, keeping "
+                "the displayed SQL and submitted SQL aligned for pipeline "
+                "stages."
+            ),
+            (
+                "Regression coverage now includes the commented UNION case, "
+                "isolated-write validation for COPY wrappers with trailing "
+                "line comments, real materialized pipeline execution, and a "
+                "Playwright smoke for the preview endpoint."
+            ),
+        ],
+    },
     {
         "version": "0.10.20",
         "releasedAt": "2026-06-16T16:25:08+02:00",

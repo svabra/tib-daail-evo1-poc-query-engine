@@ -649,11 +649,57 @@ class QuerySourceValidationTests(unittest.TestCase):
         self.assertTrue(payload["stageDuckdbCopyTargetIsRuntimePattern"])
         self.assertEqual(
             payload["executionSql"],
-            "COPY (SELECT * FROM read_parquet('s3://kbpoimports/KBPO2020.parquet')) "
-            f"TO '{expected_target}' (FORMAT PARQUET)",
+            "COPY (\nSELECT * FROM read_parquet('s3://kbpoimports/KBPO2020.parquet')\n)"
+            f"\nTO '{expected_target}' (FORMAT PARQUET)",
         )
         self.assertNotIn("https://", payload["executionSql"])
         self.assertNotIn('s3.kbpoimports."KBPO2020.parquet"', payload["executionSql"])
+
+    def test_prepare_query_sql_pipeline_stage_preview_survives_trailing_line_comment(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
+        service._data_source_discovery = SimpleNamespace(s3_relation_specs=lambda: {})
+        sql = (
+            'SELECT * FROM s3.kbpoimports."KBPO_2018undvorher.parquet"\n'
+            "UNION ALL\n"
+            'SELECT * FROM s3.kbpoimports."KBPO_2019.parquet"\n'
+            "UNION ALL\n"
+            '--SELECT * FROM s3.kbpoimports."kbpo2020.parquet"'
+        )
+
+        payload = service.prepare_query_sql(
+            sql=sql,
+            display_sql=sql,
+            notebook_id="notebook",
+            notebook_title="Pipeline Notebook",
+            cell_id="cell-stage-commented-union",
+            data_sources=["s3"],
+            query_options={"validation": {"sourceExistence": "off"}},
+            stage={
+                "enabled": True,
+                "stageId": "stage-merge-all",
+                "alias": "merge all",
+                "materialize": True,
+                "outputFileName": "merge_all.parquet",
+            },
+        )
+
+        expected_target = (
+            Path(tempfile.gettempdir()) / "bdw-stage-<run>" / "merge_all.parquet"
+        ).as_posix()
+        self.assertEqual(
+            payload["executionSql"],
+            "COPY (\n"
+            "SELECT * FROM read_parquet('s3://kbpoimports/KBPO_2018undvorher.parquet')\n"
+            "UNION ALL\n"
+            "SELECT * FROM read_parquet('s3://kbpoimports/KBPO_2019.parquet')\n"
+            "UNION ALL\n"
+            '--SELECT * FROM s3.kbpoimports."kbpo2020.parquet"\n'
+            ")\n"
+            f"TO '{expected_target}' (FORMAT PARQUET)",
+        )
+        self.assertNotIn(f'--SELECT * FROM s3.kbpoimports."kbpo2020.parquet") TO', payload["executionSql"])
 
     def test_prepare_query_sql_pipeline_stage_preview_normalizes_table_function_copy_target(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)
@@ -684,8 +730,8 @@ class QuerySourceValidationTests(unittest.TestCase):
         self.assertEqual(payload["stageOutputFileName"], "unsafe_output.parquet")
         self.assertEqual(
             payload["executionSql"],
-            "COPY (SELECT * FROM read_parquet('s3://kbpoimports/KBPO2020.parquet')) "
-            f"TO '{expected_target}' (FORMAT PARQUET)",
+            "COPY (\nSELECT * FROM read_parquet('s3://kbpoimports/KBPO2020.parquet')\n)"
+            f"\nTO '{expected_target}' (FORMAT PARQUET)",
         )
 
     def test_prepare_query_sql_does_not_copy_wrap_non_materialized_stage_preview(self) -> None:

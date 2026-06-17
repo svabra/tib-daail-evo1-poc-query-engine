@@ -874,7 +874,7 @@ class NotebookStagePipelineTests(unittest.TestCase):
             cell = stage_cell(
                 "cell-copy",
                 "copy_stage",
-                f"SELECT * FROM {source_relation} ORDER BY id_",
+                f"SELECT * FROM {source_relation} ORDER BY id_\n--SELECT * FROM disabled_branch",
             )
             cell["dataSources"] = ["s3"]
             cell["queryOptions"] = {"duckdb": {"parquetHivePartitioning": "auto"}}
@@ -894,7 +894,10 @@ class NotebookStagePipelineTests(unittest.TestCase):
             self.assertEqual(len(query_jobs), 1)
 
             runner_payload = query_jobs[0]
-            copy_prefix = f"COPY (SELECT * FROM {source_query_sql} ORDER BY id_) TO "
+            copy_prefix = (
+                f"COPY (\nSELECT * FROM {source_query_sql} ORDER BY id_\n"
+                "--SELECT * FROM disabled_branch\n)\nTO "
+            )
             self.assertTrue(
                 runner_payload["execution_sql"].startswith(copy_prefix),
                 runner_payload["execution_sql"],
@@ -910,7 +913,10 @@ class NotebookStagePipelineTests(unittest.TestCase):
                 runner_payload["result_preview_sql"],
                 f"SELECT * FROM read_parquet({sql_literal(copy_target)})",
             )
-            self.assertEqual(runner_payload["display_sql"], f"SELECT * FROM {source_relation} ORDER BY id_")
+            self.assertEqual(
+                runner_payload["display_sql"],
+                f"SELECT * FROM {source_relation} ORDER BY id_\n--SELECT * FROM disabled_branch",
+            )
             self.assertEqual(runner_payload["data_sources"], ["s3"])
             self.assertEqual(
                 runner_payload["query_options"]["duckdb"]["parquetHivePartitioning"],

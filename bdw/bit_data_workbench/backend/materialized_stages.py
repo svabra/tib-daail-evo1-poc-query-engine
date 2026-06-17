@@ -151,6 +151,11 @@ def materialized_stage_query_sql(sql: object) -> str:
     return normalized
 
 
+def materialized_stage_copy_to_parquet_sql(sql: object, target_path: object) -> str:
+    query_sql = materialized_stage_query_sql(sql)
+    return f"COPY (\n{query_sql}\n)\nTO {sql_literal(str(target_path or ''))} (FORMAT PARQUET)"
+
+
 @dataclass(slots=True)
 class StageRecord:
     run_id: str
@@ -1490,7 +1495,10 @@ class MaterializedStageManager:
         connection = None
         try:
             try:
-                copy_sql = f"COPY ({execution_sql}) TO {sql_literal(local_output.as_posix())} (FORMAT PARQUET)"
+                copy_sql = materialized_stage_copy_to_parquet_sql(
+                    execution_sql,
+                    local_output.as_posix(),
+                )
                 result_preview_sql = f"SELECT * FROM read_parquet({sql_literal(local_output.as_posix())})"
                 if self._query_job_runner is not None:
                     query_payload = self._query_job_runner(

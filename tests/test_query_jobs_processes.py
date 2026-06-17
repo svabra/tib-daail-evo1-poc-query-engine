@@ -26,6 +26,7 @@ from bit_data_workbench.backend.query_jobs import (  # noqa: E402
     DUCKDB_EXECUTION_PATH_SHARED_FILE_WRITE,
     _bootstrap_duckdb_source_views,
     _is_direct_file_relation,
+    _is_isolated_artifact_write_sql,
     QUERY_EXECUTION_DUCKDB_READ,
     QUERY_EXECUTION_DUCKDB_WRITE,
     QUERY_EXECUTION_POSTGRES_NATIVE,
@@ -121,6 +122,22 @@ class QueryJobClassifierTests(TestCase):
             "pragma version",
         ):
             self.assertEqual(classify_query_execution(sql, []), QUERY_EXECUTION_DUCKDB_WRITE)
+
+    def test_isolated_artifact_write_accepts_copy_wrapped_query_ending_in_line_comment(self) -> None:
+        broken_single_line_suffix = (
+            "COPY (SELECT 1 AS value\n"
+            "--SELECT 2 AS value) TO '/tmp/stage.parquet' (FORMAT PARQUET)"
+        )
+        safe_multiline_suffix = (
+            "COPY (\n"
+            "SELECT 1 AS value\n"
+            "--SELECT 2 AS value\n"
+            ")\n"
+            "TO '/tmp/stage.parquet' (FORMAT PARQUET)"
+        )
+
+        self.assertFalse(_is_isolated_artifact_write_sql(broken_single_line_suffix))
+        self.assertTrue(_is_isolated_artifact_write_sql(safe_multiline_suffix))
 
     def test_classifies_native_postgres_sources(self) -> None:
         self.assertEqual(

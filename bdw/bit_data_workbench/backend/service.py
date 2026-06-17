@@ -82,6 +82,7 @@ from .materialized_stages import (
     MaterializedStageManager,
     MaterializedStageStore,
     StageRecord,
+    materialized_stage_copy_to_parquet_sql,
     materialized_stage_query_sql,
     normalize_stage_output_file_name,
     sql_stage_alias_references,
@@ -1786,7 +1787,7 @@ class WorkbenchService:
             Path(gettempdir()) / f"bdw-stage-<run>" / output_file_name
         ).as_posix()
         execution_sql = materialized_stage_query_sql(prepared.execution_sql)
-        copy_sql = f"COPY ({execution_sql}) TO {sql_literal(preview_temp_path)} (FORMAT PARQUET)"
+        copy_sql = materialized_stage_copy_to_parquet_sql(execution_sql, preview_temp_path)
         payload = replace(
             prepared,
             execution_sql=copy_sql,
