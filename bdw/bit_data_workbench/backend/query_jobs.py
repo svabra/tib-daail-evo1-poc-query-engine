@@ -29,7 +29,11 @@ from ..config import Settings
 from ..models import QueryJobDefinition, QueryJobMetricPoint, QueryResourceSample, QueryResult
 from .query_cache import hydrate_cache
 from .query_options import cache_hydration_enabled
-from .runtime_connections import create_duckdb_worker_connection, open_postgres_native_connection
+from .runtime_connections import (
+    create_duckdb_worker_connection,
+    effective_duckdb_max_temp_directory_size,
+    open_postgres_native_connection,
+)
 from .runtime_storage import (
     delete_query_spill_directory,
     directory_size,
@@ -537,6 +541,10 @@ def _is_isolated_artifact_write_sql(sql: str) -> bool:
         return False
     statement = statements[0] if statements else str(sql or "")
     if _first_keyword(statement) != "copy":
+        return False
+    stripped_statement = _strip_leading_comments(statement)
+    copy_body = stripped_statement[4:].lstrip() if stripped_statement[:4].lower() == "copy" else ""
+    if not copy_body.startswith("("):
         return False
     return any(token == "to" for token in _sql_code_tokens(statement))
 
@@ -1631,6 +1639,7 @@ class QueryJobManager:
             touched_relations=normalized_touched_relations,
             touched_buckets=normalized_touched_buckets,
             source_summaries=normalized_source_summaries,
+            execution_sql=normalized_execution_sql,
         )
         duckdb_execution_path = self._validated_duckdb_execution_path_override(
             requested_path=duckdb_execution_path_override,
@@ -1774,6 +1783,7 @@ class QueryJobManager:
             touched_relations=normalized_touched_relations,
             touched_buckets=normalized_touched_buckets,
             source_summaries=normalized_source_summaries,
+            execution_sql=normalized_execution_sql,
         )
         duckdb_execution_path = self._validated_duckdb_execution_path_override(
             requested_path=duckdb_execution_path_override,
@@ -2645,12 +2655,15 @@ class QueryJobManager:
         touched_relations: list[str] | None,
         touched_buckets: list[str] | None,
         source_summaries: list[dict[str, object]] | None,
+        execution_sql: str = "",
     ) -> str:
         del source_ids, touched_relations, touched_buckets, source_summaries
         if execution_mode == QUERY_EXECUTION_POSTGRES_NATIVE:
             return DUCKDB_EXECUTION_PATH_POSTGRES_NATIVE
         if execution_mode == QUERY_EXECUTION_DUCKDB_READ:
             return DUCKDB_EXECUTION_PATH_ISOLATED_READ
+        if _is_isolated_artifact_write_sql(execution_sql):
+            return DUCKDB_EXECUTION_PATH_ISOLATED_WRITE
         return DUCKDB_EXECUTION_PATH_SHARED_FILE_WRITE
 
     @staticmethod
@@ -2800,7 +2813,9 @@ class QueryJobManager:
         )
         total_spill_bytes = directory_size(spill_root_path)
         other_spill_bytes = max(0, total_spill_bytes - query_spill_bytes)
-        limit_bytes = parse_storage_size_bytes(self._settings.duckdb_max_temp_directory_size)
+        limit_bytes = parse_storage_size_bytes(
+            effective_duckdb_max_temp_directory_size(self._settings)
+        )
         try:
             disk_usage = shutil.disk_usage(spill_root_path if spill_root_path.exists() else spill_root_path.parent)
             disk_free_bytes = max(0, int(disk_usage.free))

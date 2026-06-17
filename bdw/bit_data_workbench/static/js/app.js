@@ -188,6 +188,7 @@ let queryJobsSummary = { runningCount: 0, totalCount: 0 };
 let queryPerformanceState = { recent: [], stats: {} };
 let queryJobsReconcileHandle = null;
 let queryJobsReconcileInFlight = false;
+let sidebarNotebookTreeLoadPromise = null;
 const queryJobsReconcileInitialDelayMs = 1500;
 const queryJobsReconcilePollMs = 4000;
 const collapsedQueryResultKeys = new Set();
@@ -904,6 +905,7 @@ const {
   localWorkspaceEntryNode,
   localWorkspaceFolderNode,
   localWorkspaceSchemaNode,
+  loadDeferredSidebarSourceTree,
   renderLocalWorkspaceSidebarEntries,
   revealSidebarS3Bucket,
   setDataSourceConnectionState,
@@ -1806,6 +1808,26 @@ function setShellSidebarHidden(hidden) {
   syncSidebarResizerAria();
 }
 
+function loadDeferredSidebarNotebookTree() {
+  const placeholder = document.querySelector("[data-deferred-notebook-tree]");
+  if (!placeholder) {
+    return Promise.resolve();
+  }
+  if (sidebarNotebookTreeLoadPromise) {
+    return sidebarNotebookTreeLoadPromise;
+  }
+
+  placeholder.classList.add("is-loading");
+  sidebarNotebookTreeLoadPromise = refreshSidebar("notebook")
+    .catch((error) => {
+      console.error("Failed to load deferred notebook tree.", error);
+    })
+    .finally(() => {
+      sidebarNotebookTreeLoadPromise = null;
+    });
+  return sidebarNotebookTreeLoadPromise;
+}
+
 function restoreSidebarVisibilityForWorkspace() {
   setShellSidebarHidden(false);
   applySidebarCollapsedState(readSidebarCollapsed());
@@ -1819,6 +1841,12 @@ function openNotebookNavigation(notebookId = "") {
   if (notebookId) {
     revealNotebookLink(notebookId);
   }
+  loadDeferredSidebarNotebookTree().finally(() => {
+    notebookSection()?.setAttribute("open", "");
+    if (notebookId) {
+      revealNotebookLink(notebookId);
+    }
+  });
 }
 
 function openLoaderNavigation(generatorId = "") {
@@ -4709,17 +4737,19 @@ function notebookMetadata(notebookId) {
       readOnlyMetadata.canDelete = false;
     }
 
-    updateStoredNotebookState(notebookId, () => ({
-      title: readOnlyMetadata.title,
-      summary: readOnlyMetadata.summary,
-      pipelineMode: readOnlyMetadata.pipelineMode,
-      pipelinePaths: readOnlyMetadata.pipelinePaths,
-      tags: readOnlyMetadata.tags,
-      cells: readOnlyMetadata.cells,
-      deleted: false,
-      versions: readOnlyMetadata.versions,
-      shared: defaults.shared,
-    }));
+    if (!defaults.payloadsDeferred) {
+      updateStoredNotebookState(notebookId, () => ({
+        title: readOnlyMetadata.title,
+        summary: readOnlyMetadata.summary,
+        pipelineMode: readOnlyMetadata.pipelineMode,
+        pipelinePaths: readOnlyMetadata.pipelinePaths,
+        tags: readOnlyMetadata.tags,
+        cells: readOnlyMetadata.cells,
+        deleted: false,
+        versions: readOnlyMetadata.versions,
+        shared: defaults.shared,
+      }));
+    }
 
     return readOnlyMetadata;
   }
@@ -6405,9 +6435,11 @@ function renderLocalNotebookWorkspace(notebookId, options = {}) {
   syncVisiblePythonCells();
   querySourceValidationController.refreshAll(panel);
   refreshVisibleCacheHydrationStatuses(panel);
-  notebookStagePipelineController.initializeCurrentWorkspace().catch((error) => {
-    console.error("Failed to initialize notebook pipeline.", error);
-  });
+  if (metadata.pipelineMode === "pipeline") {
+    notebookStagePipelineController.initializeCurrentWorkspace().catch((error) => {
+      console.error("Failed to initialize notebook pipeline.", error);
+    });
+  }
   renderQueryNotificationMenu();
   if (scrollToTop) {
     scrollWorkspaceNotebookIntoView();
@@ -8493,6 +8525,23 @@ function renderLocalQueryFailure(cellRoot, { cellId, notebookId, workspaceRoot, 
   });
 }
 
+function renderLocalQueryProgress(cellRoot, { cellId, notebookId, workspaceRoot, snapshot }) {
+  const resultRoot = cellRoot?.querySelector?.("[data-cell-result]");
+  if (!resultRoot || !snapshot) {
+    return;
+  }
+  resultRoot.outerHTML = queryResultPanelMarkup(cellId, {
+    ...snapshot,
+    notebookId,
+    notebookTitle: currentWorkspaceNotebookTitle(workspaceRoot),
+    cellId,
+    columns: [],
+    rows: [],
+    rowsShown: 0,
+    truncated: false,
+  });
+}
+
 function localQueryJobId() {
   return `query-client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -8529,6 +8578,29 @@ function applyLocalQueryJobSnapshot(snapshot, { removeJobIds = [] } = {}) {
   };
   applyQueryJobsState(nextSnapshot);
   queryRunsController.refreshForQueryJobsSnapshot(nextSnapshot);
+  return normalizedSnapshot;
+}
+
+function trackLocalQueryJobSnapshot(snapshot, { removeJobIds = [] } = {}) {
+  const normalizedSnapshot = normalizeQueryJobForDisplay(snapshot);
+  if (!normalizedSnapshot?.jobId) {
+    return null;
+  }
+
+  const removeIds = new Set(removeJobIds.map((jobId) => String(jobId || "").trim()).filter(Boolean));
+  const currentState = currentQueryState();
+  const nextJobs = [
+    normalizedSnapshot,
+    ...(currentState.snapshot ?? []).filter(
+      (job) => job.jobId !== normalizedSnapshot.jobId && !removeIds.has(job.jobId)
+    ),
+  ];
+
+  queryJobsStateVersion = currentState.version;
+  queryJobsSnapshot = nextJobs;
+  queryJobsSummary = queryMonitorSummaryForJobs(nextJobs);
+  queryPerformanceState = currentState.performance ?? { recent: [], stats: {} };
+  syncQueryJobsReconciliation();
   return normalizedSnapshot;
 }
 
@@ -8655,7 +8727,7 @@ async function startQueryJobForForm(form) {
   queryClientTimingStarts.set(clientJobId, {
     startedPerf: clientRunStartedPerf,
   });
-  applyLocalQueryJobSnapshot(clientSnapshot);
+  renderLocalQueryProgress(cellRoot, { cellId, notebookId, workspaceRoot, snapshot: clientSnapshot });
 
   let preparedSubmission = null;
   try {
@@ -8664,7 +8736,7 @@ async function startQueryJobForForm(form) {
       message: "Rewriting virtual source paths and Local Workspace references for DuckDB.",
       progress: 0.08,
     });
-    applyLocalQueryJobSnapshot(clientSnapshot);
+    renderLocalQueryProgress(cellRoot, { cellId, notebookId, workspaceRoot, snapshot: clientSnapshot });
     preparedSubmission = await prepareSqlSubmissionForCell(cellRoot, originalSql);
   } catch (error) {
     const errorMessage =
@@ -8709,7 +8781,7 @@ async function startQueryJobForForm(form) {
     message: "Sending the query job request to the backend. Backend/SSE updates will replace this local monitor row.",
     progress: 0.16,
   });
-  applyLocalQueryJobSnapshot(clientSnapshot);
+  renderLocalQueryProgress(cellRoot, { cellId, notebookId, workspaceRoot, snapshot: clientSnapshot });
 
   let response = null;
   try {
@@ -8793,7 +8865,8 @@ async function startQueryJobForForm(form) {
     }
   }
   recordNotebookActivity(notebookId, "run");
-  applyLocalQueryJobSnapshot(displaySnapshot, { removeJobIds: [clientJobId] });
+  trackLocalQueryJobSnapshot(displaySnapshot, { removeJobIds: [clientJobId] });
+  renderLocalQueryProgress(cellRoot, { cellId, notebookId, workspaceRoot, snapshot: displaySnapshot });
 }
 
 async function startQueryExplainForForm(form) {
@@ -10675,9 +10748,11 @@ async function loadNotebookWorkspace(notebookId, options = {}) {
   syncVisiblePythonCells();
   querySourceValidationController.refreshAll(panel);
   refreshVisibleCacheHydrationStatuses(panel);
-  notebookStagePipelineController.initializeCurrentWorkspace().catch((error) => {
-    console.error("Failed to initialize notebook pipeline.", error);
-  });
+  if (panel.querySelector('[data-notebook-meta][data-default-pipeline-mode="pipeline"]')) {
+    notebookStagePipelineController.initializeCurrentWorkspace().catch((error) => {
+      console.error("Failed to initialize notebook pipeline.", error);
+    });
+  }
   renderQueryNotificationMenu();
   if (scrollToTop) {
     scrollWorkspaceNotebookIntoView();
@@ -11527,6 +11602,18 @@ document.body.addEventListener(
   "toggle",
   (event) => {
     handleNotebookTreeToggle(event);
+    const notebookRoot = event.target?.closest?.("[data-notebook-section]");
+    if (notebookRoot === event.target && notebookRoot.open) {
+      loadDeferredSidebarNotebookTree().catch((error) => {
+        console.error("Failed to load deferred notebook tree.", error);
+      });
+    }
+    const dataSourcesRoot = event.target?.closest?.("[data-data-sources-section]");
+    if (dataSourcesRoot === event.target && dataSourcesRoot.open) {
+      loadDeferredSidebarSourceTree().catch((error) => {
+        console.error("Failed to load deferred source tree.", error);
+      });
+    }
   },
   true
 );
@@ -11804,9 +11891,22 @@ Promise.allSettled(initialLoadTasks)
   .finally(() => {
     ensureRealtimeEventsEventSource();
     const initialSidebarMode = initialWorkspaceMode === "loader" ? "loader" : "notebook";
-    const sidebarRefreshTask = refreshSidebar(initialSidebarMode).catch((error) => {
-      console.error("Failed to refresh the sidebar during startup.", error);
-    });
+    const shouldRefreshSidebarDuringStartup = !(
+      homePageRoot() ||
+      dataProductsPageRoot() ||
+      dataExchangePageRoot() ||
+      serviceConsumptionPageRoot() ||
+      queryRunsPageRoot() ||
+      queryWorkbenchEntryPageRoot() ||
+      queryWorkbenchDataSourcesPageRoot() ||
+      dataSourceExplorerPageRoot() ||
+      currentWorkspaceMode() === "ingestion"
+    );
+    const sidebarRefreshTask = shouldRefreshSidebarDuringStartup
+      ? refreshSidebar(initialSidebarMode).catch((error) => {
+          console.error("Failed to refresh the sidebar during startup.", error);
+        })
+      : Promise.resolve();
 
     if (initialWorkspaceMode === "loader") {
       renderIngestionWorkbench();

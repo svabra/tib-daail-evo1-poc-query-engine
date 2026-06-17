@@ -13,6 +13,15 @@ export function createQueryUi(helpers) {
   } = helpers;
 
   const bytesPerMegabyte = 1024 * 1024;
+  const queryMonitorSqlPreviewMaxChars = 480;
+
+  function queryMonitorSqlPreview(sql) {
+    const text = String(sql || "").replace(/\s+/g, " ").trim();
+    if (text.length <= queryMonitorSqlPreviewMaxChars) {
+      return text;
+    }
+    return `${text.slice(0, queryMonitorSqlPreviewMaxChars - 24).trimEnd()} ... [SQL truncated]`;
+  }
 
   function emptyQueryResultsMarkup(cellId) {
     return `
@@ -1517,7 +1526,7 @@ export function createQueryUi(helpers) {
           ${queryMonitorWarningsMarkup(job)}
           ${queryMonitorErrorMarkup(job)}
           ${queryMonitorProgressEventsMarkup(job)}
-          <p class="query-monitor-sql">${escapeHtml(job.sql)}</p>
+          <p class="query-monitor-sql">${escapeHtml(queryMonitorSqlPreview(job.sql))}</p>
         </div>
         <div class="query-monitor-item-actions">
           ${running && canCancel

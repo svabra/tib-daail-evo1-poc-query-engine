@@ -2419,6 +2419,21 @@ details:not([open]) > .tree-children {
   gap: 8px;
 }
 
+.source-tree-deferred,
+.notebook-tree-deferred {
+  color: var(--muted);
+  font-size: 0.77rem;
+  padding: 8px 10px 10px 28px;
+}
+
+.source-tree-deferred.is-loading span::after,
+.notebook-tree-deferred.is-loading span::after {
+  content: "";
+  display: inline-block;
+  width: 0.8em;
+  animation: sidebar-loading-ellipsis 1.1s steps(4, end) infinite;
+}
+
 .source-catalog,
 .source-schema {
   border-radius: var(--radius-sm);
@@ -6479,7 +6494,6 @@ details:not([open]) > .tree-children {
   gap: 8px;
 }
 
-.cell-actions .run-button,
 .cell-actions .explain-button {
   opacity: 0;
   visibility: hidden;
@@ -6489,13 +6503,9 @@ details:not([open]) > .tree-children {
     visibility 0.16s ease;
 }
 
-.workspace-cell:hover .cell-actions .run-button,
 .workspace-cell:hover .cell-actions .explain-button,
-.workspace-cell.is-active .cell-actions .run-button,
 .workspace-cell.is-active .cell-actions .explain-button,
-.workspace-cell:focus-within .cell-actions .run-button,
 .workspace-cell:focus-within .cell-actions .explain-button,
-.workspace-cell.is-query-running .cell-actions .run-button,
 .workspace-cell.is-query-running .cell-actions .query-cancel-button {
   opacity: 1;
   visibility: visible;
@@ -10693,6 +10703,22 @@ details:not([open]) > .tree-children {
 @keyframes sidebar-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+@keyframes sidebar-loading-ellipsis {
+  0% {
+    content: "";
+  }
+  25% {
+    content: ".";
+  }
+  50% {
+    content: "..";
+  }
+  75%,
+  100% {
+    content: "...";
   }
 }
 

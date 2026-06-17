@@ -468,13 +468,19 @@ def shell_context(
     shared_notebooks: list | None = None,
 ) -> dict[str, object]:
     catalogs = service.catalogs()
+    defer_sidebar_source_tree = workspace_mode == "notebook"
+    defer_sidebar_notebook_tree = workspace_mode == "notebook" and shell_sidebar_hidden
     source_options = service.source_options()
     notebooks = service.notebooks()
     return {
         "title": brand_title_for_mode(workspace_mode),
         "runtime": service.runtime_info(),
         "catalogs": catalogs,
-        "source_tree_s3_hierarchy": build_source_tree_s3_hierarchy(catalogs),
+        "source_tree_s3_hierarchy": {}
+        if defer_sidebar_source_tree
+        else build_source_tree_s3_hierarchy(catalogs),
+        "defer_sidebar_source_tree": defer_sidebar_source_tree,
+        "defer_sidebar_notebook_tree": defer_sidebar_notebook_tree,
         "notebooks": notebooks,
         "notebook_tree": service.notebook_tree(),
         "source_options": source_options,
@@ -749,10 +755,14 @@ def sidebar_partial(
     request: Request,
     active_notebook_id: str | None = Query(default=None),
     mode: str = Query(default="notebook"),
+    source_tree: str = Query(default="deferred"),
+    notebook_tree: str = Query(default="full"),
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> HTMLResponse:
     workspace_mode = "loader" if mode == "loader" else "notebook"
     catalogs = service.catalogs()
+    defer_sidebar_source_tree = workspace_mode == "notebook" and source_tree != "full"
+    defer_sidebar_notebook_tree = workspace_mode == "notebook" and notebook_tree != "full"
     return templates.TemplateResponse(
         request=request,
         name="partials/sidebar.html",
@@ -760,7 +770,11 @@ def sidebar_partial(
             "sidebar_oob": False,
             "runtime": service.runtime_info(),
             "catalogs": catalogs,
-            "source_tree_s3_hierarchy": build_source_tree_s3_hierarchy(catalogs),
+            "source_tree_s3_hierarchy": {}
+            if defer_sidebar_source_tree
+            else build_source_tree_s3_hierarchy(catalogs),
+            "defer_sidebar_source_tree": defer_sidebar_source_tree,
+            "defer_sidebar_notebook_tree": defer_sidebar_notebook_tree,
             "notebooks": service.notebooks(),
             "notebook_tree": service.notebook_tree(),
             "active_notebook_id": active_notebook_id,

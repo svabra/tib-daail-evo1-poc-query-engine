@@ -1,9 +1,37 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.24. Keep entries concise and
+# Derived from git history through version 0.10.25. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.25",
+        "releasedAt": "2026-06-17T16:12:09+02:00",
+        "features": [
+            (
+                "Kostenbelege 3.1 now includes the optimized Parquet dataset "
+                "notebook that materializes FACT_Buchungsbelegposition to an "
+                "S3 dataset folder and queries that optimized output."
+            ),
+            (
+                "DuckDB SQL translation now collapses SELECT * UNION ALL "
+                "chains over S3 Parquet files into read_parquet([...], "
+                "union_by_name = true), preserving mixed schemas without "
+                "the notebook author needing DuckDB-specific syntax."
+            ),
+            (
+                "COPY ... TO artifact writes now run as isolated in-memory "
+                "DuckDB jobs, while shared catalog mutations remain on the "
+                "serialized shared-write path."
+            ),
+            (
+                "Regression coverage now includes optimized Kostenbelege "
+                "notebook translation, mock Parquet generation, effective "
+                "DuckDB spill quota handling, and source-tree loading that "
+                "avoids unnecessary startup weight."
+            ),
+        ],
+    },
     {
         "version": "0.10.24",
         "releasedAt": "2026-06-17T11:01:22+02:00",

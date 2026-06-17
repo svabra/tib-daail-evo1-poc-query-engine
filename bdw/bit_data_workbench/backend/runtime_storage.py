@@ -12,6 +12,7 @@ from .query_cache import (
     list_query_cache_datasets,
     query_cache_root,
 )
+from .runtime_connections import effective_duckdb_max_temp_directory_size
 
 
 RUNTIME_SPILL_WARNING = (
@@ -245,6 +246,7 @@ def runtime_storage_usage_metrics(settings: Settings) -> dict[str, Any]:
     cache_root = query_cache_root(settings)
     spill_dir = getattr(settings, "duckdb_temp_directory", None)
     spill_path = Path(spill_dir) if spill_dir is not None else None
+    max_temp_directory_size = effective_duckdb_max_temp_directory_size(settings)
     storage_root = _storage_root(settings, cache_root, spill_path)
     spill_total_bytes = directory_size(spill_path) if spill_path is not None else 0
     spill_active_bytes = active_query_spill_size(spill_path)
@@ -265,9 +267,9 @@ def runtime_storage_usage_metrics(settings: Settings) -> dict[str, Any]:
             "otherBytes": spill_other_bytes,
             "sizeBytes": spill_total_bytes,
             "sizeMb": _format_mb(spill_total_bytes),
-            "maxTempDirectorySize": settings.duckdb_max_temp_directory_size or "",
+            "maxTempDirectorySize": max_temp_directory_size,
             "maxTempDirectorySizeBytes": parse_storage_size_bytes(
-                settings.duckdb_max_temp_directory_size
+                max_temp_directory_size
             ),
         },
     }
@@ -280,8 +282,9 @@ def runtime_storage_snapshot(settings: Settings) -> dict[str, Any]:
     storage_root = _storage_root(settings, cache_root, spill_path)
     datasets = list_query_cache_datasets(settings=settings)
     cache_size_bytes = directory_size(cache_root)
+    max_temp_directory_size = effective_duckdb_max_temp_directory_size(settings)
     max_temp_directory_size_bytes = parse_storage_size_bytes(
-        settings.duckdb_max_temp_directory_size
+        max_temp_directory_size
     )
     spill_payload = (
         {
@@ -318,7 +321,7 @@ def runtime_storage_snapshot(settings: Settings) -> dict[str, Any]:
             "memoryLimit": settings.duckdb_memory_limit or "",
             "threads": settings.duckdb_threads,
             "tempDirectory": spill_path.as_posix() if spill_path is not None else "",
-            "maxTempDirectorySize": settings.duckdb_max_temp_directory_size or "",
+            "maxTempDirectorySize": max_temp_directory_size,
             "maxTempDirectorySizeBytes": max_temp_directory_size_bytes,
             "preserveInsertionOrder": settings.duckdb_preserve_insertion_order,
         },

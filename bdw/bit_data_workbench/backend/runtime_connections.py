@@ -14,6 +14,7 @@ from .sql_utils import sql_identifier, sql_literal
 logger = logging.getLogger(__name__)
 DUCKDB_LOCK_RETRY_ATTEMPTS = 20
 DUCKDB_LOCK_RETRY_DELAY_SECONDS = 0.5
+DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE = "100GiB"
 
 
 def normalize_port(value: str, variable_name: str) -> str:
@@ -27,6 +28,27 @@ def normalize_postgres_host(value: str | None) -> str | None:
     if normalized in {"localhost", "::1"}:
         return "127.0.0.1"
     return value
+
+
+def effective_duckdb_max_temp_directory_size(
+    settings: Settings,
+    *,
+    temp_directory_override: Path | str | None = None,
+) -> str:
+    configured_limit = str(
+        getattr(settings, "duckdb_max_temp_directory_size", "") or ""
+    ).strip()
+    if configured_limit:
+        return configured_limit
+
+    temp_directory = (
+        temp_directory_override
+        if temp_directory_override is not None
+        else getattr(settings, "duckdb_temp_directory", None)
+    )
+    if temp_directory is None:
+        return ""
+    return DEFAULT_DUCKDB_MAX_TEMP_DIRECTORY_SIZE
 
 
 def apply_duckdb_runtime_settings(
@@ -65,9 +87,10 @@ def apply_duckdb_runtime_settings(
         connection.execute(f"SET temp_directory = {sql_literal(temp_path.as_posix())}")
         applied["tempDirectory"] = temp_path.as_posix()
 
-    max_temp_directory_size = str(
-        getattr(settings, "duckdb_max_temp_directory_size", "") or ""
-    ).strip()
+    max_temp_directory_size = effective_duckdb_max_temp_directory_size(
+        settings,
+        temp_directory_override=temp_directory,
+    )
     if max_temp_directory_size:
         connection.execute(
             f"SET max_temp_directory_size = {sql_literal(max_temp_directory_size)}"

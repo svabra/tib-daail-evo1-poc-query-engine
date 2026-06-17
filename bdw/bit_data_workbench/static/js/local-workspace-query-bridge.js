@@ -184,10 +184,19 @@ export function createLocalWorkspaceQueryBridge(helpers) {
   async function prepareQuerySql(sqlText = "") {
     let rewrittenSql = String(sqlText || "");
     const synchronizedSources = [];
-    const aliasIndex = await localWorkspaceAliasIndex();
     const localAliasMap = new Map();
+    const logicalAliases = localWorkspaceAliasesInText(rewrittenSql);
+    const logicalRelations = localWorkspaceRelationsInText(rewrittenSql);
 
-    for (const logicalAlias of localWorkspaceAliasesInText(rewrittenSql)) {
+    if (!logicalAliases.length && !logicalRelations.length) {
+      return {
+        sql: rewrittenSql,
+        synchronizedSources,
+      };
+    }
+
+    const aliasIndex = logicalAliases.length ? await localWorkspaceAliasIndex() : new Map();
+    for (const logicalAlias of logicalAliases) {
       const entry = aliasIndex.get(logicalAlias.toLowerCase());
       if (!entry) {
         throw new Error(`The Local Workspace source was not found: ${logicalAlias}.`);

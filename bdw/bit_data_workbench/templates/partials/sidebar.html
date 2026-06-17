@@ -147,9 +147,20 @@
             <span class="section-count">{{ notebooks | length }}</span>
           </div>
         </summary>
-        {% set notebook_browser_live = true %}
-        {% set notebook_browser_manage = true %}
-        {% include "partials/notebook_browser_tree.html" %}
+        {% if defer_sidebar_notebook_tree | default(false) %}
+          <div
+            class="notebook-tree-deferred"
+            data-deferred-notebook-tree
+            role="status"
+          >
+            <span>Open navigation to load notebooks.</span>
+          </div>
+        {% else %}
+          {% set notebook_browser_live = true %}
+          {% set notebook_browser_manage = true %}
+          {% set notebook_browser_payloads = false %}
+          {% include "partials/notebook_browser_tree.html" %}
+        {% endif %}
       </details>
     {% endif %}
 
@@ -197,7 +208,18 @@
       {% set source_tree_scope = 'sidebar' %}
       {% set source_tree_force_source_option_id = '' %}
       {% set source_tree_open_catalogs = false %}
-      {% include "partials/source_tree.html" %}
+      {% if defer_sidebar_source_tree | default(false) %}
+        <div
+          class="source-tree-deferred"
+          data-deferred-source-tree
+          data-source-tree-scope="sidebar"
+          role="status"
+        >
+          <span>Open Data Sources to load source objects.</span>
+        </div>
+      {% else %}
+        {% include "partials/source_tree.html" %}
+      {% endif %}
     </details>
   </div>
 

@@ -139,6 +139,58 @@ class QueryJobClassifierTests(TestCase):
         self.assertFalse(_is_isolated_artifact_write_sql(broken_single_line_suffix))
         self.assertTrue(_is_isolated_artifact_write_sql(safe_multiline_suffix))
 
+    def test_isolated_artifact_write_only_accepts_copy_query_to_artifacts(self) -> None:
+        self.assertTrue(
+            _is_isolated_artifact_write_sql(
+                "COPY (SELECT 1 AS value) TO '/tmp/out.parquet' (FORMAT PARQUET)"
+            )
+        )
+        self.assertFalse(
+            _is_isolated_artifact_write_sql(
+                "COPY source_table TO '/tmp/out.parquet' (FORMAT PARQUET)"
+            )
+        )
+        self.assertFalse(
+            _is_isolated_artifact_write_sql("COPY source_table FROM '/tmp/in.csv'")
+        )
+        self.assertFalse(
+            _is_isolated_artifact_write_sql(
+                "CREATE TABLE source_table AS SELECT 1 AS value"
+            )
+        )
+
+    def test_duckdb_write_execution_path_isolates_only_copy_query_artifacts(self) -> None:
+        isolated_path = QueryJobManager._duckdb_execution_path(
+            execution_mode=QUERY_EXECUTION_DUCKDB_WRITE,
+            source_ids=[],
+            touched_relations=[],
+            touched_buckets=[],
+            source_summaries=[],
+            execution_sql=(
+                "COPY (SELECT 1 AS value) TO '/tmp/out.parquet' (FORMAT PARQUET)"
+            ),
+        )
+        shared_copy_path = QueryJobManager._duckdb_execution_path(
+            execution_mode=QUERY_EXECUTION_DUCKDB_WRITE,
+            source_ids=[],
+            touched_relations=[],
+            touched_buckets=[],
+            source_summaries=[],
+            execution_sql="COPY source_table TO '/tmp/out.parquet' (FORMAT PARQUET)",
+        )
+        shared_catalog_path = QueryJobManager._duckdb_execution_path(
+            execution_mode=QUERY_EXECUTION_DUCKDB_WRITE,
+            source_ids=[],
+            touched_relations=[],
+            touched_buckets=[],
+            source_summaries=[],
+            execution_sql="CREATE TABLE source_table AS SELECT 1 AS value",
+        )
+
+        self.assertEqual(isolated_path, DUCKDB_EXECUTION_PATH_ISOLATED_WRITE)
+        self.assertEqual(shared_copy_path, DUCKDB_EXECUTION_PATH_SHARED_FILE_WRITE)
+        self.assertEqual(shared_catalog_path, DUCKDB_EXECUTION_PATH_SHARED_FILE_WRITE)
+
     def test_classifies_native_postgres_sources(self) -> None:
         self.assertEqual(
             classify_query_execution("select 1", ["pg_oltp_native"]),
@@ -792,6 +844,51 @@ class ProcessQueryJobManagerTests(TestCase):
         self.assertEqual(sampled.duckdb_spill_limit_bytes, 96 * 1024**3)
         self.assertEqual(sampled.duckdb_spill_peak_bytes, 11)
         self.assertEqual(sampled.resource_samples[-1].duckdb_spill_bytes, 11)
+
+    def test_process_metrics_samples_effective_default_duckdb_spill_limit(self) -> None:
+        class FakeProcessMetrics:
+            def cpu_percent(self, interval=None) -> float:
+                return 10.0
+
+            def memory_info(self):
+                return SimpleNamespace(rss=1000)
+
+            def children(self, recursive=True):
+                return []
+
+        spill_root = self.root / "duckdb-spill-default"
+        query_spill = spill_root / "query-default-spill-test"
+        query_spill.mkdir(parents=True)
+        (query_spill / "block.tmp").write_bytes(b"a" * 11)
+        self.settings.duckdb_temp_directory = spill_root
+        self.settings.duckdb_max_temp_directory_size = ""
+        snapshot = QueryJobDefinition(
+            job_id="query-default-spill-test",
+            notebook_id="nb",
+            notebook_title="Notebook",
+            cell_id="cell-1",
+            sql="select 1",
+            status="running",
+            started_at="2026-05-13T00:00:00+00:00",
+            updated_at="2026-05-13T00:00:00+00:00",
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+        )
+        record = QueryJobRecord(
+            snapshot=snapshot,
+            sort_index=1,
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+            execution_sql="select 1",
+            process_metrics=FakeProcessMetrics(),
+            spill_temp_directory=query_spill,
+        )
+        with self.manager._condition:
+            self.manager._jobs[snapshot.job_id] = record
+
+        self.manager._sample_process_metrics(snapshot.job_id, force=True)
+
+        sampled = self.manager.snapshot(snapshot.job_id)
+        self.assertEqual(sampled.duckdb_spill_limit_bytes, 100 * 1024**3)
+        self.assertEqual(sampled.resource_samples[-1].duckdb_spill_limit_bytes, 100 * 1024**3)
 
     def test_process_metrics_include_capacity_normalized_cpu(self) -> None:
         class FakeProcessMetrics:

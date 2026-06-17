@@ -114,6 +114,7 @@ class SidebarLabelTests(unittest.TestCase):
             request=build_request("/sidebar"),
             active_notebook_id=None,
             mode="notebook",
+            source_tree="full",
             service=FakeWorkbenchService(),
         )
 

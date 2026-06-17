@@ -26,6 +26,30 @@ KOSTENBELEGE_3_1_PROBLEM_TREE_PATH = (
     "Performance Evaluation",
     "Kostenbelege (3.1)",
 )
+KOSTENBELEGE_3_1_OPTIMIZED_DATASET_BUCKET = (
+    "poc-tests-performance-evaluation-kostenbelege-3-1"
+)
+KOSTENBELEGE_3_1_OPTIMIZED_DATASET_PREFIX = (
+    "optimized/3_1/fact_buchungsbelegposition"
+)
+KOSTENBELEGE_3_1_OPTIMIZED_DATASET_TARGET = (
+    f"s3://{KOSTENBELEGE_3_1_OPTIMIZED_DATASET_BUCKET}/"
+    f"{KOSTENBELEGE_3_1_OPTIMIZED_DATASET_PREFIX}/"
+)
+KOSTENBELEGE_3_1_OPTIMIZED_DATASET_RELATION = (
+    f's3."{KOSTENBELEGE_3_1_OPTIMIZED_DATASET_BUCKET}".'
+    f'"{KOSTENBELEGE_3_1_OPTIMIZED_DATASET_PREFIX}/*.parquet"'
+)
+KOSTENBELEGE_3_1_FULL_KBPO_RELATIONS = (
+    "s3.kbpoimports.kbpo_2018undvorher.parquet",
+    "s3.kbpoimports.kbpo_2019.parquet",
+    "s3.kbpoimports.kbpo2020.parquet",
+    "s3.kbpoimports.kbpo2021.parquet",
+    "s3.kbpoimports.kbpo2022.parquet",
+    "s3.kbpoimports.kbpo2023.parquet",
+    "s3.kbpoimports.kbpo2024.parquet",
+    "s3.kbpoimports.kbpo2025.parquet",
+)
 
 
 def _s3_data_sources(*relations: str | None) -> list[str]:
@@ -1411,6 +1435,72 @@ CROSS JOIN (VALUES
     (CAST('Originalposition' AS VARCHAR(20)), 1),
     (CAST('Ausgleichsposition' AS VARCHAR(20)), -1)
 ) AS Positions(PositionsArt, AmountSign);
+""".strip()
+
+
+def _build_kostenbelege_3_1_full_kbpo_union_sql() -> str:
+    return "\n    UNION ALL\n    ".join(
+        f"SELECT * FROM {relation}"
+        for relation in KOSTENBELEGE_3_1_FULL_KBPO_RELATIONS
+    )
+
+
+def _build_kostenbelege_3_1_optimized_dataset_copy_sql() -> str:
+    base_sql = _build_kostenbelege_3_1_sql(
+        kbkp_relation="s3.core.kbkpfull.parquet",
+        kbpo_relation="kbpofull",
+        kbhp_relation="s3.core.kbhpfull.parquet",
+        kalender_relation="current_kalender",
+        quote_source_columns=False,
+    ).rstrip(";")
+    base_sql = base_sql.replace(
+        "WITH UNIO AS",
+        (
+            "WITH kbpofull AS (\n"
+            f"    {_build_kostenbelege_3_1_full_kbpo_union_sql()}\n"
+            "),\n"
+            "current_kalender AS (\n"
+            "    SELECT Datum\n"
+            "    FROM s3.n_3_1_imports.dim_kalender.parquet\n"
+            "    WHERE Datum = CURRENT_DATE\n"
+            "),\n"
+            "UNIO AS"
+        ),
+        1,
+    )
+    base_sql = base_sql.replace(
+        "KBKP.KBKP_Belegnummer = KBPO.KBKP_AusgleichBelegnummer",
+        "KBKP.KBKP_Belegnummer = KBPO.KBKP_Belegnummer",
+        1,
+    )
+    return f"""
+-- Materialize the full Kostenbelege 3.1 FACT_Buchungsbelegposition snapshot.
+-- The kbpofull CTE intentionally uses ANSI-style UNION ALL over virtual S3
+-- dot-notation; the DuckDB SQL translation collapses it to
+-- read_parquet([...], union_by_name = true).
+COPY (
+{base_sql}
+)
+TO '{KOSTENBELEGE_3_1_OPTIMIZED_DATASET_TARGET}'
+(
+    FORMAT parquet,
+    COMPRESSION zstd,
+    ROW_GROUP_SIZE 250000,
+    PER_THREAD_OUTPUT true,
+    FILE_SIZE_BYTES '450MB'
+);
+""".strip()
+
+
+def _build_kostenbelege_3_1_optimized_dataset_query_sql() -> str:
+    return f"""
+-- Query the optimized Parquet dataset written by Cell 1.
+SELECT
+      COUNT(*)                AS cnt
+    , SUM(BetragHauswaehrung) AS total
+FROM {KOSTENBELEGE_3_1_OPTIMIZED_DATASET_RELATION}
+WHERE Buchungsdatum >= DATE '2023-01-01'
+  AND Buchungsdatum <  DATE '2024-01-01';
 """.strip()
 
 
@@ -2909,6 +2999,7 @@ def build_static_notebooks(
     contest_s3_sources = _s3_data_sources(contest_s3_relation)
     multi_table_s3_sources = _s3_data_sources(*multi_table_s3_relations.values())
     kostenbelege_3_1_s3_sources = _s3_data_sources(*kostenbelege_3_1_s3_relations.values())
+    kostenbelege_3_1_optimized_dataset_sources = ["s3"]
     mwa_s3_parquet_sources = _s3_data_sources(*mwa_s3_parquet_relations.values())
     mwa_s3_parquet_abrechnung_sources = _s3_data_sources(
         mwa_s3_parquet_relations.get("mwa_abrechnung_entities")
@@ -3376,6 +3467,46 @@ def build_static_notebooks(
             tags=["performance", "kostenbelege", "3.1", "s3", "parquet", "optimized"],
             tree_path=("PoC Tests", "Performance Evaluation", "Kostenbelege (3.1)"),
             linked_generator_id="kostenbelege_3_1_multi_source_loader",
+            can_edit=False,
+            can_delete=False,
+        ),
+        NotebookDefinition(
+            notebook_id="kostenbelege-3-1-optimized-parquet-dataset",
+            title="3.1 Optimized",
+            summary=(
+                "Materializes the Kostenbelege 3.1 FACT_Buchungsbelegposition "
+                "snapshot as an optimized Parquet dataset folder and queries the "
+                "resulting S3 dataset."
+            ),
+            cells=[
+                NotebookCellDefinition(
+                    cell_id="kostenbelege-3-1-optimized-parquet-dataset-cell-1",
+                    data_sources=kostenbelege_3_1_optimized_dataset_sources,
+                    query_options={
+                        "duckdb": {"parquetHivePartitioning": "auto"},
+                        "validation": {"sourceExistence": "off"},
+                    },
+                    sql=_build_kostenbelege_3_1_optimized_dataset_copy_sql(),
+                ),
+                NotebookCellDefinition(
+                    cell_id="kostenbelege-3-1-optimized-parquet-dataset-cell-2",
+                    data_sources=kostenbelege_3_1_optimized_dataset_sources,
+                    query_options={
+                        "duckdb": {"parquetHivePartitioning": "auto"},
+                        "validation": {"sourceExistence": "off"},
+                    },
+                    sql=_build_kostenbelege_3_1_optimized_dataset_query_sql(),
+                ),
+            ],
+            tags=[
+                "performance",
+                "parquet",
+                "kostenbelege",
+                "3.1",
+                "optimized",
+                "dataset",
+            ],
+            tree_path=("PoC Tests", "Parquet Optimization"),
             can_edit=False,
             can_delete=False,
         ),

@@ -115,8 +115,8 @@ class FakeWorkbenchService:
                         "totalBytes": 12 * 1024**3,
                         "activeQueryBytes": 8 * 1024**3,
                         "otherBytes": 4 * 1024**3,
-                        "maxTempDirectorySize": "96GiB",
-                        "maxTempDirectorySizeBytes": 96 * 1024**3,
+                        "maxTempDirectorySize": "100GiB",
+                        "maxTempDirectorySizeBytes": 100 * 1024**3,
                     },
                 },
                 "status": {
@@ -161,7 +161,7 @@ class FakeWorkbenchService:
                 "queryCacheBytes": [5 * 1024**3],
                 "storageRootFreeBytes": [70 * 1024**3],
                 "storageRootUsedBytes": [30 * 1024**3],
-                "spillQuotaBytes": [96 * 1024**3],
+                "spillQuotaBytes": [100 * 1024**3],
             },
             "financial": {
                 "currency": "CHF",
@@ -439,7 +439,7 @@ class ServiceConsumptionRouteTests(unittest.TestCase):
         self.assertEqual(payload["s3History"]["values"], [4_096])
         self.assertEqual(payload["persistentVolumeHistory"]["values"], [1_024])
         self.assertEqual(payload["runtimeStorageHistory"]["duckdbSpillActiveBytes"], [8 * 1024**3])
-        self.assertEqual(payload["runtimeStorageHistory"]["spillQuotaBytes"], [96 * 1024**3])
+        self.assertEqual(payload["runtimeStorageHistory"]["spillQuotaBytes"], [100 * 1024**3])
         self.assertEqual(payload["latest"]["runtimeStorage"]["duckdbSpill"]["totalBytes"], 12 * 1024**3)
         self.assertTrue(payload["status"]["runtimeStorageMetricsAvailable"])
         self.assertEqual(payload["financial"]["currency"], "CHF")

@@ -63,6 +63,14 @@ export function createNotebookStagePipelineController(helpers) {
     return /(^|[^A-Za-z0-9_$])stage\.([A-Za-z_][A-Za-z0-9_$]*)/gi;
   }
 
+  function shouldRefreshSidebarForMaterializedOutputs() {
+    const dataSourcesSection = document.querySelector("[data-data-sources-section]");
+    if (!dataSourcesSection?.open) {
+      return false;
+    }
+    return !document.querySelector("[data-deferred-source-tree]");
+  }
+
   function stageAlias(value, fallback) {
     const normalized = String(value || fallback || "stage")
       .trim()
@@ -2634,10 +2642,13 @@ export function createNotebookStagePipelineController(helpers) {
       .sort()
       .join("|");
     if (completedOutputs && completedOutputs !== materializedOutputSignature) {
+      const hadPreviousSignature = Boolean(materializedOutputSignature);
       materializedOutputSignature = completedOutputs;
-      refreshSidebar("notebook").catch((error) => {
-        console.error("Failed to refresh data sources after materialized stage output.", error);
-      });
+      if (hadPreviousSignature && shouldRefreshSidebarForMaterializedOutputs()) {
+        refreshSidebar("notebook").catch((error) => {
+          console.error("Failed to refresh data sources after materialized stage output.", error);
+        });
+      }
     }
     const notebookId = getCurrentNotebookId();
     if (notebookId && pipelineEnabled(notebookId)) {

@@ -151,12 +151,20 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("function createLocalQueryJobSnapshot", app_source)
         self.assertIn("function applyLocalQueryJobSnapshot", app_source)
         self.assertIn("function failLocalQueryJobSnapshot", app_source)
+        self.assertIn("function renderLocalQueryProgress", app_source)
+        self.assertIn("function trackLocalQueryJobSnapshot", app_source)
+        self.assertIn("const shouldRefreshSidebarDuringStartup = !(", app_source)
+        self.assertIn("queryWorkbenchEntryPageRoot()", app_source)
+        self.assertIn('metadata.pipelineMode === "pipeline"', app_source)
+        self.assertIn('[data-notebook-meta][data-default-pipeline-mode="pipeline"]', app_source)
         self.assertIn("Run Cell was clicked", app_source)
-        self.assertIn("applyLocalQueryJobSnapshot(clientSnapshot);", app_source)
+        self.assertIn("renderLocalQueryProgress(cellRoot, { cellId, notebookId, workspaceRoot, snapshot: clientSnapshot });", app_source)
+        self.assertIn("renderLocalQueryProgress(cellRoot, { cellId, notebookId, workspaceRoot, snapshot: displaySnapshot });", app_source)
+        self.assertIn("trackLocalQueryJobSnapshot(displaySnapshot, { removeJobIds: [clientJobId] });", app_source)
         self.assertIn("queryRunsController.refreshForQueryJobsSnapshot(nextSnapshot);", app_source)
         self.assertIn("The backend rejected the query job request with HTTP", app_source)
         self.assertIn('formData.set("clientJobId", clientJobId);', app_source)
-        self.assertIn("removeJobIds: [clientJobId]", app_source)
+        self.assertNotIn("applyLocalQueryJobSnapshot(displaySnapshot", app_source)
         self.assertIn("let queryJobsReconcileHandle = null;", app_source)
         self.assertIn("function scheduleQueryJobsReconciliation", app_source)
         self.assertIn("function refreshQueryJobsForReconciliation", app_source)
@@ -173,6 +181,81 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("queryJobId", query_runs_source)
         self.assertIn("realQueryJobIds", query_runs_source)
         self.assertIn("renderList(root, root._bdwQueryRunsPayload || { available: true, runs: [] });", query_runs_source)
+
+    def test_query_monitor_uses_bounded_sql_preview(self) -> None:
+        query_ui_source = (STATIC_ROOT / "js" / "query-ui.js").read_text(encoding="utf-8")
+
+        self.assertIn("const queryMonitorSqlPreviewMaxChars = 480;", query_ui_source)
+        self.assertIn("function queryMonitorSqlPreview(sql)", query_ui_source)
+        self.assertIn('replace(/\\s+/g, " ").trim()', query_ui_source)
+        self.assertIn("... [SQL truncated]", query_ui_source)
+        self.assertIn("queryMonitorSqlPreview(job.sql)", query_ui_source)
+        self.assertNotIn('<p class="query-monitor-sql">${escapeHtml(job.sql)}</p>', query_ui_source)
+
+    def test_notebook_sidebar_defers_heavy_source_tree(self) -> None:
+        app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
+        source_tree_source = (STATIC_ROOT / "js" / "source-tree-controller.js").read_text(
+            encoding="utf-8"
+        )
+        sidebar_refresh_source = (
+            STATIC_ROOT / "js" / "sidebar-refresh-controller.js"
+        ).read_text(encoding="utf-8")
+        css_source = (STATIC_ROOT / "css" / "app.css").read_text(encoding="utf-8")
+        sidebar_template = (
+            REPO_ROOT / "bdw" / "bit_data_workbench" / "templates" / "partials" / "sidebar.html"
+        ).read_text(encoding="utf-8")
+        notebook_tree_template = (
+            REPO_ROOT / "bdw" / "bit_data_workbench" / "templates" / "partials" / "notebook_tree_node.html"
+        ).read_text(encoding="utf-8")
+        notebook_model_source = (STATIC_ROOT / "js" / "notebook-model.js").read_text(
+            encoding="utf-8"
+        )
+        pipeline_source = (
+            STATIC_ROOT / "js" / "notebook-stage-pipeline-controller.js"
+        ).read_text(encoding="utf-8")
+        router_source = (
+            REPO_ROOT / "bdw" / "bit_data_workbench" / "web" / "router.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("defer_sidebar_source_tree = workspace_mode == \"notebook\"", router_source)
+        self.assertIn("defer_sidebar_notebook_tree = workspace_mode == \"notebook\" and shell_sidebar_hidden", router_source)
+        self.assertIn('source_tree: str = Query(default="deferred")', router_source)
+        self.assertIn('notebook_tree: str = Query(default="full")', router_source)
+        self.assertIn('source_tree != "full"', router_source)
+        self.assertIn('notebook_tree != "full"', router_source)
+        self.assertIn("data-deferred-source-tree", sidebar_template)
+        self.assertIn("data-deferred-notebook-tree", sidebar_template)
+        self.assertIn("Open Data Sources to load source objects.", sidebar_template)
+        self.assertIn("Open navigation to load notebooks.", sidebar_template)
+        self.assertIn("{% set notebook_browser_payloads = false %}", sidebar_template)
+        self.assertIn("data-default-notebook-payloads-deferred", notebook_tree_template)
+        self.assertIn("payloadsDeferred", notebook_model_source)
+        self.assertIn("!defaults.payloadsDeferred", app_source)
+        self.assertIn("function loadDeferredSidebarSourceTree", source_tree_source)
+        self.assertIn('sourceTree: "full"', source_tree_source)
+        self.assertIn("loadDeferredSidebarSourceTree().catch", app_source)
+        self.assertIn("function loadDeferredSidebarNotebookTree", app_source)
+        self.assertIn("loadDeferredSidebarNotebookTree().catch", app_source)
+        self.assertIn("function shouldRefreshSidebarForMaterializedOutputs", pipeline_source)
+        self.assertIn("const hadPreviousSignature = Boolean(materializedOutputSignature);", pipeline_source)
+        self.assertIn("hadPreviousSignature && shouldRefreshSidebarForMaterializedOutputs()", pipeline_source)
+        self.assertIn("&source_tree=${sourceTreeMode}", sidebar_refresh_source)
+        self.assertIn(".source-tree-deferred", css_source)
+        self.assertIn(".notebook-tree-deferred", css_source)
+
+    def test_local_workspace_sql_prepare_skips_indexeddb_without_local_references(self) -> None:
+        bridge_source = (
+            STATIC_ROOT / "js" / "local-workspace-query-bridge.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("const logicalAliases = localWorkspaceAliasesInText(rewrittenSql);", bridge_source)
+        self.assertIn("const logicalRelations = localWorkspaceRelationsInText(rewrittenSql);", bridge_source)
+        self.assertIn("if (!logicalAliases.length && !logicalRelations.length)", bridge_source)
+        self.assertIn("return {\n        sql: rewrittenSql,\n        synchronizedSources,", bridge_source)
+        self.assertIn(
+            "const aliasIndex = logicalAliases.length ? await localWorkspaceAliasIndex() : new Map();",
+            bridge_source,
+        )
 
     def test_status_colors_match_runtime_semantics(self) -> None:
         css_source = (STATIC_ROOT / "css" / "app.css").read_text(encoding="utf-8")
@@ -324,6 +407,15 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("Pipeline stage ${stageTitle}.", query_runs_source)
         self.assertIn("function refreshForMaterializedStagesSnapshot(snapshot)", query_runs_source)
         self.assertIn("refreshForMaterializedStagesSnapshot,", query_runs_source)
+
+    def test_primary_run_button_is_visible_without_hover(self) -> None:
+        css_source = (STATIC_ROOT / "css" / "app.css").read_text(encoding="utf-8")
+
+        self.assertNotIn(".cell-actions .run-button,\n.cell-actions .explain-button", css_source)
+        self.assertNotIn(".workspace-cell:hover .cell-actions .run-button", css_source)
+        self.assertIn(".cell-actions .explain-button {\n  opacity: 0;", css_source)
+        self.assertIn(".run-button {", css_source)
+        self.assertIn("background: var(--accent);", css_source)
 
     def test_shared_notebook_delete_marks_pending_state_in_ui(self) -> None:
         app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")

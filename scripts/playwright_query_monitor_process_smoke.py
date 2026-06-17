@@ -647,7 +647,7 @@ async def assert_spill_resource_chart_regression(page, timeout_ms: int) -> None:
                 duckdbSpillBytes: 2 * 1024 * 1024 * 1024,
                 duckdbSpillOtherBytes: 1 * 1024 * 1024 * 1024,
                 duckdbSpillTotalBytes: 3 * 1024 * 1024 * 1024,
-                duckdbSpillLimitBytes: 96 * 1024 * 1024 * 1024,
+                duckdbSpillLimitBytes: 100 * 1024 * 1024 * 1024,
                 duckdbSpillDiskFreeBytes: 70 * 1024 * 1024 * 1024,
               },
               {
@@ -655,7 +655,7 @@ async def assert_spill_resource_chart_regression(page, timeout_ms: int) -> None:
                 duckdbSpillBytes: 4 * 1024 * 1024 * 1024,
                 duckdbSpillOtherBytes: 2 * 1024 * 1024 * 1024,
                 duckdbSpillTotalBytes: 6 * 1024 * 1024 * 1024,
-                duckdbSpillLimitBytes: 96 * 1024 * 1024 * 1024,
+                duckdbSpillLimitBytes: 100 * 1024 * 1024 * 1024,
                 duckdbSpillDiskFreeBytes: 68 * 1024 * 1024 * 1024,
               },
             ],

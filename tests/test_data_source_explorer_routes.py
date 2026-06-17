@@ -482,6 +482,7 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
         response = sidebar_partial(
             request=build_request("/sidebar", partial=True),
             mode="notebook",
+            source_tree="full",
             service=FakeWorkbenchService(),
         )
 
@@ -498,6 +499,7 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
         response = sidebar_partial(
             request=build_request("/sidebar", partial=True),
             mode="notebook",
+            source_tree="full",
             service=FakeWorkbenchService(),
         )
 
@@ -527,6 +529,7 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
         response = sidebar_partial(
             request=build_request("/sidebar", partial=True),
             mode="notebook",
+            source_tree="full",
             service=FakeWorkbenchService(),
         )
 

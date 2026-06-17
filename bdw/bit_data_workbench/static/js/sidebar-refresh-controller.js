@@ -112,8 +112,12 @@ export function createSidebarRefreshController(helpers) {
     const requestId = ++sidebarRefreshRequestId;
     const sidebarState = captureSidebarState();
     const activeNotebookId = currentActiveNotebookId() || workspaceNotebookId() || "";
+    const sourceTreeMode =
+      sidebarState.dataSourcesSectionOpen || !document.querySelector("[data-deferred-source-tree]")
+        ? "full"
+        : "deferred";
     const response = await window.fetch(
-      `/sidebar?active_notebook_id=${encodeURIComponent(activeNotebookId)}&mode=${encodeURIComponent(mode)}`,
+      `/sidebar?active_notebook_id=${encodeURIComponent(activeNotebookId)}&mode=${encodeURIComponent(mode)}&source_tree=${sourceTreeMode}`,
       {
         headers: { Accept: "text/html" },
       }

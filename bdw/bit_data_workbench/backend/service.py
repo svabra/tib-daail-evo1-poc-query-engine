@@ -62,6 +62,7 @@ from .data_exchange import (
 )
 from .data_generation_jobs import DataGenerationJobManager
 from .download_jobs import DownloadArtifactStream, DownloadJobManager
+from .duckdb_sql_rewrites import rewrite_parquet_select_star_unions
 from .ingestion_types.csv import (
     CsvIngestionManager,
     CsvUploadFileRequest,
@@ -219,6 +220,24 @@ CHE-100.000.010,Lucerne Trade AG,LU,2025-12-31,TX-10010,142200.00,9600.00,0.00,f
 CHE-100.000.011,St. Gallen Medical AG,SG,2025-12-31,TX-10011,156300.00,0.00,7100.00,refund,health
 CHE-100.000.012,Valais Hydro SA,VS,2025-12-31,TX-10012,301400.00,25400.00,0.00,assessed,energy
 """
+KOSTENBELEGE_3_1_LEGACY_KBPO_FULL_KEYS = (
+    "kbpo_2018undvorher.parquet",
+    "kbpo_2019.parquet",
+    "kbpo2020.parquet",
+    "kbpo2021.parquet",
+    "kbpo2022.parquet",
+    "kbpo2023.parquet",
+    "kbpo2024.parquet",
+    "kbpo2025.parquet",
+)
+KOSTENBELEGE_3_1_LEGACY_SINGLE_SOURCE_ALIASES = {
+    "PRDESTV_VIEWCORE01.KBKP_KtoBelegKopf": ("core", "kbkpfull.parquet"),
+    "PRDESTV_VIEWCORE01.KBHP_KtoBelegHauptBuchPosition": (
+        "core",
+        "kbhpfull.parquet",
+    ),
+    "PRDESTV_VIEWSMBB.DIM_KALENDER": ("n_3_1_imports", "dim_kalender.parquet"),
+}
 
 
 @dataclass(slots=True)
@@ -2045,6 +2064,7 @@ class WorkbenchService:
             touched_relations=query_analysis.touched_relations,
             touched_buckets=query_analysis.touched_buckets,
             source_summaries=source_summaries,
+            execution_sql=execution_sql,
         )
         return PreparedQuery(
             display_sql=user_sql,
@@ -2347,6 +2367,7 @@ class WorkbenchService:
             relation_index,
             catalogs=catalogs,
         )
+        self._add_kostenbelege_3_1_legacy_teradata_aliases(relation_index)
         self._add_local_relation_aliases(relation_index, local_relation_map)
         self._add_completed_stage_relation_aliases(
             relation_index,
@@ -2394,6 +2415,75 @@ class WorkbenchService:
                 if not normalized_alias:
                     continue
                 relation_index[normalized_alias] = entry
+
+    @staticmethod
+    def _add_kostenbelege_3_1_legacy_teradata_aliases(
+        relation_index: dict[str, KnownRelationReference],
+    ) -> None:
+        for legacy_relation, (bucket, key) in KOSTENBELEGE_3_1_LEGACY_SINGLE_SOURCE_ALIASES.items():
+            scan_sql, resolved_bucket, resolved_key = (
+                WorkbenchService._s3_scan_sql_from_relation_index(
+                    relation_index,
+                    bucket=bucket,
+                    key=key,
+                )
+            )
+            relation_index[normalize_query_alias_key(legacy_relation)] = KnownRelationReference(
+                relation=legacy_relation,
+                bucket=resolved_bucket,
+                key=resolved_key,
+                query_sql=scan_sql,
+            )
+
+        kbpo_scans = [
+            WorkbenchService._s3_scan_sql_from_relation_index(
+                relation_index,
+                bucket="kbpoimports",
+                key=object_key,
+            )[0]
+            for object_key in KOSTENBELEGE_3_1_LEGACY_KBPO_FULL_KEYS
+        ]
+        kbpo_query_sql = (
+            "(\n"
+            + "\nUNION ALL\n".join(f"SELECT * FROM {scan_sql}" for scan_sql in kbpo_scans)
+            + "\n)"
+        )
+        legacy_kbpo_relation = "PRDESTV_VIEWCORE01.KBPO_KtoBelegPosition"
+        relation_index[normalize_query_alias_key(legacy_kbpo_relation)] = (
+            KnownRelationReference(
+                relation=legacy_kbpo_relation,
+                bucket="kbpoimports",
+                key="",
+                query_sql=kbpo_query_sql,
+            )
+        )
+
+    @staticmethod
+    def _s3_scan_sql_from_relation_index(
+        relation_index: dict[str, KnownRelationReference],
+        *,
+        bucket: str,
+        key: str,
+    ) -> tuple[str, str, str]:
+        fallback_scan_sql = s3_table_function_sql(bucket=bucket, key=key)
+        aliases = {
+            s3_source_reference(bucket=bucket, key=key),
+            f's3.{bucket}."{key}"',
+            f"s3.{bucket}.{key}",
+        }
+        for alias in aliases:
+            reference = relation_index.get(normalize_query_alias_key(alias))
+            if reference is None:
+                continue
+            query_sql = str(reference.query_sql or "").strip()
+            if not query_sql:
+                continue
+            return (
+                query_sql,
+                str(reference.bucket or bucket).strip(),
+                str(reference.key or key).strip(),
+            )
+        return fallback_scan_sql, str(bucket).strip(), str(key).strip()
 
     @staticmethod
     def _kostenbelege_3_1_discovered_s3_aliases(
@@ -2709,7 +2799,8 @@ class WorkbenchService:
             normalized_physical = str(physical_relation or "").strip()
             if normalized_alias and normalized_physical:
                 alias_map[normalized_alias] = normalized_physical
-        return rewrite_query_aliases(sql, alias_map)
+        rewritten_sql = rewrite_query_aliases(sql, alias_map)
+        return rewrite_parquet_select_star_unions(rewritten_sql)
 
     def _query_source_summaries(
         self,
@@ -2735,11 +2826,15 @@ class WorkbenchService:
             if normalized_relation in summarized_keys:
                 continue
             reference = (relation_index or {}).get(normalized_relation)
-            if reference is None or not reference.query_sql:
+            if reference is None:
+                continue
+            query_sql = str(reference.query_sql or "").strip()
+            if not query_sql:
                 continue
             if not (
                 normalized_relation.startswith("s3.")
                 or normalized_relation.startswith("stage.")
+                or normalized_relation.startswith("prdestv_")
             ):
                 continue
             relation_key = str(reference.relation or "").strip()
@@ -2774,7 +2869,7 @@ class WorkbenchService:
                         if relation_key
                         else relation
                     ),
-                    "query_sql": reference.query_sql,
+                    "query_sql": query_sql,
                 }
             )
             summarized_keys.add(normalized_relation)

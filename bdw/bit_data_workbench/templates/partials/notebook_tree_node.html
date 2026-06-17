@@ -1,5 +1,6 @@
 {% set notebook_browser_live = notebook_browser_live | default(true) %}
 {% set notebook_browser_manage = notebook_browser_manage | default(true) %}
+{% set notebook_browser_payloads = notebook_browser_payloads | default(true) %}
 <details
   class="tree-folder"
   {% if notebook_browser_live %}
@@ -95,8 +96,12 @@
           data-default-notebook-summary="{{ notebook.summary }}"
           data-default-notebook-pipeline-mode="{{ notebook.pipeline_mode }}"
           data-default-notebook-pipeline-paths='{{ (notebook.pipeline_paths | default([])) | tojson }}'
-          data-default-notebook-cells='{{ notebook.cells_payload | tojson }}'
-          data-default-notebook-versions='{{ notebook.versions_payload | tojson }}'
+          {% if notebook_browser_payloads %}
+            data-default-notebook-cells='{{ notebook.cells_payload | tojson }}'
+            data-default-notebook-versions='{{ notebook.versions_payload | tojson }}'
+          {% else %}
+            data-default-notebook-payloads-deferred="true"
+          {% endif %}
           data-notebook-data-sources="{{ notebook.data_sources | join('||') }}"
           data-default-notebook-data-sources="{{ notebook.data_sources | join('||') }}"
           data-default-notebook-tags="{{ notebook.tags | join('||') }}"

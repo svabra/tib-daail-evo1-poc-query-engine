@@ -60,6 +60,15 @@ export function createSourceTreeController(helpers) {
     );
   }
 
+  function sidebarSourceTreeUrl(mode = currentWorkspaceMode(), { sourceTree = "deferred" } = {}) {
+    const activeNotebookId = currentActiveNotebookId() || workspaceNotebookId() || "";
+    const params = new URLSearchParams();
+    params.set("active_notebook_id", activeNotebookId);
+    params.set("mode", mode);
+    params.set("source_tree", sourceTree);
+    return `/sidebar?${params.toString()}`;
+  }
+
   function localWorkspaceSchemaNode(root = document) {
     const scope = root && typeof root.querySelector === "function" ? root : document;
     return scope.querySelector(
@@ -357,13 +366,12 @@ export function createSourceTreeController(helpers) {
     }
 
     const sidebarState = captureSidebarState();
-    const activeNotebookId = currentActiveNotebookId() || workspaceNotebookId() || "";
-    const response = await window.fetch(
-      `/sidebar?active_notebook_id=${encodeURIComponent(activeNotebookId)}&mode=${encodeURIComponent(mode)}`,
-      {
-        headers: { Accept: "text/html" },
-      }
-    );
+    const hasDeferredTree = Boolean(currentSection.querySelector("[data-deferred-source-tree]"));
+    const response = await window.fetch(sidebarSourceTreeUrl(mode, {
+      sourceTree: hasDeferredTree && !currentSection.open ? "deferred" : "full",
+    }), {
+      headers: { Accept: "text/html" },
+    });
     if (!response.ok) {
       throw new Error(`Failed to refresh the data sources section: ${response.status}`);
     }
@@ -381,6 +389,53 @@ export function createSourceTreeController(helpers) {
     getRestoreSelectedSourceObject()?.();
     getRenderSidebarSourceOperationStatus()?.();
     replayPendingSourceCatalogBlinks();
+  }
+
+  async function loadDeferredSidebarSourceTree() {
+    const currentSection = dataSourcesSection();
+    const deferredRoot = currentSection?.querySelector?.("[data-deferred-source-tree]");
+    if (!(currentSection instanceof HTMLDetailsElement) || !(deferredRoot instanceof HTMLElement)) {
+      return false;
+    }
+    if (deferredRoot.dataset.loading === "true") {
+      return true;
+    }
+
+    const sidebarState = {
+      ...captureSidebarState(),
+      dataSourcesSectionOpen: true,
+    };
+    deferredRoot.dataset.loading = "true";
+    deferredRoot.classList.add("is-loading");
+    deferredRoot.innerHTML = "<span>Loading source objects</span>";
+
+    const response = await window.fetch(sidebarSourceTreeUrl(currentWorkspaceMode(), { sourceTree: "full" }), {
+      headers: { Accept: "text/html" },
+    });
+    if (!response.ok) {
+      deferredRoot.dataset.loading = "false";
+      deferredRoot.classList.remove("is-loading");
+      deferredRoot.innerHTML = "<span>Source objects could not be loaded.</span>";
+      throw new Error(`Failed to load source objects: ${response.status}`);
+    }
+
+    const container = document.createElement("div");
+    container.innerHTML = await response.text();
+    const nextSection = container.querySelector("[data-data-sources-section]");
+    if (!(nextSection instanceof Element)) {
+      deferredRoot.dataset.loading = "false";
+      deferredRoot.classList.remove("is-loading");
+      deferredRoot.innerHTML = "<span>Source objects could not be loaded.</span>";
+      throw new Error("Failed to locate the loaded data sources section.");
+    }
+
+    currentSection.outerHTML = nextSection.outerHTML;
+    await renderLocalWorkspaceSidebarEntries();
+    restoreSidebarState(sidebarState);
+    getRestoreSelectedSourceObject()?.();
+    getRenderSidebarSourceOperationStatus()?.();
+    replayPendingSourceCatalogBlinks();
+    return true;
   }
 
   function queueDataSourcesSectionRefresh() {
@@ -468,6 +523,7 @@ export function createSourceTreeController(helpers) {
     localWorkspaceEntryNode,
     localWorkspaceFolderNode,
     localWorkspaceSchemaNode,
+    loadDeferredSidebarSourceTree,
     renderLocalWorkspaceSidebarEntries,
     revealSidebarS3Bucket,
     setDataSourceConnectionState,

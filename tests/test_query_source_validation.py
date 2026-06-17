@@ -58,6 +58,70 @@ def kostenbelege_3_1_s3_reference(table_name: str) -> str:
     )
 
 
+def kostenbelege_full_s3_catalogs() -> list[SourceCatalog]:
+    def s3_object(*, bucket: str, key: str, schema: str) -> SourceObject:
+        object_name = key.rsplit("/", 1)[-1]
+        return SourceObject(
+            name=object_name,
+            kind="file",
+            relation=f"{schema}.{object_name.replace('.', '_')}",
+            query_reference=s3_source_reference(bucket=bucket, key=key),
+            query_sql=f"read_parquet('s3://{bucket}/{key}')",
+            s3_bucket=bucket,
+            s3_key=key,
+            s3_file_format="parquet",
+        )
+
+    return [
+        SourceCatalog(
+            name="workspace",
+            connection_source_id="s3",
+            schemas=[
+                SourceSchema(
+                    name="CORE",
+                    objects=[
+                        s3_object(bucket="CORE", key="kbkpfull.parquet", schema="CORE"),
+                        s3_object(bucket="CORE", key="kbhpfull.parquet", schema="CORE"),
+                    ],
+                ),
+                SourceSchema(
+                    name="KBPOimports",
+                    objects=[
+                        s3_object(
+                            bucket="KBPOimports",
+                            key="KBPO_2018undvorher.parquet",
+                            schema="KBPOimports",
+                        ),
+                        s3_object(
+                            bucket="KBPOimports",
+                            key="KBPO_2019.parquet",
+                            schema="KBPOimports",
+                        ),
+                        *[
+                            s3_object(
+                                bucket="KBPOimports",
+                                key=f"KBPO{year}.parquet",
+                                schema="KBPOimports",
+                            )
+                            for year in range(2020, 2026)
+                        ],
+                    ],
+                ),
+                SourceSchema(
+                    name="n_3_1_imports",
+                    objects=[
+                        s3_object(
+                            bucket="n_3_1_imports",
+                            key="dim_kalender.parquet",
+                            schema="n_3_1_imports",
+                        )
+                    ],
+                ),
+            ],
+        )
+    ]
+
+
 def sample_catalogs() -> list[SourceCatalog]:
     return [
         SourceCatalog(
@@ -605,9 +669,12 @@ class QuerySourceValidationTests(unittest.TestCase):
         )
 
         self.assertEqual(prepared["executionSql"], execution_sql)
+        self.assertIn("SELECT * FROM read_parquet([", execution_sql)
+        self.assertIn("union_by_name = true", execution_sql)
+        self.assertNotIn("UNION ALL", execution_sql)
         for file_name in file_names:
             self.assertIn(
-                f"read_parquet('s3://KBPOimports/{file_name}')",
+                f"'s3://KBPOimports/{file_name}'",
                 execution_sql,
             )
             self.assertNotIn(f's3.KBPOimports."{file_name}"', execution_sql)
@@ -616,6 +683,43 @@ class QuerySourceValidationTests(unittest.TestCase):
             {summary["key"] for summary in source_summaries},
             set(file_names),
         )
+
+    def test_prepare_static_optimized_dataset_notebook_translates_copy_union_by_name(self) -> None:
+        from bit_data_workbench.backend.notebooks import build_notebooks  # noqa: WPS433
+
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = kostenbelege_full_s3_catalogs()
+        service._data_source_discovery = SimpleNamespace(s3_relation_specs=lambda: {})
+        notebooks = {
+            notebook.notebook_id: notebook
+            for notebook in build_notebooks(service._catalogs)
+        }
+        notebook = notebooks["kostenbelege-3-1-optimized-parquet-dataset"]
+        cell = notebook.cells[0]
+
+        payload = service.prepare_query_sql(
+            sql=cell.sql,
+            notebook_id=notebook.notebook_id,
+            notebook_title=notebook.title,
+            cell_id=cell.cell_id,
+            data_sources=cell.data_sources,
+            query_options=cell.query_options,
+        )
+
+        execution_sql = payload["executionSql"]
+        self.assertEqual(payload["duckdbExecutionPath"], DUCKDB_EXECUTION_PATH_ISOLATED_WRITE)
+        self.assertIn("COPY (", execution_sql)
+        self.assertIn("SELECT * FROM read_parquet([", execution_sql)
+        self.assertIn("union_by_name = true", execution_sql)
+        self.assertIn(
+            "TO 's3://poc-tests-performance-evaluation-kostenbelege-3-1/"
+            "optimized/3_1/fact_buchungsbelegposition/'",
+            execution_sql,
+        )
+        self.assertIn("PER_THREAD_OUTPUT true", execution_sql)
+        self.assertIn("FILE_SIZE_BYTES '450MB'", execution_sql)
+        self.assertNotIn("s3.kbpoimports.kbpo2020.parquet", execution_sql)
 
     def test_prepare_query_sql_wraps_pipeline_stage_preview_in_copy_to_parquet(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)
@@ -812,17 +916,96 @@ class QuerySourceValidationTests(unittest.TestCase):
 
         for file_name in file_names:
             self.assertIn(
-                f"read_parquet('s3://KBPOimports/{file_name}')",
+                f"'s3://KBPOimports/{file_name}'",
                 execution_sql,
             )
             self.assertNotIn(
                 f"read_parquet('s3://kbpoimports/{file_name.lower()}')",
                 execution_sql,
             )
+        self.assertIn("SELECT * FROM read_parquet([", execution_sql)
+        self.assertIn("union_by_name = true", execution_sql)
+        self.assertNotIn("UNION ALL", execution_sql)
         self.assertEqual(
             {summary["path"] for summary in source_summaries},
             {f"s3://KBPOimports/{file_name}" for file_name in file_names},
         )
+
+    def test_prepare_query_sql_rewrites_legacy_prdestv_sources_to_isolated_full_s3_scans(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = kostenbelege_full_s3_catalogs()
+        service._data_source_discovery = SimpleNamespace(s3_relation_specs=lambda: {})
+        sql = """
+WITH UNIO AS (
+    SELECT
+        KBKP.KBKP_Belegnummer,
+        KBPO.KBPO_PositionId,
+        KBHP.KBHP_Id,
+        KALE.Datum
+    FROM PRDESTV_VIEWCORE01.KBKP_KtoBelegKopf KBKP
+    INNER JOIN PRDESTV_VIEWSMBB.DIM_KALENDER KALE
+        ON KALE.Datum = CURRENT_DATE
+    INNER JOIN PRDESTV_VIEWCORE01.KBPO_KtoBelegPosition KBPO
+        ON KBKP.KBKP_Belegnummer = KBPO.KBKP_AusgleichBelegnummer
+    LEFT JOIN PRDESTV_VIEWCORE01.KBHP_KtoBelegHauptBuchPosition KBHP
+        ON KBKP.KBKP_Belegnummer = KBHP.KBKP_BelegNummer
+)
+SELECT COUNT(*) AS cnt FROM UNIO
+""".strip()
+
+        payload = service.prepare_query_sql(
+            sql=sql,
+            notebook_id="notebook",
+            data_sources=["s3"],
+        )
+
+        execution_sql = str(payload["executionSql"])
+        self.assertEqual(payload["duckdbExecutionPath"], "isolated-read")
+        self.assertNotIn("PRDESTV_VIEWCORE01", execution_sql)
+        self.assertNotIn("PRDESTV_VIEWSMBB", execution_sql)
+        self.assertIn("read_parquet('s3://CORE/kbkpfull.parquet')", execution_sql)
+        self.assertIn("read_parquet('s3://CORE/kbhpfull.parquet')", execution_sql)
+        self.assertIn(
+            "read_parquet('s3://n_3_1_imports/dim_kalender.parquet')",
+            execution_sql,
+        )
+        self.assertIn("SELECT * FROM read_parquet([", execution_sql)
+        self.assertIn("union_by_name = true", execution_sql)
+        self.assertIn(
+            "'s3://KBPOimports/KBPO_2018undvorher.parquet'",
+            execution_sql,
+        )
+        self.assertIn(
+            "'s3://KBPOimports/KBPO2025.parquet'",
+            execution_sql,
+        )
+        self.assertNotIn("UNION ALL", execution_sql)
+
+    def test_legacy_prdestv_source_summaries_make_read_query_isolated(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
+        service._data_source_discovery = SimpleNamespace(s3_relation_specs=lambda: {})
+        sql = """
+SELECT COUNT(*)
+FROM PRDESTV_VIEWCORE01.KBPO_KtoBelegPosition KBPO
+JOIN PRDESTV_VIEWCORE01.KBKP_KtoBelegKopf KBKP
+  ON KBKP.KBKP_Belegnummer = KBPO.KBKP_AusgleichBelegnummer
+""".strip()
+
+        payload = service.prepare_query_sql(
+            sql=sql,
+            notebook_id="notebook",
+            data_sources=["s3"],
+        )
+
+        self.assertEqual(payload["duckdbExecutionPath"], "isolated-read")
+        self.assertIn("SELECT * FROM read_parquet([", payload["executionSql"])
+        self.assertIn("union_by_name = true", payload["executionSql"])
+        self.assertIn("'s3://kbpoimports/kbpo2025.parquet'", payload["executionSql"])
+        self.assertNotIn("UNION ALL", payload["executionSql"])
+        self.assertIn("read_parquet('s3://core/kbkpfull.parquet')", payload["executionSql"])
 
     def test_source_validation_rejects_unverified_direct_s3_fallback(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)

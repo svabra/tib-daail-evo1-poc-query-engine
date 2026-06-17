@@ -1486,6 +1486,39 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             "CROSS JOIN (VALUES",
             notebooks["kostenbelege-3-1-s3-parquet-optimized"].cells[0].sql,
         )
+        optimized_dataset = notebooks["kostenbelege-3-1-optimized-parquet-dataset"]
+        self.assertEqual(optimized_dataset.title, "3.1 Optimized")
+        self.assertEqual(
+            optimized_dataset.tree_path,
+            ("PoC Tests", "Parquet Optimization"),
+        )
+        self.assertFalse(optimized_dataset.can_edit)
+        self.assertFalse(optimized_dataset.can_delete)
+        self.assertEqual(len(optimized_dataset.cells), 2)
+        self.assertEqual(optimized_dataset.cells[0].data_sources, ["s3"])
+        self.assertEqual(optimized_dataset.cells[1].data_sources, ["s3"])
+        self.assertIn("COPY (", optimized_dataset.cells[0].sql)
+        self.assertIn("UNION ALL", optimized_dataset.cells[0].sql)
+        self.assertIn(
+            "s3.kbpoimports.kbpo_2018undvorher.parquet",
+            optimized_dataset.cells[0].sql,
+        )
+        self.assertIn(
+            "TO 's3://poc-tests-performance-evaluation-kostenbelege-3-1/"
+            "optimized/3_1/fact_buchungsbelegposition/'",
+            optimized_dataset.cells[0].sql,
+        )
+        self.assertIn("PER_THREAD_OUTPUT true", optimized_dataset.cells[0].sql)
+        self.assertIn("FILE_SIZE_BYTES '450MB'", optimized_dataset.cells[0].sql)
+        self.assertIn(
+            'FROM s3."poc-tests-performance-evaluation-kostenbelege-3-1".'
+            '"optimized/3_1/fact_buchungsbelegposition/*.parquet"',
+            optimized_dataset.cells[1].sql,
+        )
+        self.assertEqual(
+            optimized_dataset.cells[0].query_options["validation"]["sourceExistence"],
+            "off",
+        )
         self.assertIn(
             'FROM public.kbkp_2019 KBKP',
             notebooks["kostenbelege-3-1-oltp-native"].cells[0].sql,

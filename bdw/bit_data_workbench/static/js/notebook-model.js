@@ -402,6 +402,8 @@ export function createNotebookModel(helpers) {
     const linkCells = parseCellsPayload(link?.dataset.defaultNotebookCells);
     const metaVersions = parseVersionsPayload(metaRoot?.dataset.defaultVersions);
     const linkVersions = parseVersionsPayload(link?.dataset.defaultNotebookVersions);
+    const payloadsDeferred =
+      !metaCells.length && link?.dataset.defaultNotebookPayloadsDeferred === "true";
     const metaPipelinePaths = parsePipelinePathsPayload(metaRoot?.dataset.defaultPipelinePaths);
     const linkPipelinePaths = parsePipelinePathsPayload(link?.dataset.defaultNotebookPipelinePaths);
     const metaDataSources = parseDefaultDataSources(metaRoot?.dataset.defaultDataSources);
@@ -465,6 +467,7 @@ export function createNotebookModel(helpers) {
       ),
       deleted: false,
       versions: metaVersions.length ? metaVersions : linkVersions,
+      payloadsDeferred,
     };
     if (!defaults.versions.length) {
       defaults.versions = [createInitialNotebookVersion(notebookId, defaults)];
