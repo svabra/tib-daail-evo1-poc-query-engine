@@ -1,9 +1,37 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.25. Keep entries concise and
+# Derived from git history through version 0.10.26. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.26",
+        "releasedAt": "2026-06-17T16:47:23+02:00",
+        "features": [
+            (
+                "The main page now includes a lightweight pure duckdb tile "
+                "that opens a standalone /pure-duckdb page without the "
+                "notebook shell, sidebar, app bundle, or SSE transport."
+            ),
+            (
+                "Pure DuckDB cells run final DuckDB SQL directly through a "
+                "narrow jobs API, while still reusing the existing DuckDB "
+                "worker runtime for S3 secrets, spill settings, isolated "
+                "reads, and isolated artifact writes."
+            ),
+            (
+                "The predefined Pure DuckDB cells contain final s3:// "
+                "read_parquet and COPY SQL, including union_by_name input "
+                "merges and S3 artifact outputs for the FACT_BUPO flow."
+            ),
+            (
+                "Regression coverage now executes all nine preset queries "
+                "against tiny local Parquet fixtures and adds a Playwright "
+                "smoke for the standalone page, direct query run, frozen "
+                "elapsed time, and desktop/mobile overflow checks."
+            ),
+        ],
+    },
     {
         "version": "0.10.25",
         "releasedAt": "2026-06-17T16:12:09+02:00",

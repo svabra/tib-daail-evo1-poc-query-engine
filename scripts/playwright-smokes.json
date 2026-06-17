@@ -41,6 +41,11 @@
       "enabledByDefault": true
     },
     {
+      "id": "pure-duckdb",
+      "script": "playwright_pure_duckdb_smoke.py",
+      "enabledByDefault": true
+    },
+    {
       "id": "home-workbench-card-sizes",
       "script": "playwright_home_workbench_card_sizes.py",
       "enabledByDefault": true

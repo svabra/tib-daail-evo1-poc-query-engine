@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <link rel="icon" type="image/png" href="/static/img/favicon.png">
+    <link rel="shortcut icon" href="/static/img/favicon.ico">
+    <link rel="stylesheet" href="/static/css/pure-duckdb.css?v={{ runtime.timestamp_utc | urlencode }}">
+  </head>
+  <body>
+    <main class="pure-duckdb-page" data-pure-duckdb-page>
+      {% for cell in pure_duckdb_cells %}
+        <section class="pure-duckdb-cell" data-pure-duckdb-cell data-cell-id="{{ cell.cellId }}">
+          <div class="pure-duckdb-cell-bar">
+            <span class="pure-duckdb-cell-label">{{ cell.label }}</span>
+            <button type="button" class="pure-duckdb-run-button" data-run-pure-duckdb-cell>Run Cell</button>
+          </div>
+          <textarea class="pure-duckdb-editor" spellcheck="false" data-pure-duckdb-sql>{{ cell.sql }}</textarea>
+          <div class="pure-duckdb-meta">
+            <span>Total processing time</span>
+            <strong data-pure-duckdb-duration>-</strong>
+          </div>
+          <div class="pure-duckdb-result" data-pure-duckdb-result></div>
+        </section>
+      {% endfor %}
+    </main>
+    <script type="module" src="/static/js/pure-duckdb.js?v={{ runtime.timestamp_utc | urlencode }}"></script>
+  </body>
+</html>

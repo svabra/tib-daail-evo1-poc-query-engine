@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 
+from ..backend.pure_duckdb import pure_duckdb_cells_payload
 from ..backend.service import WorkbenchService
 from ..dependencies import get_workbench_service
 from ..models import SourceCatalog
@@ -535,6 +536,22 @@ def index(
             ),
             "title": "DAAIF Factory",
             **build_home_data_source_context(service),
+        },
+    )
+
+
+@router.get("/pure-duckdb", response_class=HTMLResponse)
+def pure_duckdb_page(
+    request: Request,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> HTMLResponse:
+    return templates.TemplateResponse(
+        request=request,
+        name="pure_duckdb.html",
+        context={
+            "title": "Pure DuckDB",
+            "runtime": service.runtime_info(),
+            "pure_duckdb_cells": pure_duckdb_cells_payload(),
         },
     )
 

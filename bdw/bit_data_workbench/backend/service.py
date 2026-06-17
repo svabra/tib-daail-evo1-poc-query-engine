@@ -1567,6 +1567,28 @@ class WorkbenchService:
     def query_jobs_state(self) -> dict[str, object]:
         return self._query_jobs.state_payload()
 
+    def start_pure_duckdb_job(self, *, cell_id: str, sql: str) -> dict[str, object]:
+        normalized_sql = str(sql or "").strip()
+        if not normalized_sql:
+            raise ValueError("Provide a DuckDB SQL statement before running the cell.")
+        normalized_cell_id = str(cell_id or "").strip() or "pure-duckdb-cell"
+        snapshot = self._query_jobs.start_job(
+            sql=normalized_sql,
+            execution_sql=normalized_sql,
+            notebook_id="pure-duckdb",
+            notebook_title="Pure DuckDB",
+            cell_id=normalized_cell_id,
+            data_sources=[],
+            touched_relations=[],
+            touched_buckets=[],
+            source_summaries=[],
+            query_options={},
+        )
+        return snapshot.payload
+
+    def pure_duckdb_job(self, job_id: str) -> dict[str, object]:
+        return self._query_jobs.snapshot(str(job_id or "").strip()).payload
+
     def query_runs_history(
         self,
         *,

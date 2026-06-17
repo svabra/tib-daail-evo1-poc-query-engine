@@ -221,6 +221,11 @@ class QuerySqlPreparePayload(QueryExplainPayload):
     stage: dict[str, object] | None = None
 
 
+class PureDuckDBJobPayload(BaseModel):
+    cell_id: str = Field(default="", validation_alias="cellId", serialization_alias="cellId")
+    sql: str = ""
+
+
 class QueryCachePayload(BaseModel):
     sql: str = ""
     notebook_id: str = Field(default="", validation_alias="notebookId", serialization_alias="notebookId")
@@ -1358,6 +1363,33 @@ async def copy_local_workspace_export_to_s3(
 @router.get("/api/query-jobs")
 def query_jobs_state(service: WorkbenchService = Depends(get_workbench_service)) -> JSONResponse:
     return JSONResponse(jsonable_encoder(service.query_jobs_state()))
+
+
+@router.post("/api/pure-duckdb/jobs")
+def start_pure_duckdb_job(
+    payload: PureDuckDBJobPayload,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        snapshot = service.start_pure_duckdb_job(
+            cell_id=payload.cell_id,
+            sql=payload.sql,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder(snapshot))
+
+
+@router.get("/api/pure-duckdb/jobs/{job_id}")
+def pure_duckdb_job(
+    job_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> JSONResponse:
+    try:
+        snapshot = service.pure_duckdb_job(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return JSONResponse(jsonable_encoder(snapshot))
 
 
 @router.get("/api/query-runs")
