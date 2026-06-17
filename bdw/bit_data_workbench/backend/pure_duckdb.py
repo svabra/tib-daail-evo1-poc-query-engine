@@ -10,7 +10,7 @@ FACT_BUPO_TARGET = "s3://core/fact_bupo.parquet"
 KBKP_TODAY_TARGET = "s3://core/kbkp_today.parquet"
 KBKP_FULL_PATH = "s3://core/kbkpfull.parquet"
 KBHP_FULL_PATH = "s3://core/kbhpfull.parquet"
-KALENDER_PATH = "s3://n_3_1_imports/dim_kalender.parquet"
+KALENDER_PATH = "s3://3-1-imports/dim_kalender.parquet"
 KBPO_PATHS = (
     "s3://kbpoimports/kbpo_2018undvorher.parquet",
     "s3://kbpoimports/kbpo_2019.parquet",

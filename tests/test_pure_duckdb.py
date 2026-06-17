@@ -252,10 +252,27 @@ class PureDuckDBPageTests(unittest.TestCase):
         self.assertIn("data-open-pure-duckdb", home_template)
         self.assertIn(">pure duckdb<", home_template)
 
+    def test_result_rows_can_be_downloaded_as_csv(self) -> None:
+        script = (
+            REPO_ROOT / "bdw" / "bit_data_workbench" / "static" / "js" / "pure-duckdb.js"
+        ).read_text(encoding="utf-8")
+        styles = (
+            REPO_ROOT / "bdw" / "bit_data_workbench" / "static" / "css" / "pure-duckdb.css"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("data-download-pure-duckdb-csv", script)
+        self.assertIn("Download CSV", script)
+        self.assertIn("text/csv;charset=utf-8", script)
+        self.assertIn('link.download = `${safeCellId}.csv`', script)
+        self.assertIn("completedResults.set", script)
+        self.assertIn(".pure-duckdb-download-button", styles)
+
     def test_presets_are_final_duckdb_sql_without_virtual_s3_references(self) -> None:
         self.assertEqual(len(PURE_DUCKDB_CELLS), 9)
         for cell in PURE_DUCKDB_CELLS:
             self.assertNotRegex(cell.sql, r"\bs3\.[A-Za-z0-9_\"]")
+            self.assertNotIn("s3://n_3_1_imports/", cell.sql)
+            self.assertNotIn("s3://3_1_imports/", cell.sql)
             self.assertTrue(
                 "read_parquet('s3://" in cell.sql
                 or "read_parquet([\n" in cell.sql

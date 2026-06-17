@@ -1,9 +1,34 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.26. Keep entries concise and
+# Derived from git history through version 0.10.27. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.27",
+        "releasedAt": "2026-06-17T17:23:44+02:00",
+        "features": [
+            (
+                "Pure DuckDB result tables now include a Download CSV action "
+                "whenever a completed cell returns displayed rows."
+            ),
+            (
+                "Pure DuckDB CSV export is generated client-side from the "
+                "returned result rows with standard CSV quoting and stable "
+                "cell-based filenames."
+            ),
+            (
+                "The Pure DuckDB Kostenbelege calendar source now uses the "
+                "valid physical S3 bucket path s3://3-1-imports/... instead "
+                "of legacy or underscore-based virtual bucket names."
+            ),
+            (
+                "Regression coverage now asserts CSV export wiring, rejects "
+                "the legacy calendar S3 paths, and verifies the CSV download "
+                "content in the Pure DuckDB Playwright smoke."
+            ),
+        ],
+    },
     {
         "version": "0.10.26",
         "releasedAt": "2026-06-17T16:47:23+02:00",

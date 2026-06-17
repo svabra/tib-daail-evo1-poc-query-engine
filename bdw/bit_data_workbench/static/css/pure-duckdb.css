@@ -115,6 +115,25 @@ body {
   color: var(--pure-muted);
 }
 
+.pure-duckdb-result-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.pure-duckdb-download-button {
+  flex: 0 0 auto;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--pure-line);
+  background: #edf3f8;
+  color: var(--pure-text);
+  font-weight: 700;
+  cursor: pointer;
+}
+
 .pure-duckdb-error {
   margin: 0;
   padding: 10px;
@@ -160,5 +179,10 @@ body {
   .pure-duckdb-editor {
     min-height: 220px;
     font-size: 12px;
+  }
+
+  .pure-duckdb-result-bar {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

@@ -1,5 +1,6 @@
 const terminalStatuses = new Set(["completed", "failed", "cancelled", "canceled", "aborted", "incomplete"]);
 const activeRuns = new WeakMap();
+const completedResults = new WeakMap();
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -45,6 +46,7 @@ function renderStatus(cell, copy) {
   if (result) {
     result.innerHTML = `<p class="pure-duckdb-status">${escapeHtml(copy)}</p>`;
   }
+  completedResults.delete(cell);
 }
 
 function renderError(cell, copy) {
@@ -52,6 +54,47 @@ function renderError(cell, copy) {
   if (result) {
     result.innerHTML = `<pre class="pure-duckdb-error">${escapeHtml(copy || "Query failed.")}</pre>`;
   }
+  completedResults.delete(cell);
+}
+
+function csvCell(value) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  const text = String(value);
+  if (/[",\r\n]/.test(text)) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
+
+function buildCsv(columns, rows) {
+  const lines = [columns.map(csvCell).join(",")];
+  for (const row of rows) {
+    const values = Array.isArray(row) ? row : [];
+    lines.push(columns.map((_column, index) => csvCell(values[index])).join(","));
+  }
+  return `${lines.join("\r\n")}\r\n`;
+}
+
+function downloadCsv(cell) {
+  const exportData = completedResults.get(cell);
+  const columns = Array.isArray(exportData?.columns) ? exportData.columns : [];
+  const rows = Array.isArray(exportData?.rows) ? exportData.rows : [];
+  if (!columns.length || !rows.length) {
+    return;
+  }
+
+  const blob = new Blob([buildCsv(columns, rows)], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  const safeCellId = String(cell?.dataset?.cellId || "pure-duckdb-result").replace(/[^a-zA-Z0-9_-]+/g, "-");
+  link.href = url;
+  link.download = `${safeCellId}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 function renderRows(cell, job) {
@@ -63,7 +106,16 @@ function renderRows(cell, job) {
   const rows = Array.isArray(job?.rows) ? job.rows : [];
   if (!columns.length) {
     result.innerHTML = `<p class="pure-duckdb-status">${escapeHtml(job?.message || "Statement executed successfully.")}</p>`;
+    completedResults.delete(cell);
     return;
+  }
+  if (rows.length) {
+    completedResults.set(cell, {
+      columns: [...columns],
+      rows: rows.map((row) => (Array.isArray(row) ? [...row] : [])),
+    });
+  } else {
+    completedResults.delete(cell);
   }
   const head = columns.map((column) => `<th>${escapeHtml(column)}</th>`).join("");
   const body = rows
@@ -73,8 +125,14 @@ function renderRows(cell, job) {
     })
     .join("");
   const message = job?.message ? `<p class="pure-duckdb-status">${escapeHtml(job.message)}</p>` : "";
+  const downloadButton = rows.length
+    ? `<button type="button" class="pure-duckdb-download-button" data-download-pure-duckdb-csv>Download CSV</button>`
+    : "";
   result.innerHTML = `
-    ${message}
+    <div class="pure-duckdb-result-bar">
+      ${message}
+      ${downloadButton}
+    </div>
     <table class="pure-duckdb-table">
       <thead><tr>${head}</tr></thead>
       <tbody>${body}</tbody>
@@ -192,6 +250,13 @@ async function runCell(cell) {
 }
 
 document.addEventListener("click", (event) => {
+  const downloadButton = event.target.closest?.("[data-download-pure-duckdb-csv]");
+  if (downloadButton) {
+    const cell = downloadButton.closest("[data-pure-duckdb-cell]");
+    downloadCsv(cell);
+    return;
+  }
+
   const button = event.target.closest?.("[data-run-pure-duckdb-cell]");
   if (!button) {
     return;

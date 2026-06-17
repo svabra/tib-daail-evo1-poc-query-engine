@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from pathlib import Path
 
 from playwright.async_api import async_playwright
 
@@ -31,7 +32,10 @@ async def main() -> None:
 
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=args.headless)
-        context = await browser.new_context(viewport={"width": 1366, "height": 900})
+        context = await browser.new_context(
+            viewport={"width": 1366, "height": 900},
+            accept_downloads=True,
+        )
         page = await context.new_page()
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.on(
@@ -78,6 +82,21 @@ async def main() -> None:
             value = (await first_cell.locator(".pure-duckdb-table tbody tr td").first.inner_text()).strip()
             if value != "1":
                 raise RuntimeError(f"Unexpected Pure DuckDB result value: {value!r}")
+            await first_cell.locator("[data-download-pure-duckdb-csv]").wait_for(
+                state="visible",
+                timeout=args.timeout_ms,
+            )
+            async with page.expect_download(timeout=args.timeout_ms) as download_info:
+                await first_cell.locator("[data-download-pure-duckdb-csv]").click()
+            download = await download_info.value
+            if download.suggested_filename != "pure-duckdb-query-1.csv":
+                raise RuntimeError(
+                    f"Unexpected CSV filename: {download.suggested_filename!r}"
+                )
+            csv_path = await download.path()
+            csv_text = Path(str(csv_path)).read_text(encoding="utf-8")
+            if csv_text.replace("\r\n", "\n") != "pure_value\n1\n":
+                raise RuntimeError(f"Unexpected CSV content: {csv_text!r}")
             duration_one = (await first_cell.locator("[data-pure-duckdb-duration]").inner_text()).strip()
             await page.wait_for_timeout(800)
             duration_two = (await first_cell.locator("[data-pure-duckdb-duration]").inner_text()).strip()
