@@ -52,8 +52,8 @@ async def main() -> None:
                 raise RuntimeError(f"Unexpected Pure DuckDB path: {path!r}")
 
             cell_count = await page.locator("[data-pure-duckdb-cell]").count()
-            if cell_count != 9:
-                raise RuntimeError(f"Expected 9 Pure DuckDB cells, found {cell_count}.")
+            if cell_count != 17:
+                raise RuntimeError(f"Expected 17 Pure DuckDB cells, found {cell_count}.")
             forbidden_count = await page.locator("[data-sidebar], .topbar, [data-query-cell]").count()
             if forbidden_count:
                 raise RuntimeError("Pure DuckDB page rendered notebook shell elements.")

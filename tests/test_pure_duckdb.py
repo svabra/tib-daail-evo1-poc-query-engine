@@ -235,7 +235,7 @@ class PureDuckDBPageTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.body.decode("utf-8")
         self.assertIn('data-pure-duckdb-page', body)
-        self.assertEqual(body.count('data-pure-duckdb-cell'), 9)
+        self.assertEqual(body.count('data-pure-duckdb-cell'), 17)
         self.assertIn('/static/js/pure-duckdb.js', body)
         self.assertNotIn('/static/js/app.js', body)
         self.assertNotIn('data-sidebar', body)
@@ -268,7 +268,7 @@ class PureDuckDBPageTests(unittest.TestCase):
         self.assertIn(".pure-duckdb-download-button", styles)
 
     def test_presets_are_final_duckdb_sql_without_virtual_s3_references(self) -> None:
-        self.assertEqual(len(PURE_DUCKDB_CELLS), 9)
+        self.assertEqual(len(PURE_DUCKDB_CELLS), 17)
         for cell in PURE_DUCKDB_CELLS:
             self.assertNotRegex(cell.sql, r"\bs3\.[A-Za-z0-9_\"]")
             self.assertNotIn("s3://n_3_1_imports/", cell.sql)
@@ -280,6 +280,21 @@ class PureDuckDBPageTests(unittest.TestCase):
             )
         self.assertIn("union_by_name = true", PURE_DUCKDB_CELLS[0].sql)
         self.assertIn("union_by_name = true", PURE_DUCKDB_CELLS[1].sql)
+
+    def test_appended_analytical_queries_are_translated_to_duckdb_sql(self) -> None:
+        appended_sql = "\n\n".join(cell.sql for cell in PURE_DUCKDB_CELLS[9:])
+
+        self.assertEqual(len(PURE_DUCKDB_CELLS[9:]), 8)
+        self.assertIn("-- 5. HIGH CARDINALITY GROUP BY", PURE_DUCKDB_CELLS[9].sql)
+        self.assertIn("read_parquet('s3://core/fact_bupo.parquet')", appended_sql)
+        self.assertNotRegex(appended_sql, r"\bFROM\s+fact_bupo\b")
+        self.assertNotRegex(appended_sql, r"\bSELECT\s+TOP\b")
+        self.assertIn("LIMIT 10", PURE_DUCKDB_CELLS[13].sql)
+        self.assertIn("DATE_TRUNC('month', Buchungsdatum)::DATE AS mmonth", PURE_DUCKDB_CELLS[16].sql)
+        self.assertIn("ORDER BY mmonth, total DESC", PURE_DUCKDB_CELLS[16].sql)
+        self.assertNotIn("ADD_MONTHS", appended_sql)
+        self.assertNotIn("monthh", appended_sql)
+        self.assertNotIn("GROUP BY Belegart\n", appended_sql)
 
     def test_copy_artifact_queries_use_isolated_write_path(self) -> None:
         for cell in (PURE_DUCKDB_CELLS[1], PURE_DUCKDB_CELLS[3]):

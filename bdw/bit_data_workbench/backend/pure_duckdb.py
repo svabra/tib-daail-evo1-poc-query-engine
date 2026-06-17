@@ -211,6 +211,121 @@ ORDER BY cnt DESC;
 """.strip()
 
 
+def _query_10_sql() -> str:
+    return f"""
+-- 5. HIGH CARDINALITY GROUP BY
+SELECT
+    SachkontoHBID,
+    Buchungsdatum,
+    COUNT(*) AS cnt,
+    SUM(BetragHauswaehrung) AS total_amount
+FROM {_read_parquet(FACT_BUPO_TARGET)}
+GROUP BY
+    SachkontoHBID,
+    Buchungsdatum;
+""".strip()
+
+
+def _query_11_sql() -> str:
+    return f"""
+-- 6. TIME SERIES AGGREGATION
+SELECT
+    Buchungsdatum,
+    SUM(BetragHauswaehrung) AS daily_total,
+    COUNT(*) AS transactions
+FROM {_read_parquet(FACT_BUPO_TARGET)}
+GROUP BY Buchungsdatum
+ORDER BY Buchungsdatum;
+""".strip()
+
+
+def _query_12_sql() -> str:
+    return f"""
+-- 7. DERIVED EXPRESSION AGGREGATION
+SELECT
+    BelegartID,
+    SUM(BetragHauswaehrung * Umrechnungskurs) AS adjusted_amount
+FROM {_read_parquet(FACT_BUPO_TARGET)}
+GROUP BY BelegartID;
+""".strip()
+
+
+def _query_13_sql() -> str:
+    return f"""
+-- 8. CONDITIONAL (CASE WHEN) AGGREGATION
+SELECT
+    BelegartID,
+    SUM(CASE
+        WHEN Ausgleichsstatus = 'A' THEN BetragHauswaehrung
+        ELSE 0
+    END) AS cleared_amount,
+    SUM(CASE
+        WHEN Ausgleichsstatus <> 'A' THEN BetragHauswaehrung
+        ELSE 0
+    END) AS open_amount
+FROM {_read_parquet(FACT_BUPO_TARGET)}
+GROUP BY BelegartID;
+""".strip()
+
+
+def _query_14_sql() -> str:
+    return f"""
+-- 9. TOP-N QUERY WITH SORT
+SELECT
+    SachkontoHBID,
+    SUM(BetragHauswaehrung) AS total_amount
+FROM {_read_parquet(FACT_BUPO_TARGET)}
+GROUP BY SachkontoHBID
+ORDER BY total_amount DESC
+LIMIT 10;
+""".strip()
+
+
+def _query_15_sql() -> str:
+    return f"""
+-- 10. WINDOW FUNCTION (RUNNING TOTAL)
+SELECT
+    SachkontoHBID,
+    Buchungsdatum,
+    BetragHauswaehrung,
+    SUM(BetragHauswaehrung) OVER (
+        PARTITION BY SachkontoHBID
+        ORDER BY Buchungsdatum
+    ) AS running_total
+FROM {_read_parquet(FACT_BUPO_TARGET)};
+""".strip()
+
+
+def _query_16_sql() -> str:
+    return f"""
+-- 11. DISTINCT COUNT
+SELECT
+    COUNT(DISTINCT SachkontoHBID) AS distinct_accounts,
+    COUNT(DISTINCT BelegartID) AS distinct_doc_types
+FROM {_read_parquet(FACT_BUPO_TARGET)};
+""".strip()
+
+
+def _query_17_sql() -> str:
+    return f"""
+-- 12. COMPLEX ANALYTICAL QUERY
+SELECT
+    BelegartID,
+    WaehrungHauptbuchID,
+    DATE_TRUNC('month', Buchungsdatum)::DATE AS mmonth,
+    COUNT(*) AS cnt,
+    SUM(BetragHauswaehrung) AS total,
+    AVG(BetragHauswaehrung) AS avg_amount
+FROM {_read_parquet(FACT_BUPO_TARGET)}
+WHERE Buchungsdatum >= DATE '2022-01-01'
+GROUP BY
+    BelegartID,
+    WaehrungHauptbuchID,
+    DATE_TRUNC('month', Buchungsdatum)::DATE
+ORDER BY mmonth, total DESC;
+""".strip()
+
+
 PURE_DUCKDB_CELLS: tuple[PureDuckDBCell, ...] = (
     PureDuckDBCell("pure-duckdb-query-1", "Query 1", _query_1_sql()),
     PureDuckDBCell("pure-duckdb-query-2", "Query 2", _query_2_sql()),
@@ -221,6 +336,14 @@ PURE_DUCKDB_CELLS: tuple[PureDuckDBCell, ...] = (
     PureDuckDBCell("pure-duckdb-query-7", "Query 7", _query_7_sql()),
     PureDuckDBCell("pure-duckdb-query-8", "Query 8", _query_8_sql()),
     PureDuckDBCell("pure-duckdb-query-9", "Query 9", _query_9_sql()),
+    PureDuckDBCell("pure-duckdb-query-10", "Query 10", _query_10_sql()),
+    PureDuckDBCell("pure-duckdb-query-11", "Query 11", _query_11_sql()),
+    PureDuckDBCell("pure-duckdb-query-12", "Query 12", _query_12_sql()),
+    PureDuckDBCell("pure-duckdb-query-13", "Query 13", _query_13_sql()),
+    PureDuckDBCell("pure-duckdb-query-14", "Query 14", _query_14_sql()),
+    PureDuckDBCell("pure-duckdb-query-15", "Query 15", _query_15_sql()),
+    PureDuckDBCell("pure-duckdb-query-16", "Query 16", _query_16_sql()),
+    PureDuckDBCell("pure-duckdb-query-17", "Query 17", _query_17_sql()),
 )
 
 

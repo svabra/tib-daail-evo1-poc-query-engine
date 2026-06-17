@@ -1,9 +1,36 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.27. Keep entries concise and
+# Derived from git history through version 0.10.28. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.28",
+        "releasedAt": "2026-06-17T17:33:41+02:00",
+        "features": [
+            (
+                "Pure DuckDB now includes eight additional analytical cells, "
+                "expanding the page from 9 to 17 executable DuckDB SQL cells."
+            ),
+            (
+                "The appended Kostenbelege analytics cover high-cardinality "
+                "grouping, time-series aggregation, derived expressions, "
+                "conditional aggregation, top-N sorting, window functions, "
+                "distinct counts, and monthly analytical rollups."
+            ),
+            (
+                "ANSI/Teradata syntax from the supplied examples is translated "
+                "to final DuckDB SQL, including fact_bupo Parquet reads, "
+                "TOP 10 to LIMIT 10, and ADD_MONTHS/monthh month bucketing to "
+                "DATE_TRUNC('month', ...) AS mmonth."
+            ),
+            (
+                "Regression coverage now executes all 17 presets against tiny "
+                "local Parquet fixtures and the Pure DuckDB Playwright smoke "
+                "asserts the expanded cell count."
+            ),
+        ],
+    },
     {
         "version": "0.10.27",
         "releasedAt": "2026-06-17T17:23:44+02:00",
