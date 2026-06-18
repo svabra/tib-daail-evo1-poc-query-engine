@@ -7,18 +7,28 @@ from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
+import re
+import shutil
+from tempfile import mkdtemp
 from typing import Any
+from urllib.parse import urlparse
 
 import duckdb
 
 from ..config import Settings
 from .runtime_connections import create_duckdb_worker_connection
 from .runtime_storage import delete_query_spill_directory
+from .s3_storage import s3_client
+from .sql_utils import sql_literal
 
 
 PURE_DUCKDB_DIRECT_EXECUTION_PATH = "direct-in-process"
 PURE_DUCKDB_RUNNING_STATUSES = {"queued", "running"}
 PURE_DUCKDB_TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+S3_COPY_TARGET_PATTERN = re.compile(
+    r"(?is)(?P<prefix>\bTO\s*)'(?P<target>s3://[^']+)'(?P<suffix>\s*\()"
+)
+PURE_DUCKDB_SINGLE_PUT_MAX_BYTES = 5 * 1024 * 1024 * 1024
 
 
 def _utc_now_iso() -> str:
@@ -94,6 +104,65 @@ class PureDuckDBJobRecord:
     thread: threading.Thread | None = None
     connection: duckdb.DuckDBPyConnection | None = None
     spill_temp_directory: Path | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PureDuckDBS3CopyUpload:
+    execution_sql: str
+    target_url: str
+    bucket: str
+    key: str
+    local_path: Path
+    temporary_directory: Path
+
+
+def _s3_copy_upload_for_sql(sql: str, job_id: str) -> PureDuckDBS3CopyUpload | None:
+    matches = list(S3_COPY_TARGET_PATTERN.finditer(sql))
+    if len(matches) != 1:
+        return None
+
+    match = matches[0]
+    target_url = match.group("target")
+    parsed = urlparse(target_url)
+    key = parsed.path.lstrip("/")
+    if parsed.scheme.lower() != "s3" or not parsed.netloc or not key or key.endswith("/"):
+        return None
+
+    temporary_directory = Path(mkdtemp(prefix=f"bdw-pure-duckdb-s3-copy-{job_id[-8:]}-"))
+    suffix = Path(key).suffix or ".parquet"
+    local_path = temporary_directory / f"copy-output{suffix}"
+    execution_sql = (
+        sql[: match.start()]
+        + match.group("prefix")
+        + sql_literal(local_path.as_posix())
+        + match.group("suffix")
+        + sql[match.end() :]
+    )
+    return PureDuckDBS3CopyUpload(
+        execution_sql=execution_sql,
+        target_url=target_url,
+        bucket=parsed.netloc,
+        key=key,
+        local_path=local_path,
+        temporary_directory=temporary_directory,
+    )
+
+
+def _put_s3_file_single_request(
+    client,
+    *,
+    local_path: Path,
+    bucket: str,
+    key: str,
+) -> None:
+    size_bytes = local_path.stat().st_size
+    if size_bytes > PURE_DUCKDB_SINGLE_PUT_MAX_BYTES:
+        raise ValueError(
+            "Pure DuckDB single-file S3 COPY output exceeds the 5 GiB single PUT limit. "
+            "Use a Parquet dataset folder or split output files instead of a single S3 object."
+        )
+    with local_path.open("rb") as body:
+        client.put_object(Bucket=bucket, Key=key, Body=body)
 
 
 class PureDuckDBJobManager:
@@ -177,6 +246,7 @@ class PureDuckDBJobManager:
         truncated: bool,
         engine_query_ms: float,
         result_fetch_ms: float,
+        s3_upload_ms: float = 0.0,
     ) -> None:
         duration_ms = (time.perf_counter() - started) * 1000
         snapshot = record.snapshot
@@ -201,6 +271,8 @@ class PureDuckDBJobManager:
             "resultFetchMs": result_fetch_ms,
             "engineAccessWaitMs": 0.0,
         }
+        if s3_upload_ms > 0:
+            snapshot.timings["s3UploadMs"] = s3_upload_ms
         snapshot.completed_at = _utc_now_iso()
         snapshot.updated_at = snapshot.completed_at
         self._condition.notify_all()
@@ -224,6 +296,7 @@ class PureDuckDBJobManager:
         started = time.perf_counter()
         connection: duckdb.DuckDBPyConnection | None = None
         spill_temp_directory: Path | None = None
+        s3_copy_upload: PureDuckDBS3CopyUpload | None = None
         with self._condition:
             record = self._jobs[job_id]
             if self._settings.duckdb_temp_directory is not None:
@@ -244,10 +317,27 @@ class PureDuckDBJobManager:
                 record = self._jobs[job_id]
                 record.connection = connection
 
+            s3_copy_upload = _s3_copy_upload_for_sql(record.snapshot.sql, job_id)
+            execution_sql = (
+                s3_copy_upload.execution_sql
+                if s3_copy_upload is not None
+                else record.snapshot.sql
+            )
             query_started = time.perf_counter()
-            cursor = connection.execute(record.snapshot.sql)
+            cursor = connection.execute(execution_sql)
             columns = [column[0] for column in cursor.description] if cursor.description else []
             engine_query_ms = (time.perf_counter() - query_started) * 1000
+
+            s3_upload_ms = 0.0
+            if s3_copy_upload is not None:
+                upload_started = time.perf_counter()
+                _put_s3_file_single_request(
+                    s3_client(self._settings),
+                    local_path=s3_copy_upload.local_path,
+                    bucket=s3_copy_upload.bucket,
+                    key=s3_copy_upload.key,
+                )
+                s3_upload_ms = (time.perf_counter() - upload_started) * 1000
 
             rows: list[list[Any]] = []
             truncated = False
@@ -274,12 +364,15 @@ class PureDuckDBJobManager:
                     truncated=truncated,
                     engine_query_ms=engine_query_ms,
                     result_fetch_ms=result_fetch_ms,
+                    s3_upload_ms=s3_upload_ms,
                 )
         except Exception as exc:
             with self._condition:
                 record = self._jobs[job_id]
                 self._set_failed(record, started=started, error=exc)
         finally:
+            if s3_copy_upload is not None:
+                shutil.rmtree(s3_copy_upload.temporary_directory, ignore_errors=True)
             if connection is not None:
                 with suppress(Exception):
                     connection.close()

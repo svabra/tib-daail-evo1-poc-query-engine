@@ -1,39 +1,38 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.32. Keep entries concise and
+# Derived from git history through version 0.10.33. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
     {
-        "version": "0.10.32",
-        "releasedAt": "2026-06-18T17:40:38+02:00",
+        "version": "0.10.33",
+        "releasedAt": "2026-06-18T21:01:05+02:00",
         "features": [
             (
-                "Pure DuckDB now includes Query 2b immediately after Query "
-                "2, keeping Query 2 unchanged while offering the optimized "
-                "single-file FACT_Buchungsbelegposition materialization."
+                "Pure DuckDB single-file S3 COPY writes now avoid DuckDB's "
+                "S3 multipart uploader by writing the Parquet artifact to a "
+                "temporary local file first."
             ),
             (
-                "Query 2b exposes collapsed Optimization Remarks explaining "
-                "that KBKP, KBPO, and KBHP joins plus ledger fallback are "
-                "resolved once before original and settlement rows are "
-                "derived with a two-row CROSS JOIN."
+                "The temporary artifact is uploaded through the application "
+                "S3 client with a direct PutObject call, avoiding the "
+                "production ECS 404 on POST ?uploads= multipart initiation."
             ),
             (
-                "Pure DuckDB local development now supplies an explicit S3 "
-                "region to DuckDB and boto clients, preventing local MinIO "
-                "reads from failing with a missing-region HTTP 400."
+                "Pure DuckDB reports the application-managed upload duration "
+                "as s3UploadMs while preserving the direct in-process DuckDB "
+                "execution path and zero shared DuckDB access wait."
             ),
             (
-                "The Pure DuckDB page now renders local-compatible S3 bucket "
-                "references for local endpoints while preserving production "
-                "ECS object-store casing for non-local deployments."
+                "Pure DuckDB single-file S3 COPY now fails clearly above the "
+                "5 GiB single PutObject limit and directs users to dataset or "
+                "split-file outputs instead of silently falling back to "
+                "multipart upload."
             ),
             (
-                "Regression coverage now verifies Query 2b ordering, "
-                "collapsed remarks rendering, Query 2b equivalence, Q2 "
-                "benchmark candidates, S3 region bootstrap, and local bucket "
-                "reference rendering."
+                "Regression coverage now verifies the direct PutObject path, "
+                "temporary file cleanup, the 5 GiB guardrail, and live local "
+                "Pure DuckDB S3 write/read behavior."
             ),
         ],
     },

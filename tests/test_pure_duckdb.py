@@ -5,6 +5,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 import duckdb
 from starlette.requests import Request
@@ -462,6 +463,106 @@ class PureDuckDBPageTests(unittest.TestCase):
             self.assertEqual(payload["status"], "completed")
             self.assertEqual(payload["duckdbExecutionPath"], PURE_DUCKDB_DIRECT_EXECUTION_PATH)
             self.assertEqual(payload["rows"], [[7]])
+
+    def test_pure_duckdb_s3_copy_writes_local_file_then_uploads(self) -> None:
+        test_case = self
+
+        class FakeS3Client:
+            def __init__(self) -> None:
+                self.put_object_calls: list[dict[str, object]] = []
+                self.upload_parent: Path | None = None
+
+            def put_object(self, **kwargs):
+                body = kwargs["Body"]
+                source_path = Path(body.name)
+                self.upload_parent = source_path.parent
+                test_case.assertTrue(source_path.is_file())
+                uploaded_copy = self.upload_parent / "uploaded-copy.parquet"
+                uploaded_copy.write_bytes(body.read())
+                con = duckdb.connect(":memory:")
+                try:
+                    test_case.assertEqual(
+                        con.execute(
+                            f"SELECT COUNT(*) FROM read_parquet('{uploaded_copy.as_posix()}')"
+                        ).fetchone()[0],
+                        1,
+                    )
+                finally:
+                    con.close()
+                self.put_object_calls.append(
+                    {
+                        "Bucket": kwargs["Bucket"],
+                        "Key": kwargs["Key"],
+                    }
+                )
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+            settings = make_settings(Path(tmp_dir))
+            settings.s3_endpoint = "ecspr01.sz.admin.ch:9021"
+            settings.s3_access_key_id = "key"
+            settings.s3_secret_access_key = "secret"
+            settings.s3_region = "us-east-1"
+            fake_client = FakeS3Client()
+
+            manager = PureDuckDBJobManager(settings=settings, max_result_rows=10)
+            with patch(
+                "bit_data_workbench.backend.pure_duckdb_jobs.s3_client",
+                return_value=fake_client,
+            ):
+                snapshot = manager.start_job(
+                    cell_id="pure-duckdb-query-4",
+                    sql=(
+                        "COPY (SELECT 1 AS id, 'alpha' AS name) "
+                        "TO 's3://core/kbkp_today.parquet' "
+                        "(FORMAT parquet, OVERWRITE_OR_IGNORE true);"
+                    ),
+                )
+                terminal = manager.wait_for_terminal(snapshot.job_id, timeout=20)
+
+            payload = terminal.payload
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(
+                fake_client.put_object_calls,
+                [{"Bucket": "core", "Key": "kbkp_today.parquet"}],
+            )
+            self.assertGreater(payload["timings"].get("s3UploadMs", 0), 0)
+            self.assertIsNotNone(fake_client.upload_parent)
+            self.assertTrue(
+                wait_until(
+                    lambda: fake_client.upload_parent is not None
+                    and not fake_client.upload_parent.exists(),
+                    timeout=5,
+                )
+            )
+
+    def test_pure_duckdb_s3_copy_rejects_outputs_above_single_put_limit(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+            settings = make_settings(Path(tmp_dir))
+            settings.s3_endpoint = "ecspr01.sz.admin.ch:9021"
+            settings.s3_access_key_id = "key"
+            settings.s3_secret_access_key = "secret"
+            settings.s3_region = "us-east-1"
+            manager = PureDuckDBJobManager(settings=settings, max_result_rows=10)
+            with patch(
+                "bit_data_workbench.backend.pure_duckdb_jobs.s3_client",
+                return_value=object(),
+            ), patch(
+                "bit_data_workbench.backend.pure_duckdb_jobs.PURE_DUCKDB_SINGLE_PUT_MAX_BYTES",
+                1,
+            ):
+                snapshot = manager.start_job(
+                    cell_id="pure-duckdb-query-4",
+                    sql=(
+                        "COPY (SELECT 1 AS id, 'alpha' AS name) "
+                        "TO 's3://core/kbkp_today.parquet' "
+                        "(FORMAT parquet, OVERWRITE_OR_IGNORE true);"
+                    ),
+                )
+                terminal = manager.wait_for_terminal(snapshot.job_id, timeout=20)
+
+            payload = terminal.payload
+            self.assertEqual(payload["status"], "failed")
+            self.assertIn("single PUT limit", payload["error"])
 
     def test_local_duckdb_can_execute_all_preset_queries_with_tiny_parquet_fixtures(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:
