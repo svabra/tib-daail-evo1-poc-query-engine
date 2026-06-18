@@ -25,15 +25,12 @@ from bit_data_workbench.backend.pure_duckdb import (  # noqa: E402
     KBPO_PATHS,
     PURE_DUCKDB_CELLS,
 )
-from bit_data_workbench.backend.query_jobs import (  # noqa: E402
-    DUCKDB_EXECUTION_PATH_ISOLATED_READ,
-    DUCKDB_EXECUTION_PATH_ISOLATED_WRITE,
-    QUERY_EXECUTION_DUCKDB_READ,
-    QUERY_EXECUTION_DUCKDB_WRITE,
-    QueryJobManager,
-    classify_query_execution,
+from bit_data_workbench.backend.pure_duckdb_jobs import (  # noqa: E402
+    PURE_DUCKDB_DIRECT_EXECUTION_PATH,
+    PureDuckDBJobManager,
 )
 from bit_data_workbench.config import Settings  # noqa: E402
+from bit_data_workbench.backend.service import WorkbenchService  # noqa: E402
 from bit_data_workbench.web.router import pure_duckdb_page  # noqa: E402
 from bit_data_workbench.version_info import current_repo_version  # noqa: E402
 
@@ -267,6 +264,22 @@ class PureDuckDBPageTests(unittest.TestCase):
         self.assertIn("completedResults.set", script)
         self.assertIn(".pure-duckdb-download-button", styles)
 
+    def test_big_data_benchmark_script_targets_pure_duckdb_s3_fixtures(self) -> None:
+        script = (REPO_ROOT / "scripts" / "pure_duckdb_big_data_benchmark.py").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("default=500.0", script)
+        self.assertIn("KBKP_FULL_PATH", script)
+        self.assertIn("KBHP_FULL_PATH", script)
+        self.assertIn("KALENDER_PATH", script)
+        self.assertIn("KBPO_PATHS", script)
+        self.assertIn("run_api_benchmark", script)
+        self.assertIn("run_ui_benchmark", script)
+        self.assertIn("/api/pure-duckdb/jobs", script)
+        self.assertIn("--local-compatible-s3-names", script)
+        self.assertIn("Object key casing is preserved", script)
+
     def test_presets_are_final_duckdb_sql_without_virtual_s3_references(self) -> None:
         self.assertEqual(len(PURE_DUCKDB_CELLS), 17)
         for cell in PURE_DUCKDB_CELLS:
@@ -307,48 +320,50 @@ class PureDuckDBPageTests(unittest.TestCase):
         self.assertNotIn("monthh", appended_sql)
         self.assertNotIn("GROUP BY Belegart\n", appended_sql)
 
-    def test_copy_artifact_queries_use_isolated_write_path(self) -> None:
-        for cell in (PURE_DUCKDB_CELLS[1], PURE_DUCKDB_CELLS[3]):
-            self.assertEqual(
-                classify_query_execution(cell.sql, []),
-                QUERY_EXECUTION_DUCKDB_WRITE,
-            )
-            self.assertEqual(
-                QueryJobManager._duckdb_execution_path(
-                    execution_mode=QUERY_EXECUTION_DUCKDB_WRITE,
-                    source_ids=[],
-                    touched_relations=[],
-                    touched_buckets=[],
-                    source_summaries=[],
-                    execution_sql=cell.sql,
-                ),
-                DUCKDB_EXECUTION_PATH_ISOLATED_WRITE,
-            )
-
-    def test_pure_read_job_runs_isolated_without_shared_duckdb_wait(self) -> None:
+    def test_pure_duckdb_manager_runs_directly_in_process(self) -> None:
         with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
-            manager = QueryJobManager(
+            manager = PureDuckDBJobManager(
                 settings=make_settings(Path(tmp_dir)),
                 max_result_rows=10,
-                notebook_title_resolver=lambda _notebook_id: "Pure DuckDB",
-                metadata_refresher=lambda: None,
             )
             snapshot = manager.start_job(
-                sql="SELECT 1 AS pure_value",
-                execution_sql="SELECT 1 AS pure_value",
-                notebook_id="pure-duckdb",
-                notebook_title="Pure DuckDB",
                 cell_id="pure-duckdb-query-test",
-                data_sources=[],
-                source_summaries=[],
+                sql="SELECT 1 AS pure_value",
             )
 
             terminal = manager.wait_for_terminal(snapshot.job_id, timeout=20)
             payload = terminal.payload
             self.assertEqual(payload["status"], "completed")
-            self.assertEqual(payload["duckdbExecutionPath"], DUCKDB_EXECUTION_PATH_ISOLATED_READ)
+            self.assertEqual(payload["duckdbExecutionPath"], PURE_DUCKDB_DIRECT_EXECUTION_PATH)
             self.assertEqual(payload["timings"].get("engineAccessWaitMs"), 0.0)
             self.assertEqual(payload["rows"], [[1]])
+            self.assertIn("backendTotalMs", payload["timings"])
+
+    def test_service_pure_duckdb_bypasses_query_job_manager(self) -> None:
+        class ExplodingQueryJobs:
+            def start_job(self, **_kwargs):
+                raise AssertionError("Pure DuckDB must not use QueryJobManager.start_job")
+
+            def snapshot(self, _job_id):
+                raise AssertionError("Pure DuckDB must not use QueryJobManager.snapshot")
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+            service = WorkbenchService(make_settings(Path(tmp_dir)))
+            service._query_jobs = ExplodingQueryJobs()  # type: ignore[assignment]
+
+            started = service.start_pure_duckdb_job(
+                cell_id="pure-duckdb-query-test",
+                sql="SELECT 7 AS pure_value",
+            )
+            terminal = service._pure_duckdb_jobs.wait_for_terminal(  # type: ignore[attr-defined]
+                started["jobId"],
+                timeout=20,
+            )
+            payload = service.pure_duckdb_job(terminal.job_id)
+
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(payload["duckdbExecutionPath"], PURE_DUCKDB_DIRECT_EXECUTION_PATH)
+            self.assertEqual(payload["rows"], [[7]])
 
     def test_local_duckdb_can_execute_all_preset_queries_with_tiny_parquet_fixtures(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_dir:

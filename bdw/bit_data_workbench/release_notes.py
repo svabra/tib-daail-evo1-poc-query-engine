@@ -1,33 +1,35 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.29. Keep entries concise and
+# Derived from git history through version 0.10.30. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
     {
-        "version": "0.10.29",
-        "releasedAt": "2026-06-17T22:06:26+02:00",
+        "version": "0.10.30",
+        "releasedAt": "2026-06-18T08:18:01+02:00",
         "features": [
             (
-                "Data source object action menus now include Copy source "
-                "reference - DuckDB, copying the final DuckDB table "
-                "function or relation reference for direct DuckDB SQL use."
+                "Pure DuckDB page jobs now bypass QueryJobManager and run "
+                "through a dedicated direct in-process DuckDB job manager "
+                "instead of the notebook one-query-one-process pipeline."
             ),
             (
-                "Shared Workspace S3 objects prefer catalog-provided "
-                "query SQL and fall back to read_parquet, read_csv_auto, "
-                "or read_json_auto with s3:// paths when copying DuckDB "
-                "source references."
+                "Direct Pure DuckDB execution uses an in-memory DuckDB "
+                "connection with the existing S3, extension, runtime, and "
+                "spill configuration bootstrap while reporting zero shared "
+                "DuckDB access wait."
             ),
             (
-                "Pure DuckDB Kostenbelege input references now preserve "
-                "the case-sensitive Dell ECS S3 bucket and object names "
-                "for CORE, KBPOimports, and DIM_Kalender sources."
+                "A Pure DuckDB big-data benchmark script now generates "
+                "large Kostenbelege Parquet fixtures, uploads them to S3, "
+                "and can run all Pure DuckDB cells through both API and UI "
+                "with local S3 bucket-name compatibility."
             ),
             (
-                "Regression coverage now asserts DuckDB source reference "
-                "menu wiring and executes all Pure DuckDB presets against "
-                "tiny local Parquet fixtures with the corrected S3 casing."
+                "Regression coverage now proves Pure DuckDB does not call "
+                "QueryJobManager, verifies the direct execution payload, "
+                "and keeps local DuckDB spill artifacts out of release "
+                "status."
             ),
         ],
     },

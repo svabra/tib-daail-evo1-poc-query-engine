@@ -89,6 +89,7 @@ from .materialized_stages import (
     sql_stage_alias_references,
 )
 from .python_execution import KernelSessionManager, PythonJobManager
+from .pure_duckdb_jobs import PureDuckDBJobManager
 from .query_analysis import (
     KnownRelationReference,
     analyze_query_touches,
@@ -340,6 +341,10 @@ class WorkbenchService:
             ),
             terminal_job_callback=self._record_query_run_history,
             access_coordinator=self._duckdb_query_access,
+        )
+        self._pure_duckdb_jobs = PureDuckDBJobManager(
+            settings=settings,
+            max_result_rows=settings.max_result_rows,
         )
         self._kernel_sessions = KernelSessionManager()
         self._python_jobs = PythonJobManager(
@@ -1572,22 +1577,14 @@ class WorkbenchService:
         if not normalized_sql:
             raise ValueError("Provide a DuckDB SQL statement before running the cell.")
         normalized_cell_id = str(cell_id or "").strip() or "pure-duckdb-cell"
-        snapshot = self._query_jobs.start_job(
-            sql=normalized_sql,
-            execution_sql=normalized_sql,
-            notebook_id="pure-duckdb",
-            notebook_title="Pure DuckDB",
+        snapshot = self._pure_duckdb_jobs.start_job(
             cell_id=normalized_cell_id,
-            data_sources=[],
-            touched_relations=[],
-            touched_buckets=[],
-            source_summaries=[],
-            query_options={},
+            sql=normalized_sql,
         )
         return snapshot.payload
 
     def pure_duckdb_job(self, job_id: str) -> dict[str, object]:
-        return self._query_jobs.snapshot(str(job_id or "").strip()).payload
+        return self._pure_duckdb_jobs.snapshot(str(job_id or "").strip()).payload
 
     def query_runs_history(
         self,
