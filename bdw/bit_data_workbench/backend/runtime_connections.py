@@ -7,7 +7,7 @@ from pathlib import Path
 import duckdb
 
 from ..config import Settings
-from .s3_storage import effective_s3_url_style, normalize_s3_endpoint
+from .s3_storage import effective_s3_region, effective_s3_url_style, normalize_s3_endpoint
 from .sql_utils import sql_identifier, sql_literal
 
 
@@ -296,6 +296,7 @@ def _s3_secret_options(
         "PROVIDER config",
         f"KEY_ID {sql_literal(access_key_id)}",
         f"SECRET {sql_literal(secret_access_key)}",
+        f"REGION {sql_literal(effective_s3_region(settings))}",
         f"ENDPOINT {sql_literal(endpoint)}",
         f"USE_SSL {'true' if use_ssl else 'false'}",
     ]

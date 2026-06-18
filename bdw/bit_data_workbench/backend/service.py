@@ -36,6 +36,7 @@ from .sql_utils import (
 )
 from .s3_storage import (
     download_s3_file,
+    effective_s3_region,
     effective_s3_url_style,
     list_s3_buckets,
     list_s3_buckets_from_client,
@@ -5061,6 +5062,7 @@ class WorkbenchService:
             "PROVIDER config",
             f"KEY_ID {sql_literal(access_key_id)}",
             f"SECRET {sql_literal(secret_access_key)}",
+            f"REGION {sql_literal(effective_s3_region(self.settings))}",
             f"ENDPOINT {sql_literal(endpoint)}",
             f"USE_SSL {'true' if use_ssl else 'false'}",
         ]

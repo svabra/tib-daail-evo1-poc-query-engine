@@ -17,6 +17,7 @@ from ..config import Settings
 
 
 logger = logging.getLogger(__name__)
+DEFAULT_S3_REGION = "us-east-1"
 
 
 def _parsed_endpoint_host_port(raw_endpoint: str) -> tuple[str | None, int | None]:
@@ -194,6 +195,26 @@ def effective_s3_url_style(
     return None
 
 
+def is_likely_local_s3_endpoint(endpoint: str | None) -> bool:
+    endpoint_value = str(endpoint or "").strip()
+    if not endpoint_value:
+        return False
+    try:
+        normalized_endpoint, _ssl_enabled, _reason = normalize_s3_endpoint(
+            endpoint_value,
+            use_ssl=False,
+            verify_ssl=False,
+        )
+        hostname, _port = _parsed_endpoint_host_port(normalized_endpoint)
+    except Exception:
+        hostname, _port = _parsed_endpoint_host_port(endpoint_value)
+    return _is_likely_local_s3_host(hostname)
+
+
+def effective_s3_region(settings: Settings) -> str:
+    return (getattr(settings, "s3_region", None) or "").strip() or DEFAULT_S3_REGION
+
+
 def s3_client(
     settings: Settings,
     *,
@@ -229,6 +250,7 @@ def s3_client(
     client = boto3.client(
         "s3",
         endpoint_url=endpoint_url,
+        region_name=effective_s3_region(settings),
         aws_access_key_id=settings.current_s3_access_key_id(),
         aws_secret_access_key=settings.current_s3_secret_access_key(),
         aws_session_token=settings.current_s3_session_token(),

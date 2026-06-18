@@ -551,7 +551,7 @@ def pure_duckdb_page(
         context={
             "title": "Pure DuckDB",
             "runtime": service.runtime_info(),
-            "pure_duckdb_cells": pure_duckdb_cells_payload(),
+            "pure_duckdb_cells": pure_duckdb_cells_payload(getattr(service, "settings", None)),
         },
     )
 

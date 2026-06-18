@@ -6,6 +6,7 @@ from .notebook_presets import (
     _build_kostenbelege_3_1_optimized_sql,
     _build_kostenbelege_3_1_sql,
 )
+from .s3_storage import is_likely_local_s3_endpoint
 from .sql_utils import sql_literal
 
 
@@ -24,6 +25,11 @@ KBPO_PATHS = (
     "s3://KBPOimports/KBPO2024.parquet",
     "s3://KBPOimports/KBPO2025.parquet",
 )
+LOCAL_COMPATIBLE_S3_PATH_REPLACEMENTS = {
+    "s3://CORE/": "s3://core/",
+    "s3://KBPOimports/": "s3://kbpoimports/",
+    "s3://3_1_imports/": "s3://3-1-imports/",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +47,11 @@ class PureDuckDBCell:
             "sql": self.sql,
             "remarks": list(self.remarks),
         }
+
+    def payload_with_sql(self, sql: str) -> dict[str, object]:
+        payload = self.payload
+        payload["sql"] = sql
+        return payload
 
 
 def _read_parquet(path: str) -> str:
@@ -134,8 +145,19 @@ QUERY_1B_OPTIMIZATION_REMARKS = (
 )
 
 
-def _query_2_sql() -> str:
-    fact_select = _fact_bupo_select_sql(
+QUERY_2B_OPTIMIZATION_REMARKS = (
+    "Query 2b keeps the output contract of Query 2: it writes the same FACT_Buchungsbelegposition row shape to the same single ZSTD Parquet artifact. The result remains consistent with Query 2.",
+    "The optimization is in how the FACT rows are built before COPY. Query 2 repeats the wide KBKP, KBPO, and KBHP join work in separate UNION ALL branches for original and settlement rows. Query 2b builds the resolved joined row set once.",
+    "The expensive KBKP, KBPO, and KBHP joins are performed once through current source snapshots. Ledger-account fallback is resolved once before the final projection: exact KBHP position matches are kept first, and the document-level fallback is used only for rows without an exact position match.",
+    "Original and settlement rows are derived from the resolved position set with a two-row CROSS JOIN. Originalposition keeps the amount sign, Ausgleichsposition applies the negative sign, and the original-versus-settlement date semantics are preserved.",
+    "No runtime path, S3 configuration, or execution engine behavior changes are part of this optimization. It still uses Pure DuckDB direct in-process execution, read_parquet inputs, and a single COPY TO Parquet output.",
+    "Regression checks confirm that schema, row count, grouped fingerprints, and amount totals match Query 2.",
+)
+
+
+def _materialized_fact_bupo_copy_sql(*, optimized: bool, comment: str) -> str:
+    builder = _optimized_fact_bupo_select_sql if optimized else _fact_bupo_select_sql
+    fact_select = builder(
         kbkp_relation="kbkp_today",
         kbpo_relation="kbpo_today",
         kbhp_relation="kbhp_today",
@@ -143,7 +165,7 @@ def _query_2_sql() -> str:
     )
     fact_select_ctes = fact_select[5:] if fact_select.upper().startswith("WITH ") else fact_select
     return f"""
--- Materialize FACT_Buchungsbelegposition once as an S3 Parquet artifact.
+{comment}
 COPY (
 WITH kbkp_today AS (
     SELECT *
@@ -170,6 +192,20 @@ TO {sql_literal(FACT_BUPO_TARGET)}
     OVERWRITE_OR_IGNORE true
 );
 """.strip()
+
+
+def _query_2_sql() -> str:
+    return _materialized_fact_bupo_copy_sql(
+        optimized=False,
+        comment="-- Materialize FACT_Buchungsbelegposition once as an S3 Parquet artifact.",
+    )
+
+
+def _query_2b_sql() -> str:
+    return _materialized_fact_bupo_copy_sql(
+        optimized=True,
+        comment="-- Optimized materialization of FACT_Buchungsbelegposition as an S3 Parquet artifact.",
+    )
 
 
 def _query_3_sql() -> str:
@@ -385,6 +421,12 @@ PURE_DUCKDB_CELLS: tuple[PureDuckDBCell, ...] = (
         remarks=QUERY_1B_OPTIMIZATION_REMARKS,
     ),
     PureDuckDBCell("pure-duckdb-query-2", "Query 2", _query_2_sql()),
+    PureDuckDBCell(
+        "pure-duckdb-query-2b",
+        "Query 2b",
+        _query_2b_sql(),
+        remarks=QUERY_2B_OPTIMIZATION_REMARKS,
+    ),
     PureDuckDBCell("pure-duckdb-query-3", "Query 3", _query_3_sql()),
     PureDuckDBCell("pure-duckdb-query-4", "Query 4", _query_4_sql()),
     PureDuckDBCell("pure-duckdb-query-5", "Query 5", _query_5_sql()),
@@ -403,5 +445,18 @@ PURE_DUCKDB_CELLS: tuple[PureDuckDBCell, ...] = (
 )
 
 
-def pure_duckdb_cells_payload() -> list[dict[str, object]]:
-    return [cell.payload for cell in PURE_DUCKDB_CELLS]
+def _local_compatible_sql(sql: str) -> str:
+    rewritten = sql
+    for source, replacement in LOCAL_COMPATIBLE_S3_PATH_REPLACEMENTS.items():
+        rewritten = rewritten.replace(source, replacement)
+    return rewritten
+
+
+def pure_duckdb_cells_payload(settings: object | None = None) -> list[dict[str, object]]:
+    endpoint = getattr(settings, "s3_endpoint", None) if settings is not None else None
+    if not is_likely_local_s3_endpoint(endpoint):
+        return [cell.payload for cell in PURE_DUCKDB_CELLS]
+    return [
+        cell.payload_with_sql(_local_compatible_sql(cell.sql))
+        for cell in PURE_DUCKDB_CELLS
+    ]

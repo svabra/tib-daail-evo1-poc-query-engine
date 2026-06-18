@@ -348,6 +348,63 @@ class S3StorageTests(unittest.TestCase):
         self.assertEqual(event_name, "before-sign.s3.DeleteObjects")
         self.assertIs(handler, s3_storage._inject_delete_objects_content_md5)
 
+    def test_s3_client_supplies_default_region_for_s3_compatible_endpoints(self) -> None:
+        s3_storage = import_s3_storage()
+        fake_client = _FakeClient()
+        settings = build_settings()
+        settings.s3_region = None
+
+        with patch.object(
+            s3_storage.boto3,
+            "client",
+            return_value=fake_client,
+        ) as client_mock:
+            s3_storage.s3_client(settings)
+
+        self.assertEqual(client_mock.call_args.kwargs["region_name"], "us-east-1")
+
+    def test_local_s3_endpoint_detection(self) -> None:
+        s3_storage = import_s3_storage()
+
+        self.assertTrue(s3_storage.is_likely_local_s3_endpoint("localhost:9000"))
+        self.assertTrue(s3_storage.is_likely_local_s3_endpoint("http://127.0.0.1:9000"))
+        self.assertFalse(s3_storage.is_likely_local_s3_endpoint("ecspr01.sz.admin.ch:9021"))
+
+    def test_s3_client_uses_configured_region(self) -> None:
+        s3_storage = import_s3_storage()
+        fake_client = _FakeClient()
+        settings = build_settings()
+        settings.s3_region = "eu-central-2"
+
+        with patch.object(
+            s3_storage.boto3,
+            "client",
+            return_value=fake_client,
+        ) as client_mock:
+            s3_storage.s3_client(settings)
+
+        self.assertEqual(client_mock.call_args.kwargs["region_name"], "eu-central-2")
+
+    def test_duckdb_s3_secret_options_include_region(self) -> None:
+        from bit_data_workbench.backend.runtime_connections import _s3_secret_options
+
+        settings = build_settings()
+        settings.s3_region = None
+
+        options = _s3_secret_options(settings, endpoint="127.0.0.1:9000", use_ssl=False)
+
+        self.assertIn("REGION 'us-east-1'", options)
+
+    def test_duckdb_s3_secret_options_use_configured_region(self) -> None:
+        from bit_data_workbench.backend.runtime_connections import _s3_secret_options
+
+        settings = build_settings()
+        settings.s3_region = "eu-central-2"
+
+        options = _s3_secret_options(settings, endpoint="127.0.0.1:9000", use_ssl=False)
+
+        self.assertIn("REGION 'eu-central-2'", options)
+
     def test_remove_s3_bucket_retries_until_bucket_is_empty(self) -> None:
         s3_storage = import_s3_storage()
         settings = build_settings()

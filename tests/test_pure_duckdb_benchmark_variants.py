@@ -144,6 +144,9 @@ class PureDuckDBBenchmarkVariantTests(unittest.TestCase):
         self.assertIn("q1_baseline_current", variant_ids)
         self.assertIn("q1_pushdown_v1", variant_ids)
         self.assertIn("q2_dataset_folder_v1", variant_ids)
+        self.assertIn("q2_optimized_snappy_single_file_v1", variant_ids)
+        self.assertIn("q2_optimized_uncompressed_single_file_v1", variant_ids)
+        self.assertIn("q2_optimized_zstd_rowgroup_1000000_v1", variant_ids)
         self.assertIn("q2_staged_materialization_v1", variant_ids)
         for variant in variants:
             metadata = variant.comparison_metadata
@@ -184,6 +187,12 @@ class PureDuckDBBenchmarkVariantTests(unittest.TestCase):
             "q2_optimized_single_file_v1",
             "q2_dataset_folder_v1",
             "q2_materialized_ctes_v1",
+            "q2_optimized_snappy_single_file_v1",
+            "q2_optimized_uncompressed_single_file_v1",
+            "q2_optimized_zstd_rowgroup_1000000_v1",
+            "q2_optimized_preserve_false_v1",
+            "q2_optimized_direct_sources_v1",
+            "q2_optimized_direct_uncompressed_v1",
             "q2_staged_materialization_v1",
             "q2_runtime_unordered_threads4_v1",
         )

@@ -25,6 +25,8 @@ from bit_data_workbench.backend.pure_duckdb import (  # noqa: E402
     KBPO_PATHS,
     PURE_DUCKDB_CELLS,
     _query_1_sql,
+    _query_2_sql,
+    pure_duckdb_cells_payload,
 )
 from bit_data_workbench.backend.pure_duckdb_jobs import (  # noqa: E402
     PURE_DUCKDB_DIRECT_EXECUTION_PATH,
@@ -93,6 +95,8 @@ def make_settings(root: Path) -> Settings:
 
 
 class FakeWorkbenchService:
+    settings = None
+
     def runtime_info(self) -> dict[str, str]:
         return {
             "service": "bit-data-workbench",
@@ -233,7 +237,7 @@ class PureDuckDBPageTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.body.decode("utf-8")
         self.assertIn('data-pure-duckdb-page', body)
-        self.assertEqual(body.count('data-pure-duckdb-cell'), 18)
+        self.assertEqual(body.count('data-pure-duckdb-cell'), 19)
         self.assertIn('/static/js/pure-duckdb.js', body)
         self.assertNotIn('/static/js/app.js', body)
         self.assertNotIn('data-sidebar', body)
@@ -260,7 +264,46 @@ class PureDuckDBPageTests(unittest.TestCase):
         self.assertIn("Optimization Remarks", body)
         self.assertIn("The expensive joined row set is built once", body)
         self.assertIn("The result remains consistent", body)
-        self.assertEqual(body.count('class="pure-duckdb-remarks"'), 1)
+        self.assertEqual(body.count('class="pure-duckdb-remarks"'), 2)
+        self.assertNotIn('class="pure-duckdb-remarks" open', body)
+
+    def test_local_pure_duckdb_page_uses_local_compatible_s3_buckets(self) -> None:
+        class LocalPureDuckDBService(FakeWorkbenchService):
+            settings = type("LocalSettings", (), {"s3_endpoint": "localhost:9000"})()
+
+        response = pure_duckdb_page(
+            request=build_request("/pure-duckdb"),
+            service=LocalPureDuckDBService(),
+        )
+
+        body = response.body.decode("utf-8")
+        self.assertIn("s3://core/KBKPfull.parquet", body)
+        self.assertIn("s3://core/KBHPfull.parquet", body)
+        self.assertIn("s3://kbpoimports/KBPO_2018undvorher.parquet", body)
+        self.assertIn("s3://3-1-imports/DIM_Kalender.parquet", body)
+        self.assertNotIn("s3://CORE/KBKPfull.parquet", body)
+        self.assertNotIn("s3://KBPOimports/KBPO_2018undvorher.parquet", body)
+
+    def test_query_2b_renders_after_query_2_with_collapsed_optimization_remarks(self) -> None:
+        response = pure_duckdb_page(
+            request=build_request("/pure-duckdb"),
+            service=FakeWorkbenchService(),
+        )
+
+        body = response.body.decode("utf-8")
+        self.assertLess(
+            body.index('data-cell-id="pure-duckdb-query-2"'),
+            body.index('data-cell-id="pure-duckdb-query-2b"'),
+        )
+        self.assertLess(
+            body.index('data-cell-id="pure-duckdb-query-2b"'),
+            body.index('data-cell-id="pure-duckdb-query-3"'),
+        )
+        self.assertIn("Query 2b", body)
+        self.assertIn("Optimization Remarks", body)
+        self.assertIn("builds the resolved joined row set once", body)
+        self.assertIn("schema, row count, grouped fingerprints, and amount totals match Query 2", body)
+        self.assertEqual(body.count('class="pure-duckdb-remarks"'), 2)
         self.assertNotIn('class="pure-duckdb-remarks" open', body)
 
     def test_home_page_contains_pure_duckdb_tile(self) -> None:
@@ -304,16 +347,18 @@ class PureDuckDBPageTests(unittest.TestCase):
         self.assertIn("Object key casing is preserved", script)
 
     def test_presets_are_final_duckdb_sql_without_virtual_s3_references(self) -> None:
-        self.assertEqual(len(PURE_DUCKDB_CELLS), 18)
+        self.assertEqual(len(PURE_DUCKDB_CELLS), 19)
         self.assertEqual(
-            [(cell.cell_id, cell.label) for cell in PURE_DUCKDB_CELLS[:3]],
+            [(cell.cell_id, cell.label) for cell in PURE_DUCKDB_CELLS[:4]],
             [
                 ("pure-duckdb-query-1", "Query 1"),
                 ("pure-duckdb-query-1b", "Query 1b"),
                 ("pure-duckdb-query-2", "Query 2"),
+                ("pure-duckdb-query-2b", "Query 2b"),
             ],
         )
         self.assertEqual(PURE_DUCKDB_CELLS[0].sql, _query_1_sql())
+        self.assertEqual(PURE_DUCKDB_CELLS[2].sql, _query_2_sql())
         for cell in PURE_DUCKDB_CELLS:
             self.assertNotRegex(cell.sql, r"\bs3\.[A-Za-z0-9_\"]")
             self.assertNotIn("s3://n_3_1_imports/", cell.sql)
@@ -340,18 +385,35 @@ class PureDuckDBPageTests(unittest.TestCase):
         self.assertIn("current_kalender AS", PURE_DUCKDB_CELLS[1].sql)
         self.assertIn("resolved_positions AS", PURE_DUCKDB_CELLS[1].sql)
         self.assertEqual(PURE_DUCKDB_CELLS[1].remarks[0].split(":", 1)[0], "Query 1b keeps the result shape and business semantics of Query 1")
+        self.assertIn("union_by_name = true", PURE_DUCKDB_CELLS[3].sql)
+        self.assertIn("CROSS JOIN (VALUES", PURE_DUCKDB_CELLS[3].sql)
+        self.assertIn("current_kalender AS", PURE_DUCKDB_CELLS[3].sql)
+        self.assertIn("resolved_positions AS", PURE_DUCKDB_CELLS[3].sql)
+        self.assertIn("COPY (", PURE_DUCKDB_CELLS[3].sql)
+        self.assertIn("TO 's3://core/fact_bupo.parquet'", PURE_DUCKDB_CELLS[3].sql)
+        self.assertIn("COMPRESSION zstd", PURE_DUCKDB_CELLS[3].sql)
+        self.assertEqual(PURE_DUCKDB_CELLS[3].remarks[0].split(":", 1)[0], "Query 2b keeps the output contract of Query 2")
+
+    def test_static_pure_duckdb_payload_keeps_production_s3_casing(self) -> None:
+        payload = pure_duckdb_cells_payload()
+        sql = "\n\n".join(str(cell["sql"]) for cell in payload[:4])
+
+        self.assertIn("s3://CORE/KBKPfull.parquet", sql)
+        self.assertIn("s3://CORE/KBHPfull.parquet", sql)
+        self.assertIn("s3://KBPOimports/KBPO_2018undvorher.parquet", sql)
+        self.assertIn("s3://3_1_imports/DIM_Kalender.parquet", sql)
 
     def test_appended_analytical_queries_are_translated_to_duckdb_sql(self) -> None:
-        appended_sql = "\n\n".join(cell.sql for cell in PURE_DUCKDB_CELLS[10:])
+        appended_sql = "\n\n".join(cell.sql for cell in PURE_DUCKDB_CELLS[11:])
 
-        self.assertEqual(len(PURE_DUCKDB_CELLS[10:]), 8)
-        self.assertIn("-- 5. HIGH CARDINALITY GROUP BY", PURE_DUCKDB_CELLS[10].sql)
+        self.assertEqual(len(PURE_DUCKDB_CELLS[11:]), 8)
+        self.assertIn("-- 5. HIGH CARDINALITY GROUP BY", PURE_DUCKDB_CELLS[11].sql)
         self.assertIn("read_parquet('s3://core/fact_bupo.parquet')", appended_sql)
         self.assertNotRegex(appended_sql, r"\bFROM\s+fact_bupo\b")
         self.assertNotRegex(appended_sql, r"\bSELECT\s+TOP\b")
-        self.assertIn("LIMIT 10", PURE_DUCKDB_CELLS[14].sql)
-        self.assertIn("DATE_TRUNC('month', Buchungsdatum)::DATE AS mmonth", PURE_DUCKDB_CELLS[17].sql)
-        self.assertIn("ORDER BY mmonth, total DESC", PURE_DUCKDB_CELLS[17].sql)
+        self.assertIn("LIMIT 10", PURE_DUCKDB_CELLS[15].sql)
+        self.assertIn("DATE_TRUNC('month', Buchungsdatum)::DATE AS mmonth", PURE_DUCKDB_CELLS[18].sql)
+        self.assertIn("ORDER BY mmonth, total DESC", PURE_DUCKDB_CELLS[18].sql)
         self.assertNotIn("ADD_MONTHS", appended_sql)
         self.assertNotIn("monthh", appended_sql)
         self.assertNotIn("GROUP BY Belegart\n", appended_sql)
@@ -410,7 +472,11 @@ class PureDuckDBPageTests(unittest.TestCase):
                 for cell in PURE_DUCKDB_CELLS:
                     sql = _with_local_paths(cell.sql, paths)
                     result = con.execute(sql)
-                    if cell.cell_id in {"pure-duckdb-query-2", "pure-duckdb-query-4"}:
+                    if cell.cell_id in {
+                        "pure-duckdb-query-2",
+                        "pure-duckdb-query-2b",
+                        "pure-duckdb-query-4",
+                    }:
                         self.assertIsNotNone(result)
                     else:
                         rows = result.fetchall()
@@ -423,6 +489,37 @@ class PureDuckDBPageTests(unittest.TestCase):
                     ).fetchone()[0],
                     0,
                 )
+            finally:
+                con.close()
+
+    def test_query_2b_matches_query_2_against_tiny_parquet_fixtures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            paths = _write_fixture_parquet_files(root)
+            con = duckdb.connect(":memory:")
+            try:
+                query_2 = _with_local_paths(PURE_DUCKDB_CELLS[2].sql, paths)
+                query_2b = _with_local_paths(PURE_DUCKDB_CELLS[3].sql, paths)
+                con.execute(query_2)
+                fact_path = paths[FACT_BUPO_TARGET].as_posix()
+                con.execute(f"CREATE TEMP TABLE q2_baseline AS SELECT * FROM read_parquet('{fact_path}')")
+                con.execute(query_2b)
+                difference_count = con.execute(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM (
+                        (SELECT * FROM q2_baseline
+                         EXCEPT ALL
+                         SELECT * FROM read_parquet('{fact_path}'))
+                        UNION ALL
+                        (SELECT * FROM read_parquet('{fact_path}')
+                         EXCEPT ALL
+                         SELECT * FROM q2_baseline)
+                    ) differences
+                    """
+                ).fetchone()[0]
+
+                self.assertEqual(difference_count, 0)
             finally:
                 con.close()
 

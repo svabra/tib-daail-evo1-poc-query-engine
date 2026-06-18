@@ -77,6 +77,7 @@ WORKBENCH_ENVIRONMENT_VARIABLES = (
     "S3_ACCESS_KEY_ID_FILE",
     "S3_SECRET_ACCESS_KEY",
     "S3_SECRET_ACCESS_KEY_FILE",
+    "S3_REGION",
     "S3_URL_STYLE",
     "S3_USE_SSL",
     "S3_VERIFY_SSL",
@@ -592,6 +593,7 @@ class Settings:
     pod_namespace: str | None
     pod_ip: str | None
     node_name: str | None
+    s3_region: str | None = None
     service_consumption_node_metrics_enabled: bool = False
     service_consumption_pvc_capacity_enabled: bool = False
     service_consumption_cost_node_chf_per_hour: float | None = None
@@ -862,6 +864,7 @@ class Settings:
             s3_access_key_id_file=env_path_optional("S3_ACCESS_KEY_ID_FILE"),
             s3_secret_access_key=env_optional("S3_SECRET_ACCESS_KEY"),
             s3_secret_access_key_file=env_path_optional("S3_SECRET_ACCESS_KEY_FILE"),
+            s3_region=env_optional("S3_REGION"),
             s3_url_style=env_optional("S3_URL_STYLE"),
             s3_use_ssl=env_bool("S3_USE_SSL", True),
             s3_verify_ssl=env_bool("S3_VERIFY_SSL", True),

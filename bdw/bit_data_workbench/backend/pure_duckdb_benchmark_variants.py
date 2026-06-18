@@ -200,29 +200,30 @@ def _copy_sql(
     *,
     target: str,
     dataset_folder: bool = False,
+    compression: str = "zstd",
+    row_group_size: int = 250000,
+    file_size_bytes: str = "450MB",
+    overwrite_or_ignore: bool = True,
 ) -> str:
+    options = [
+        "FORMAT parquet",
+        f"COMPRESSION {compression}",
+        f"ROW_GROUP_SIZE {row_group_size}",
+    ]
     if dataset_folder:
-        options = """
-    FORMAT parquet,
-    COMPRESSION zstd,
-    ROW_GROUP_SIZE 250000,
-    PER_THREAD_OUTPUT true,
-    FILE_SIZE_BYTES '450MB'
-""".strip()
-    else:
-        options = """
-    FORMAT parquet,
-    COMPRESSION zstd,
-    ROW_GROUP_SIZE 250000,
-    OVERWRITE_OR_IGNORE true
-""".strip()
+        options.append("PER_THREAD_OUTPUT true")
+        if file_size_bytes:
+            options.append(f"FILE_SIZE_BYTES {sql_literal(file_size_bytes)}")
+    elif overwrite_or_ignore:
+        options.append("OVERWRITE_OR_IGNORE true")
+    rendered_options = ",\n    ".join(options)
     return f"""
 COPY (
 {select_sql.rstrip().rstrip(";")}
 )
 TO {sql_literal(target)}
 (
-    {options}
+    {rendered_options}
 );
 """.strip()
 
@@ -288,10 +289,19 @@ def pure_duckdb_q1_q2_benchmark_variants() -> tuple[PureDuckDBBenchmarkVariant, 
     q2_materialized_target = benchmark_fact_target("q2_materialized_ctes_v1")
     q2_staged_target = benchmark_fact_target("q2_staged_materialization_v1")
     q2_runtime_target = benchmark_fact_target("q2_runtime_unordered_threads4_v1")
+    q2_snappy_target = benchmark_fact_target("q2_optimized_snappy_single_file_v1")
+    q2_uncompressed_target = benchmark_fact_target("q2_optimized_uncompressed_single_file_v1")
+    q2_large_row_group_target = benchmark_fact_target("q2_optimized_zstd_rowgroup_1000000_v1")
+    q2_preserve_false_target = benchmark_fact_target("q2_optimized_preserve_false_v1")
+    q2_direct_sources_target = benchmark_fact_target("q2_optimized_direct_sources_v1")
+    q2_direct_uncompressed_target = benchmark_fact_target(
+        "q2_optimized_direct_uncompressed_v1"
+    )
 
     q2_baseline_select = _q2_source_ctes(_fact_select_for_current_sources(optimized=False))
     q2_optimized_select = _q2_source_ctes(_fact_select_for_current_sources(optimized=True))
     q2_materialized_select = _with_materialized_ctes(q2_optimized_select)
+    q2_direct_sources_select = _optimized_fact_select_sql()
 
     return (
         PureDuckDBBenchmarkVariant(
@@ -376,6 +386,131 @@ def pure_duckdb_q1_q2_benchmark_variants() -> tuple[PureDuckDBBenchmarkVariant, 
             expected_effect="Tests whether preventing CTE re-planning or repeated source scans improves stability.",
             validation_sql=f"SELECT * FROM {fact_scan_sql(q2_materialized_target)}",
             output_s3_url=q2_materialized_target,
+        ),
+        PureDuckDBBenchmarkVariant(
+            variant_id="q2_optimized_snappy_single_file_v1",
+            query_number=2,
+            statements=(
+                _copy_sql(q2_optimized_select, target=q2_snappy_target, compression="snappy"),
+            ),
+            change_summary=(
+                "Keeps the optimized FACT SQL and one-file artifact, but writes Snappy Parquet instead "
+                "of ZSTD."
+            ),
+            sql_strategy="Optimized FACT builder inside COPY; only the Parquet compression codec changes.",
+            output_layout="single parquet file",
+            duckdb_settings=(),
+            expected_effect=(
+                "Reduces CPU spent compressing the output; can be faster if a larger artifact is acceptable."
+            ),
+            validation_sql=f"SELECT * FROM {fact_scan_sql(q2_snappy_target)}",
+            output_s3_url=q2_snappy_target,
+        ),
+        PureDuckDBBenchmarkVariant(
+            variant_id="q2_optimized_uncompressed_single_file_v1",
+            query_number=2,
+            statements=(
+                _copy_sql(
+                    q2_optimized_select,
+                    target=q2_uncompressed_target,
+                    compression="uncompressed",
+                ),
+            ),
+            change_summary=(
+                "Keeps the optimized FACT SQL and one-file artifact, but disables Parquet compression."
+            ),
+            sql_strategy="Optimized FACT builder inside COPY; only the Parquet compression codec changes.",
+            output_layout="single parquet file",
+            duckdb_settings=(),
+            expected_effect=(
+                "Removes output compression CPU entirely; useful to separate compute cost from write "
+                "compression cost, but produces larger files."
+            ),
+            validation_sql=f"SELECT * FROM {fact_scan_sql(q2_uncompressed_target)}",
+            output_s3_url=q2_uncompressed_target,
+        ),
+        PureDuckDBBenchmarkVariant(
+            variant_id="q2_optimized_zstd_rowgroup_1000000_v1",
+            query_number=2,
+            statements=(
+                _copy_sql(
+                    q2_optimized_select,
+                    target=q2_large_row_group_target,
+                    row_group_size=1000000,
+                ),
+            ),
+            change_summary=(
+                "Keeps optimized FACT SQL and ZSTD compression, but writes larger Parquet row groups."
+            ),
+            sql_strategy="Optimized FACT builder inside COPY with ROW_GROUP_SIZE 1000000.",
+            output_layout="single parquet file",
+            duckdb_settings=(),
+            expected_effect=(
+                "Reduces row-group metadata and write coordination overhead; may trade off later scan "
+                "pruning granularity."
+            ),
+            validation_sql=f"SELECT * FROM {fact_scan_sql(q2_large_row_group_target)}",
+            output_s3_url=q2_large_row_group_target,
+        ),
+        PureDuckDBBenchmarkVariant(
+            variant_id="q2_optimized_preserve_false_v1",
+            query_number=2,
+            statements=(_copy_sql(q2_optimized_select, target=q2_preserve_false_target),),
+            change_summary=(
+                "Keeps optimized FACT SQL and ZSTD output, but disables insertion-order preservation."
+            ),
+            sql_strategy="Optimized FACT builder inside COPY; only preserve_insertion_order changes.",
+            output_layout="single parquet file",
+            duckdb_settings=("SET preserve_insertion_order = false",),
+            expected_effect=(
+                "Lets DuckDB reorder intermediate work where row order is irrelevant without also "
+                "forcing a thread count."
+            ),
+            validation_sql=f"SELECT * FROM {fact_scan_sql(q2_preserve_false_target)}",
+            output_s3_url=q2_preserve_false_target,
+        ),
+        PureDuckDBBenchmarkVariant(
+            variant_id="q2_optimized_direct_sources_v1",
+            query_number=2,
+            statements=(_copy_sql(q2_direct_sources_select, target=q2_direct_sources_target),),
+            change_summary=(
+                "Runs the optimized FACT builder directly against source Parquet plus DIM_Kalender, "
+                "without separate kbkp_today/kbpo_today/kbhp_today CTEs."
+            ),
+            sql_strategy=(
+                "Optimized FACT builder owns the current-date filtering and joins directly to each source."
+            ),
+            output_layout="single parquet file",
+            duckdb_settings=(),
+            expected_effect=(
+                "Tests whether removing prefiltered source CTEs gives DuckDB a better global plan."
+            ),
+            validation_sql=f"SELECT * FROM {fact_scan_sql(q2_direct_sources_target)}",
+            output_s3_url=q2_direct_sources_target,
+        ),
+        PureDuckDBBenchmarkVariant(
+            variant_id="q2_optimized_direct_uncompressed_v1",
+            query_number=2,
+            statements=(
+                _copy_sql(
+                    q2_direct_sources_select,
+                    target=q2_direct_uncompressed_target,
+                    compression="uncompressed",
+                ),
+            ),
+            change_summary=(
+                "Combines direct optimized source planning with uncompressed Parquet output."
+            ),
+            sql_strategy=(
+                "Optimized FACT builder owns current-date filtering and COPY skips output compression."
+            ),
+            output_layout="single parquet file",
+            duckdb_settings=(),
+            expected_effect=(
+                "Tests whether the faster plan and lower write CPU compound; output files are larger."
+            ),
+            validation_sql=f"SELECT * FROM {fact_scan_sql(q2_direct_uncompressed_target)}",
+            output_s3_url=q2_direct_uncompressed_target,
         ),
         PureDuckDBBenchmarkVariant(
             variant_id="q2_staged_materialization_v1",
