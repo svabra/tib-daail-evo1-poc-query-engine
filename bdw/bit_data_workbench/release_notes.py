@@ -1,9 +1,39 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.30. Keep entries concise and
+# Derived from git history through version 0.10.31. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.31",
+        "releasedAt": "2026-06-18T15:06:48+02:00",
+        "features": [
+            (
+                "Pure DuckDB now includes Query 1b immediately after Query "
+                "1, keeping Query 1 unchanged while offering the optimized "
+                "FACT_Buchungsbelegposition SQL shape for the same filtered "
+                "count and amount aggregate."
+            ),
+            (
+                "Query 1b exposes collapsed Optimization Remarks explaining "
+                "that expensive joins and ledger fallback are resolved once, "
+                "then original and settlement rows are derived with a two-row "
+                "CROSS JOIN while preserving amount signs and date semantics."
+            ),
+            (
+                "A dedicated Q1/Q2 optimization benchmark harness now "
+                "defines baseline and candidate SQL variants, validates "
+                "result consistency, and emits explanatory comparison tables "
+                "with the exact SQL strategy and expected effect per row."
+            ),
+            (
+                "Regression coverage now verifies Query 1b ordering, "
+                "collapsed remarks rendering, unchanged Query 1 SQL, "
+                "Query 1b equivalence on local Parquet fixtures, and Q2 "
+                "candidate output equivalence for the benchmark harness."
+            ),
+        ],
+    },
     {
         "version": "0.10.30",
         "releasedAt": "2026-06-18T08:18:01+02:00",

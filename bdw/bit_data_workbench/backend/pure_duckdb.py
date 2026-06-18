@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from .notebook_presets import _build_kostenbelege_3_1_sql
+from .notebook_presets import (
+    _build_kostenbelege_3_1_optimized_sql,
+    _build_kostenbelege_3_1_sql,
+)
 from .sql_utils import sql_literal
 
 
@@ -28,13 +31,15 @@ class PureDuckDBCell:
     cell_id: str
     label: str
     sql: str
+    remarks: tuple[str, ...] = ()
 
     @property
-    def payload(self) -> dict[str, str]:
+    def payload(self) -> dict[str, object]:
         return {
             "cellId": self.cell_id,
             "label": self.label,
             "sql": self.sql,
+            "remarks": list(self.remarks),
         }
 
 
@@ -63,10 +68,33 @@ def _fact_bupo_select_sql(
     ).rstrip(";")
 
 
+def _optimized_fact_bupo_select_sql(
+    *,
+    kbkp_relation: str | None = None,
+    kbpo_relation: str | None = None,
+    kbhp_relation: str | None = None,
+    kalender_relation: str | None = None,
+) -> str:
+    return _build_kostenbelege_3_1_optimized_sql(
+        kbkp_relation=kbkp_relation or _read_parquet(KBKP_FULL_PATH),
+        kbpo_relation=kbpo_relation or _kbpo_union_by_name_relation(),
+        kbhp_relation=kbhp_relation or _read_parquet(KBHP_FULL_PATH),
+        kalender_relation=kalender_relation or _read_parquet(KALENDER_PATH),
+    ).rstrip(";")
+
+
 def _fact_bupo_cte_sql() -> str:
     return f"""
 WITH fact_bupo AS (
 {_fact_bupo_select_sql()}
+)
+""".strip()
+
+
+def _optimized_fact_bupo_cte_sql() -> str:
+    return f"""
+WITH fact_bupo AS (
+{_optimized_fact_bupo_select_sql()}
 )
 """.strip()
 
@@ -82,6 +110,28 @@ FROM fact_bupo
 WHERE Buchungsdatum >= DATE '2023-01-01'
   AND Buchungsdatum <  DATE '2024-01-01';
 """.strip()
+
+
+def _query_1b_sql() -> str:
+    return f"""
+-- Optimized single-query FACT_Buchungsbelegposition replication with a filtered aggregate.
+{_optimized_fact_bupo_cte_sql()}
+SELECT
+      COUNT(*) AS cnt
+    , SUM(BetragHauswaehrung) AS total
+FROM fact_bupo
+WHERE Buchungsdatum >= DATE '2023-01-01'
+  AND Buchungsdatum <  DATE '2024-01-01';
+""".strip()
+
+
+QUERY_1B_OPTIMIZATION_REMARKS = (
+    "Query 1b keeps the result shape and business semantics of Query 1: it returns the same cnt and total aggregate over FACT_Buchungsbelegposition for the 2023 booking-date range. The result remains consistent with Query 1.",
+    "The optimization is in the FACT-building SQL. The expensive joined row set is built once through current_kalender, base_positions, position_specific, and resolved_positions instead of repeating the large join tree in two UNION ALL branches.",
+    "Ledger-account fallback is resolved once: DuckDB first keeps exact KBHP position matches and only performs the document-level fallback for rows where the exact position match is missing.",
+    "Original and settlement rows are then derived from the resolved rows with a two-row CROSS JOIN that supplies PositionsArt and AmountSign. Amount signs and original-versus-settlement date semantics are preserved with the same business mapping as Query 1.",
+    "No runtime path changes are part of this optimization. It still uses the Pure DuckDB direct in-process execution path, the same S3 configuration, the same read_parquet inputs, and no shared DuckDB catalog access.",
+)
 
 
 def _query_2_sql() -> str:
@@ -328,6 +378,12 @@ ORDER BY mmonth, total DESC;
 
 PURE_DUCKDB_CELLS: tuple[PureDuckDBCell, ...] = (
     PureDuckDBCell("pure-duckdb-query-1", "Query 1", _query_1_sql()),
+    PureDuckDBCell(
+        "pure-duckdb-query-1b",
+        "Query 1b",
+        _query_1b_sql(),
+        remarks=QUERY_1B_OPTIMIZATION_REMARKS,
+    ),
     PureDuckDBCell("pure-duckdb-query-2", "Query 2", _query_2_sql()),
     PureDuckDBCell("pure-duckdb-query-3", "Query 3", _query_3_sql()),
     PureDuckDBCell("pure-duckdb-query-4", "Query 4", _query_4_sql()),
@@ -347,5 +403,5 @@ PURE_DUCKDB_CELLS: tuple[PureDuckDBCell, ...] = (
 )
 
 
-def pure_duckdb_cells_payload() -> list[dict[str, str]]:
+def pure_duckdb_cells_payload() -> list[dict[str, object]]:
     return [cell.payload for cell in PURE_DUCKDB_CELLS]

@@ -24,6 +24,7 @@ from bit_data_workbench.backend.pure_duckdb import (  # noqa: E402
     KALENDER_PATH,
     KBPO_PATHS,
     PURE_DUCKDB_CELLS,
+    _query_1_sql,
 )
 from bit_data_workbench.backend.pure_duckdb_jobs import (  # noqa: E402
     PURE_DUCKDB_DIRECT_EXECUTION_PATH,
@@ -232,13 +233,35 @@ class PureDuckDBPageTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.body.decode("utf-8")
         self.assertIn('data-pure-duckdb-page', body)
-        self.assertEqual(body.count('data-pure-duckdb-cell'), 17)
+        self.assertEqual(body.count('data-pure-duckdb-cell'), 18)
         self.assertIn('/static/js/pure-duckdb.js', body)
         self.assertNotIn('/static/js/app.js', body)
         self.assertNotIn('data-sidebar', body)
         self.assertNotIn('topbar', body)
         self.assertNotIn('data-query-cell', body)
         self.assertNotIn('/api/events/stream', body)
+
+    def test_query_1b_renders_after_query_1_with_collapsed_optimization_remarks(self) -> None:
+        response = pure_duckdb_page(
+            request=build_request("/pure-duckdb"),
+            service=FakeWorkbenchService(),
+        )
+
+        body = response.body.decode("utf-8")
+        self.assertLess(
+            body.index('data-cell-id="pure-duckdb-query-1"'),
+            body.index('data-cell-id="pure-duckdb-query-1b"'),
+        )
+        self.assertLess(
+            body.index('data-cell-id="pure-duckdb-query-1b"'),
+            body.index('data-cell-id="pure-duckdb-query-2"'),
+        )
+        self.assertIn("Query 1b", body)
+        self.assertIn("Optimization Remarks", body)
+        self.assertIn("The expensive joined row set is built once", body)
+        self.assertIn("The result remains consistent", body)
+        self.assertEqual(body.count('class="pure-duckdb-remarks"'), 1)
+        self.assertNotIn('class="pure-duckdb-remarks" open', body)
 
     def test_home_page_contains_pure_duckdb_tile(self) -> None:
         home_template = (
@@ -281,7 +304,16 @@ class PureDuckDBPageTests(unittest.TestCase):
         self.assertIn("Object key casing is preserved", script)
 
     def test_presets_are_final_duckdb_sql_without_virtual_s3_references(self) -> None:
-        self.assertEqual(len(PURE_DUCKDB_CELLS), 17)
+        self.assertEqual(len(PURE_DUCKDB_CELLS), 18)
+        self.assertEqual(
+            [(cell.cell_id, cell.label) for cell in PURE_DUCKDB_CELLS[:3]],
+            [
+                ("pure-duckdb-query-1", "Query 1"),
+                ("pure-duckdb-query-1b", "Query 1b"),
+                ("pure-duckdb-query-2", "Query 2"),
+            ],
+        )
+        self.assertEqual(PURE_DUCKDB_CELLS[0].sql, _query_1_sql())
         for cell in PURE_DUCKDB_CELLS:
             self.assertNotRegex(cell.sql, r"\bs3\.[A-Za-z0-9_\"]")
             self.assertNotIn("s3://n_3_1_imports/", cell.sql)
@@ -304,18 +336,22 @@ class PureDuckDBPageTests(unittest.TestCase):
         self.assertIn("'s3://KBPOimports/KBPO2025.parquet'", PURE_DUCKDB_CELLS[0].sql)
         self.assertIn("union_by_name = true", PURE_DUCKDB_CELLS[0].sql)
         self.assertIn("union_by_name = true", PURE_DUCKDB_CELLS[1].sql)
+        self.assertIn("CROSS JOIN (VALUES", PURE_DUCKDB_CELLS[1].sql)
+        self.assertIn("current_kalender AS", PURE_DUCKDB_CELLS[1].sql)
+        self.assertIn("resolved_positions AS", PURE_DUCKDB_CELLS[1].sql)
+        self.assertEqual(PURE_DUCKDB_CELLS[1].remarks[0].split(":", 1)[0], "Query 1b keeps the result shape and business semantics of Query 1")
 
     def test_appended_analytical_queries_are_translated_to_duckdb_sql(self) -> None:
-        appended_sql = "\n\n".join(cell.sql for cell in PURE_DUCKDB_CELLS[9:])
+        appended_sql = "\n\n".join(cell.sql for cell in PURE_DUCKDB_CELLS[10:])
 
-        self.assertEqual(len(PURE_DUCKDB_CELLS[9:]), 8)
-        self.assertIn("-- 5. HIGH CARDINALITY GROUP BY", PURE_DUCKDB_CELLS[9].sql)
+        self.assertEqual(len(PURE_DUCKDB_CELLS[10:]), 8)
+        self.assertIn("-- 5. HIGH CARDINALITY GROUP BY", PURE_DUCKDB_CELLS[10].sql)
         self.assertIn("read_parquet('s3://core/fact_bupo.parquet')", appended_sql)
         self.assertNotRegex(appended_sql, r"\bFROM\s+fact_bupo\b")
         self.assertNotRegex(appended_sql, r"\bSELECT\s+TOP\b")
-        self.assertIn("LIMIT 10", PURE_DUCKDB_CELLS[13].sql)
-        self.assertIn("DATE_TRUNC('month', Buchungsdatum)::DATE AS mmonth", PURE_DUCKDB_CELLS[16].sql)
-        self.assertIn("ORDER BY mmonth, total DESC", PURE_DUCKDB_CELLS[16].sql)
+        self.assertIn("LIMIT 10", PURE_DUCKDB_CELLS[14].sql)
+        self.assertIn("DATE_TRUNC('month', Buchungsdatum)::DATE AS mmonth", PURE_DUCKDB_CELLS[17].sql)
+        self.assertIn("ORDER BY mmonth, total DESC", PURE_DUCKDB_CELLS[17].sql)
         self.assertNotIn("ADD_MONTHS", appended_sql)
         self.assertNotIn("monthh", appended_sql)
         self.assertNotIn("GROUP BY Belegart\n", appended_sql)
@@ -387,6 +423,26 @@ class PureDuckDBPageTests(unittest.TestCase):
                     ).fetchone()[0],
                     0,
                 )
+            finally:
+                con.close()
+
+    def test_query_1b_matches_query_1_against_tiny_parquet_fixtures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            paths = _write_fixture_parquet_files(root)
+            con = duckdb.connect(":memory:")
+            try:
+                query_1 = _with_local_paths(PURE_DUCKDB_CELLS[0].sql, paths)
+                query_1b = _with_local_paths(PURE_DUCKDB_CELLS[1].sql, paths)
+                baseline = con.execute(query_1).fetchone()
+                optimized = con.execute(query_1b).fetchone()
+
+                self.assertEqual(optimized[0], baseline[0])
+                if baseline[1] is None or optimized[1] is None:
+                    self.assertIsNone(baseline[1])
+                    self.assertIsNone(optimized[1])
+                else:
+                    self.assertAlmostEqual(float(optimized[1]), float(baseline[1]), places=6)
             finally:
                 con.close()
 

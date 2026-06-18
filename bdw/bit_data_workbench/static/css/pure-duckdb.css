@@ -75,6 +75,31 @@ body {
   opacity: 0.65;
 }
 
+.pure-duckdb-remarks {
+  margin: 0 0 8px;
+  border: 1px solid var(--pure-line);
+  background: #f8fbfd;
+}
+
+.pure-duckdb-remarks summary {
+  min-height: 32px;
+  padding: 7px 10px;
+  color: var(--pure-blue-strong);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pure-duckdb-remarks-body {
+  padding: 0 10px 10px;
+  color: var(--pure-text);
+  font-size: 13px;
+}
+
+.pure-duckdb-remarks-body p {
+  margin: 8px 0 0;
+}
+
 .pure-duckdb-editor {
   display: block;
   width: 100%;

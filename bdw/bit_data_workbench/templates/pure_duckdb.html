@@ -16,6 +16,16 @@
             <span class="pure-duckdb-cell-label">{{ cell.label }}</span>
             <button type="button" class="pure-duckdb-run-button" data-run-pure-duckdb-cell>Run Cell</button>
           </div>
+          {% if cell.remarks %}
+            <details class="pure-duckdb-remarks">
+              <summary>Optimization Remarks</summary>
+              <div class="pure-duckdb-remarks-body">
+                {% for paragraph in cell.remarks %}
+                  <p>{{ paragraph }}</p>
+                {% endfor %}
+              </div>
+            </details>
+          {% endif %}
           <textarea class="pure-duckdb-editor" spellcheck="false" data-pure-duckdb-sql>{{ cell.sql }}</textarea>
           <div class="pure-duckdb-meta">
             <span>Total processing time</span>
