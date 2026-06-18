@@ -45,7 +45,7 @@ def _write_fixture(root: Path) -> dict[str, Path]:
         KBKP_FULL_PATH: root / "CORE" / "KBKPfull.parquet",
         KBHP_FULL_PATH: root / "CORE" / "KBHPfull.parquet",
         KALENDER_PATH: root / "3_1_imports" / "DIM_Kalender.parquet",
-        FACT_BUPO_TARGET: root / "core" / "fact_bupo.parquet",
+        FACT_BUPO_TARGET: root / "CORE" / "fact_bupo.parquet",
     }
     for index, s3_url in enumerate(KBPO_PATHS):
         paths[s3_url] = root / "KBPOimports" / f"kbpo_{index}.parquet"

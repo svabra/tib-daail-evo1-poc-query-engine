@@ -1,38 +1,37 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.33. Keep entries concise and
+# Derived from git history through version 0.10.34. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
     {
-        "version": "0.10.33",
-        "releasedAt": "2026-06-18T21:01:05+02:00",
+        "version": "0.10.34",
+        "releasedAt": "2026-06-18T22:12:18+02:00",
         "features": [
             (
-                "Pure DuckDB single-file S3 COPY writes now avoid DuckDB's "
-                "S3 multipart uploader by writing the Parquet artifact to a "
-                "temporary local file first."
+                "Pure DuckDB production output targets now use the existing "
+                "case-sensitive CORE bucket for fact_bupo.parquet and "
+                "kbkp_today.parquet instead of the non-existent core bucket."
             ),
             (
-                "The temporary artifact is uploaded through the application "
-                "S3 client with a direct PutObject call, avoiding the "
-                "production ECS 404 on POST ?uploads= multipart initiation."
+                "Query 2, Query 2b, Query 4, Query 5, and downstream "
+                "fact_bupo analytical queries now share the same CORE bucket "
+                "casing as the production KBKP and KBHP source files."
             ),
             (
-                "Pure DuckDB reports the application-managed upload duration "
-                "as s3UploadMs while preserving the direct in-process DuckDB "
-                "execution path and zero shared DuckDB access wait."
+                "Pure DuckDB Q1/Q2 benchmark artifact targets now also use "
+                "the CORE bucket to avoid NoSuchBucket errors against "
+                "case-sensitive ECS S3 storage."
             ),
             (
-                "Pure DuckDB single-file S3 COPY now fails clearly above the "
-                "5 GiB single PutObject limit and directs users to dataset or "
-                "split-file outputs instead of silently falling back to "
-                "multipart upload."
+                "Local development still rewrites CORE to the lowercase core "
+                "bucket for MinIO, preserving local test compatibility while "
+                "keeping production SQL correctly cased."
             ),
             (
-                "Regression coverage now verifies the direct PutObject path, "
-                "temporary file cleanup, the 5 GiB guardrail, and live local "
-                "Pure DuckDB S3 write/read behavior."
+                "Regression coverage now verifies production CORE targets, "
+                "local bucket-name rendering, Q2 benchmark target paths, and "
+                "a live local Query 4 write smoke."
             ),
         ],
     },

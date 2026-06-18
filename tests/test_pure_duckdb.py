@@ -280,9 +280,12 @@ class PureDuckDBPageTests(unittest.TestCase):
         body = response.body.decode("utf-8")
         self.assertIn("s3://core/KBKPfull.parquet", body)
         self.assertIn("s3://core/KBHPfull.parquet", body)
+        self.assertIn("s3://core/fact_bupo.parquet", body)
+        self.assertIn("s3://core/kbkp_today.parquet", body)
         self.assertIn("s3://kbpoimports/KBPO_2018undvorher.parquet", body)
         self.assertIn("s3://3-1-imports/DIM_Kalender.parquet", body)
         self.assertNotIn("s3://CORE/KBKPfull.parquet", body)
+        self.assertNotIn("s3://CORE/fact_bupo.parquet", body)
         self.assertNotIn("s3://KBPOimports/KBPO_2018undvorher.parquet", body)
 
     def test_query_2b_renders_after_query_2_with_collapsed_optimization_remarks(self) -> None:
@@ -391,7 +394,7 @@ class PureDuckDBPageTests(unittest.TestCase):
         self.assertIn("current_kalender AS", PURE_DUCKDB_CELLS[3].sql)
         self.assertIn("resolved_positions AS", PURE_DUCKDB_CELLS[3].sql)
         self.assertIn("COPY (", PURE_DUCKDB_CELLS[3].sql)
-        self.assertIn("TO 's3://core/fact_bupo.parquet'", PURE_DUCKDB_CELLS[3].sql)
+        self.assertIn("TO 's3://CORE/fact_bupo.parquet'", PURE_DUCKDB_CELLS[3].sql)
         self.assertIn("COMPRESSION zstd", PURE_DUCKDB_CELLS[3].sql)
         self.assertEqual(PURE_DUCKDB_CELLS[3].remarks[0].split(":", 1)[0], "Query 2b keeps the output contract of Query 2")
 
@@ -401,6 +404,7 @@ class PureDuckDBPageTests(unittest.TestCase):
 
         self.assertIn("s3://CORE/KBKPfull.parquet", sql)
         self.assertIn("s3://CORE/KBHPfull.parquet", sql)
+        self.assertIn("s3://CORE/fact_bupo.parquet", sql)
         self.assertIn("s3://KBPOimports/KBPO_2018undvorher.parquet", sql)
         self.assertIn("s3://3_1_imports/DIM_Kalender.parquet", sql)
 
@@ -409,7 +413,7 @@ class PureDuckDBPageTests(unittest.TestCase):
 
         self.assertEqual(len(PURE_DUCKDB_CELLS[11:]), 8)
         self.assertIn("-- 5. HIGH CARDINALITY GROUP BY", PURE_DUCKDB_CELLS[11].sql)
-        self.assertIn("read_parquet('s3://core/fact_bupo.parquet')", appended_sql)
+        self.assertIn("read_parquet('s3://CORE/fact_bupo.parquet')", appended_sql)
         self.assertNotRegex(appended_sql, r"\bFROM\s+fact_bupo\b")
         self.assertNotRegex(appended_sql, r"\bSELECT\s+TOP\b")
         self.assertIn("LIMIT 10", PURE_DUCKDB_CELLS[15].sql)
@@ -513,7 +517,7 @@ class PureDuckDBPageTests(unittest.TestCase):
                     cell_id="pure-duckdb-query-4",
                     sql=(
                         "COPY (SELECT 1 AS id, 'alpha' AS name) "
-                        "TO 's3://core/kbkp_today.parquet' "
+                        "TO 's3://CORE/kbkp_today.parquet' "
                         "(FORMAT parquet, OVERWRITE_OR_IGNORE true);"
                     ),
                 )
@@ -523,7 +527,7 @@ class PureDuckDBPageTests(unittest.TestCase):
             self.assertEqual(payload["status"], "completed")
             self.assertEqual(
                 fake_client.put_object_calls,
-                [{"Bucket": "core", "Key": "kbkp_today.parquet"}],
+                [{"Bucket": "CORE", "Key": "kbkp_today.parquet"}],
             )
             self.assertGreater(payload["timings"].get("s3UploadMs", 0), 0)
             self.assertIsNotNone(fake_client.upload_parent)
@@ -554,7 +558,7 @@ class PureDuckDBPageTests(unittest.TestCase):
                     cell_id="pure-duckdb-query-4",
                     sql=(
                         "COPY (SELECT 1 AS id, 'alpha' AS name) "
-                        "TO 's3://core/kbkp_today.parquet' "
+                        "TO 's3://CORE/kbkp_today.parquet' "
                         "(FORMAT parquet, OVERWRITE_OR_IGNORE true);"
                     ),
                 )

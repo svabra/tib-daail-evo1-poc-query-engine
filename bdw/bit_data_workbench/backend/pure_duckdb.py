@@ -10,8 +10,8 @@ from .s3_storage import is_likely_local_s3_endpoint
 from .sql_utils import sql_literal
 
 
-FACT_BUPO_TARGET = "s3://core/fact_bupo.parquet"
-KBKP_TODAY_TARGET = "s3://core/kbkp_today.parquet"
+FACT_BUPO_TARGET = "s3://CORE/fact_bupo.parquet"
+KBKP_TODAY_TARGET = "s3://CORE/kbkp_today.parquet"
 KBKP_FULL_PATH = "s3://CORE/KBKPfull.parquet"
 KBHP_FULL_PATH = "s3://CORE/KBHPfull.parquet"
 KALENDER_PATH = "s3://3_1_imports/DIM_Kalender.parquet"

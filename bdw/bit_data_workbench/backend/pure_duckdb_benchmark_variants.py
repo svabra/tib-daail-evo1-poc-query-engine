@@ -24,7 +24,7 @@ from .pure_duckdb import (
 from .sql_utils import sql_literal
 
 
-BENCHMARK_FACT_TARGET_PREFIX = "s3://core/pure-duckdb-benchmarks"
+BENCHMARK_FACT_TARGET_PREFIX = "s3://CORE/pure-duckdb-benchmarks"
 
 
 @dataclass(frozen=True, slots=True)
