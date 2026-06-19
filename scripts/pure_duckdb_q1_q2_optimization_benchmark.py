@@ -60,7 +60,7 @@ EXPLANATORY_COMPARISON_COLUMNS = (
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Benchmark Pure DuckDB Query 1 and Query 2 optimization variants and "
+            "Benchmark Pure DuckDB Query 1, Query 2, and Query 3 optimization variants and "
             "validate every candidate against the current baseline."
         )
     )
@@ -99,9 +99,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--query",
         action="append",
-        choices=["1", "2"],
+        choices=["1", "2", "3"],
         default=[],
-        help="Run only Q1 or Q2 variants. May be passed multiple times.",
+        help="Run only Q1, Q2, or Q3 variants. May be passed multiple times.",
     )
     parser.add_argument(
         "--rerun-fastest",
@@ -257,6 +257,37 @@ def _q1_consistency(result: tuple[Any, ...], baseline: tuple[Any, ...] | None) -
     return "pass", f"count and sum match baseline: cnt={result[0]}, total={result[1]}"
 
 
+def _q3_consistency(result: tuple[Any, ...], baseline: tuple[Any, ...] | None) -> tuple[str, str]:
+    labels = (
+        "total_rows",
+        "sum_betrag_hw",
+        "avg_betrag_hw",
+        "min_betrag_hw",
+        "max_betrag_hw",
+    )
+    if baseline is None:
+        rendered = ", ".join(
+            f"{label}={result[index] if index < len(result) else None}"
+            for index, label in enumerate(labels)
+        )
+        return "baseline", f"baseline {rendered}"
+    if len(result) != len(labels) or len(baseline) != len(labels):
+        return "fail", f"expected five aggregate columns, got result={result}, baseline={baseline}"
+    if result[0] != baseline[0]:
+        return "fail", f"row count differs: result={result[0]}, baseline={baseline[0]}"
+    for index, label in enumerate(labels[1:], start=1):
+        if not _decimal_close(result[index], baseline[index]):
+            return (
+                "fail",
+                f"{label} differs: result={result[index]}, baseline={baseline[index]}",
+            )
+    return (
+        "pass",
+        "all Q3 aggregate values match baseline: "
+        + ", ".join(f"{label}={result[index]}" for index, label in enumerate(labels)),
+    )
+
+
 def _q2_profile(connection: duckdb.DuckDBPyConnection, scan_sql: str) -> dict[str, Any]:
     describe_rows = connection.execute(f"DESCRIBE SELECT * FROM ({scan_sql}) q").fetchall()
     schema = [(row[0], row[1]) for row in describe_rows]
@@ -324,10 +355,10 @@ def _execute_variant(
         final_result: tuple[Any, ...] | None = None
         for index, statement in enumerate(variant.statements):
             cursor = connection.execute(runtime_sql(args, statement, variants))
-            if variant.query_number == 1 and index == len(variant.statements) - 1:
+            if variant.query_number in {1, 3} and index == len(variant.statements) - 1:
                 final_result = tuple(cursor.fetchone() or ())
         elapsed_ms = round((time.perf_counter() - started) * 1000, 3)
-        if variant.query_number == 1:
+        if variant.query_number in {1, 3}:
             validation_payload: Any = final_result or _fetch_one(
                 connection,
                 runtime_sql(args, variant.validation_sql, variants),
@@ -421,6 +452,7 @@ def _selected_variants(args: argparse.Namespace) -> list[PureDuckDBBenchmarkVari
     baseline_ids = {
         1: "q1_baseline_current",
         2: "q2_baseline_current",
+        3: "q3_baseline_current",
     }
     existing_ids = {variant.variant_id for variant in variants}
     baselines = [
@@ -515,6 +547,7 @@ def main() -> int:
 
     q1_baseline: tuple[Any, ...] | None = None
     q2_baseline: dict[str, Any] | None = None
+    q3_baseline: tuple[Any, ...] | None = None
     comparison_rows: list[dict[str, Any]] = []
     raw_results: list[dict[str, Any]] = []
 
@@ -533,13 +566,20 @@ def main() -> int:
             )
             if variant.variant_id == "q1_baseline_current":
                 q1_baseline = result["validationPayload"]
-        else:
+        elif variant.query_number == 2:
             consistency_status, consistency_details = _q2_consistency(
                 result["validationPayload"],
                 q2_baseline,
             )
             if variant.variant_id == "q2_baseline_current":
                 q2_baseline = result["validationPayload"]
+        else:
+            consistency_status, consistency_details = _q3_consistency(
+                result["validationPayload"],
+                q3_baseline,
+            )
+            if variant.variant_id == "q3_baseline_current":
+                q3_baseline = result["validationPayload"]
         comparison_rows.append(
             _comparison_row(
                 args=args,

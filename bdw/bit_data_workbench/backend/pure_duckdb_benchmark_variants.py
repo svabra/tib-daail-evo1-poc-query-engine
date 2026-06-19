@@ -19,6 +19,7 @@ from .pure_duckdb import (
     _fact_bupo_select_sql,
     _kbpo_union_by_name_relation,
     _query_1_sql,
+    _query_3_sql,
     _read_parquet,
 )
 from .sql_utils import sql_literal
@@ -161,6 +162,88 @@ WHERE Buchungsdatum >= DATE '2023-01-01'
 """.strip()
 
 
+def _q3_from_fact_select(fact_select_sql: str) -> str:
+    return f"""
+WITH fact_bupo AS (
+{fact_select_sql.rstrip().rstrip(";")}
+)
+SELECT
+      COUNT(*) AS total_rows
+    , SUM(BetragHauswaehrung) AS sum_betrag_hw
+    , AVG(BetragHauswaehrung) AS avg_betrag_hw
+    , MIN(BetragHauswaehrung) AS min_betrag_hw
+    , MAX(BetragHauswaehrung) AS max_betrag_hw
+FROM fact_bupo;
+""".strip()
+
+
+def _q3_narrow_amount_aggregate_sql() -> str:
+    kbkp_relation = _read_parquet(KBKP_FULL_PATH)
+    kbpo_relation = _kbpo_union_by_name_relation()
+    kbhp_relation = _read_parquet(KBHP_FULL_PATH)
+    kalender_relation = _read_parquet(KALENDER_PATH)
+    return f"""
+-- Narrow Q3 aggregate that preserves FACT join multiplicity and amount sign rules.
+WITH current_kalender AS (
+    SELECT Datum
+    FROM {kalender_relation}
+    WHERE Datum = CURRENT_DATE
+),
+base_positions AS (
+    SELECT
+          KBKP.KBKP_Belegnummer
+        , KBPO.KBPO_VtgKtoPositionNr
+        , KBPO.KBPO_HWhrBetrag1
+        , KALE.Datum
+    FROM {kbkp_relation} KBKP
+    INNER JOIN current_kalender KALE
+        ON KALE.Datum BETWEEN KBKP.KBKP_TechBeginnDt AND KBKP.KBKP_TechEndeDt
+    INNER JOIN {kbpo_relation} KBPO
+        ON  KBKP.KBKP_Belegnummer = KBPO.KBKP_AusgleichBelegnummer
+        AND KALE.Datum BETWEEN KBPO.KBPO_TechBeginnDt AND KBPO.KBPO_TechEndeDt
+),
+position_specific AS (
+    SELECT
+          BP.*
+        , KBHP.KBKP_BelegNummer AS KBHP_MatchedBelegNummer
+    FROM base_positions BP
+    LEFT JOIN {kbhp_relation} KBHP
+        ON  BP.KBKP_Belegnummer = KBHP.KBKP_BelegNummer
+        AND KBHP.KBHP_VTGKtoPositionNr = BP.KBPO_VtgKtoPositionNr
+        AND BP.Datum BETWEEN KBHP.KBHP_TechBeginnDt AND KBHP.KBHP_TechEndeDt
+),
+resolved_amounts AS (
+    SELECT
+        PS.KBPO_HWhrBetrag1
+    FROM position_specific PS
+    WHERE PS.KBHP_MatchedBelegNummer IS NOT NULL
+    UNION ALL
+    SELECT
+        PS.KBPO_HWhrBetrag1
+    FROM position_specific PS
+    LEFT JOIN {kbhp_relation} KBHH
+        ON  PS.KBKP_Belegnummer = KBHH.KBKP_BelegNummer
+        AND PS.Datum BETWEEN KBHH.KBHP_TechBeginnDt AND KBHH.KBHP_TechEndeDt
+        AND KBHH.KBHP_VTGKtoPositionNr = 1
+    WHERE PS.KBHP_MatchedBelegNummer IS NULL
+),
+signed_amounts AS (
+    SELECT KBPO_HWhrBetrag1 AS BetragHauswaehrung
+    FROM resolved_amounts
+    UNION ALL
+    SELECT KBPO_HWhrBetrag1 * -1 AS BetragHauswaehrung
+    FROM resolved_amounts
+)
+SELECT
+      COUNT(*) AS total_rows
+    , SUM(BetragHauswaehrung) AS sum_betrag_hw
+    , AVG(BetragHauswaehrung) AS avg_betrag_hw
+    , MIN(BetragHauswaehrung) AS min_betrag_hw
+    , MAX(BetragHauswaehrung) AS max_betrag_hw
+FROM signed_amounts;
+""".strip()
+
+
 def _fact_select_for_current_sources(*, optimized: bool) -> str:
     builder = _optimized_fact_select_sql if optimized else _fact_bupo_select_sql
     return builder(
@@ -282,6 +365,9 @@ def pure_duckdb_q1_q2_benchmark_variants() -> tuple[PureDuckDBBenchmarkVariant, 
     q1_baseline_sql = _query_1_sql()
     q1_optimized_sql = _q1_from_fact_select(_optimized_fact_select_sql())
     q1_pushdown_sql = _q1_aggregate_pushdown_sql()
+    q3_baseline_sql = _query_3_sql()
+    q3_optimized_sql = _q3_from_fact_select(_optimized_fact_select_sql())
+    q3_narrow_amount_sql = _q3_narrow_amount_aggregate_sql()
 
     q2_baseline_target = benchmark_fact_target("q2_baseline_current")
     q2_optimized_target = benchmark_fact_target("q2_optimized_single_file_v1")
@@ -535,6 +621,61 @@ def pure_duckdb_q1_q2_benchmark_variants() -> tuple[PureDuckDBBenchmarkVariant, 
             expected_effect="Allows DuckDB more freedom to reorder work and tests a controlled thread count.",
             validation_sql=f"SELECT * FROM {fact_scan_sql(q2_runtime_target)}",
             output_s3_url=q2_runtime_target,
+        ),
+        PureDuckDBBenchmarkVariant(
+            variant_id="q3_baseline_current",
+            query_number=3,
+            statements=(q3_baseline_sql,),
+            change_summary="Current production Query 3 SQL, used as the semantic and timing baseline.",
+            sql_strategy="Build full FACT_Buchungsbelegposition in a CTE, then aggregate all rows.",
+            output_layout="none",
+            duckdb_settings=(),
+            expected_effect="Baseline only.",
+            validation_sql=q3_baseline_sql,
+        ),
+        PureDuckDBBenchmarkVariant(
+            variant_id="q3_runtime_preserve_false_v1",
+            query_number=3,
+            statements=(q3_baseline_sql,),
+            change_summary="Keeps Query 3 SQL unchanged and disables DuckDB insertion-order preservation.",
+            sql_strategy="Current Query 3 statement; only preserve_insertion_order changes.",
+            output_layout="none",
+            duckdb_settings=("SET preserve_insertion_order = false",),
+            expected_effect=(
+                "Tests the safest optimization class first: no customer SQL rewrite, just letting "
+                "DuckDB reorder intermediate work where output order is irrelevant."
+            ),
+            validation_sql=q3_baseline_sql,
+        ),
+        PureDuckDBBenchmarkVariant(
+            variant_id="q3_optimized_fact_v1",
+            query_number=3,
+            statements=(q3_optimized_sql,),
+            change_summary="Uses the existing optimized FACT join shape before applying the same Q3 aggregate.",
+            sql_strategy="Resolved-position CTE plus CROSS JOIN amount-sign projection, then full aggregate.",
+            output_layout="none",
+            duckdb_settings=(),
+            expected_effect="Avoids duplicated wide UNION branch joins while keeping the same aggregate result.",
+            validation_sql=q3_optimized_sql,
+        ),
+        PureDuckDBBenchmarkVariant(
+            variant_id="q3_narrow_amount_aggregate_v1",
+            query_number=3,
+            statements=(q3_narrow_amount_sql,),
+            change_summary=(
+                "Projects only the signed amount needed by Q3 while preserving FACT row multiplicity."
+            ),
+            sql_strategy=(
+                "Current-source joins plus ledger fallback are kept for row multiplicity, but the "
+                "final projection contains only BetragHauswaehrung before aggregation."
+            ),
+            output_layout="none",
+            duckdb_settings=(),
+            expected_effect=(
+                "Reduces projection width and string/date column handling; this is the strongest SQL "
+                "rewrite candidate and should only be promoted after consistency proof."
+            ),
+            validation_sql=q3_narrow_amount_sql,
         ),
     )
 

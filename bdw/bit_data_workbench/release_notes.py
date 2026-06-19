@@ -1,37 +1,40 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.34. Keep entries concise and
+# Derived from git history through version 0.10.35. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
     {
-        "version": "0.10.34",
-        "releasedAt": "2026-06-18T22:12:18+02:00",
+        "version": "0.10.35",
+        "releasedAt": "2026-06-19T12:13:39+02:00",
         "features": [
             (
-                "Pure DuckDB production output targets now use the existing "
-                "case-sensitive CORE bucket for fact_bupo.parquet and "
-                "kbkp_today.parquet instead of the non-existent core bucket."
+                "Pure DuckDB result previews are now capped at 20 displayed "
+                "rows so large result sets do not overload the page."
             ),
             (
-                "Query 2, Query 2b, Query 4, Query 5, and downstream "
-                "fact_bupo analytical queries now share the same CORE bucket "
-                "casing as the production KBKP and KBHP source files."
+                "The Pure DuckDB Download CSV action now exports the complete "
+                "read-query result as a compressed CSV ZIP through a backend "
+                "download endpoint instead of exporting only the visible rows."
             ),
             (
-                "Pure DuckDB Q1/Q2 benchmark artifact targets now also use "
-                "the CORE bucket to avoid NoSuchBucket errors against "
-                "case-sensitive ECS S3 storage."
+                "Pure DuckDB now includes Query 3b, an optimized FACT-builder "
+                "variant of Query 3 that preserves the aggregate result shape "
+                "while avoiding duplicated wide UNION ALL join branches."
             ),
             (
-                "Local development still rewrites CORE to the lowercase core "
-                "bucket for MinIO, preserving local test compatibility while "
-                "keeping production SQL correctly cased."
+                "Query 3b includes collapsed Optimization Remarks documenting "
+                "the q3_optimized_fact_v1 strategy and its consistency checks."
             ),
             (
-                "Regression coverage now verifies production CORE targets, "
-                "local bucket-name rendering, Q2 benchmark target paths, and "
-                "a live local Query 4 write smoke."
+                "The Pure DuckDB Q1/Q2 benchmark suite now supports Q3 "
+                "optimization variants and validates count, sum, average, "
+                "minimum, and maximum against the current Query 3 baseline."
+            ),
+            (
+                "Regression coverage now verifies the 20-row preview cap, "
+                "full-result ZIP export, Query 3b rendering, and Q3/Q3b "
+                "aggregate consistency on local Parquet fixtures."
             ),
         ],
     },

@@ -1587,6 +1587,9 @@ class WorkbenchService:
     def pure_duckdb_job(self, job_id: str) -> dict[str, object]:
         return self._pure_duckdb_jobs.snapshot(str(job_id or "").strip()).payload
 
+    def pure_duckdb_job_csv_zip(self, job_id: str):
+        return self._pure_duckdb_jobs.csv_zip_artifact(str(job_id or "").strip())
+
     def query_runs_history(
         self,
         *,

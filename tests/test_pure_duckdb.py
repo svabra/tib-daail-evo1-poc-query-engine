@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import shutil
 import sys
 import tempfile
 import time
 import unittest
+import zipfile
 from unittest.mock import patch
 
 import duckdb
@@ -27,6 +29,7 @@ from bit_data_workbench.backend.pure_duckdb import (  # noqa: E402
     PURE_DUCKDB_CELLS,
     _query_1_sql,
     _query_2_sql,
+    _query_3_sql,
     pure_duckdb_cells_payload,
 )
 from bit_data_workbench.backend.pure_duckdb_jobs import (  # noqa: E402
@@ -238,7 +241,7 @@ class PureDuckDBPageTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.body.decode("utf-8")
         self.assertIn('data-pure-duckdb-page', body)
-        self.assertEqual(body.count('data-pure-duckdb-cell'), 19)
+        self.assertEqual(body.count('data-pure-duckdb-cell'), 20)
         self.assertIn('/static/js/pure-duckdb.js', body)
         self.assertNotIn('/static/js/app.js', body)
         self.assertNotIn('data-sidebar', body)
@@ -265,7 +268,7 @@ class PureDuckDBPageTests(unittest.TestCase):
         self.assertIn("Optimization Remarks", body)
         self.assertIn("The expensive joined row set is built once", body)
         self.assertIn("The result remains consistent", body)
-        self.assertEqual(body.count('class="pure-duckdb-remarks"'), 2)
+        self.assertEqual(body.count('class="pure-duckdb-remarks"'), 3)
         self.assertNotIn('class="pure-duckdb-remarks" open', body)
 
     def test_local_pure_duckdb_page_uses_local_compatible_s3_buckets(self) -> None:
@@ -307,7 +310,29 @@ class PureDuckDBPageTests(unittest.TestCase):
         self.assertIn("Optimization Remarks", body)
         self.assertIn("builds the resolved joined row set once", body)
         self.assertIn("schema, row count, grouped fingerprints, and amount totals match Query 2", body)
-        self.assertEqual(body.count('class="pure-duckdb-remarks"'), 2)
+        self.assertEqual(body.count('class="pure-duckdb-remarks"'), 3)
+        self.assertNotIn('class="pure-duckdb-remarks" open', body)
+
+    def test_query_3b_renders_after_query_3_with_collapsed_optimization_remarks(self) -> None:
+        response = pure_duckdb_page(
+            request=build_request("/pure-duckdb"),
+            service=FakeWorkbenchService(),
+        )
+
+        body = response.body.decode("utf-8")
+        self.assertLess(
+            body.index('data-cell-id="pure-duckdb-query-3"'),
+            body.index('data-cell-id="pure-duckdb-query-3b"'),
+        )
+        self.assertLess(
+            body.index('data-cell-id="pure-duckdb-query-3b"'),
+            body.index('data-cell-id="pure-duckdb-query-4"'),
+        )
+        self.assertIn("Query 3b", body)
+        self.assertIn("Optimization Remarks", body)
+        self.assertIn("q3_optimized_fact_v1", body)
+        self.assertIn("count, sum, average, minimum, and maximum match Query 3", body)
+        self.assertEqual(body.count('class="pure-duckdb-remarks"'), 3)
         self.assertNotIn('class="pure-duckdb-remarks" open', body)
 
     def test_home_page_contains_pure_duckdb_tile(self) -> None:
@@ -329,10 +354,21 @@ class PureDuckDBPageTests(unittest.TestCase):
 
         self.assertIn("data-download-pure-duckdb-csv", script)
         self.assertIn("Download CSV", script)
-        self.assertIn("text/csv;charset=utf-8", script)
-        self.assertIn('link.download = `${safeCellId}.csv`', script)
-        self.assertIn("completedResults.set", script)
+        self.assertIn("/api/pure-duckdb/jobs/${encodeURIComponent(jobId)}/csv.zip", script)
+        self.assertIn('headers: { Accept: "application/zip" }', script)
+        self.assertIn('link.download = fileName || `${safeCellId}.csv.zip`', script)
+        self.assertNotIn("text/csv;charset=utf-8", script)
+        self.assertNotIn("completedResults.set", script)
         self.assertIn(".pure-duckdb-download-button", styles)
+
+    def test_pure_duckdb_csv_zip_api_route_is_registered(self) -> None:
+        api_router = (
+            REPO_ROOT / "bdw" / "bit_data_workbench" / "api" / "router.py"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn('@router.get("/api/pure-duckdb/jobs/{job_id}/csv.zip")', api_router)
+        self.assertIn("pure_duckdb_job_csv_zip", api_router)
+        self.assertIn("FileResponse", api_router)
 
     def test_big_data_benchmark_script_targets_pure_duckdb_s3_fixtures(self) -> None:
         script = (REPO_ROOT / "scripts" / "pure_duckdb_big_data_benchmark.py").read_text(
@@ -351,18 +387,21 @@ class PureDuckDBPageTests(unittest.TestCase):
         self.assertIn("Object key casing is preserved", script)
 
     def test_presets_are_final_duckdb_sql_without_virtual_s3_references(self) -> None:
-        self.assertEqual(len(PURE_DUCKDB_CELLS), 19)
+        self.assertEqual(len(PURE_DUCKDB_CELLS), 20)
         self.assertEqual(
-            [(cell.cell_id, cell.label) for cell in PURE_DUCKDB_CELLS[:4]],
+            [(cell.cell_id, cell.label) for cell in PURE_DUCKDB_CELLS[:6]],
             [
                 ("pure-duckdb-query-1", "Query 1"),
                 ("pure-duckdb-query-1b", "Query 1b"),
                 ("pure-duckdb-query-2", "Query 2"),
                 ("pure-duckdb-query-2b", "Query 2b"),
+                ("pure-duckdb-query-3", "Query 3"),
+                ("pure-duckdb-query-3b", "Query 3b"),
             ],
         )
         self.assertEqual(PURE_DUCKDB_CELLS[0].sql, _query_1_sql())
         self.assertEqual(PURE_DUCKDB_CELLS[2].sql, _query_2_sql())
+        self.assertEqual(PURE_DUCKDB_CELLS[4].sql, _query_3_sql())
         for cell in PURE_DUCKDB_CELLS:
             self.assertNotRegex(cell.sql, r"\bs3\.[A-Za-z0-9_\"]")
             self.assertNotIn("s3://n_3_1_imports/", cell.sql)
@@ -397,6 +436,13 @@ class PureDuckDBPageTests(unittest.TestCase):
         self.assertIn("TO 's3://CORE/fact_bupo.parquet'", PURE_DUCKDB_CELLS[3].sql)
         self.assertIn("COMPRESSION zstd", PURE_DUCKDB_CELLS[3].sql)
         self.assertEqual(PURE_DUCKDB_CELLS[3].remarks[0].split(":", 1)[0], "Query 2b keeps the output contract of Query 2")
+        self.assertIn("union_by_name = true", PURE_DUCKDB_CELLS[5].sql)
+        self.assertIn("CROSS JOIN (VALUES", PURE_DUCKDB_CELLS[5].sql)
+        self.assertIn("current_kalender AS", PURE_DUCKDB_CELLS[5].sql)
+        self.assertIn("resolved_positions AS", PURE_DUCKDB_CELLS[5].sql)
+        self.assertIn("COUNT(*) AS total_rows", PURE_DUCKDB_CELLS[5].sql)
+        self.assertNotIn("COPY (", PURE_DUCKDB_CELLS[5].sql)
+        self.assertEqual(PURE_DUCKDB_CELLS[5].remarks[0].split(":", 1)[0], "Query 3b keeps the result shape and business semantics of Query 3")
 
     def test_static_pure_duckdb_payload_keeps_production_s3_casing(self) -> None:
         payload = pure_duckdb_cells_payload()
@@ -409,16 +455,16 @@ class PureDuckDBPageTests(unittest.TestCase):
         self.assertIn("s3://3_1_imports/DIM_Kalender.parquet", sql)
 
     def test_appended_analytical_queries_are_translated_to_duckdb_sql(self) -> None:
-        appended_sql = "\n\n".join(cell.sql for cell in PURE_DUCKDB_CELLS[11:])
+        appended_sql = "\n\n".join(cell.sql for cell in PURE_DUCKDB_CELLS[12:])
 
-        self.assertEqual(len(PURE_DUCKDB_CELLS[11:]), 8)
-        self.assertIn("-- 5. HIGH CARDINALITY GROUP BY", PURE_DUCKDB_CELLS[11].sql)
+        self.assertEqual(len(PURE_DUCKDB_CELLS[12:]), 8)
+        self.assertIn("-- 5. HIGH CARDINALITY GROUP BY", PURE_DUCKDB_CELLS[12].sql)
         self.assertIn("read_parquet('s3://CORE/fact_bupo.parquet')", appended_sql)
         self.assertNotRegex(appended_sql, r"\bFROM\s+fact_bupo\b")
         self.assertNotRegex(appended_sql, r"\bSELECT\s+TOP\b")
-        self.assertIn("LIMIT 10", PURE_DUCKDB_CELLS[15].sql)
-        self.assertIn("DATE_TRUNC('month', Buchungsdatum)::DATE AS mmonth", PURE_DUCKDB_CELLS[18].sql)
-        self.assertIn("ORDER BY mmonth, total DESC", PURE_DUCKDB_CELLS[18].sql)
+        self.assertIn("LIMIT 10", PURE_DUCKDB_CELLS[16].sql)
+        self.assertIn("DATE_TRUNC('month', Buchungsdatum)::DATE AS mmonth", PURE_DUCKDB_CELLS[19].sql)
+        self.assertIn("ORDER BY mmonth, total DESC", PURE_DUCKDB_CELLS[19].sql)
         self.assertNotIn("ADD_MONTHS", appended_sql)
         self.assertNotIn("monthh", appended_sql)
         self.assertNotIn("GROUP BY Belegart\n", appended_sql)
@@ -441,6 +487,44 @@ class PureDuckDBPageTests(unittest.TestCase):
             self.assertEqual(payload["timings"].get("engineAccessWaitMs"), 0.0)
             self.assertEqual(payload["rows"], [[1]])
             self.assertIn("backendTotalMs", payload["timings"])
+
+    def test_pure_duckdb_preview_is_capped_and_csv_zip_contains_all_rows(self) -> None:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp_dir:
+            manager = PureDuckDBJobManager(
+                settings=make_settings(Path(tmp_dir)),
+                max_result_rows=200,
+            )
+            snapshot = manager.start_job(
+                cell_id="pure-duckdb-query-export",
+                sql="-- export regression\nSELECT i AS value FROM range(25) AS source(i) ORDER BY i",
+            )
+
+            terminal = manager.wait_for_terminal(snapshot.job_id, timeout=20)
+            payload = terminal.payload
+            self.assertEqual(payload["status"], "completed")
+            self.assertEqual(payload["rowCount"], 20)
+            self.assertEqual(payload["rowsShown"], 20)
+            self.assertTrue(payload["truncated"])
+            self.assertEqual(len(payload["rows"]), 20)
+            self.assertEqual(payload["rows"][0], [0])
+            self.assertEqual(payload["rows"][-1], [19])
+
+            artifact = manager.csv_zip_artifact(snapshot.job_id)
+            try:
+                self.assertEqual(artifact.media_type, "application/zip")
+                self.assertEqual(artifact.filename, "pure-duckdb-query-export.csv.zip")
+                with zipfile.ZipFile(artifact.path) as archive:
+                    self.assertEqual(archive.namelist(), ["pure-duckdb-query-export.csv"])
+                    csv_lines = (
+                        archive.read("pure-duckdb-query-export.csv")
+                        .decode("utf-8")
+                        .splitlines()
+                    )
+                self.assertEqual(csv_lines[0], "value")
+                self.assertEqual(len(csv_lines), 26)
+                self.assertEqual(csv_lines[-1], "24")
+            finally:
+                shutil.rmtree(artifact.temporary_directory, ignore_errors=True)
 
     def test_service_pure_duckdb_bypasses_query_job_manager(self) -> None:
         class ExplodingQueryJobs:
@@ -645,6 +729,32 @@ class PureDuckDBPageTests(unittest.TestCase):
                     self.assertIsNone(optimized[1])
                 else:
                     self.assertAlmostEqual(float(optimized[1]), float(baseline[1]), places=6)
+            finally:
+                con.close()
+
+    def test_query_3b_matches_query_3_against_tiny_parquet_fixtures(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            paths = _write_fixture_parquet_files(root)
+            con = duckdb.connect(":memory:")
+            try:
+                query_3 = _with_local_paths(PURE_DUCKDB_CELLS[4].sql, paths)
+                query_3b = _with_local_paths(PURE_DUCKDB_CELLS[5].sql, paths)
+                baseline = con.execute(query_3).fetchone()
+                optimized = con.execute(query_3b).fetchone()
+
+                self.assertEqual(len(optimized), 5)
+                self.assertEqual(optimized[0], baseline[0])
+                for index in range(1, 5):
+                    if baseline[index] is None or optimized[index] is None:
+                        self.assertIsNone(baseline[index])
+                        self.assertIsNone(optimized[index])
+                    else:
+                        self.assertAlmostEqual(
+                            float(optimized[index]),
+                            float(baseline[index]),
+                            places=6,
+                        )
             finally:
                 con.close()
 

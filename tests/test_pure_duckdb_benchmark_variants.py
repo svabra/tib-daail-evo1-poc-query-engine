@@ -73,6 +73,30 @@ def _add_variant_outputs(paths: dict[str, Path], root: Path) -> None:
             paths[variant.output_s3_url] = root / relative
 
 
+def _duplicate_kbhp_rows(paths: dict[str, Path], root: Path) -> None:
+    source = paths[KBHP_FULL_PATH]
+    duplicate = root / "CORE" / "KBHPfull-duplicated.parquet"
+    connection = duckdb.connect(":memory:")
+    try:
+        connection.execute(
+            f"""
+            COPY (
+                SELECT *
+                FROM read_parquet('{source.as_posix()}')
+                UNION ALL
+                SELECT *
+                FROM read_parquet('{source.as_posix()}')
+                WHERE KBHP_VTGKtoPositionNr = 1
+            )
+            TO '{duplicate.as_posix()}'
+            (FORMAT parquet)
+            """
+        )
+    finally:
+        connection.close()
+    duplicate.replace(source)
+
+
 def _local_sql(sql: str, paths: dict[str, Path]) -> str:
     rewritten = sql
     for s3_url, local_path in sorted(paths.items(), key=lambda item: len(item[0]), reverse=True):
@@ -143,6 +167,10 @@ class PureDuckDBBenchmarkVariantTests(unittest.TestCase):
         self.assertIn("expected_effect", columns)
         self.assertIn("q1_baseline_current", variant_ids)
         self.assertIn("q1_pushdown_v1", variant_ids)
+        self.assertIn("q3_baseline_current", variant_ids)
+        self.assertIn("q3_runtime_preserve_false_v1", variant_ids)
+        self.assertIn("q3_optimized_fact_v1", variant_ids)
+        self.assertIn("q3_narrow_amount_aggregate_v1", variant_ids)
         self.assertIn("q2_dataset_folder_v1", variant_ids)
         self.assertIn("q2_optimized_snappy_single_file_v1", variant_ids)
         self.assertIn("q2_optimized_uncompressed_single_file_v1", variant_ids)
@@ -178,6 +206,72 @@ class PureDuckDBBenchmarkVariantTests(unittest.TestCase):
                 self.assertAlmostEqual(float(pushed_down[1]), float(baseline[1]), places=6)
                 self.assertEqual(optimized[0], baseline[0])
                 self.assertAlmostEqual(float(optimized[1]), float(baseline[1]), places=6)
+            finally:
+                connection.close()
+
+    def test_q3_candidates_match_current_baseline_on_local_parquet(self) -> None:
+        variants = {variant.variant_id: variant for variant in pure_duckdb_q1_q2_benchmark_variants()}
+        candidate_ids = (
+            "q3_runtime_preserve_false_v1",
+            "q3_optimized_fact_v1",
+            "q3_narrow_amount_aggregate_v1",
+        )
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            paths = _write_fixture(root)
+            _add_variant_outputs(paths, root)
+            connection = duckdb.connect(":memory:")
+            try:
+                baseline = variants["q3_baseline_current"]
+                baseline_row = connection.execute(
+                    _local_sql(baseline.validation_sql, paths)
+                ).fetchone()
+                self.assertIsNotNone(baseline_row)
+                self.assertEqual(len(baseline_row), 5)
+
+                for candidate_id in candidate_ids:
+                    with self.subTest(candidate_id=candidate_id):
+                        candidate = variants[candidate_id]
+                        for setting in candidate.duckdb_settings:
+                            connection.execute(setting)
+                        candidate_row = connection.execute(
+                            _local_sql(candidate.validation_sql, paths)
+                        ).fetchone()
+                        self.assertEqual(candidate_row[0], baseline_row[0])
+                        for index in range(1, 5):
+                            self.assertAlmostEqual(
+                                float(candidate_row[index]),
+                                float(baseline_row[index]),
+                                places=6,
+                            )
+            finally:
+                connection.close()
+
+    def test_q3_narrow_amount_preserves_ledger_join_multiplicity(self) -> None:
+        variants = {variant.variant_id: variant for variant in pure_duckdb_q1_q2_benchmark_variants()}
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            paths = _write_fixture(root)
+            _duplicate_kbhp_rows(paths, root)
+            connection = duckdb.connect(":memory:")
+            try:
+                baseline_row = connection.execute(
+                    _local_sql(variants["q3_baseline_current"].validation_sql, paths)
+                ).fetchone()
+                narrow_row = connection.execute(
+                    _local_sql(
+                        variants["q3_narrow_amount_aggregate_v1"].validation_sql,
+                        paths,
+                    )
+                ).fetchone()
+
+                self.assertEqual(narrow_row[0], baseline_row[0])
+                for index in range(1, 5):
+                    self.assertAlmostEqual(
+                        float(narrow_row[index]),
+                        float(baseline_row[index]),
+                        places=6,
+                    )
             finally:
                 connection.close()
 
@@ -258,6 +352,7 @@ class PureDuckDBBenchmarkVariantTests(unittest.TestCase):
         self.assertIn("consistency_details", script)
         self.assertIn("--target-compressed-mib", script)
         self.assertIn("default=20.0", script)
+        self.assertIn('choices=["1", "2", "3"]', script)
         self.assertIn("--rerun-top-candidates", script)
         self.assertIn("--no-json", script)
         self.assertIn("--json-output", script)
@@ -270,6 +365,16 @@ class PureDuckDBBenchmarkVariantTests(unittest.TestCase):
         self.assertEqual(
             [variant.variant_id for variant in selected],
             ["q1_baseline_current", "q1_pushdown_v1"],
+        )
+
+    def test_runner_includes_q3_baseline_when_q3_candidate_is_selected(self) -> None:
+        selected = _selected_variants(
+            SimpleNamespace(variant=["q3_narrow_amount_aggregate_v1"], query=[])
+        )
+
+        self.assertEqual(
+            [variant.variant_id for variant in selected],
+            ["q3_baseline_current", "q3_narrow_amount_aggregate_v1"],
         )
 
 

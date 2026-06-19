@@ -155,6 +155,16 @@ QUERY_2B_OPTIMIZATION_REMARKS = (
 )
 
 
+QUERY_3B_OPTIMIZATION_REMARKS = (
+    "Query 3b keeps the result shape and business semantics of Query 3: it returns total_rows, sum_betrag_hw, avg_betrag_hw, min_betrag_hw, and max_betrag_hw over the full FACT_Buchungsbelegposition result. The result remains consistent with Query 3.",
+    "The optimization is the q3_optimized_fact_v1 variant: the aggregate stays the same, but the FACT-building SQL uses the optimized resolved-position shape instead of the original duplicated wide UNION ALL branches.",
+    "The expensive KBKP, KBPO, and KBHP joins are performed once through current_kalender, base_positions, position_specific, and resolved_positions. Ledger-account fallback is resolved once before the final signed position projection.",
+    "Original and settlement rows are derived with the same two-row CROSS JOIN used by Query 1b and Query 2b. Amount signs and original-versus-settlement semantics are preserved.",
+    "No runtime path, S3 configuration, cache behavior, or execution engine behavior changes are part of this optimization. It still uses Pure DuckDB direct in-process execution and the same read_parquet inputs.",
+    "Regression checks confirm that count, sum, average, minimum, and maximum match Query 3 within floating-point tolerance.",
+)
+
+
 def _materialized_fact_bupo_copy_sql(*, optimized: bool, comment: str) -> str:
     builder = _optimized_fact_bupo_select_sql if optimized else _fact_bupo_select_sql
     fact_select = builder(
@@ -212,6 +222,20 @@ def _query_3_sql() -> str:
     return f"""
 -- Single-query FACT_Buchungsbelegposition replication with a full aggregate.
 {_fact_bupo_cte_sql()}
+SELECT
+      COUNT(*) AS total_rows
+    , SUM(BetragHauswaehrung) AS sum_betrag_hw
+    , AVG(BetragHauswaehrung) AS avg_betrag_hw
+    , MIN(BetragHauswaehrung) AS min_betrag_hw
+    , MAX(BetragHauswaehrung) AS max_betrag_hw
+FROM fact_bupo;
+""".strip()
+
+
+def _query_3b_sql() -> str:
+    return f"""
+-- Optimized single-query FACT_Buchungsbelegposition replication with a full aggregate.
+{_optimized_fact_bupo_cte_sql()}
 SELECT
       COUNT(*) AS total_rows
     , SUM(BetragHauswaehrung) AS sum_betrag_hw
@@ -428,6 +452,12 @@ PURE_DUCKDB_CELLS: tuple[PureDuckDBCell, ...] = (
         remarks=QUERY_2B_OPTIMIZATION_REMARKS,
     ),
     PureDuckDBCell("pure-duckdb-query-3", "Query 3", _query_3_sql()),
+    PureDuckDBCell(
+        "pure-duckdb-query-3b",
+        "Query 3b",
+        _query_3b_sql(),
+        remarks=QUERY_3B_OPTIMIZATION_REMARKS,
+    ),
     PureDuckDBCell("pure-duckdb-query-4", "Query 4", _query_4_sql()),
     PureDuckDBCell("pure-duckdb-query-5", "Query 5", _query_5_sql()),
     PureDuckDBCell("pure-duckdb-query-6", "Query 6", _query_6_sql()),

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import csv
+import io
 import threading
 import time
 import uuid
+import zipfile
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -25,6 +28,7 @@ from .sql_utils import sql_literal
 PURE_DUCKDB_DIRECT_EXECUTION_PATH = "direct-in-process"
 PURE_DUCKDB_RUNNING_STATUSES = {"queued", "running"}
 PURE_DUCKDB_TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
+PURE_DUCKDB_RESULT_PREVIEW_ROW_LIMIT = 20
 S3_COPY_TARGET_PATTERN = re.compile(
     r"(?is)(?P<prefix>\bTO\s*)'(?P<target>s3://[^']+)'(?P<suffix>\s*\()"
 )
@@ -37,6 +41,11 @@ def _utc_now_iso() -> str:
 
 def _safe_query_spill_directory_name(job_id: str) -> str:
     return "".join(char if char.isalnum() or char in {"-", "_"} else "-" for char in job_id)
+
+
+def _safe_download_file_stem(value: str) -> str:
+    stem = re.sub(r"[^A-Za-z0-9_-]+", "-", str(value or "").strip()).strip("-")
+    return stem or "pure-duckdb-result"
 
 
 def _serialize_value(value: Any) -> Any:
@@ -107,6 +116,14 @@ class PureDuckDBJobRecord:
 
 
 @dataclass(frozen=True, slots=True)
+class PureDuckDBCsvZipArtifact:
+    path: Path
+    filename: str
+    temporary_directory: Path
+    media_type: str = "application/zip"
+
+
+@dataclass(frozen=True, slots=True)
 class PureDuckDBS3CopyUpload:
     execution_sql: str
     target_url: str
@@ -165,10 +182,34 @@ def _put_s3_file_single_request(
         client.put_object(Bucket=bucket, Key=key, Body=body)
 
 
+def _leading_sql_keyword(sql: str) -> str:
+    text = str(sql or "").lstrip()
+    while text:
+        if text.startswith("--"):
+            line_end = text.find("\n")
+            if line_end < 0:
+                return ""
+            text = text[line_end + 1 :].lstrip()
+            continue
+        if text.startswith("/*"):
+            block_end = text.find("*/")
+            if block_end < 0:
+                return ""
+            text = text[block_end + 2 :].lstrip()
+            continue
+        break
+    match = re.match(r"([A-Za-z_][A-Za-z0-9_]*)", text)
+    return match.group(1).lower() if match else ""
+
+
+def _is_downloadable_result_sql(sql: str) -> bool:
+    return _leading_sql_keyword(sql) in {"select", "with", "values"}
+
+
 class PureDuckDBJobManager:
     def __init__(self, *, settings: Settings, max_result_rows: int) -> None:
         self._settings = settings
-        self._max_result_rows = max(1, int(max_result_rows or 50))
+        self._preview_row_limit = PURE_DUCKDB_RESULT_PREVIEW_ROW_LIMIT
         self._condition = threading.Condition(threading.RLock())
         self._jobs: dict[str, PureDuckDBJobRecord] = {}
 
@@ -204,6 +245,30 @@ class PureDuckDBJobManager:
             if record is None:
                 raise KeyError(f"Unknown Pure DuckDB job: {normalized_job_id}")
             return record.snapshot
+
+    def csv_zip_artifact(self, job_id: str) -> PureDuckDBCsvZipArtifact:
+        normalized_job_id = str(job_id or "").strip()
+        with self._condition:
+            record = self._jobs.get(normalized_job_id)
+            if record is None:
+                raise KeyError(f"Unknown Pure DuckDB job: {normalized_job_id}")
+            snapshot = record.snapshot
+            if snapshot.status != "completed":
+                raise ValueError("Pure DuckDB CSV download is available after the job completes.")
+            if not snapshot.columns:
+                raise ValueError("Pure DuckDB job did not produce a tabular result.")
+            if snapshot.row_count <= 0:
+                raise ValueError("Pure DuckDB job did not return any rows to download.")
+            if not _is_downloadable_result_sql(snapshot.sql):
+                raise ValueError("CSV download is only available for read-result statements.")
+            sql = snapshot.sql
+            cell_id = snapshot.cell_id
+
+        return self._build_csv_zip_artifact(
+            job_id=normalized_job_id,
+            cell_id=cell_id,
+            sql=sql,
+        )
 
     def wait_for_terminal(
         self,
@@ -243,6 +308,7 @@ class PureDuckDBJobManager:
         started: float,
         columns: list[str],
         rows: list[list[Any]],
+        row_count: int,
         truncated: bool,
         engine_query_ms: float,
         result_fetch_ms: float,
@@ -253,14 +319,15 @@ class PureDuckDBJobManager:
         snapshot.status = "completed"
         snapshot.columns = columns
         snapshot.rows = rows
-        snapshot.row_count = len(rows)
+        snapshot.row_count = row_count
         snapshot.rows_shown = len(rows)
         snapshot.truncated = truncated
         if columns:
             snapshot.message = (
-                f"{self._max_result_rows} row(s) shown. The result was truncated for the UI."
+                f"{len(rows)} row(s) shown. The UI preview is capped at {self._preview_row_limit} rows; "
+                "Download CSV exports the complete result."
                 if truncated
-                else f"{len(rows)} row(s) shown."
+                else f"{row_count} row(s) shown."
             )
         else:
             snapshot.message = "Statement executed successfully."
@@ -340,18 +407,20 @@ class PureDuckDBJobManager:
                 s3_upload_ms = (time.perf_counter() - upload_started) * 1000
 
             rows: list[list[Any]] = []
+            row_count = 0
             truncated = False
             fetch_started = time.perf_counter()
             if columns:
-                while len(rows) <= self._max_result_rows:
-                    batch = cursor.fetchmany(max(1, min(1000, self._max_result_rows + 1)))
+                while len(rows) <= self._preview_row_limit:
+                    batch = cursor.fetchmany(max(1, self._preview_row_limit + 1 - len(rows)))
                     if not batch:
                         break
                     rows.extend(_serialize_row(row) for row in batch)
-                    if len(rows) > self._max_result_rows:
+                    if len(rows) > self._preview_row_limit:
                         truncated = True
-                        rows = rows[: self._max_result_rows]
+                        rows = rows[: self._preview_row_limit]
                         break
+                row_count = len(rows)
             result_fetch_ms = (time.perf_counter() - fetch_started) * 1000 if columns else 0.0
 
             with self._condition:
@@ -361,6 +430,7 @@ class PureDuckDBJobManager:
                     started=started,
                     columns=columns,
                     rows=rows,
+                    row_count=row_count,
                     truncated=truncated,
                     engine_query_ms=engine_query_ms,
                     result_fetch_ms=result_fetch_ms,
@@ -389,3 +459,67 @@ class PureDuckDBJobManager:
             return
         with suppress(Exception):
             delete_query_spill_directory(self._settings.duckdb_temp_directory, spill_temp_directory)
+
+    def _build_csv_zip_artifact(
+        self,
+        *,
+        job_id: str,
+        cell_id: str,
+        sql: str,
+    ) -> PureDuckDBCsvZipArtifact:
+        export_directory = Path(mkdtemp(prefix=f"bdw-pure-duckdb-export-{job_id[-8:]}-"))
+        filename = f"{_safe_download_file_stem(cell_id)}.csv.zip"
+        zip_path = export_directory / filename
+        csv_filename = filename[: -len(".zip")]
+        connection: duckdb.DuckDBPyConnection | None = None
+        spill_temp_directory: Path | None = None
+        try:
+            if self._settings.duckdb_temp_directory is not None:
+                spill_root = Path(self._settings.duckdb_temp_directory)
+                spill_temp_directory = spill_root / _safe_query_spill_directory_name(
+                    f"{job_id}-csv-{uuid.uuid4().hex}"
+                )
+                spill_temp_directory.mkdir(parents=True, exist_ok=True)
+            connection = create_duckdb_worker_connection(
+                self._settings,
+                database_path=":memory:",
+                read_only=False,
+                temp_directory_override=spill_temp_directory,
+            )
+            cursor = connection.execute(sql)
+            columns = [column[0] for column in cursor.description] if cursor.description else []
+            if not columns:
+                raise ValueError("Pure DuckDB job did not produce a tabular result.")
+            with zipfile.ZipFile(
+                zip_path,
+                mode="w",
+                compression=zipfile.ZIP_DEFLATED,
+                compresslevel=9,
+            ) as archive:
+                with archive.open(csv_filename, "w", force_zip64=True) as binary_csv:
+                    with io.TextIOWrapper(
+                        binary_csv,
+                        encoding="utf-8",
+                        newline="",
+                    ) as text_csv:
+                        writer = csv.writer(text_csv)
+                        writer.writerow(columns)
+                        while True:
+                            batch = cursor.fetchmany(1000)
+                            if not batch:
+                                break
+                            for row in batch:
+                                writer.writerow(_serialize_row(row))
+            return PureDuckDBCsvZipArtifact(
+                path=zip_path,
+                filename=filename,
+                temporary_directory=export_directory,
+            )
+        except Exception:
+            shutil.rmtree(export_directory, ignore_errors=True)
+            raise
+        finally:
+            if connection is not None:
+                with suppress(Exception):
+                    connection.close()
+            self._cleanup_query_spill_directory(spill_temp_directory)

@@ -1392,6 +1392,27 @@ def pure_duckdb_job(
     return JSONResponse(jsonable_encoder(snapshot))
 
 
+@router.get("/api/pure-duckdb/jobs/{job_id}/csv.zip")
+def pure_duckdb_job_csv_zip(
+    job_id: str,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> FileResponse:
+    try:
+        artifact = service.pure_duckdb_job_csv_zip(job_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return FileResponse(
+        artifact.path,
+        media_type=artifact.media_type,
+        filename=artifact.filename,
+        background=BackgroundTask(
+            lambda: shutil.rmtree(artifact.temporary_directory, ignore_errors=True)
+        ),
+    )
+
+
 @router.get("/api/query-runs")
 def query_runs_history(
     notebook_id: str = Query("", alias="notebookId"),
