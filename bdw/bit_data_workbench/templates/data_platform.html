@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <link rel="icon" type="image/png" href="/static/img/favicon.png">
+    <link rel="shortcut icon" href="/static/img/favicon.ico">
+    <link rel="stylesheet" href="/static/css/app.css?v={{ runtime.timestamp_utc | urlencode }}">
+    <script src="/static/js/data-platform-topic.js?v={{ runtime.timestamp_utc | urlencode }}" defer></script>
+  </head>
+  <body class="data-platform-document">
+    <header class="data-platform-admin-header">
+      <div class="data-platform-authority-strip" aria-label="Federal authority navigation">
+        <div class="data-platform-header-inner">
+          <a class="data-platform-authority-link" href="https://www.admin.ch/" rel="noreferrer">
+            The federal authorities of the Swiss Confederation
+          </a>
+          <nav class="data-platform-language-nav" aria-label="Language selection">
+            <a href="#" lang="de">DE</a>
+            <a href="#" lang="fr">FR</a>
+            <a href="#" lang="it">IT</a>
+            <a href="#" lang="rm">RM</a>
+            <a href="#" lang="en" aria-current="true">EN</a>
+          </nav>
+        </div>
+      </div>
+
+      <div class="data-platform-brand-row">
+        <div class="data-platform-header-inner data-platform-brand-inner">
+          <a class="data-platform-logo-link" href="/" aria-label="Go to DAAIF Factory">
+            <img
+              class="data-platform-logo"
+              src="/static/img/swiss-confederation-logo.png"
+              alt="Schweizerische Eidgenossenschaft"
+            >
+          </a>
+          <div class="data-platform-brand-copy">
+            <span>Bundesamt für Informatik</span>
+            <h1>Data Platform BIT</h1>
+          </div>
+          <form class="data-platform-search" role="search" action="/" method="get">
+            <label for="data-platform-search-input">Search</label>
+            <div class="data-platform-search-control">
+              <input
+                id="data-platform-search-input"
+                name="q"
+                type="search"
+                placeholder="Search"
+                autocomplete="off"
+              >
+              <button type="submit" aria-label="Search">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="10.5" cy="10.5" r="5.6"></circle>
+                  <path d="M15 15l4.2 4.2"></path>
+                </svg>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <nav class="data-platform-main-nav" aria-label="Main navigation">
+        <div class="data-platform-header-inner">
+          <a href="#">Medien</a>
+          <a href="#">Services</a>
+          <a href="#">Kontakt</a>
+        </div>
+      </nav>
+    </header>
+
+    <main class="data-platform-page" data-data-platform-page>
+      <section class="data-platform-intro" aria-labelledby="data-platform-page-title">
+        <div>
+          <span>The federal Data Plattform</span>
+          <h2 id="data-platform-page-title">Data Platform BIT oversight</h2>
+        </div>
+      </section>
+
+      <section class="data-platform-map" data-data-platform-overview-map aria-label="Data Platform BIT capability map">
+        <svg
+          class="data-platform-flow-map"
+          viewBox="0 0 1200 720"
+          preserveAspectRatio="none"
+          role="img"
+          aria-label="Hover a topic bubble to reveal labelled data-flow use cases."
+        >
+          {% for use_case in topic_use_cases %}
+            <g
+              class="data-platform-usecase-flow data-platform-flow-{{ use_case.id }}"
+              data-topic-use-case-flow
+              data-source-topic="{{ use_case.source }}"
+              data-target-topic="{{ use_case.target }}"
+              data-flow-duration="{{ use_case.duration }}"
+            >
+              <path id="data-platform-flow-{{ use_case.id }}-path" d="{{ use_case.path }}"></path>
+              <text
+                class="data-platform-flow-label"
+                data-flow-label
+              >
+                {{ use_case.label }}
+              </text>
+            </g>
+          {% endfor %}
+        </svg>
+
+        <article class="data-platform-card data-platform-card-governance" data-topic-slug="data-governance" tabindex="0">
+          <a
+            class="data-platform-bubble-link"
+            href="/the-data-platform/data-governance"
+            aria-label="Open Data Governance topic page"
+          ></a>
+          <div class="data-platform-card-topline">
+            <span class="data-platform-icon-box" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M4.4 9.4h15.2"></path>
+                <path d="M6.2 9.4v8.1"></path>
+                <path d="M10 9.4v8.1"></path>
+                <path d="M14 9.4v8.1"></path>
+                <path d="M17.8 9.4v8.1"></path>
+                <path d="M3.4 19h17.2"></path>
+                <path d="M5 7.4 12 3.6l7 3.8"></path>
+              </svg>
+            </span>
+            <a href="#" class="data-platform-drilldown">DRILL DOWN -></a>
+          </div>
+          <h3>Data Governance</h3>
+          <p>
+            Rules, accountabilities, catalogue-driven data product governance,
+            lineage, audit, publication workflows and data subject rights.
+          </p>
+          <div class="data-platform-chip-row">
+            <span>Data Catalogue SaaS</span>
+            <span>Data Owner</span>
+            <span>Data Steward</span>
+            <span>I14Y / BAR</span>
+          </div>
+        </article>
+
+        <article class="data-platform-product-card" data-topic-slug="data-products" tabindex="0">
+          <a
+            class="data-platform-bubble-link"
+            href="/the-data-platform/data-products"
+            aria-label="Open secure, governed data products topic page"
+          ></a>
+          <div class="data-platform-product-frame">
+            <span class="data-platform-product-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M12 3.8 20 8l-8 4.2L4 8z"></path>
+                <path d="m6.6 11.1 5.4 2.8 5.4-2.8"></path>
+                <path d="m6.6 14.4 5.4 2.8 5.4-2.8"></path>
+              </svg>
+            </span>
+            <h3>Secure, governed Data Products</h3>
+            <p>
+              The catalogue is the trust anchor. Processing, publication and
+              storage systems consume governance metadata and access decisions
+              instead of owning governance themselves.
+            </p>
+          </div>
+        </article>
+
+        <article class="data-platform-card data-platform-card-security" data-topic-slug="data-security" tabindex="0">
+          <a
+            class="data-platform-bubble-link"
+            href="/the-data-platform/data-security"
+            aria-label="Open Data Security topic page"
+          ></a>
+          <div class="data-platform-card-topline">
+            <span class="data-platform-icon-box" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M12 3.5 18.2 6v5.2c0 4-2.2 7.1-6.2 9.3-4-2.2-6.2-5.3-6.2-9.3V6z"></path>
+                <path d="m9 12 2.1 2.1 4-4.4"></path>
+              </svg>
+            </span>
+            <a href="#" class="data-platform-drilldown">DRILL DOWN -></a>
+          </div>
+          <h3>Data Security</h3>
+          <p>
+            Policy-based access control, policy lifecycle, runtime enforcement,
+            identity context, environmental attributes and audit evidence.
+          </p>
+          <div class="data-platform-chip-row">
+            <span>PBAC</span>
+            <span>PAP</span>
+            <span>PDP</span>
+            <span>PIP</span>
+            <span>PEP</span>
+          </div>
+          <span class="data-platform-policy-label">storage policy</span>
+        </article>
+
+        <article class="data-platform-card data-platform-card-management" data-topic-slug="data-management" tabindex="0">
+          <a
+            class="data-platform-bubble-link"
+            href="/the-data-platform/data-management"
+            aria-label="Open Data Management topic page"
+          ></a>
+          <div class="data-platform-card-topline">
+            <span class="data-platform-icon-box" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M6.2 3.8h8.1l3.5 3.5v12.9H6.2z"></path>
+                <path d="M14.3 3.8v3.5h3.5"></path>
+                <path d="M9 11h6"></path>
+                <path d="M9 14.2h6"></path>
+                <path d="M9 17.4h3.8"></path>
+              </svg>
+            </span>
+            <a href="#" class="data-platform-drilldown">DRILL DOWN -></a>
+          </div>
+          <h3>Data Management</h3>
+          <p>
+            Lifecycle, quality, contracts, metadata, signatures, versioning and
+            operational curation of reusable data products.
+          </p>
+          <div class="data-platform-chip-row">
+            <span>Metadata</span>
+            <span>Quality</span>
+            <span>Contracts</span>
+            <span>Lifecycle</span>
+          </div>
+        </article>
+
+        <article class="data-platform-card data-platform-card-processing" data-topic-slug="data-processing" tabindex="0">
+          <a
+            class="data-platform-bubble-link"
+            href="/the-data-platform/data-processing"
+            aria-label="Open Data Processing topic page"
+          ></a>
+          <div class="data-platform-card-topline">
+            <span class="data-platform-icon-box" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M5.3 4.2h13.4v15.6H5.3z"></path>
+                <path d="m7.8 15 2.3-6.1 2.3 8.1 2.1-5 1.7 3"></path>
+              </svg>
+            </span>
+            <a href="#" class="data-platform-drilldown">DRILL DOWN -></a>
+          </div>
+          <h3>Data Processing</h3>
+          <p>
+            DAAIF analytics, ingestion, transformation, scheduling, query
+            execution, AI-assisted analysis and controlled publication.
+          </p>
+          <span class="data-platform-inline-label">stored products</span>
+          <div class="data-platform-chip-row">
+            <span>DAAIF</span>
+            <span>Analytics</span>
+            <span>AI Feed</span>
+            <span>Publication</span>
+          </div>
+        </article>
+
+        <article class="data-platform-card data-platform-card-storage" data-topic-slug="data-storage" tabindex="0">
+          <a
+            class="data-platform-bubble-link"
+            href="/the-data-platform/data-storage"
+            aria-label="Open Data Storage topic page"
+          ></a>
+          <div class="data-platform-card-topline">
+            <span class="data-platform-icon-box" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <ellipse cx="12" cy="6.6" rx="5.6" ry="2.2"></ellipse>
+                <path d="M6.4 6.6v10.8c0 1.2 2.5 2.2 5.6 2.2s5.6-1 5.6-2.2V6.6"></path>
+                <path d="M6.4 10.2c0 1.2 2.5 2.2 5.6 2.2s5.6-1 5.6-2.2"></path>
+                <path d="M6.4 13.9c0 1.2 2.5 2.2 5.6 2.2s5.6-1 5.6-2.2"></path>
+              </svg>
+            </span>
+            <a href="#" class="data-platform-drilldown">DRILL DOWN -></a>
+          </div>
+          <h3>Data Storage</h3>
+          <p>
+            Storage zones and persistence capabilities for raw, staged,
+            curated, published and archived data product states.
+          </p>
+          <div class="data-platform-chip-row">
+            <span>S3 / Object</span>
+            <span>RDBMS</span>
+            <span>Kafka</span>
+            <span>Backup</span>
+          </div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

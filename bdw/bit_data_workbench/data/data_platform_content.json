@@ -1,0 +1,792 @@
+{
+  "topics": [
+    {
+      "slug": "data-governance",
+      "title": "Data Governance",
+      "summary": "Accountability, publication control, lineage, auditability and federal governance workflows for trusted data products.",
+      "capabilities": [
+        {
+          "id": "governance-framework",
+          "label": "Governance Framework",
+          "description": "Define roles, rules, ownership and publication accountabilities."
+        },
+        {
+          "id": "lineage-audit",
+          "label": "Lineage & Audit",
+          "description": "Track provenance, manipulation history and evidence for reviews."
+        },
+        {
+          "id": "publication-approval",
+          "label": "Publication Approval",
+          "description": "Coordinate approvals before data products become consumable."
+        },
+        {
+          "id": "data-subject-rights",
+          "label": "Data Subject Rights",
+          "description": "Manage rights, retention obligations and public-sector records duties."
+        }
+      ],
+      "services": [
+        {
+          "id": "governance-workflow",
+          "label": "Governance Workflow Service",
+          "description": "Task and approval workflow for owners, stewards and publishers."
+        },
+        {
+          "id": "lineage-audit-service",
+          "label": "Lineage / Audit Service",
+          "description": "Evidence store for lineage, approvals and manipulation events."
+        },
+        {
+          "id": "i14y-gateway",
+          "label": "I14Y Publication Gateway",
+          "description": "Integration point for federal interoperability publication processes."
+        },
+        {
+          "id": "records-rights-service",
+          "label": "BAR / Rights Service",
+          "description": "Retention, archive and data-subject-rights coordination."
+        }
+      ],
+      "links": [
+        {
+          "capability": "governance-framework",
+          "service": "governance-workflow"
+        },
+        {
+          "capability": "lineage-audit",
+          "service": "lineage-audit-service"
+        },
+        {
+          "capability": "publication-approval",
+          "service": "governance-workflow"
+        },
+        {
+          "capability": "publication-approval",
+          "service": "i14y-gateway"
+        },
+        {
+          "capability": "data-subject-rights",
+          "service": "records-rights-service"
+        }
+      ]
+    },
+    {
+      "slug": "data-products",
+      "title": "Secure, governed Data Products",
+      "summary": "Catalogue-backed data products that expose trusted metadata, access decisions and consumable interfaces to processing and storage services.",
+      "capabilities": [
+        {
+          "id": "product-discovery",
+          "label": "Product Discovery",
+          "description": "Find governed, reusable data products with metadata and lineage context."
+        },
+        {
+          "id": "access-request",
+          "label": "Access Request",
+          "description": "Request product access with purpose, identity and policy context."
+        },
+        {
+          "id": "product-analysis",
+          "label": "Product Analysis",
+          "description": "Open governed products in analysis and query workbench workflows."
+        },
+        {
+          "id": "product-publication",
+          "label": "Product Publication",
+          "description": "Publish product versions, interfaces and consumption contracts."
+        }
+      ],
+      "services": [
+        {
+          "id": "product-portal",
+          "label": "Data Product Portal",
+          "description": "User-facing catalogue and request surface for consumers."
+        },
+        {
+          "id": "access-request-service",
+          "label": "Access Request Service",
+          "description": "Workflow service for purpose, approval and policy checks."
+        },
+        {
+          "id": "query-workbench-service",
+          "label": "Query Workbench Service",
+          "description": "Interactive analysis surface for governed products."
+        },
+        {
+          "id": "publication-service",
+          "label": "Publication Service",
+          "description": "Publishes product versions and endpoint metadata."
+        },
+        {
+          "id": "catalog-sync",
+          "label": "Catalogue Sync Adapter",
+          "description": "Synchronizes product metadata into the catalogue trust anchor."
+        }
+      ],
+      "links": [
+        {
+          "capability": "product-discovery",
+          "service": "product-portal"
+        },
+        {
+          "capability": "product-discovery",
+          "service": "catalog-sync"
+        },
+        {
+          "capability": "access-request",
+          "service": "access-request-service"
+        },
+        {
+          "capability": "product-analysis",
+          "service": "query-workbench-service"
+        },
+        {
+          "capability": "product-publication",
+          "service": "publication-service"
+        },
+        {
+          "capability": "product-publication",
+          "service": "catalog-sync"
+        }
+      ]
+    },
+    {
+      "slug": "data-security",
+      "title": "Data Security",
+      "summary": "Policy-based access control, policy lifecycle, runtime enforcement, identity context and audit evidence.",
+      "capabilities": [
+        {
+          "id": "policy-authoring",
+          "label": "Policy Authoring",
+          "description": "Model PBAC rules, exceptions and lifecycle approvals."
+        },
+        {
+          "id": "access-decisioning",
+          "label": "Access Decisioning",
+          "description": "Evaluate identity, purpose and environmental attributes at runtime."
+        },
+        {
+          "id": "runtime-enforcement",
+          "label": "Runtime Enforcement",
+          "description": "Enforce decisions close to query, API and storage access paths."
+        },
+        {
+          "id": "security-evidence",
+          "label": "Security Evidence",
+          "description": "Collect decisions, policy versions and enforcement evidence."
+        }
+      ],
+      "services": [
+        {
+          "id": "pap-service",
+          "label": "Policy Administration Point",
+          "description": "Administration service for policy lifecycle and approvals."
+        },
+        {
+          "id": "pdp-service",
+          "label": "Policy Decision Point",
+          "description": "Decision service for access requests and runtime checks."
+        },
+        {
+          "id": "pip-service",
+          "label": "Policy Information Point",
+          "description": "Attribute source for identity, purpose and environment."
+        },
+        {
+          "id": "pep-service",
+          "label": "Policy Enforcement Point",
+          "description": "Enforcement integration for query, API and storage runtimes."
+        },
+        {
+          "id": "audit-evidence-store",
+          "label": "Audit Evidence Store",
+          "description": "Immutable evidence for policy decisions and enforcement events."
+        }
+      ],
+      "links": [
+        {
+          "capability": "policy-authoring",
+          "service": "pap-service"
+        },
+        {
+          "capability": "access-decisioning",
+          "service": "pdp-service"
+        },
+        {
+          "capability": "access-decisioning",
+          "service": "pip-service"
+        },
+        {
+          "capability": "runtime-enforcement",
+          "service": "pep-service"
+        },
+        {
+          "capability": "security-evidence",
+          "service": "audit-evidence-store"
+        }
+      ]
+    },
+    {
+      "slug": "data-management",
+      "title": "Data Management",
+      "summary": "Lifecycle, quality, contracts, metadata, signatures, versioning and operational curation of reusable data products.",
+      "capabilities": [
+        {
+          "id": "data-inventory",
+          "label": "Daten Inventorisierung",
+          "description": "Register available datasets, owners, states and reuse constraints."
+        },
+        {
+          "id": "metadata-curation",
+          "label": "Metadata Curation",
+          "description": "Maintain business, technical and operational metadata."
+        },
+        {
+          "id": "quality-management",
+          "label": "Data Quality Management",
+          "description": "Define quality rules, checks and evidence for product trust."
+        },
+        {
+          "id": "contract-management",
+          "label": "Data Contract Management",
+          "description": "Manage schemas, signatures, expectations and version compatibility."
+        },
+        {
+          "id": "lifecycle-management",
+          "label": "Lifecycle Management",
+          "description": "Control product states from raw intake to archive or deletion."
+        }
+      ],
+      "services": [
+        {
+          "id": "catalog-service",
+          "label": "Datenkatalog Service",
+          "description": "Catalogue service for inventory, ownership and product metadata."
+        },
+        {
+          "id": "metadata-registry",
+          "label": "Metadata Registry",
+          "description": "Registry for technical metadata, tags and stewardship attributes."
+        },
+        {
+          "id": "quality-service",
+          "label": "Data Quality Service",
+          "description": "Runs and records data quality checks and scorecards."
+        },
+        {
+          "id": "contract-registry",
+          "label": "Data Contract Registry",
+          "description": "Stores schemas, signatures, compatibility rules and versions."
+        },
+        {
+          "id": "lifecycle-service",
+          "label": "Lifecycle Service",
+          "description": "Tracks product states, retention and curation transitions."
+        }
+      ],
+      "links": [
+        {
+          "capability": "data-inventory",
+          "service": "catalog-service"
+        },
+        {
+          "capability": "metadata-curation",
+          "service": "catalog-service"
+        },
+        {
+          "capability": "metadata-curation",
+          "service": "metadata-registry"
+        },
+        {
+          "capability": "quality-management",
+          "service": "quality-service"
+        },
+        {
+          "capability": "contract-management",
+          "service": "contract-registry"
+        },
+        {
+          "capability": "lifecycle-management",
+          "service": "lifecycle-service"
+        },
+        {
+          "capability": "lifecycle-management",
+          "service": "catalog-service"
+        }
+      ]
+    },
+    {
+      "slug": "data-processing",
+      "title": "Data Processing",
+      "summary": "Ingestion, transformation, scheduling, query execution, AI-assisted analysis and controlled publication.",
+      "capabilities": [
+        {
+          "id": "ingestion-orchestration",
+          "label": "Ingestion Orchestration",
+          "description": "Load and stage source data into controlled processing zones."
+        },
+        {
+          "id": "transformation-scheduling",
+          "label": "Transformation Scheduling",
+          "description": "Run reproducible transformations, schedules and dependency chains."
+        },
+        {
+          "id": "query-execution",
+          "label": "Query Execution",
+          "description": "Execute governed SQL and analytical workloads."
+        },
+        {
+          "id": "ai-assisted-analysis",
+          "label": "AI-assisted Analysis",
+          "description": "Support analysis workflows with governed context and outputs."
+        },
+        {
+          "id": "publication-jobs",
+          "label": "Publication Jobs",
+          "description": "Prepare processed outputs for product publication and refresh."
+        }
+      ],
+      "services": [
+        {
+          "id": "ingestion-service",
+          "label": "DAAIF Ingestion Service",
+          "description": "Pipeline entry point for source intake and staging."
+        },
+        {
+          "id": "scheduler-service",
+          "label": "Scheduler Service",
+          "description": "Coordinates jobs, dependencies and controlled execution windows."
+        },
+        {
+          "id": "query-engine-service",
+          "label": "Query Engine Service",
+          "description": "Runs governed SQL over catalogue-backed sources."
+        },
+        {
+          "id": "ai-feed-service",
+          "label": "AI Feed Service",
+          "description": "Packages governed context for AI-assisted analysis."
+        },
+        {
+          "id": "publication-job-service",
+          "label": "Publication Job Service",
+          "description": "Publishes processed product states and endpoint metadata."
+        }
+      ],
+      "links": [
+        {
+          "capability": "ingestion-orchestration",
+          "service": "ingestion-service"
+        },
+        {
+          "capability": "transformation-scheduling",
+          "service": "scheduler-service"
+        },
+        {
+          "capability": "query-execution",
+          "service": "query-engine-service"
+        },
+        {
+          "capability": "ai-assisted-analysis",
+          "service": "ai-feed-service"
+        },
+        {
+          "capability": "publication-jobs",
+          "service": "publication-job-service"
+        },
+        {
+          "capability": "publication-jobs",
+          "service": "scheduler-service"
+        }
+      ]
+    },
+    {
+      "slug": "data-storage",
+      "title": "Data Storage",
+      "summary": "Storage zones and persistence capabilities for raw, staged, curated, published and archived data product states.",
+      "capabilities": [
+        {
+          "id": "object-zones",
+          "label": "Object Storage Zones",
+          "description": "Persist raw, staged, curated and published object states."
+        },
+        {
+          "id": "relational-persistence",
+          "label": "Relational Persistence",
+          "description": "Serve curated, relational product states and marts."
+        },
+        {
+          "id": "streaming-persistence",
+          "label": "Streaming Persistence",
+          "description": "Provide topic-based event and streaming product states."
+        },
+        {
+          "id": "backup-archive",
+          "label": "Backup & Archive",
+          "description": "Protect and retain data product states across lifecycle phases."
+        },
+        {
+          "id": "storage-policy",
+          "label": "Storage Policy Enforcement",
+          "description": "Apply persistence, encryption and retention policies to storage zones."
+        }
+      ],
+      "services": [
+        {
+          "id": "object-storage",
+          "label": "S3 / Object Storage",
+          "description": "Object storage service for raw, curated and published states."
+        },
+        {
+          "id": "rdbms-storage",
+          "label": "RDBMS Storage Service",
+          "description": "Relational persistence for curated analytical products."
+        },
+        {
+          "id": "kafka-service",
+          "label": "Kafka Topic Service",
+          "description": "Streaming persistence and event topic management."
+        },
+        {
+          "id": "backup-service",
+          "label": "Backup Service",
+          "description": "Backup, recovery and operational protection service."
+        },
+        {
+          "id": "storage-policy-agent",
+          "label": "Storage Policy Agent",
+          "description": "Applies storage policy decisions to persistence services."
+        }
+      ],
+      "links": [
+        {
+          "capability": "object-zones",
+          "service": "object-storage"
+        },
+        {
+          "capability": "relational-persistence",
+          "service": "rdbms-storage"
+        },
+        {
+          "capability": "streaming-persistence",
+          "service": "kafka-service"
+        },
+        {
+          "capability": "backup-archive",
+          "service": "backup-service"
+        },
+        {
+          "capability": "storage-policy",
+          "service": "storage-policy-agent"
+        },
+        {
+          "capability": "storage-policy",
+          "service": "object-storage"
+        }
+      ]
+    }
+  ],
+  "topicUseCases": [
+    {
+      "id": "governance-products",
+      "source": "data-governance",
+      "target": "data-products",
+      "label": "publish governed products",
+      "path": "M 233 149 C 340 170 435 218 486 265",
+      "duration": "4s",
+      "labelX": 360,
+      "labelY": 207
+    },
+    {
+      "id": "governance-security",
+      "source": "data-governance",
+      "target": "data-security",
+      "label": "provide policy requirements",
+      "path": "M 246 108 C 420 34 780 34 954 108",
+      "duration": "4.2s",
+      "labelX": 600,
+      "labelY": 67
+    },
+    {
+      "id": "governance-management",
+      "source": "data-governance",
+      "target": "data-management",
+      "label": "steer stewardship",
+      "path": "M 144 210 C 76 270 76 315 144 366",
+      "duration": "4.1s",
+      "labelX": 103,
+      "labelY": 290
+    },
+    {
+      "id": "governance-processing",
+      "source": "data-governance",
+      "target": "data-processing",
+      "label": "approve processing controls",
+      "path": "M 210 184 C 330 310 420 520 548 605",
+      "duration": "4.3s",
+      "labelX": 390,
+      "labelY": 420
+    },
+    {
+      "id": "governance-storage",
+      "source": "data-governance",
+      "target": "data-storage",
+      "label": "define retention obligations",
+      "path": "M 232 128 C 420 220 740 560 966 516",
+      "duration": "4.4s",
+      "labelX": 610,
+      "labelY": 356
+    },
+    {
+      "id": "products-governance",
+      "source": "data-products",
+      "target": "data-governance",
+      "label": "report lineage status",
+      "path": "M 486 265 C 435 218 340 170 233 149",
+      "duration": "4s",
+      "labelX": 356,
+      "labelY": 212
+    },
+    {
+      "id": "products-security",
+      "source": "data-products",
+      "target": "data-security",
+      "label": "request access decision",
+      "path": "M 714 265 C 765 218 860 170 967 149",
+      "duration": "4.2s",
+      "labelX": 842,
+      "labelY": 212
+    },
+    {
+      "id": "products-processing",
+      "source": "data-products",
+      "target": "data-processing",
+      "label": "submit analysis request",
+      "path": "M 548 430 C 430 458 404 560 522 546",
+      "duration": "3.9s",
+      "labelX": 500,
+      "labelY": 490
+    },
+    {
+      "id": "products-management",
+      "source": "data-products",
+      "target": "data-management",
+      "label": "open curation work",
+      "path": "M 486 346 C 420 390 340 438 234 420",
+      "duration": "4.1s",
+      "labelX": 358,
+      "labelY": 392
+    },
+    {
+      "id": "products-storage",
+      "source": "data-products",
+      "target": "data-storage",
+      "label": "publish storage contract",
+      "path": "M 714 346 C 806 382 884 430 966 420",
+      "duration": "4.3s",
+      "labelX": 836,
+      "labelY": 392
+    },
+    {
+      "id": "security-products",
+      "source": "data-security",
+      "target": "data-products",
+      "label": "authorize product access",
+      "path": "M 967 149 C 860 170 765 218 714 265",
+      "duration": "4s",
+      "labelX": 842,
+      "labelY": 212
+    },
+    {
+      "id": "security-management",
+      "source": "data-security",
+      "target": "data-management",
+      "label": "protect data products",
+      "path": "M 984 182 C 860 355 420 560 234 420",
+      "duration": "4.2s",
+      "labelX": 617,
+      "labelY": 415
+    },
+    {
+      "id": "security-storage",
+      "source": "data-security",
+      "target": "data-storage",
+      "label": "enforce storage policy",
+      "path": "M 1056 210 C 1124 270 1124 315 1056 366",
+      "duration": "4.1s",
+      "labelX": 1098,
+      "labelY": 290
+    },
+    {
+      "id": "security-governance",
+      "source": "data-security",
+      "target": "data-governance",
+      "label": "return control evidence",
+      "path": "M 954 108 C 780 34 420 34 246 108",
+      "duration": "4.3s",
+      "labelX": 600,
+      "labelY": 67
+    },
+    {
+      "id": "security-processing",
+      "source": "data-security",
+      "target": "data-processing",
+      "label": "enforce query decisions",
+      "path": "M 984 182 C 884 300 770 505 698 605",
+      "duration": "4.4s",
+      "labelX": 840,
+      "labelY": 406
+    },
+    {
+      "id": "management-governance",
+      "source": "data-management",
+      "target": "data-governance",
+      "label": "audit data manipulation",
+      "path": "M 144 366 C 76 315 76 270 144 210",
+      "duration": "4s",
+      "labelX": 103,
+      "labelY": 290
+    },
+    {
+      "id": "management-products",
+      "source": "data-management",
+      "target": "data-products",
+      "label": "certify product metadata",
+      "path": "M 234 420 C 350 440 424 386 486 346",
+      "duration": "4.2s",
+      "labelX": 362,
+      "labelY": 405
+    },
+    {
+      "id": "management-processing",
+      "source": "data-management",
+      "target": "data-processing",
+      "label": "curate reusable products",
+      "path": "M 234 516 C 350 590 460 630 502 605",
+      "duration": "4.1s",
+      "labelX": 374,
+      "labelY": 585
+    },
+    {
+      "id": "management-security",
+      "source": "data-management",
+      "target": "data-security",
+      "label": "supply policy attributes",
+      "path": "M 234 420 C 420 560 860 355 984 182",
+      "duration": "4.3s",
+      "labelX": 617,
+      "labelY": 415
+    },
+    {
+      "id": "management-storage",
+      "source": "data-management",
+      "target": "data-storage",
+      "label": "curate storage states",
+      "path": "M 234 516 C 430 650 760 650 966 516",
+      "duration": "4.4s",
+      "labelX": 600,
+      "labelY": 638
+    },
+    {
+      "id": "processing-management",
+      "source": "data-processing",
+      "target": "data-management",
+      "label": "return quality metrics",
+      "path": "M 502 605 C 460 630 350 590 234 516",
+      "duration": "4s",
+      "labelX": 374,
+      "labelY": 585
+    },
+    {
+      "id": "processing-products",
+      "source": "data-processing",
+      "target": "data-products",
+      "label": "analyse governed products",
+      "path": "M 600 546 C 500 470 450 410 506 360 C 542 342 584 380 548 430",
+      "duration": "4.2s",
+      "labelX": 710,
+      "labelY": 480
+    },
+    {
+      "id": "processing-storage",
+      "source": "data-processing",
+      "target": "data-storage",
+      "label": "store published products",
+      "path": "M 698 605 C 800 600 900 548 966 516",
+      "duration": "4.1s",
+      "labelX": 835,
+      "labelY": 570
+    },
+    {
+      "id": "processing-governance",
+      "source": "data-processing",
+      "target": "data-governance",
+      "label": "submit run evidence",
+      "path": "M 548 605 C 420 520 330 310 210 184",
+      "duration": "4.3s",
+      "labelX": 390,
+      "labelY": 420
+    },
+    {
+      "id": "processing-security",
+      "source": "data-processing",
+      "target": "data-security",
+      "label": "request runtime policy",
+      "path": "M 698 605 C 770 505 884 300 984 182",
+      "duration": "4.4s",
+      "labelX": 840,
+      "labelY": 406
+    },
+    {
+      "id": "storage-products",
+      "source": "data-storage",
+      "target": "data-products",
+      "label": "serve product states",
+      "path": "M 966 420 C 850 390 775 352 714 346",
+      "duration": "4s",
+      "labelX": 838,
+      "labelY": 382
+    },
+    {
+      "id": "storage-processing",
+      "source": "data-storage",
+      "target": "data-processing",
+      "label": "load stored products",
+      "path": "M 966 516 C 900 548 800 600 698 605",
+      "duration": "4.2s",
+      "labelX": 835,
+      "labelY": 570
+    },
+    {
+      "id": "storage-security",
+      "source": "data-storage",
+      "target": "data-security",
+      "label": "provide storage evidence",
+      "path": "M 1056 366 C 1124 315 1124 270 1056 210",
+      "duration": "4.1s",
+      "labelX": 1098,
+      "labelY": 290
+    },
+    {
+      "id": "storage-governance",
+      "source": "data-storage",
+      "target": "data-governance",
+      "label": "prove retention state",
+      "path": "M 966 516 C 740 560 420 220 232 128",
+      "duration": "4.3s",
+      "labelX": 610,
+      "labelY": 356
+    },
+    {
+      "id": "storage-management",
+      "source": "data-storage",
+      "target": "data-management",
+      "label": "report storage lifecycle",
+      "path": "M 966 516 C 760 650 430 650 234 516",
+      "duration": "4.4s",
+      "labelX": 600,
+      "labelY": 638
+    }
+  ]
+}

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }}</title>
+    <link rel="icon" type="image/png" href="/static/img/favicon.png">
+    <link rel="shortcut icon" href="/static/img/favicon.ico">
+    <link rel="stylesheet" href="/static/css/app.css?v={{ runtime.timestamp_utc | urlencode }}">
+    <script src="/static/js/data-platform-topic.js?v={{ runtime.timestamp_utc | urlencode }}" defer></script>
+  </head>
+  <body class="data-platform-document">
+    <header class="data-platform-admin-header">
+      <div class="data-platform-authority-strip" aria-label="Federal authority navigation">
+        <div class="data-platform-header-inner">
+          <a class="data-platform-authority-link" href="https://www.admin.ch/" rel="noreferrer">
+            The federal authorities of the Swiss Confederation
+          </a>
+          <nav class="data-platform-language-nav" aria-label="Language selection">
+            <a href="#" lang="de">DE</a>
+            <a href="#" lang="fr">FR</a>
+            <a href="#" lang="it">IT</a>
+            <a href="#" lang="rm">RM</a>
+            <a href="#" lang="en" aria-current="true">EN</a>
+          </nav>
+        </div>
+      </div>
+
+      <div class="data-platform-brand-row">
+        <div class="data-platform-header-inner data-platform-brand-inner">
+          <a class="data-platform-logo-link" href="/" aria-label="Go to DAAIF Factory">
+            <img
+              class="data-platform-logo"
+              src="/static/img/swiss-confederation-logo.png"
+              alt="Schweizerische Eidgenossenschaft"
+            >
+          </a>
+          <div class="data-platform-brand-copy">
+            <span>Bundesamt fÃ¼r Informatik</span>
+            <h1>Data Platform BIT</h1>
+          </div>
+          <form class="data-platform-search" role="search" action="/" method="get">
+            <label for="data-platform-search-input">Search</label>
+            <div class="data-platform-search-control">
+              <input
+                id="data-platform-search-input"
+                name="q"
+                type="search"
+                placeholder="Search"
+                autocomplete="off"
+              >
+              <button type="submit" aria-label="Search">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <circle cx="10.5" cy="10.5" r="5.6"></circle>
+                  <path d="M15 15l4.2 4.2"></path>
+                </svg>
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <nav class="data-platform-main-nav" aria-label="Main navigation">
+        <div class="data-platform-header-inner">
+          <a href="#">Medien</a>
+          <a href="#">Services</a>
+          <a href="#">Kontakt</a>
+        </div>
+      </nav>
+    </header>
+
+    <main class="data-platform-page data-platform-topic-page" data-data-platform-topic-page>
+      <nav class="data-platform-topic-breadcrumbs" aria-label="Breadcrumb">
+        <a href="/the-data-platform">Data Platform BIT</a>
+        <span aria-hidden="true">/</span>
+        <span>{{ topic.title }}</span>
+      </nav>
+
+      <section class="data-platform-topic-hero" aria-labelledby="data-platform-topic-title">
+        <div>
+          <span>The federal Data Plattform</span>
+          <h2 id="data-platform-topic-title">{{ topic.title }}</h2>
+          <p>{{ topic.summary }}</p>
+        </div>
+        <a class="data-platform-topic-overview-link" href="/the-data-platform">Overview</a>
+      </section>
+
+      <section
+        class="data-platform-topic-board"
+        data-data-platform-topic-board
+        aria-label="{{ topic.title }} capabilities and technical services"
+      >
+        <svg
+          class="data-platform-topic-connection-map"
+          data-data-platform-topic-connections
+          aria-hidden="true"
+        ></svg>
+
+        <div class="data-platform-topic-column data-platform-topic-column-capabilities">
+          <div class="data-platform-topic-column-header">
+            <span>Capabilities</span>
+            <h3>Capabilities</h3>
+          </div>
+          <div class="data-platform-topic-node-list">
+            {% for capability in topic.capabilities %}
+              <button
+                class="data-platform-topic-node data-platform-topic-capability"
+                type="button"
+                data-node-type="capability"
+                data-node-id="{{ capability.id }}"
+              >
+                <span>{{ capability.label }}</span>
+                <small>{{ capability.description }}</small>
+              </button>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="data-platform-topic-column data-platform-topic-column-services">
+          <div class="data-platform-topic-column-header">
+            <span>Technical Services</span>
+            <h3>Services</h3>
+          </div>
+          <div class="data-platform-topic-node-list">
+            {% for service in topic.services %}
+              <button
+                class="data-platform-topic-node data-platform-topic-service"
+                type="button"
+                data-node-type="service"
+                data-node-id="{{ service.id }}"
+              >
+                <span>{{ service.label }}</span>
+                <small>{{ service.description }}</small>
+              </button>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div hidden data-data-platform-topic-links>
+          {% for link in topic.links %}
+            <span
+              data-platform-topic-link
+              data-capability="{{ link.capability }}"
+              data-service="{{ link.service }}"
+            ></span>
+          {% endfor %}
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
