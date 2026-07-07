@@ -87,6 +87,17 @@ class NotebookTreeUiRegressionTests(unittest.TestCase):
             state_source,
         )
 
+    def test_tree_state_places_result_storage_sample_in_general_functionalities(self) -> None:
+        state_source = (STATIC_JS_ROOT / "notebook-tree-state.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn('notebookId: "result-set-storage-s3-demo"', state_source)
+        self.assertIn(
+            'folderPath: ["PoC Tests", "General Functionalities"]',
+            state_source,
+        )
+
     def test_drop_target_resolves_folder_summary_before_parent_container(self) -> None:
         ui_source = (STATIC_JS_ROOT / "notebook-tree-ui.js").read_text(
             encoding="utf-8"

@@ -372,6 +372,10 @@ export function createNotebookTreeState(helpers) {
         folderPath: ["PoC Tests", "SQL Functionalities"],
       },
       {
+        notebookId: "result-set-storage-s3-demo",
+        folderPath: ["PoC Tests", "General Functionalities"],
+      },
+      {
         notebookId: "pg-vs-s3-contest-oltp",
         folderPath: ["PoC Tests", "Performance Evaluation", "Single-Table Test"],
       },

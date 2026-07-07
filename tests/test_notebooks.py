@@ -1576,6 +1576,16 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
     def test_build_notebooks_includes_immutable_python_demo_presets(
         self,
     ) -> None:
+        from bit_data_workbench.data_generator.result_set_storage_sample import (  # noqa: WPS433
+            RESULT_SET_STORAGE_SAMPLE_BUCKET,
+            RESULT_SET_STORAGE_SAMPLE_RESULT_KEY,
+            RESULT_SET_STORAGE_SAMPLE_RESULT_PATH,
+            RESULT_SET_STORAGE_SAMPLE_SCHEMA,
+            RESULT_SET_STORAGE_SAMPLE_SOURCE_NAME,
+            RESULT_SET_STORAGE_SAMPLE_TREE_PATH,
+        )
+        from bit_data_workbench.backend.source_references import s3_source_reference  # noqa: WPS433
+
         (
             _,
             _,
@@ -1588,6 +1598,9 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
         ) = import_notebook_helpers()
 
         postgres_relation = "pg_oltp.public.vat_smoke_test_reference"
+        result_set_storage_relation = (
+            f"{RESULT_SET_STORAGE_SAMPLE_SCHEMA}.{RESULT_SET_STORAGE_SAMPLE_SOURCE_NAME}"
+        )
         catalogs = [
             source_catalog_type(
                 name="pg_oltp",
@@ -1603,7 +1616,22 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
                         ],
                     )
                 ],
-            )
+            ),
+            source_catalog_type(
+                name="workspace",
+                schemas=[
+                    source_schema_type(
+                        name=RESULT_SET_STORAGE_SAMPLE_SCHEMA,
+                        objects=[
+                            source_object_type(
+                                name=RESULT_SET_STORAGE_SAMPLE_SOURCE_NAME,
+                                kind="view",
+                                relation=result_set_storage_relation,
+                            )
+                        ],
+                    )
+                ],
+            ),
         ]
 
         notebooks = {
@@ -1658,6 +1686,43 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             "import matplotlib.pyplot as plt",
             chart_demo.cells[1].sql,
         )
+
+        result_storage_demo = notebooks["result-set-storage-s3-demo"]
+        self.assertEqual(
+            result_storage_demo.tree_path,
+            RESULT_SET_STORAGE_SAMPLE_TREE_PATH,
+        )
+        self.assertFalse(result_storage_demo.can_edit)
+        self.assertFalse(result_storage_demo.can_delete)
+        self.assertTrue(result_storage_demo.shared)
+        self.assertEqual(
+            result_storage_demo.linked_generator_id,
+            "result_set_storage_s3_loader",
+        )
+        self.assertEqual([cell.language for cell in result_storage_demo.cells], ["sql", "sql"])
+        self.assertEqual(
+            result_storage_demo.cells[0].query_options["duckdb"]["resultStorage"],
+            {
+                "mode": "on",
+                "path": RESULT_SET_STORAGE_SAMPLE_RESULT_PATH,
+            },
+        )
+        self.assertIn(
+            f"FROM {result_set_storage_relation}",
+            result_storage_demo.cells[0].sql,
+        )
+        self.assertIn(
+            "store result set in S3",
+            result_storage_demo.cells[0].sql,
+        )
+        self.assertIn(
+            s3_source_reference(
+                bucket=RESULT_SET_STORAGE_SAMPLE_BUCKET,
+                key=RESULT_SET_STORAGE_SAMPLE_RESULT_KEY,
+            ),
+            result_storage_demo.cells[1].sql,
+        )
+        self.assertNotIn("read_parquet(", result_storage_demo.cells[1].sql)
 
 
 if __name__ == "__main__":

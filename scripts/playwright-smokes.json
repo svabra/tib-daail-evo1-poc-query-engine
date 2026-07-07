@@ -26,6 +26,11 @@
       "enabledByDefault": true
     },
     {
+      "id": "query-result-s3-storage",
+      "script": "playwright_query_result_s3_storage_regression.py",
+      "enabledByDefault": true
+    },
+    {
       "id": "query-timing-breadcrumb-phase",
       "script": "playwright_query_timing_breadcrumb_phase_regression.py",
       "enabledByDefault": true

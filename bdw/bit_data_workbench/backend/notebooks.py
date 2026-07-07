@@ -10,10 +10,14 @@ from ..models import (
     SourceObject,
     SourceCatalog,
 )
+from ..data_generator.result_set_storage_sample import (
+    RESULT_SET_STORAGE_SAMPLE_SOURCE_NAME,
+)
 from .notebook_presets import (
     build_kostenbelege_3_1_problem_solving_notebook,
     build_kostenbelege_3_1_s3_parquet_pipeline_notebook,
     build_mwa_s3_parquet_pipeline_notebook,
+    build_result_set_storage_s3_demo_notebook,
     build_static_notebooks,
 )
 from .s3_storage import parse_s3_url, s3_bucket_schema_name
@@ -445,6 +449,12 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         schema_name=None,
         object_names=parquet_performance_option_object_names,
     )
+    result_set_storage_source_relation = _find_relation_by_object_name(
+        catalogs,
+        catalog_name="workspace",
+        schema_name=None,
+        object_names=(RESULT_SET_STORAGE_SAMPLE_SOURCE_NAME,),
+    )
     mwa_postgres_relations = _find_relations_by_object_names(
         catalogs,
         catalog_name="pg_oltp",
@@ -541,6 +551,7 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         union_oltp_s3_relation=union_oltp_s3_relation,
         union_s3_relation=union_s3_relation,
         parquet_performance_option_relations=parquet_performance_option_relations,
+        result_set_storage_source_relation=result_set_storage_source_relation,
     )
     for notebook in notebooks:
         if not notebook.can_edit:
@@ -574,6 +585,12 @@ def build_restart_seeded_shared_notebooks(
         catalogs,
         object_names=kostenbelege_3_1_object_names,
     )
+    result_set_storage_source_relation = _find_relation_by_object_name(
+        catalogs,
+        catalog_name="workspace",
+        schema_name=None,
+        object_names=(RESULT_SET_STORAGE_SAMPLE_SOURCE_NAME,),
+    )
     return [
         build_mwa_s3_parquet_pipeline_notebook(
             mwa_s3_parquet_relations=mwa_s3_parquet_relations,
@@ -583,6 +600,9 @@ def build_restart_seeded_shared_notebooks(
         ),
         build_kostenbelege_3_1_problem_solving_notebook(
             kostenbelege_3_1_s3_relations=kostenbelege_3_1_s3_relations,
+        ),
+        build_result_set_storage_s3_demo_notebook(
+            result_set_storage_source_relation=result_set_storage_source_relation,
         ),
     ]
 

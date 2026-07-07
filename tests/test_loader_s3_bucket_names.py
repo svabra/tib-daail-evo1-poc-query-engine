@@ -27,6 +27,9 @@ from bit_data_workbench.data_generator.pg_vs_s3_contest import (  # noqa: E402
 from bit_data_workbench.data_generator.pg_vs_s3_multi_table import (  # noqa: E402
     GENERATOR as MULTI_TABLE_GENERATOR,
 )
+from bit_data_workbench.data_generator.result_set_storage_sample import (  # noqa: E402
+    GENERATOR as RESULT_SET_STORAGE_GENERATOR,
+)
 from bit_data_workbench.data_generator.s3_smoke import (  # noqa: E402
     GENERATOR as S3_SMOKE_GENERATOR,
 )
@@ -61,6 +64,12 @@ class LoaderS3BucketNameTests(unittest.TestCase):
         bucket_name = UNION_S3_GENERATOR._loader_bucket_name("vat-smoke-test")
 
         self.assertEqual(bucket_name, "poc-tests-sql-functionalities")
+        self.assertFalse(bucket_name.startswith("vat-smoke-test"))
+
+    def test_result_set_storage_loader_uses_notebook_structure_bucket_name(self) -> None:
+        bucket_name = RESULT_SET_STORAGE_GENERATOR._loader_bucket_name("vat-smoke-test")
+
+        self.assertEqual(bucket_name, "poc-tests-general-functionalities-result-set-storage")
         self.assertFalse(bucket_name.startswith("vat-smoke-test"))
 
     def test_tree_bucket_name_is_s3_safe_and_truncated_with_hash_when_needed(self) -> None:

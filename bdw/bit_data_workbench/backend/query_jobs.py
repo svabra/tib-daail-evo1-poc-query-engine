@@ -29,6 +29,13 @@ from ..config import Settings
 from ..models import QueryJobDefinition, QueryJobMetricPoint, QueryResourceSample, QueryResult
 from .query_cache import hydrate_cache
 from .query_options import cache_hydration_enabled
+from .query_result_storage import (
+    normalize_result_storage_target,
+    planned_result_storage_payload,
+    result_storage_copy_sql,
+    result_storage_preview_sql,
+    validate_result_storage_request,
+)
 from .runtime_connections import (
     create_duckdb_worker_connection,
     effective_duckdb_max_temp_directory_size,
@@ -354,6 +361,13 @@ def infer_source_types(data_sources: list[str]) -> list[str]:
         if source_type not in source_types:
             source_types.append(source_type)
     return source_types
+
+
+def _safe_planned_result_storage_payload(query_options: Any) -> dict[str, Any]:
+    try:
+        return planned_result_storage_payload(query_options)
+    except Exception:
+        return {}
 
 
 def percentile(values: list[float], ratio: float) -> float | None:
@@ -1059,6 +1073,8 @@ def _query_worker_entry(
     execution_error: Exception | None = None
     duckdb_profile_path: Path | None = None
     cache_hydration_summary: dict[str, object] = {}
+    result_storage_summary: dict[str, Any] = {}
+    result_storage_target = None
 
     try:
         if cancel_event.is_set():
@@ -1139,6 +1155,20 @@ def _query_worker_entry(
                 },
             )
 
+        if execution_mode == QUERY_EXECUTION_POSTGRES_NATIVE:
+            result_storage_target = normalize_result_storage_target(query_options)
+            if result_storage_target is not None:
+                raise ValueError(
+                    "Store result set in S3 is available only for DuckDB read queries."
+                )
+        else:
+            result_storage_target = normalize_result_storage_target(query_options)
+            if result_storage_target is not None:
+                result_storage_summary = result_storage_target.payload(
+                    status="storing",
+                    message="Result set is being stored in S3 before the UI preview is fetched.",
+                )
+
         def execute_query() -> None:
             nonlocal execution_result, first_row_ms, engine_query_ms, result_fetch_ms, execution_error
             try:
@@ -1165,13 +1195,32 @@ def _query_worker_entry(
                         started=started,
                     )
                 else:
+                    duckdb_execution_sql = sql
+                    duckdb_result_preview_sql = result_preview_sql
+                    if result_storage_target is not None:
+                        _put_worker_event(
+                            event_queue,
+                            {
+                                "type": "phase",
+                                "phase": "storing_result_set",
+                                "progressLabel": "Storing result set in S3...",
+                                "message": "DuckDB is writing the complete result set to S3.",
+                                "resultStorage": result_storage_summary,
+                            },
+                        )
+                        duckdb_execution_sql = result_storage_copy_sql(sql, result_storage_target)
+                        duckdb_result_preview_sql = result_storage_preview_sql(result_storage_target)
                     _put_worker_event(
                         event_queue,
                         {
                             "type": "phase",
                             "phase": "querying",
                             "progressLabel": "Querying...",
-                            "message": "DuckDB is planning and executing the statement.",
+                            "message": (
+                                "DuckDB is fetching the stored S3 result preview."
+                                if result_storage_target is not None
+                                else "DuckDB is planning and executing the statement."
+                            ),
                         },
                     )
                     (
@@ -1181,11 +1230,11 @@ def _query_worker_entry(
                         result_fetch_ms,
                     ) = _execute_duckdb_query(
                         connection=connection,
-                        sql=sql,
+                        sql=duckdb_execution_sql,
                         max_result_rows=max_result_rows,
                         event_queue=event_queue,
                         started=started,
-                        result_preview_sql=result_preview_sql,
+                        result_preview_sql=duckdb_result_preview_sql,
                     )
             except Exception as exc:
                 execution_error = exc
@@ -1256,6 +1305,14 @@ def _query_worker_entry(
 
         if execution_error is not None:
             if cancel_event.is_set():
+                cancelled_storage_summary = (
+                    result_storage_target.payload(
+                        status="cancelled",
+                        message="Result set storage was cancelled before completion.",
+                    )
+                    if result_storage_target is not None
+                    else result_storage_summary
+                )
                 _put_final_worker_event(
                     event_queue,
                     {
@@ -1265,10 +1322,19 @@ def _query_worker_entry(
                         "message": "Query cancellation completed.",
                         "progressLabel": "Cancelled",
                         "cancellationPhase": "cancelled",
+                        "resultStorage": cancelled_storage_summary,
                     },
                     duckdb_profile_summary,
                 )
             else:
+                failed_storage_summary = (
+                    result_storage_target.payload(
+                        status="failed",
+                        message="DuckDB could not store the complete result set in S3.",
+                    )
+                    if result_storage_target is not None
+                    else result_storage_summary
+                )
                 _put_final_worker_event(
                     event_queue,
                     {
@@ -1278,12 +1344,21 @@ def _query_worker_entry(
                         "message": "Query failed.",
                         "error": str(execution_error),
                         "progressLabel": "Failed",
+                        "resultStorage": failed_storage_summary,
                     },
                     duckdb_profile_summary,
                 )
             return
 
         if execution_result is None:
+            missing_result_storage_summary = (
+                result_storage_target.payload(
+                    status="failed",
+                    message="DuckDB could not store the complete result set in S3.",
+                )
+                if result_storage_target is not None
+                else result_storage_summary
+            )
             _put_final_worker_event(
                 event_queue,
                 {
@@ -1293,11 +1368,20 @@ def _query_worker_entry(
                     "message": "Query failed.",
                     "error": "The query finished without returning a result.",
                     "progressLabel": "Failed",
+                    "resultStorage": missing_result_storage_summary,
                 },
                 duckdb_profile_summary,
             )
             return
 
+        completed_storage_summary = (
+            result_storage_target.payload(
+                status="completed",
+                message="DuckDB stored the complete result set in S3.",
+            )
+            if result_storage_target is not None
+            else result_storage_summary
+        )
         _put_final_worker_event(
             event_queue,
             {
@@ -1319,6 +1403,7 @@ def _query_worker_entry(
                     "resultFetchMs": result_fetch_ms,
                 },
                 "cacheHydration": cache_hydration_summary,
+                "resultStorage": completed_storage_summary,
             },
             duckdb_profile_summary,
         )
@@ -1336,6 +1421,15 @@ def _query_worker_entry(
                 "statusLabel": "Error",
                 "statusReason": str(exc),
             }
+        if result_storage_target is not None:
+            result_storage_summary = result_storage_target.payload(
+                status="cancelled" if cancel_event.is_set() else "failed",
+                message=(
+                    "Result set storage was cancelled before completion."
+                    if cancel_event.is_set()
+                    else "DuckDB could not store the complete result set in S3."
+                ),
+            )
         _put_final_worker_event(
             event_queue,
             {
@@ -1347,6 +1441,7 @@ def _query_worker_entry(
                 "progressLabel": "Cancelled" if cancel_event.is_set() else "Failed",
                 "cancellationPhase": "cancelled" if cancel_event.is_set() else None,
                 "cacheHydration": cache_hydration_summary,
+                "resultStorage": result_storage_summary,
             },
             _read_duckdb_profile_summary(duckdb_profile_path),
         )
@@ -1571,6 +1666,7 @@ class QueryJobManager:
                 data_sources=source_ids,
                 query_options=dict(query_options or {}),
                 source_types=source_types,
+                result_storage=_safe_planned_result_storage_payload(query_options),
                 backend_name="Preparing",
                 execution_mode="",
                 duckdb_execution_path="",
@@ -1659,6 +1755,8 @@ class QueryJobManager:
             and self._settings.duckdb_threads is not None
             else None
         )
+        validate_result_storage_request(query_options, execution_mode=execution_mode)
+        result_storage = planned_result_storage_payload(query_options)
         with self._condition:
             record = self._jobs.get(str(job_id or "").strip())
             if record is None:
@@ -1688,6 +1786,7 @@ class QueryJobManager:
             record.snapshot.execution_mode = execution_mode
             record.snapshot.duckdb_execution_path = duckdb_execution_path
             record.snapshot.duckdb_thread_limit = duckdb_thread_limit
+            record.snapshot.result_storage = result_storage
             record.snapshot.can_cancel = True
             self._set_timing_locked(record, "backendPrepareMs", backend_prepare_ms)
             record.snapshot.updated_at = utc_now_iso()
@@ -1813,6 +1912,8 @@ class QueryJobManager:
             if timing is not None:
                 timings[key] = timing
         requested_id = _requested_query_job_id(requested_job_id)
+        validate_result_storage_request(query_options, execution_mode=execution_mode)
+        result_storage = planned_result_storage_payload(query_options)
 
         with self._condition:
             job_id = requested_id if requested_id and requested_id not in self._jobs else f"query-{uuid.uuid4().hex}"
@@ -1840,6 +1941,7 @@ class QueryJobManager:
                 cpu_capacity_cores=self._cpu_capacity_cores,
                 duckdb_thread_limit=duckdb_thread_limit,
                 timings=timings,
+                result_storage=result_storage,
                 can_cancel=True,
             )
             self._sort_counter += 1
@@ -2794,6 +2896,7 @@ class QueryJobManager:
             "workerExitCode": "worker_exit_code",
             "timings": "timings",
             "cacheHydration": "cache_hydration",
+            "resultStorage": "result_storage",
         }
         changes: dict[str, Any] = {}
         for source_key, target_key in mapping.items():

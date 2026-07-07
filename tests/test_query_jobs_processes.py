@@ -37,6 +37,13 @@ from bit_data_workbench.backend.query_jobs import (  # noqa: E402
     classify_query_execution,
     utc_now_iso,
 )
+from bit_data_workbench.backend.query_result_storage import (  # noqa: E402
+    normalize_result_storage_target,
+    planned_result_storage_payload,
+    result_storage_copy_sql,
+    result_storage_preview_sql,
+    validate_result_storage_request,
+)
 from bit_data_workbench.backend.sql_utils import sql_literal  # noqa: E402
 from bit_data_workbench.config import Settings  # noqa: E402
 from bit_data_workbench.models import QueryJobDefinition, QueryResourceSample  # noqa: E402
@@ -252,6 +259,77 @@ class QueryJobClassifierTests(TestCase):
 
 
 class DuckDBQueryExecutionTests(TestCase):
+    def test_result_storage_target_builds_copy_and_preview_sql(self) -> None:
+        options = {
+            "duckdb": {
+                "resultStorage": {
+                    "mode": "on",
+                    "path": "s3://workspace/query-results/nb-1/cell-1/result.parquet",
+                }
+            }
+        }
+
+        target = normalize_result_storage_target(options)
+
+        self.assertIsNotNone(target)
+        assert target is not None
+        self.assertEqual(target.bucket, "workspace")
+        self.assertEqual(target.key, "query-results/nb-1/cell-1/result.parquet")
+        self.assertEqual(
+            target.virtual_path,
+            's3.workspace."query-results/nb-1/cell-1/result.parquet"',
+        )
+        self.assertEqual(
+            target.duckdb_reference,
+            "read_parquet('s3://workspace/query-results/nb-1/cell-1/result.parquet')",
+        )
+        self.assertEqual(
+            result_storage_copy_sql("SELECT 1 AS value;", target),
+            (
+                "COPY (\n"
+                "SELECT 1 AS value\n"
+                ") TO 's3://workspace/query-results/nb-1/cell-1/result.parquet' (FORMAT PARQUET)"
+            ),
+        )
+        self.assertEqual(
+            result_storage_preview_sql(target),
+            "SELECT * FROM read_parquet('s3://workspace/query-results/nb-1/cell-1/result.parquet')",
+        )
+        self.assertEqual(
+            planned_result_storage_payload(options)["duckdbReference"],
+            target.duckdb_reference,
+        )
+
+    def test_result_storage_validation_rejects_non_read_queries(self) -> None:
+        options = {
+            "duckdb": {
+                "resultStorage": {
+                    "mode": "on",
+                    "path": "s3://workspace/query-results/nb-1/cell-1/result.parquet",
+                }
+            }
+        }
+
+        validate_result_storage_request(
+            options,
+            execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+        )
+        with self.assertRaisesRegex(ValueError, "DuckDB read queries"):
+            validate_result_storage_request(
+                options,
+                execution_mode=QUERY_EXECUTION_DUCKDB_WRITE,
+            )
+
+    def test_result_storage_validation_rejects_non_s3_or_non_parquet_paths(self) -> None:
+        with self.assertRaisesRegex(ValueError, "s3://"):
+            normalize_result_storage_target(
+                {"duckdb": {"resultStorage": {"mode": "on", "path": "file:///tmp/out.parquet"}}}
+            )
+        with self.assertRaisesRegex(ValueError, ".parquet"):
+            normalize_result_storage_target(
+                {"duckdb": {"resultStorage": {"mode": "on", "path": "s3://bucket/out.csv"}}}
+            )
+
     def test_copy_query_uses_materialized_parquet_preview_for_monitor_rows(self) -> None:
         with tempfile.TemporaryDirectory(prefix="bdw-query-preview-") as temp_dir:
             output_path = Path(temp_dir) / "stage_output.parquet"
@@ -362,6 +440,13 @@ class QueryJobPayloadTests(TestCase):
                 "resultFetchMs": 3.0,
                 "backendTotalMs": 41.0,
             },
+            result_storage={
+                "enabled": True,
+                "status": "completed",
+                "path": "s3://workspace/query-results/nb/cell/result.parquet",
+                "virtualPath": 's3.workspace."query-results/nb/cell/result.parquet"',
+                "duckdbReference": "read_parquet('s3://workspace/query-results/nb/cell/result.parquet')",
+            },
         )
 
         payload = job.payload
@@ -407,6 +492,11 @@ class QueryJobPayloadTests(TestCase):
             "on",
         )
         self.assertEqual(payload["cacheHydration"], {})
+        self.assertEqual(payload["resultStorage"]["status"], "completed")
+        self.assertEqual(
+            payload["resultStorage"]["virtualPath"],
+            's3.workspace."query-results/nb/cell/result.parquet"',
+        )
 
 
 class DuckDBQueryAccessCoordinatorTests(TestCase):

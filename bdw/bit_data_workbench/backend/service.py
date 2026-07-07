@@ -119,6 +119,7 @@ from .query_options import (
     parquet_hive_partitioning_option,
     source_existence_validation_enabled,
 )
+from .query_result_storage import validate_result_storage_request
 from .query_jobs import (
     DUCKDB_EXECUTION_PATH_ISOLATED_READ,
     DUCKDB_EXECUTION_PATH_ISOLATED_WRITE,
@@ -2061,6 +2062,10 @@ class WorkbenchService:
             local_relation_map,
         )
         execution_mode = classify_query_execution(execution_sql, normalized_data_sources)
+        validate_result_storage_request(
+            normalized_query_options,
+            execution_mode=execution_mode,
+        )
         query_analysis = self._analyze_query(routing_sql, relation_index=relation_index)
         source_summaries = self._query_source_summaries(
             query_analysis.touched_relations,

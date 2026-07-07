@@ -16,6 +16,8 @@ from bit_data_workbench.backend.query_options import (  # noqa: E402
     cache_hydration_options,
     normalize_query_options,
     parquet_hive_partitioning_option,
+    result_storage_enabled,
+    result_storage_options,
     source_existence_validation_enabled,
 )
 
@@ -36,6 +38,8 @@ class QueryOptionsTests(unittest.TestCase):
         )
         self.assertEqual(options["validation"]["sourceExistence"], "off")
         self.assertFalse(cache_hydration_enabled(options))
+        self.assertEqual(options["duckdb"]["resultStorage"], {"mode": "off", "path": ""})
+        self.assertFalse(result_storage_enabled(options))
         self.assertFalse(source_existence_validation_enabled(options))
 
     def test_accepts_on_and_off_values(self) -> None:
@@ -95,6 +99,27 @@ class QueryOptionsTests(unittest.TestCase):
         self.assertEqual(on_options["validation"]["sourceExistence"], "on")
         self.assertTrue(source_existence_validation_enabled(on_options))
 
+    def test_accepts_result_storage_option(self) -> None:
+        options = normalize_query_options(
+            {
+                "duckdb": {
+                    "resultStorage": {
+                        "mode": "ON",
+                        "path": " s3://workspace/query-results/demo/result.parquet ",
+                    }
+                }
+            }
+        )
+
+        self.assertTrue(result_storage_enabled(options))
+        self.assertEqual(
+            result_storage_options(options),
+            {
+                "mode": "on",
+                "path": "s3://workspace/query-results/demo/result.parquet",
+            },
+        )
+
     def test_rejects_invalid_cache_hydration_values(self) -> None:
         with self.assertRaisesRegex(ValueError, "cacheHydration.mode"):
             normalize_query_options({"duckdb": {"cacheHydration": {"mode": "always"}}})
@@ -122,6 +147,12 @@ class QueryOptionsTests(unittest.TestCase):
     def test_rejects_invalid_source_existence_validation_value(self) -> None:
         with self.assertRaisesRegex(ValueError, "validation.sourceExistence"):
             normalize_query_options({"validation": {"sourceExistence": "sometimes"}})
+
+    def test_rejects_invalid_result_storage_values(self) -> None:
+        with self.assertRaisesRegex(ValueError, "resultStorage must be an object"):
+            normalize_query_options({"duckdb": {"resultStorage": "on"}})
+        with self.assertRaisesRegex(ValueError, "resultStorage.mode"):
+            normalize_query_options({"duckdb": {"resultStorage": {"mode": "always"}}})
 
 
 if __name__ == "__main__":

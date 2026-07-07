@@ -7,6 +7,7 @@ PARQUET_HIVE_PARTITIONING_OPTIONS = {"auto", "on", "off"}
 CACHE_HYDRATION_MODES = {"off", "on"}
 CACHE_HYDRATION_SCOPES = {"referencedS3Parquet"}
 CACHE_HYDRATION_INDEX_POLICIES = {"autoPredicates"}
+RESULT_STORAGE_MODES = {"off", "on"}
 SOURCE_EXISTENCE_VALIDATION_OPTIONS = {"off", "on"}
 DEFAULT_QUERY_OPTIONS = {
     "duckdb": {
@@ -15,6 +16,10 @@ DEFAULT_QUERY_OPTIONS = {
             "mode": "off",
             "scope": "referencedS3Parquet",
             "indexPolicy": "autoPredicates",
+        },
+        "resultStorage": {
+            "mode": "off",
+            "path": "",
         },
     },
     "validation": {
@@ -31,6 +36,10 @@ def default_query_options() -> dict[str, dict[str, object]]:
                 "mode": "off",
                 "scope": "referencedS3Parquet",
                 "indexPolicy": "autoPredicates",
+            },
+            "resultStorage": {
+                "mode": "off",
+                "path": "",
             },
         },
         "validation": {
@@ -87,6 +96,17 @@ def normalize_query_options(value: Any) -> dict[str, dict[str, object]]:
             "queryOptions.duckdb.cacheHydration.indexPolicy must be autoPredicates."
         )
 
+    result_storage = duckdb_options.get("resultStorage")
+    if result_storage is None:
+        result_storage = {}
+    if not isinstance(result_storage, dict):
+        raise ValueError("queryOptions.duckdb.resultStorage must be an object.")
+
+    result_storage_mode = str(result_storage.get("mode") or "off").strip().lower()
+    if result_storage_mode not in RESULT_STORAGE_MODES:
+        raise ValueError("queryOptions.duckdb.resultStorage.mode must be one of: off, on.")
+    result_storage_path = str(result_storage.get("path") or "").strip()
+
     source_existence = (
         str(validation_options.get("sourceExistence") or "off").strip().lower()
     )
@@ -102,6 +122,10 @@ def normalize_query_options(value: Any) -> dict[str, dict[str, object]]:
                 "mode": mode,
                 "scope": scope,
                 "indexPolicy": index_policy,
+            },
+            "resultStorage": {
+                "mode": result_storage_mode,
+                "path": result_storage_path,
             },
         },
         "validation": {
@@ -125,6 +149,18 @@ def cache_hydration_options(query_options: Any) -> dict[str, str]:
 
 def cache_hydration_enabled(query_options: Any) -> bool:
     return cache_hydration_options(query_options)["mode"] == "on"
+
+
+def result_storage_options(query_options: Any) -> dict[str, str]:
+    options = normalize_query_options(query_options)["duckdb"]["resultStorage"]
+    return {
+        "mode": str(options.get("mode") or "off"),
+        "path": str(options.get("path") or "").strip(),
+    }
+
+
+def result_storage_enabled(query_options: Any) -> bool:
+    return result_storage_options(query_options)["mode"] == "on"
 
 
 def source_existence_validation_enabled(query_options: Any) -> bool:

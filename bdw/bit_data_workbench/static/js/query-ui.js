@@ -1021,6 +1021,47 @@ export function createQueryUi(helpers) {
     `;
   }
 
+  function queryResultStorageMarkup(job) {
+    const storage = job?.resultStorage && typeof job.resultStorage === "object" ? job.resultStorage : null;
+    if (!storage || storage.enabled === false || !storage.path) {
+      return "";
+    }
+    const status = String(storage.status || "planned").trim().toLowerCase() || "planned";
+    const statusLabel = status === "completed"
+      ? "Stored"
+      : status === "failed"
+        ? "Failed"
+        : status === "cancelled" || status === "canceled"
+          ? "Cancelled"
+        : status === "storing"
+          ? "Storing"
+          : "Planned";
+    const message = String(storage.message || "").trim();
+    const path = String(storage.path || "").trim();
+    const virtualPath = String(storage.virtualPath || "").trim();
+    const duckdbReference = String(storage.duckdbReference || storage.duckdbPath || "").trim();
+    return `
+      <div
+        class="result-storage-summary is-${escapeHtml(status)}"
+        data-result-storage-summary
+        data-result-storage-path="${escapeHtml(path)}"
+        data-result-storage-virtual-path="${escapeHtml(virtualPath)}"
+        data-result-storage-duckdb-reference="${escapeHtml(duckdbReference)}"
+      >
+        <div class="result-storage-copy">
+          <strong>S3 result set storage</strong>
+          <span>${escapeHtml(path)}</span>
+          ${message ? `<small>${escapeHtml(message)}</small>` : ""}
+        </div>
+        <div class="result-storage-actions">
+          <span class="result-storage-status">${escapeHtml(statusLabel)}</span>
+          <button type="button" class="result-storage-copy-button" data-copy-result-storage-virtual title="Copy virtual S3 source path">Virtual</button>
+          <button type="button" class="result-storage-copy-button" data-copy-result-storage-duckdb title="Copy DuckDB read_parquet path">DuckDB</button>
+        </div>
+      </div>
+    `;
+  }
+
   function resultExportMenuMarkup(showActions, jobId = "") {
     const normalizedJobId = String(jobId || "").trim();
     const sharedWorkspaceTooltip =
@@ -1202,10 +1243,12 @@ export function createQueryUi(helpers) {
     const hasResourceCharts = Boolean(queryResourceSparklineMarkup(job));
     const terminalSparklineMarkup = queryJobIsRunning(job) ? "" : queryResourceSparklineMarkup(job, { hidden: !chartsVisible });
     const warningsMarkup = queryWarningsMarkup(job);
+    const resultStorageMarkup = queryResultStorageMarkup(job);
     const resultBody = job.status === "cancelled"
       ? `
           <div class="result-empty result-empty-cancelled">
             ${warningsMarkup}
+            ${resultStorageMarkup}
             <p>${escapeHtml(queryCancellationCopy({ ...job, cancellationPhase: "cancelled" }))}</p>
             ${terminalMetricsMarkup}
             ${terminalSparklineMarkup}
@@ -1216,6 +1259,7 @@ export function createQueryUi(helpers) {
           <div class="result-error">
             <strong>${escapeHtml(job.status === "cancelled" ? "Query cancelled." : "Query failed.")}</strong>
             ${warningsMarkup}
+            ${resultStorageMarkup}
             <pre>${escapeHtml(job.error)}</pre>
             ${terminalMetricsMarkup}
             ${terminalSparklineMarkup}
@@ -1225,6 +1269,7 @@ export function createQueryUi(helpers) {
         ? `
             ${queryProgressMarkup(job, { chartsHidden: !chartsVisible })}
             ${warningsMarkup}
+            ${resultStorageMarkup}
             ${terminalMetricsMarkup}
             ${terminalSparklineMarkup}
             ${queryResultTableMarkup(job)}
@@ -1234,12 +1279,14 @@ export function createQueryUi(helpers) {
               ${queryProgressMarkup(job, { chartsHidden: !chartsVisible })}
               <div class="result-empty result-empty-running">
                 ${warningsMarkup}
+                ${resultStorageMarkup}
                 <p>${escapeHtml(job.message || "Running query...")}</p>
               </div>
             `
           : `
               <div class="result-empty">
                 ${warningsMarkup}
+                ${resultStorageMarkup}
                 <p>${escapeHtml(job.message || "Statement executed successfully.")}</p>
                 ${terminalMetricsMarkup}
                 ${terminalSparklineMarkup}

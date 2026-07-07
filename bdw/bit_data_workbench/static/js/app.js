@@ -2551,6 +2551,161 @@ function selectedDataSourcesForCell(cellRoot) {
   return normalizeDataSources((cellRoot.dataset.defaultCellSources || "").split("||"));
 }
 
+let cachedRuntimeInfo = null;
+
+function readRuntimeInfo() {
+  if (cachedRuntimeInfo !== null) {
+    return cachedRuntimeInfo;
+  }
+  const script = document.getElementById("runtime-info");
+  if (!script?.textContent) {
+    cachedRuntimeInfo = {};
+    return cachedRuntimeInfo;
+  }
+  try {
+    const parsed = JSON.parse(script.textContent);
+    cachedRuntimeInfo = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (_error) {
+    cachedRuntimeInfo = {};
+  }
+  return cachedRuntimeInfo;
+}
+
+function slugForResultStoragePath(value, fallback = "notebook") {
+  const slug = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return slug || fallback;
+}
+
+function defaultResultStorageBucket() {
+  const runtime = readRuntimeInfo();
+  const runtimeBucket = String(runtime.s3_bucket || runtime.s3Bucket || "").trim();
+  if (runtimeBucket) {
+    return runtimeBucket;
+  }
+  const sourceBucket = document.querySelector("[data-s3-bucket]")?.dataset?.s3Bucket;
+  return String(sourceBucket || "workspace").trim() || "workspace";
+}
+
+function proposedResultStorageS3Path(cellRoot) {
+  const workspaceRoot = cellRoot?.closest?.("[data-workspace-notebook]");
+  const notebookId = slugForResultStoragePath(workspaceNotebookId(workspaceRoot), "notebook");
+  const cellId = slugForResultStoragePath(cellRoot?.dataset?.cellId || "", "cell");
+  return `s3://${defaultResultStorageBucket()}/query-results/${notebookId}/${cellId}/result.parquet`;
+}
+
+function sqlStringLiteral(value) {
+  return `'${String(value || "").replace(/'/g, "''")}'`;
+}
+
+function decodeSqlStringLiteralContent(value) {
+  return String(value || "").replace(/''/g, "'");
+}
+
+function virtualReferencePart(value) {
+  const text = String(value || "").trim();
+  if (/^[A-Za-z_][A-Za-z0-9_$]*$/.test(text)) {
+    return text;
+  }
+  return `"${text.replace(/"/g, '""')}"`;
+}
+
+function virtualS3ReferenceForPath(path) {
+  const text = String(path || "").trim();
+  if (!text.toLowerCase().startsWith("s3://")) {
+    return "";
+  }
+  let parsed = null;
+  try {
+    parsed = new URL(text);
+  } catch (_error) {
+    return "";
+  }
+  const bucket = decodeURIComponent(parsed.hostname || "").trim();
+  const key = decodeURIComponent(parsed.pathname || "").replace(/^\/+/, "").trim();
+  if (!bucket || !key) {
+    return "";
+  }
+  return `s3.${virtualReferencePart(bucket)}.${virtualReferencePart(key)}`;
+}
+
+function duckdbSqlToVirtualSql(sql) {
+  return String(sql ?? "").replace(
+    /\bread_parquet\s*\(\s*'((?:[^']|'')*)'\s*\)/gi,
+    (match, rawPath) => virtualS3ReferenceForPath(decodeSqlStringLiteralContent(rawPath)) || match
+  );
+}
+
+function resultStorageReferencesForPath(path) {
+  const text = String(path || "").trim();
+  if (!text.toLowerCase().startsWith("s3://")) {
+    return null;
+  }
+  let parsed = null;
+  try {
+    parsed = new URL(text);
+  } catch (_error) {
+    return null;
+  }
+  const bucket = decodeURIComponent(parsed.hostname || "").trim();
+  const key = decodeURIComponent(parsed.pathname || "").replace(/^\/+/, "").trim();
+  if (!bucket || !key || key.endsWith("/") || !key.toLowerCase().endsWith(".parquet")) {
+    return null;
+  }
+  return {
+    path: `s3://${bucket}/${key}`,
+    virtualPath: virtualS3ReferenceForPath(`s3://${bucket}/${key}`),
+    duckdbPath: `s3://${bucket}/${key}`,
+    duckdbReference: `read_parquet(${sqlStringLiteral(`s3://${bucket}/${key}`)})`,
+  };
+}
+
+function syncCellResultStorageState(cellRoot, { proposeIfEmpty = true } = {}) {
+  if (!(cellRoot instanceof Element)) {
+    return null;
+  }
+  const root = cellRoot.querySelector("[data-cell-result-storage]");
+  const toggle = cellRoot.querySelector('[data-cell-query-option="duckdb.resultStorage.mode"]');
+  const pathInput = cellRoot.querySelector('[data-cell-query-option="duckdb.resultStorage.path"]');
+  if (!root || !pathInput) {
+    return null;
+  }
+  const enabled = toggle?.checked === true || toggle?.getAttribute?.("aria-checked") === "true";
+  if (proposeIfEmpty && !String(pathInput.value || "").trim()) {
+    pathInput.value = proposedResultStorageS3Path(cellRoot);
+  }
+  const references = resultStorageReferencesForPath(pathInput.value);
+  root.dataset.resultStorageState = enabled ? (references ? "on" : "invalid") : "off";
+  root.classList.toggle("is-on", enabled);
+  root.classList.toggle("is-invalid", enabled && !references);
+  if (references) {
+    root.dataset.resultStorageS3Path = references.path;
+    root.dataset.resultStorageVirtualPath = references.virtualPath;
+    root.dataset.resultStorageDuckdbPath = references.duckdbPath;
+    root.dataset.resultStorageDuckdbReference = references.duckdbReference;
+  } else {
+    delete root.dataset.resultStorageS3Path;
+    delete root.dataset.resultStorageVirtualPath;
+    delete root.dataset.resultStorageDuckdbPath;
+    delete root.dataset.resultStorageDuckdbReference;
+  }
+  root.querySelectorAll("[data-copy-result-storage-virtual], [data-copy-result-storage-duckdb]").forEach((button) => {
+    button.disabled = !enabled || !references;
+  });
+  pathInput.disabled = toggle?.disabled === true;
+  return references;
+}
+
+function syncVisibleResultStorageControls(root = document) {
+  root.querySelectorAll?.("[data-query-cell]").forEach((cellRoot) => {
+    syncCellResultStorageState(cellRoot);
+  });
+}
+
 function queryOptionsForCellRoot(cellRoot) {
   if (!(cellRoot instanceof Element)) {
     return normalizeCellQueryOptions({});
@@ -2558,10 +2713,17 @@ function queryOptionsForCellRoot(cellRoot) {
   const select = cellRoot.querySelector('[data-cell-query-option="duckdb.parquetHivePartitioning"]');
   const cacheToggle = cellRoot.querySelector('[data-cell-query-option="duckdb.cacheHydration.mode"]');
   const sourceCheckToggle = cellRoot.querySelector('[data-cell-query-option="validation.sourceExistence"]');
+  const resultStorageToggle = cellRoot.querySelector('[data-cell-query-option="duckdb.resultStorage.mode"]');
+  const resultStoragePathInput = cellRoot.querySelector('[data-cell-query-option="duckdb.resultStorage.path"]');
   const cacheEnabled =
     cacheToggle?.checked === true || cacheToggle?.getAttribute?.("aria-checked") === "true";
   const sourceCheckEnabled =
     sourceCheckToggle?.checked === true || sourceCheckToggle?.getAttribute?.("aria-checked") === "true";
+  const resultStorageEnabled =
+    resultStorageToggle?.checked === true || resultStorageToggle?.getAttribute?.("aria-checked") === "true";
+  if (resultStorageEnabled) {
+    syncCellResultStorageState(cellRoot);
+  }
   return normalizeCellQueryOptions({
     duckdb: {
       parquetHivePartitioning: select?.value || "auto",
@@ -2569,6 +2731,10 @@ function queryOptionsForCellRoot(cellRoot) {
         mode: cacheEnabled ? "on" : "off",
         scope: "referencedS3Parquet",
         indexPolicy: "autoPredicates",
+      },
+      resultStorage: {
+        mode: resultStorageEnabled ? "on" : "off",
+        path: resultStoragePathInput?.value || "",
       },
     },
     validation: {
@@ -3968,6 +4134,9 @@ function invalidatePreparedSqlViewForCell(cellRoot) {
   }
   const panel = cellRoot.querySelector("[data-duckdb-sql-panel]");
   if (panel) {
+    if ("value" in panel) {
+      panel.value = "";
+    }
     panel.textContent = "";
     delete panel.dataset.sql;
     panel.classList.remove("is-error");
@@ -4024,6 +4193,7 @@ async function prepareDuckdbSqlForCell(cellRoot) {
     throw new Error("The SQL cell is missing notebook context.");
   }
 
+  syncVisibleDuckdbSqlToVirtual(cellRoot);
   const originalSql = currentEditorSql(editorRoot);
   const preparedSubmission = await prepareSqlSubmissionForCell(cellRoot, originalSql);
   const stagePayload = stageSqlPreviewPayloadForCell(cellRoot);
@@ -4315,10 +4485,49 @@ function renderDuckdbSqlPanel(editorRoot, { sql = "", error = "" } = {}) {
   }
   const text = error || sql || "";
   panel.hidden = false;
-  panel.textContent = text;
+  if ("value" in panel) {
+    panel.value = text;
+  } else {
+    panel.textContent = text;
+  }
   panel.dataset.sql = text;
   panel.classList.toggle("is-error", Boolean(error));
+  if (panel instanceof HTMLTextAreaElement) {
+    panel.readOnly = Boolean(error);
+  }
   panel.removeAttribute("aria-busy");
+}
+
+function duckdbSqlPanelIsPreparing(panel) {
+  return panel?.getAttribute?.("aria-busy") === "true";
+}
+
+function syncVirtualSqlFromDuckdbPanel(panel) {
+  if (!(panel instanceof HTMLTextAreaElement)) {
+    return false;
+  }
+  const editorRoot = panel.closest("[data-editor-root]");
+  if (
+    !(editorRoot instanceof Element)
+    || panel.classList.contains("is-error")
+    || duckdbSqlPanelIsPreparing(panel)
+  ) {
+    return false;
+  }
+  const duckdbSql = panel.value ?? "";
+  panel.dataset.sql = duckdbSql;
+  const virtualSql = duckdbSqlToVirtualSql(duckdbSql);
+  setVirtualEditorSql(editorRoot, virtualSql);
+  preparedSqlViewCache.delete(editorRoot.closest("[data-query-cell]"));
+  return true;
+}
+
+function syncVisibleDuckdbSqlToVirtual(cellRoot) {
+  const editorRoot = cellRoot?.querySelector?.("[data-editor-root]");
+  if (sqlViewModeForEditor(editorRoot) !== "duckdb") {
+    return false;
+  }
+  return syncVirtualSqlFromDuckdbPanel(editorRoot.querySelector("[data-duckdb-sql-panel]"));
 }
 
 async function setEditorSqlViewMode(editorRoot, mode) {
@@ -4328,8 +4537,9 @@ async function setEditorSqlViewMode(editorRoot, mode) {
   const normalizedMode = mode === "duckdb" ? "duckdb" : "virtual";
   const cellRoot = editorRoot.closest("[data-query-cell]");
   if (normalizedMode === "virtual") {
-    editorRoot.classList.remove("is-duckdb-sql-view");
     const panel = editorRoot.querySelector("[data-duckdb-sql-panel]");
+    syncVirtualSqlFromDuckdbPanel(panel);
+    editorRoot.classList.remove("is-duckdb-sql-view");
     if (panel) {
       panel.hidden = true;
       panel.removeAttribute("aria-busy");
@@ -4343,7 +4553,11 @@ async function setEditorSqlViewMode(editorRoot, mode) {
     panel.hidden = false;
     panel.classList.remove("is-error");
     panel.setAttribute("aria-busy", "true");
-    panel.textContent = "Preparing DuckDB SQL...";
+    if ("value" in panel) {
+      panel.value = "Preparing DuckDB SQL...";
+    } else {
+      panel.textContent = "Preparing DuckDB SQL...";
+    }
   }
   editorRoot.classList.add("is-duckdb-sql-view");
   syncSqlViewToggle(editorRoot, "duckdb");
@@ -4363,7 +4577,10 @@ async function setEditorSqlViewMode(editorRoot, mode) {
 function currentVisibleEditorSql(editorRoot) {
   if (sqlViewModeForEditor(editorRoot) === "duckdb") {
     const panel = editorRoot?.querySelector?.("[data-duckdb-sql-panel]");
-    return panel?.dataset?.sql ?? panel?.textContent ?? "";
+    if (duckdbSqlPanelIsPreparing(panel)) {
+      return currentEditorSql(editorRoot);
+    }
+    return panel?.value ?? panel?.dataset?.sql ?? panel?.textContent ?? "";
   }
   return currentEditorSql(editorRoot);
 }
@@ -4454,6 +4671,64 @@ async function copyQueryTimingTable(trigger) {
     trigger.classList.remove("is-copied");
     trigger.title = previousTitle || "Copy timing table";
   }, 1200);
+  return true;
+}
+
+function resultStorageReferencesForCopyTrigger(trigger) {
+  if (!(trigger instanceof Element)) {
+    return null;
+  }
+  const cellStorageRoot = trigger.closest("[data-cell-result-storage]");
+  if (cellStorageRoot) {
+    const cellRoot = cellStorageRoot.closest("[data-query-cell]");
+    syncCellResultStorageState(cellRoot);
+    return {
+      virtualPath: cellStorageRoot.dataset.resultStorageVirtualPath || "",
+      duckdbReference: cellStorageRoot.dataset.resultStorageDuckdbReference || "",
+      duckdbPath: cellStorageRoot.dataset.resultStorageDuckdbPath || "",
+    };
+  }
+
+  const summaryRoot = trigger.closest("[data-result-storage-summary]");
+  if (summaryRoot) {
+    return {
+      virtualPath: summaryRoot.dataset.resultStorageVirtualPath || "",
+      duckdbReference: summaryRoot.dataset.resultStorageDuckdbReference || "",
+      duckdbPath: summaryRoot.dataset.resultStorageDuckdbPath || "",
+    };
+  }
+
+  const storage = queryJobForResultActionTarget(trigger)?.resultStorage;
+  if (storage && typeof storage === "object") {
+    return {
+      virtualPath: String(storage.virtualPath || ""),
+      duckdbReference: String(storage.duckdbReference || ""),
+      duckdbPath: String(storage.duckdbPath || ""),
+    };
+  }
+  return null;
+}
+
+async function copyResultStorageReference(trigger, kind = "virtual") {
+  const references = resultStorageReferencesForCopyTrigger(trigger);
+  const value = kind === "duckdb"
+    ? references?.duckdbReference || references?.duckdbPath || ""
+    : references?.virtualPath || "";
+  await writeTextToClipboard(value, {
+    emptyMessage:
+      kind === "duckdb"
+        ? "There is no DuckDB result storage path to copy."
+        : "There is no virtual result storage path to copy.",
+  });
+  if (trigger instanceof HTMLButtonElement) {
+    const previousTitle = trigger.title;
+    trigger.classList.add("is-copied");
+    trigger.title = "Copied";
+    window.setTimeout(() => {
+      trigger.classList.remove("is-copied");
+      trigger.title = previousTitle || (kind === "duckdb" ? "Copy DuckDB path" : "Copy virtual path");
+    }, 1200);
+  }
   return true;
 }
 
@@ -6125,6 +6400,41 @@ function currentEditorSql(root) {
   return textarea?.value ?? defaultEditorSql(textarea);
 }
 
+function setVirtualEditorSql(editorRoot, sql) {
+  if (!(editorRoot instanceof Element)) {
+    return false;
+  }
+  const nextSql = String(sql ?? "");
+  const textarea = editorRoot.querySelector("[data-editor-source]");
+  const editor = editorRegistry.get(editorRoot);
+  if (editor) {
+    const currentSql = editor.state.doc.toString();
+    if (currentSql !== nextSql) {
+      editor.dispatch({
+        changes: {
+          from: 0,
+          to: editor.state.doc.length,
+          insert: nextSql,
+        },
+      });
+    } else if (textarea instanceof HTMLTextAreaElement && textarea.value !== nextSql) {
+      textarea.value = nextSql;
+    }
+  } else if (textarea instanceof HTMLTextAreaElement && textarea.value !== nextSql) {
+    textarea.value = nextSql;
+    invalidatePreparedSqlViewForCell(editorRoot.closest("[data-query-cell]"));
+    autosizeEditor(editorRoot);
+    const workspaceRoot = editorRoot.closest("[data-workspace-notebook]") ?? editorRoot;
+    const notebookId = workspaceNotebookId(workspaceRoot);
+    const cellId = editorRoot.closest("[data-query-cell]")?.dataset.cellId;
+    if (!applyingNotebookState && notebookId && cellId) {
+      setCellSql(notebookId, cellId, nextSql);
+    }
+    querySourceValidationController.handleTextareaInput(textarea);
+  }
+  return true;
+}
+
 function queryResultCollapseKey(cellId, job = null) {
   return String(job?.jobId || cellId || "").trim();
 }
@@ -6454,6 +6764,7 @@ function renderLocalNotebookWorkspace(notebookId, options = {}) {
   recordNotebookActivity(notebookId, "open");
   syncVisibleQueryCells();
   syncVisiblePythonCells();
+  syncVisibleResultStorageControls(panel);
   querySourceValidationController.refreshAll(panel);
   refreshVisibleCacheHydrationStatuses(panel);
   if (metadata.pipelineMode === "pipeline") {
@@ -6890,6 +7201,12 @@ function applyWorkspaceCellState(workspaceRoot, cell, index, editable, totalCell
   const sourceCheckToggle = cellRoot.querySelector(
     '[data-cell-query-option="validation.sourceExistence"]'
   );
+  const resultStorageToggle = cellRoot.querySelector(
+    '[data-cell-query-option="duckdb.resultStorage.mode"]'
+  );
+  const resultStoragePathInput = cellRoot.querySelector(
+    '[data-cell-query-option="duckdb.resultStorage.path"]'
+  );
   const normalizedQueryOptions = normalizeCellQueryOptions(cell.queryOptions);
   if (duckdbOptionsRoot) {
     duckdbOptionsRoot.hidden = cellLanguage !== "sql";
@@ -6926,6 +7243,21 @@ function applyWorkspaceCellState(workspaceRoot, cell, index, editable, totalCell
     if (label) {
       label.textContent = sourceCheckEnabled ? "On" : "Off";
     }
+  }
+  if (resultStorageToggle) {
+    resultStorageToggle.disabled = !editable || cellLanguage !== "sql";
+    const storageEnabled = normalizedQueryOptions.duckdb.resultStorage.mode === "on";
+    if (resultStorageToggle instanceof HTMLInputElement) {
+      resultStorageToggle.checked = storageEnabled;
+    } else {
+      resultStorageToggle.setAttribute("aria-checked", storageEnabled ? "true" : "false");
+    }
+  }
+  if (resultStoragePathInput) {
+    resultStoragePathInput.value =
+      normalizedQueryOptions.duckdb.resultStorage.path || resultStoragePathInput.value || "";
+    resultStoragePathInput.disabled = !editable || cellLanguage !== "sql";
+    syncCellResultStorageState(cellRoot);
   }
 
   const sourceSummary = cellRoot.querySelector("[data-cell-source-summary]");
@@ -8733,6 +9065,8 @@ async function startQueryJobForForm(form) {
     return;
   }
 
+  syncCellResultStorageState(cellRoot);
+  syncVisibleDuckdbSqlToVirtual(cellRoot);
   const formData = new FormData(form);
   const editorSource = cellRoot.querySelector("[data-editor-source]");
   const originalSql = editorSource?.value ?? "";
@@ -8924,6 +9258,7 @@ async function startQueryExplainForForm(form) {
   }
 
   const editorSource = cellRoot.querySelector("[data-editor-source]");
+  syncVisibleDuckdbSqlToVirtual(cellRoot);
   const originalSql = editorSource?.value ?? "";
   const sourceValidation = await querySourceValidationController.validateBeforeExplain(cellRoot, originalSql);
   if (sourceValidation?.status === "invalid") {
@@ -10767,6 +11102,7 @@ async function loadNotebookWorkspace(notebookId, options = {}) {
   recordNotebookActivity(notebookId, "open");
   syncVisibleQueryCells();
   syncVisiblePythonCells();
+  syncVisibleResultStorageControls(panel);
   querySourceValidationController.refreshAll(panel);
   refreshVisibleCacheHydrationStatuses(panel);
   if (panel.querySelector('[data-notebook-meta][data-default-pipeline-mode="pipeline"]')) {
@@ -11174,6 +11510,38 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const resultStorageVirtualCopyTrigger = event.target.closest("[data-copy-result-storage-virtual]");
+  if (resultStorageVirtualCopyTrigger) {
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      await copyResultStorageReference(resultStorageVirtualCopyTrigger, "virtual");
+    } catch (error) {
+      console.error("Failed to copy virtual result storage path.", error);
+      await showMessageDialog({
+        title: "Copy result path failed",
+        copy: error instanceof Error ? error.message : "The virtual result storage path could not be copied.",
+      });
+    }
+    return;
+  }
+
+  const resultStorageDuckdbCopyTrigger = event.target.closest("[data-copy-result-storage-duckdb]");
+  if (resultStorageDuckdbCopyTrigger) {
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      await copyResultStorageReference(resultStorageDuckdbCopyTrigger, "duckdb");
+    } catch (error) {
+      console.error("Failed to copy DuckDB result storage path.", error);
+      await showMessageDialog({
+        title: "Copy result path failed",
+        copy: error instanceof Error ? error.message : "The DuckDB result storage path could not be copied.",
+      });
+    }
+    return;
+  }
+
   const timingDetailsToggle = event.target.closest("[data-query-duration-details-toggle]");
   if (timingDetailsToggle) {
     event.preventDefault();
@@ -11367,10 +11735,23 @@ document.body.addEventListener("input", (event) => {
     return;
   }
 
+  const duckdbSqlPanel = event.target.closest("[data-duckdb-sql-panel]");
+  if (duckdbSqlPanel) {
+    syncVirtualSqlFromDuckdbPanel(duckdbSqlPanel);
+    return;
+  }
+
   const queryEditorSource = event.target.closest("[data-editor-source]");
   if (queryEditorSource) {
     invalidatePreparedSqlViewForCell(queryEditorSource.closest("[data-query-cell]"));
     querySourceValidationController.handleTextareaInput(queryEditorSource);
+  }
+
+  const resultStoragePathInput = event.target.closest("input[data-result-storage-path]");
+  if (resultStoragePathInput) {
+    const cellRoot = resultStoragePathInput.closest("[data-query-cell]");
+    syncCellResultStorageState(cellRoot, { proposeIfEmpty: false });
+    invalidatePreparedSqlViewForCell(cellRoot);
   }
 
   if (handleNotebookWorkspaceInput(event)) {
@@ -11509,9 +11890,11 @@ document.body.addEventListener("change", async (event) => {
   const changedCellSourceOption = event.target.closest("[data-cell-source-option]");
   const changedCellQueryOption = event.target.closest("[data-cell-query-option]");
   if (changedCellSourceOption || changedCellQueryOption) {
-    invalidatePreparedSqlViewForCell(
-      (changedCellSourceOption || changedCellQueryOption).closest("[data-query-cell]")
-    );
+    const changedCellRoot = (changedCellSourceOption || changedCellQueryOption).closest("[data-query-cell]");
+    if (changedCellQueryOption?.dataset?.cellQueryOption?.startsWith("duckdb.resultStorage")) {
+      syncCellResultStorageState(changedCellRoot);
+    }
+    invalidatePreparedSqlViewForCell(changedCellRoot);
   }
   if (handleNotebookWorkspaceChange(event)) {
     if (changedCellSourceOption) {
@@ -11684,6 +12067,7 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
   renderQueryMonitor();
   syncVisibleQueryCells();
   syncVisiblePythonCells();
+  syncVisibleResultStorageControls(event.target);
   querySourceValidationController.refreshAll(event.target);
   refreshVisibleCacheHydrationStatuses(event.target);
   queryRunsController.initializeCurrentPage(event.target).catch((error) => {
@@ -11863,6 +12247,7 @@ initializeSidebarSearch();
 initializeNotebookTree();
 initializeSidebarToggle();
 initializeSidebarResizer();
+syncVisibleResultStorageControls(document.getElementById("workspace-panel") || document);
 renderLocalWorkspaceSidebarEntries().catch((error) => {
   console.error("Failed to render Local Workspace entries during startup.", error);
 });

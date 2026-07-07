@@ -904,6 +904,7 @@ class Settings:
             ),
             "duckdb_max_temp_directory_size": self.duckdb_max_temp_directory_size or "",
             "query_cache_dir": self.query_cache_dir.as_posix(),
+            "s3_bucket": self.s3_bucket or "",
             "timestamp_utc": datetime.now(UTC).isoformat(),
         }
 

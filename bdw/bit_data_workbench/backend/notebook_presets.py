@@ -5,7 +5,14 @@ from __future__ import annotations
 
 import re
 
+from ..data_generator.result_set_storage_sample import (
+    RESULT_SET_STORAGE_SAMPLE_BUCKET,
+    RESULT_SET_STORAGE_SAMPLE_RESULT_KEY,
+    RESULT_SET_STORAGE_SAMPLE_RESULT_PATH,
+    RESULT_SET_STORAGE_SAMPLE_TREE_PATH,
+)
 from ..models import NotebookCellDefinition, NotebookDefinition
+from .source_references import s3_source_reference
 
 
 DATA_PIPELINES_TREE_PATH = (
@@ -64,6 +71,122 @@ def _s3_data_sources(*relations: str | None) -> list[str]:
         seen.add(source)
         sources.append(source)
     return sources
+
+
+def _result_set_storage_query_options() -> dict[str, object]:
+    return {
+        "duckdb": {
+            "resultStorage": {
+                "mode": "on",
+                "path": RESULT_SET_STORAGE_SAMPLE_RESULT_PATH,
+            }
+        }
+    }
+
+
+def _build_result_set_storage_store_sql(source_relation: str) -> str:
+    return f"""
+-- Store this complete aggregation in S3 through the cell option "store result set in S3".
+-- The result panel exposes both the virtual path and the DuckDB read_parquet(...) path.
+WITH quarterly_orders AS (
+  SELECT
+    canton_code,
+    order_channel,
+    order_status,
+    CAST(date_trunc('quarter', order_date) AS DATE) AS order_quarter_start,
+    COUNT(*) AS order_count,
+    CAST(ROUND(SUM(net_amount_chf), 2) AS DECIMAL(18,2)) AS net_total_chf,
+    CAST(ROUND(SUM(vat_amount_chf), 2) AS DECIMAL(18,2)) AS vat_total_chf,
+    CAST(ROUND(SUM(gross_amount_chf), 2) AS DECIMAL(18,2)) AS gross_total_chf,
+    SUM(CASE WHEN needs_review THEN 1 ELSE 0 END) AS review_order_count,
+    MAX(updated_at) AS latest_update_at
+  FROM {source_relation}
+  WHERE order_date >= DATE '2025-01-01'
+  GROUP BY canton_code, order_channel, order_status, order_quarter_start
+)
+SELECT
+  canton_code,
+  order_channel,
+  order_status,
+  order_quarter_start,
+  order_count,
+  net_total_chf,
+  vat_total_chf,
+  gross_total_chf,
+  review_order_count,
+  latest_update_at
+FROM quarterly_orders
+ORDER BY gross_total_chf DESC, review_order_count DESC, order_count DESC
+LIMIT 75;
+""".strip()
+
+
+def _build_result_set_storage_load_sql() -> str:
+    virtual_path = s3_source_reference(
+        bucket=RESULT_SET_STORAGE_SAMPLE_BUCKET,
+        key=RESULT_SET_STORAGE_SAMPLE_RESULT_KEY,
+    )
+    return f"""
+-- Load the result set written by the previous cell and continue computing from it.
+SELECT
+  canton_code,
+  SUM(order_count) AS stored_order_count,
+  CAST(ROUND(SUM(gross_total_chf), 2) AS DECIMAL(18,2)) AS stored_gross_total_chf,
+  CAST(ROUND(SUM(vat_total_chf), 2) AS DECIMAL(18,2)) AS stored_vat_total_chf,
+  SUM(review_order_count) AS stored_review_order_count
+FROM {virtual_path}
+GROUP BY canton_code
+ORDER BY stored_gross_total_chf DESC, stored_review_order_count DESC;
+""".strip()
+
+
+def build_result_set_storage_s3_demo_notebook(
+    result_set_storage_source_relation: str | None,
+) -> NotebookDefinition:
+    result_set_storage_sources = _s3_data_sources(result_set_storage_source_relation)
+    result_set_storage_store_sql = (
+        _build_result_set_storage_store_sql(result_set_storage_source_relation)
+        if result_set_storage_source_relation
+        else "SELECT 'Run the Result Set Storage S3 Loader from the Loader Workbench first.' AS status;"
+    )
+    result_set_storage_load_sql = (
+        _build_result_set_storage_load_sql()
+        if result_set_storage_source_relation
+        else "SELECT 'Run the Result Set Storage S3 Loader, then run the store-result cell first.' AS status;"
+    )
+    result_set_storage_store_options = (
+        _result_set_storage_query_options()
+        if result_set_storage_source_relation
+        else {}
+    )
+    return NotebookDefinition(
+        notebook_id="result-set-storage-s3-demo",
+        title="Store Result Set in S3 Demo",
+        summary=(
+            "Stores a complete DuckDB aggregation as Parquet in S3 through the "
+            "notebook result-storage option, then loads that stored result set "
+            "again for follow-up computation."
+        ),
+        cells=[
+            NotebookCellDefinition(
+                cell_id="result-set-storage-s3-demo-cell-1",
+                data_sources=result_set_storage_sources,
+                query_options=result_set_storage_store_options,
+                sql=result_set_storage_store_sql,
+            ),
+            NotebookCellDefinition(
+                cell_id="result-set-storage-s3-demo-cell-2",
+                data_sources=["s3"] if result_set_storage_source_relation else [],
+                sql=result_set_storage_load_sql,
+            ),
+        ],
+        tags=["s3", "parquet", "duckdb", "result-storage", "demo"],
+        tree_path=RESULT_SET_STORAGE_SAMPLE_TREE_PATH,
+        linked_generator_id="result_set_storage_s3_loader",
+        can_edit=False,
+        can_delete=False,
+        shared=True,
+    )
 
 
 KOSTENBELEGE_3_1_SOURCE_COLUMNS = {
@@ -2301,6 +2424,7 @@ def build_static_notebooks(
     union_oltp_s3_relation: str | None,
     union_s3_relation: str | None,
     parquet_performance_option_relations: dict[str, str | None],
+    result_set_storage_source_relation: str | None,
 ) -> list[NotebookDefinition]:
     s3_sql = (
         "SELECT\n"
@@ -3112,6 +3236,7 @@ def build_static_notebooks(
             can_edit=False,
             can_delete=False,
         ),
+        build_result_set_storage_s3_demo_notebook(result_set_storage_source_relation),
         NotebookDefinition(
             notebook_id="postgres-oltp-write-test",
             title="PostgreSQL OLTP Write Test",

@@ -112,6 +112,17 @@ export function createNotebookModel(helpers) {
     };
   }
 
+  function normalizeResultStorageOptions(value, fallback = {}) {
+    const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const fallbackSource =
+      fallback && typeof fallback === "object" && !Array.isArray(fallback) ? fallback : {};
+    const mode = String(source.mode ?? fallbackSource.mode ?? "off").trim().toLowerCase();
+    return {
+      mode: mode === "on" ? "on" : "off",
+      path: String(source.path ?? fallbackSource.path ?? "").trim(),
+    };
+  }
+
   function normalizeSourceExistenceValidationOption(value) {
     const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
     return normalized === "on" ? "on" : "off";
@@ -149,6 +160,10 @@ export function createNotebookModel(helpers) {
         cacheHydration: normalizeCacheHydrationOptions(
           duckdb.cacheHydration,
           fallbackDuckdb.cacheHydration
+        ),
+        resultStorage: normalizeResultStorageOptions(
+          duckdb.resultStorage,
+          fallbackDuckdb.resultStorage
         ),
       },
       validation: {

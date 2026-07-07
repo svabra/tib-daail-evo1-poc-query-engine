@@ -21,6 +21,50 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn('aria-label="Compare"', source)
         self.assertIn('aria-pressed="false"', source)
 
+    def test_exploration_result_storage_controls_have_runtime_wiring(self) -> None:
+        markup_source = (
+            STATIC_ROOT / "js" / "notebook-workspace-markup.js"
+        ).read_text(encoding="utf-8")
+        workspace_template = (
+            REPO_ROOT / "bdw" / "bit_data_workbench" / "templates" / "partials" / "workspace.html"
+        ).read_text(encoding="utf-8")
+        index_template = (
+            REPO_ROOT / "bdw" / "bit_data_workbench" / "templates" / "index.html"
+        ).read_text(encoding="utf-8")
+        model_source = (STATIC_ROOT / "js" / "notebook-model.js").read_text(
+            encoding="utf-8"
+        )
+        controller_source = (
+            STATIC_ROOT / "js" / "notebook-workspace-controller.js"
+        ).read_text(encoding="utf-8")
+        app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
+        query_ui_source = (STATIC_ROOT / "js" / "query-ui.js").read_text(encoding="utf-8")
+        query_state_source = (
+            STATIC_ROOT / "js" / "query-job-state.js"
+        ).read_text(encoding="utf-8")
+        css_source = (STATIC_ROOT / "css" / "app.css").read_text(encoding="utf-8")
+
+        for source in (markup_source, workspace_template):
+            self.assertIn("store result set in S3", source)
+            self.assertIn('data-cell-query-option="duckdb.resultStorage.mode"', source)
+            self.assertIn('data-cell-query-option="duckdb.resultStorage.path"', source)
+            self.assertIn("data-copy-result-storage-virtual", source)
+            self.assertIn("data-copy-result-storage-duckdb", source)
+
+        self.assertIn("runtime-info", index_template)
+        self.assertIn("normalizeResultStorageOptions", model_source)
+        self.assertIn("queryOptionInput", controller_source)
+        self.assertIn("queryOptionsForCellRoot(cellRoot)", controller_source)
+        self.assertIn("proposedResultStorageS3Path", app_source)
+        self.assertIn("syncCellResultStorageState", app_source)
+        self.assertIn("copyResultStorageReference", app_source)
+        self.assertIn("read_parquet(${sqlStringLiteral", app_source)
+        self.assertIn("queryResultStorageMarkup", query_ui_source)
+        self.assertIn("data-result-storage-summary", query_ui_source)
+        self.assertIn("resultStorage", query_state_source)
+        self.assertIn(".cell-result-storage-option", css_source)
+        self.assertIn(".result-storage-summary", css_source)
+
     def test_editor_expand_control_has_runtime_wiring_and_styles(self) -> None:
         app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
         autosize_source = (
@@ -453,7 +497,12 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("data-editor-sql-view-toggle", markup_source)
         self.assertIn('data-editor-sql-view="duckdb"', markup_source)
         self.assertIn("data-duckdb-sql-panel", markup_source)
+        self.assertIn('<textarea class="editor-duckdb-sql-panel"', markup_source)
+        self.assertNotIn('<pre class="editor-duckdb-sql-panel"', markup_source)
         self.assertIn("data-editor-sql-view-toggle", workspace_template)
+        self.assertIn("data-duckdb-sql-panel", workspace_template)
+        self.assertIn("class=\"editor-duckdb-sql-panel\"", workspace_template)
+        self.assertNotIn('<pre class="editor-duckdb-sql-panel"', workspace_template)
         self.assertIn("/api/query-sql/prepare", app_source)
         self.assertIn("prepareDuckdbSqlForCell", app_source)
         self.assertIn("stageSqlPreviewPayloadForCell", app_source)
@@ -461,6 +510,17 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("stagePayloadForCell", app_source)
         self.assertIn("currentVisibleEditorSql", app_source)
         self.assertIn("invalidatePreparedSqlViewForCell", app_source)
+        self.assertIn("function duckdbSqlToVirtualSql", app_source)
+        self.assertIn("function setVirtualEditorSql", app_source)
+        self.assertIn("function syncVirtualSqlFromDuckdbPanel", app_source)
+        self.assertIn("function syncVisibleDuckdbSqlToVirtual", app_source)
+        self.assertIn("function duckdbSqlPanelIsPreparing", app_source)
+        self.assertIn('panel?.getAttribute?.("aria-busy") === "true"', app_source)
+        self.assertIn("syncVisibleDuckdbSqlToVirtual(cellRoot);", app_source)
+        self.assertIn("panel.value = \"Preparing DuckDB SQL...\";", app_source)
+        self.assertIn("panel.value = text;", app_source)
+        self.assertIn("duckdbSqlToVirtualSql(duckdbSql)", app_source)
+        self.assertIn("virtualS3ReferenceForPath(`s3://${bucket}/${key}`)", app_source)
         self.assertIn("notebookId", validation_source)
         self.assertIn(".editor-sql-view-toggle", css_source)
         self.assertIn(".editor-frame:hover .editor-sql-view-toggle", css_source)
@@ -468,6 +528,11 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertNotIn(".editor-frame.is-duckdb-sql-view .editor-sql-view-toggle", css_source)
         self.assertNotIn(".editor-frame[data-editor-language=\"sql\"] textarea", css_source)
         self.assertIn(".editor-duckdb-sql-panel", css_source)
+        self.assertIn(".editor-frame.editor-ready textarea[data-editor-source]", css_source)
+        self.assertIn(".editor-frame.is-duckdb-sql-view textarea[data-editor-source]", css_source)
+        self.assertNotIn(".editor-frame.editor-ready textarea {\n", css_source)
+        self.assertNotIn(".editor-frame.is-duckdb-sql-view textarea,\n", css_source)
+        self.assertIn("resize: none;", css_source)
         self.assertIn("padding: 10px 12px;", css_source)
 
     def test_duckdb_parquet_hive_query_option_has_markup_and_payload_wiring(self) -> None:

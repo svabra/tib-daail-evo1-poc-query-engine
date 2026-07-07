@@ -422,6 +422,17 @@ export function createNotebookWorkspaceController(helpers) {
       return true;
     }
 
+    const queryOptionInput = event.target.closest("[data-cell-query-option]");
+    if (queryOptionInput) {
+      const { notebookId, cellId } = notebookCellContext(queryOptionInput);
+      const cellRoot = queryOptionInput.closest("[data-query-cell]");
+      const metaRoot = queryOptionInput.closest("[data-notebook-meta]");
+      if (notebookId && cellId && cellRoot && metaRoot?.dataset.canEdit !== "false") {
+        setCellQueryOptions(notebookId, cellId, queryOptionsForCellRoot(cellRoot));
+      }
+      return true;
+    }
+
     const editorSource = event.target.closest("[data-editor-source]");
     if (editorSource) {
       const { notebookId, cellId } = notebookCellContext(editorSource);

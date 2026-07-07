@@ -29,6 +29,22 @@ export function normalizeQueryJob(job) {
   const duckdbSpillLimitBytes = Number(job.duckdbSpillLimitBytes);
   const duckdbSpillDiskFreeBytes = Number(job.duckdbSpillDiskFreeBytes);
   const workerExitCode = Number(job.workerExitCode);
+  const resultStorage =
+    job.resultStorage && typeof job.resultStorage === "object" && !Array.isArray(job.resultStorage)
+      ? {
+          ...job.resultStorage,
+          enabled: job.resultStorage.enabled !== false,
+          status: String(job.resultStorage.status || "").trim(),
+          format: String(job.resultStorage.format || "").trim(),
+          path: String(job.resultStorage.path || "").trim(),
+          bucket: String(job.resultStorage.bucket || "").trim(),
+          key: String(job.resultStorage.key || "").trim(),
+          virtualPath: String(job.resultStorage.virtualPath || "").trim(),
+          duckdbPath: String(job.resultStorage.duckdbPath || "").trim(),
+          duckdbReference: String(job.resultStorage.duckdbReference || "").trim(),
+          message: String(job.resultStorage.message || "").trim(),
+        }
+      : {};
   const timings = {};
   if (job.timings && typeof job.timings === "object") {
     Object.entries(job.timings).forEach(([key, value]) => {
@@ -171,6 +187,7 @@ export function normalizeQueryJob(job) {
     cancellationPhase: String(job.cancellationPhase ?? "").trim(),
     cancellationRequestedAt: String(job.cancellationRequestedAt ?? "").trim(),
     workerExitCode: Number.isFinite(workerExitCode) ? Math.round(workerExitCode) : null,
+    resultStorage,
     canCancel: job.canCancel !== false,
     timings,
   };

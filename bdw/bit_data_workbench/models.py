@@ -662,6 +662,7 @@ class QueryJobDefinition:
     duckdb_spill_disk_free_bytes: int | None = None
     resource_samples: list[QueryResourceSample] = field(default_factory=list)
     cache_hydration: dict[str, Any] = field(default_factory=dict)
+    result_storage: dict[str, Any] = field(default_factory=dict)
     cancellation_phase: str | None = None
     cancellation_requested_at: str | None = None
     worker_exit_code: int | None = None
@@ -733,6 +734,7 @@ class QueryJobDefinition:
             "duckdbSpillDiskFreeBytes": self.duckdb_spill_disk_free_bytes,
             "resourceSamples": [sample.payload for sample in self.resource_samples],
             "cacheHydration": dict(self.cache_hydration),
+            "resultStorage": dict(self.result_storage),
             "cancellationPhase": self.cancellation_phase,
             "cancellationRequestedAt": self.cancellation_requested_at,
             "workerExitCode": self.worker_exit_code,

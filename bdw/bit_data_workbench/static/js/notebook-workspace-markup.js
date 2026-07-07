@@ -96,10 +96,20 @@ export function createNotebookWorkspaceMarkup(helpers) {
     return value === "on";
   }
 
+  function resultStorageOptions(cell) {
+    const options = cell?.queryOptions?.duckdb?.resultStorage || {};
+    const mode = String(options.mode || "off").trim().toLowerCase();
+    return {
+      enabled: mode === "on",
+      path: String(options.path || "").trim(),
+    };
+  }
+
   function duckdbOptionsMarkup(cell, canEdit, cellLanguage) {
     const selected = parquetHivePartitioningOption(cell);
     const hydrateCache = cacheHydrationEnabled(cell);
     const checkSources = sourceExistenceValidationEnabled(cell);
+    const resultStorage = resultStorageOptions(cell);
     const hidden = cellLanguage === "sql" ? "" : " hidden";
     const disabled = canEdit && cellLanguage === "sql" ? "" : " disabled";
     const hiveTitle =
@@ -108,6 +118,8 @@ export function createNotebookWorkspaceMarkup(helpers) {
       "Copies the S3 Parquet data referenced by this cell into a temporary local DuckDB table before the query runs. DuckDB can then reuse the local table and optional ART indexes for repeated filters and lookups. This cache lives in temporary compute storage and can disappear after a pod restart.";
     const sourceCheckTitle =
       "Checks whether referenced sources exist before running or explaining this cell. Turn off for proven queries to skip the preflight check and let DuckDB fail only if a source is actually missing.";
+    const resultStorageTitle =
+      "Stores the complete DuckDB result set as a Parquet file in S3 before fetching the truncated HTML preview for this cell.";
     return `
       <span class="cell-duckdb-options"${hidden} data-cell-duckdb-options>
         <label class="cell-duckdb-option" title="${escapeHtml(hiveTitle)}">
@@ -159,6 +171,35 @@ export function createNotebookWorkspaceMarkup(helpers) {
               <strong data-source-check-state-label>${checkSources ? "On" : "Off"}</strong>
             </span>
           </button>
+        </span>
+        <span
+          class="cell-result-storage-option"
+          data-cell-result-storage
+          data-result-storage-state="${resultStorage.enabled ? "on" : "off"}"
+          title="${escapeHtml(resultStorageTitle)}"
+        >
+          <label class="cell-result-storage-toggle">
+            <input
+              type="checkbox"
+              name="store_result_set_in_s3"
+              data-cell-query-option="duckdb.resultStorage.mode"
+              data-result-storage-toggle
+              ${resultStorage.enabled ? "checked" : ""}
+              ${disabled}
+            >
+            <span>store result set in S3</span>
+          </label>
+          <input
+            class="cell-result-storage-path"
+            type="text"
+            value="${escapeHtml(resultStorage.path)}"
+            placeholder="s3://bucket/query-results/notebook/cell/result.parquet"
+            data-cell-query-option="duckdb.resultStorage.path"
+            data-result-storage-path
+            ${disabled}
+          >
+          <button type="button" class="cell-result-storage-copy" data-copy-result-storage-virtual title="Copy virtual S3 source path" ${resultStorage.enabled ? "" : "disabled"}>Virtual</button>
+          <button type="button" class="cell-result-storage-copy" data-copy-result-storage-duckdb title="Copy DuckDB read_parquet path" ${resultStorage.enabled ? "" : "disabled"}>DuckDB</button>
         </span>
       </span>
     `;
@@ -442,7 +483,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
               >DuckDB</button>
             </div>
             <textarea name="sql" data-editor-source data-default-sql="${escapeHtml(cell.sql)}" data-editor-language="${escapeHtml(cellLanguage)}" rows="${preferredSqlEditorRows(cell.sql)}" spellcheck="false">${escapeHtml(cell.sql)}</textarea>
-            <pre class="editor-duckdb-sql-panel" data-duckdb-sql-panel hidden></pre>
+            <textarea class="editor-duckdb-sql-panel" data-duckdb-sql-panel rows="10" spellcheck="false" hidden></textarea>
           </div>
           <div class="query-source-validation" data-query-source-validation data-query-source-validation-status="unchecked" aria-live="polite" ${cellLanguage === "python" ? "hidden" : ""}>
             <span data-query-source-validation-message>No source references found. Sources will be checked before execution.</span>

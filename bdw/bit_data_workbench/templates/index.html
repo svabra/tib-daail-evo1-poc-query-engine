@@ -296,5 +296,6 @@
     
   </aside>
   <script id="source-options" type="application/json">{{ source_options_json | safe }}</script>
+  <script id="runtime-info" type="application/json">{{ runtime | tojson }}</script>
   <script id="feature-release-notes" type="application/json">{{ release_notes_json | safe }}</script>
 {% endblock %}

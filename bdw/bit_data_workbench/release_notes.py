@@ -1,9 +1,40 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.38. Keep entries concise and
+# Derived from git history through version 0.10.39. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.39",
+        "releasedAt": "2026-07-07T08:30:57+02:00",
+        "features": [
+            (
+                "Exploration notebook SQL cells can now store the complete "
+                "DuckDB result set to an editable S3 Parquet path while the "
+                "HTML preview remains capped for display."
+            ),
+            (
+                "Stored result sets are written with DuckDB COPY TO and expose "
+                "copyable virtual and DuckDB S3 references both before and "
+                "after query execution."
+            ),
+            (
+                "The DuckDB SQL view is now editable and keeps simple S3 "
+                "read_parquet references synchronized with the virtual SQL "
+                "editor in both directions."
+            ),
+            (
+                "PoC Tests now includes a Store Result Set in S3 demo notebook "
+                "and a matching loader so the stored Parquet result can be "
+                "loaded by a later cell."
+            ),
+            (
+                "Regression coverage now verifies backend result storage, "
+                "the sample loader, notebook placement, copy controls, and "
+                "virtual/DuckDB SQL editor synchronization."
+            ),
+        ],
+    },
     {
         "version": "0.10.38",
         "releasedAt": "2026-06-19T12:13:39+02:00",
