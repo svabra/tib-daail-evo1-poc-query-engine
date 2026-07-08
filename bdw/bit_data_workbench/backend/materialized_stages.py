@@ -3,8 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import shutil
-import tempfile
 import threading
 import uuid
 from collections import deque
@@ -13,6 +11,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from botocore.exceptions import BotoCoreError, ClientError
 
@@ -35,6 +34,20 @@ DUCKDB_TABLE_FUNCTION_RE = re.compile(
     r"^(?:parquet_scan|read_(?:parquet|csv|csv_auto|json|json_auto|ndjson|ndjson_auto|xlsx))\s*\(",
     re.IGNORECASE,
 )
+S3_STAGE_REFERENCE_RE = re.compile(
+    r'(?<![A-Za-z0-9_$])s3\s*\.\s*(?:"((?:[^"]|"")*)"|([A-Za-z_][A-Za-z0-9_$]*))'
+    r'\s*\.\s*(?:"((?:[^"]|"")*)"|([A-Za-z0-9_./*?[\]${}-]+))',
+    re.IGNORECASE,
+)
+S3_URI_LITERAL_RE = re.compile(r"'(s3://(?:[^']|'')+)'", re.IGNORECASE)
+
+
+@dataclass(frozen=True, slots=True)
+class StageOutputTarget:
+    bucket: str
+    key: str
+    path: str
+    file_name: str
 
 
 def utc_now_iso() -> str:
@@ -58,14 +71,6 @@ def _parse_iso_datetime(value: object) -> datetime | None:
 
 def _sha256_text(value: str) -> str:
     return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def _clean_stage_kind(value: object) -> str:
@@ -126,6 +131,10 @@ def recommended_stage_output_file_name(alias: object) -> str:
     return f"{stem}{STAGE_OUTPUT_FILE_EXTENSION}"
 
 
+def _decode_sql_identifier(value: object) -> str:
+    return str(value or "").replace('""', '"').strip()
+
+
 def normalize_stage_output_file_name(value: object, *, alias: object) -> str:
     text = str(value or "").strip().replace("\\", "/")
     name = text.rsplit("/", 1)[-1].strip()
@@ -138,6 +147,146 @@ def normalize_stage_output_file_name(value: object, *, alias: object) -> str:
     if not name.lower().endswith(STAGE_OUTPUT_FILE_EXTENSION):
         name = f"{name}{STAGE_OUTPUT_FILE_EXTENSION}"
     return name
+
+
+def _normalize_s3_stage_output_path(value: object, *, alias: object) -> StageOutputTarget:
+    raw_path = str(value or "").strip()
+    if not raw_path:
+        raise ValueError("Provide an S3 output path for the materialized stage.")
+    parsed = urlparse(raw_path)
+    if parsed.scheme.lower() != "s3":
+        raise ValueError("Materialized stage output path must start with s3://.")
+    bucket = unquote(str(parsed.netloc or "").strip())
+    key = unquote(str(parsed.path or "").lstrip("/").strip())
+    if not bucket:
+        raise ValueError("Materialized stage output path must include an S3 bucket.")
+    if not key:
+        raise ValueError("Materialized stage output path must include an object key.")
+    if key.endswith("/"):
+        raise ValueError("Materialized stage output path must point to a Parquet file, not a folder.")
+    if any(char in key for char in "*?[]"):
+        raise ValueError("Materialized stage output path must not contain wildcard characters.")
+    if not key.lower().endswith(STAGE_OUTPUT_FILE_EXTENSION):
+        raise ValueError("Materialized stage output path must end with .parquet.")
+    file_name = normalize_stage_output_file_name(key, alias=alias)
+    return StageOutputTarget(
+        bucket=bucket,
+        key=key,
+        path=f"s3://{bucket}/{key}",
+        file_name=file_name,
+    )
+
+
+def normalize_stage_output_path(value: object, *, alias: object) -> str:
+    return _normalize_s3_stage_output_path(value, alias=alias).path
+
+
+def _stage_output_metadata_key(output_key: object) -> str:
+    key = str(output_key or "").strip().lstrip("/")
+    if not key:
+        return ""
+    return f"{key}.bdw-stage.json"
+
+
+def _s3_path_for_key(bucket: str, key: str) -> str:
+    return f"s3://{str(bucket or '').strip()}/{str(key or '').strip().lstrip('/')}"
+
+
+def _extract_first_direct_s3_path(sql: object) -> str:
+    text = str(sql or "")
+    uri_match = S3_URI_LITERAL_RE.search(text)
+    if uri_match:
+        return uri_match.group(1).replace("''", "'")
+    for match in S3_STAGE_REFERENCE_RE.finditer(text):
+        bucket = _decode_sql_identifier(match.group(1) or match.group(2))
+        key = _decode_sql_identifier(match.group(3) or match.group(4))
+        if bucket and key:
+            return _s3_path_for_key(bucket, key)
+    return ""
+
+
+def _s3_path_parent(value: object) -> tuple[str, str]:
+    try:
+        target = _normalize_s3_stage_output_path(value, alias="stage")
+    except ValueError:
+        return "", ""
+    parent = target.key.rsplit("/", 1)[0] if "/" in target.key else ""
+    return target.bucket, parent
+
+
+def _recommended_stage_output_path_from_source(
+    *,
+    source_path: str,
+    notebook_id: str,
+    notebook_title: str,
+    output_file_name: str,
+) -> str:
+    parsed = urlparse(str(source_path or "").strip())
+    if parsed.scheme.lower() != "s3":
+        return ""
+    bucket = unquote(str(parsed.netloc or "").strip())
+    key = unquote(str(parsed.path or "").lstrip("/").strip())
+    if not bucket or not key:
+        return ""
+    source_marker = "/source/"
+    if source_marker in key:
+        base_prefix = key.split(source_marker, 1)[0]
+    elif "/" in key:
+        base_prefix = key.rsplit("/", 1)[0]
+    else:
+        base_prefix = ""
+    slug = notebook_slug(notebook_id, notebook_title)
+    recommended_key = "/".join(
+        item.strip("/")
+        for item in (
+            base_prefix,
+            "pipeline-results",
+            slug,
+            output_file_name,
+        )
+        if item.strip("/")
+    )
+    return _s3_path_for_key(bucket, recommended_key)
+
+
+def recommended_stage_output_path(
+    *,
+    notebook_id: str,
+    notebook_title: str = "",
+    stage_alias: object,
+    output_file_name: object = "",
+    sql: object = "",
+    predecessor_output_paths: Iterable[str] | None = None,
+    runtime_bucket: object = "",
+) -> str:
+    alias = str(stage_alias or "").strip()
+    file_name = normalize_stage_output_file_name(output_file_name, alias=alias)
+    source_path = _extract_first_direct_s3_path(sql)
+    if source_path:
+        recommended = _recommended_stage_output_path_from_source(
+            source_path=source_path,
+            notebook_id=notebook_id,
+            notebook_title=notebook_title,
+            output_file_name=file_name,
+        )
+        if recommended:
+            return recommended
+    for predecessor_path in predecessor_output_paths or []:
+        bucket, parent = _s3_path_parent(predecessor_path)
+        if bucket:
+            key = "/".join(item.strip("/") for item in (parent, file_name) if item.strip("/"))
+            return _s3_path_for_key(bucket, key)
+    bucket = str(runtime_bucket or "").strip()
+    if not bucket:
+        bucket = "workspace"
+    fallback_key = "/".join(
+        [
+            STAGE_ROOT_PREFIX,
+            notebook_slug(notebook_id, notebook_title),
+            file_name,
+        ]
+    )
+    return _s3_path_for_key(bucket, fallback_key)
 
 
 def materialized_stage_query_sql(sql: object) -> str:
@@ -154,6 +303,16 @@ def materialized_stage_query_sql(sql: object) -> str:
 def materialized_stage_copy_to_parquet_sql(sql: object, target_path: object) -> str:
     query_sql = materialized_stage_query_sql(sql)
     return f"COPY (\n{query_sql}\n)\nTO {sql_literal(str(target_path or ''))} (FORMAT PARQUET)"
+
+
+def materialized_stage_query_options(query_options: object) -> dict[str, object]:
+    normalized = normalize_query_options(query_options if isinstance(query_options, dict) else {})
+    duckdb_options = dict(normalized.get("duckdb") or {})
+    duckdb_options["resultStorage"] = {"mode": "off", "path": ""}
+    return {
+        **normalized,
+        "duckdb": duckdb_options,
+    }
 
 
 @dataclass(slots=True)
@@ -370,8 +529,16 @@ def normalize_stage_cells(cells: Iterable[dict[str, object]]) -> list[dict[str, 
             if "outputFileName" in stage_meta
             else stage_meta.get("output_file_name")
         )
+        raw_output_path = (
+            stage_meta.get("outputPath")
+            if "outputPath" in stage_meta
+            else stage_meta.get("output_path")
+        )
+        output_path = str(raw_output_path or "").strip()
         output_file_name = (
-            normalize_stage_output_file_name(raw_output_file_name, alias=alias)
+            normalize_stage_output_file_name(output_path, alias=alias)
+            if output_path
+            else normalize_stage_output_file_name(raw_output_file_name, alias=alias)
             if str(raw_output_file_name or "").strip()
             else ""
         )
@@ -391,6 +558,7 @@ def normalize_stage_cells(cells: Iterable[dict[str, object]]) -> list[dict[str, 
                 "description": str(stage_meta.get("description") or "").strip(),
                 "kind": _clean_stage_kind(stage_meta.get("kind")),
                 "materialize": stage_meta.get("materialize") is not False,
+                "outputPath": output_path,
                 "outputFileName": output_file_name,
                 "recommendedOutputFileName": recommended_output_file_name,
                 "resolvedOutputFileName": output_file_name or recommended_output_file_name,
@@ -646,6 +814,7 @@ def build_notebook_stage_graph(
     state: dict[str, object] | None = None,
     published_products_for_source: Callable[[dict[str, object]], list[dict[str, object]]] | None = None,
     pipeline_paths: Iterable[dict[str, object]] | None = None,
+    runtime_bucket: object = "",
 ) -> dict[str, object]:
     stage_cells = normalize_stage_cells(cells)
     state = state or {"version": 0, "records": [], "stageStates": {}}
@@ -729,6 +898,48 @@ def build_notebook_stage_graph(
                 "message": "Pipeline dependencies contain a cycle.",
             }
         )
+
+    planned_output_paths: dict[str, str] = {}
+    for stage_id in ordered_stage_ids:
+        stage = by_id[stage_id]
+        stage_alias = str(stage.get("alias") or "")
+        output_file_name = normalize_stage_output_file_name(
+            stage.get("resolvedOutputFileName") or stage.get("outputFileName"),
+            alias=stage_alias,
+        )
+        explicit_output_path = str(stage.get("outputPath") or "").strip()
+        if explicit_output_path:
+            try:
+                planned_output_path = normalize_stage_output_path(
+                    explicit_output_path,
+                    alias=stage_alias,
+                )
+            except ValueError:
+                planned_output_path = explicit_output_path
+        else:
+            planned_output_path = recommended_stage_output_path(
+                notebook_id=notebook_id,
+                notebook_title=notebook_title,
+                stage_alias=stage_alias,
+                output_file_name=output_file_name,
+                sql=stage.get("sql"),
+                predecessor_output_paths=[
+                    planned_output_paths[predecessor_id]
+                    for predecessor_id in predecessor_map.get(stage_id, [])
+                    if predecessor_id in planned_output_paths
+                ],
+                runtime_bucket=runtime_bucket,
+            )
+        planned_output_paths[stage_id] = planned_output_path
+        if not explicit_output_path:
+            stage["plannedOutputPath"] = planned_output_path
+        try:
+            target = _normalize_s3_stage_output_path(planned_output_path, alias=stage_alias)
+        except ValueError:
+            continue
+        stage["resolvedOutputFileName"] = target.file_name
+        if explicit_output_path:
+            stage["outputFileName"] = target.file_name
 
     layer_by_stage: dict[str, int] = {}
     for stage_id in ordered_stage_ids:
@@ -862,6 +1073,8 @@ class MaterializedStageManager:
         state_change_callback: Callable[[dict[str, object]], None] | None = None,
         published_products_for_source: Callable[[dict[str, object]], list[dict[str, object]]] | None = None,
         object_writer: Callable[[str, str, Path, str, dict[str, object]], dict[str, object]] | None = None,
+        metadata_writer: Callable[[str, str, dict[str, object]], dict[str, object] | None] | None = None,
+        stage_output_inspector: Callable[[StageOutputTarget], dict[str, object]] | None = None,
         query_job_runner: Callable[..., dict[str, object]] | None = None,
     ) -> None:
         self._settings = settings
@@ -874,6 +1087,8 @@ class MaterializedStageManager:
         self._state_change_callback = state_change_callback
         self._published_products_for_source = published_products_for_source
         self._object_writer = object_writer or self._write_object_to_s3
+        self._metadata_writer = metadata_writer or self._write_stage_metadata_to_s3
+        self._stage_output_inspector = stage_output_inspector or self._inspect_stage_output
         self._query_job_runner = query_job_runner
         self._lock = threading.RLock()
         self._active_runs: dict[str, dict[str, object]] = {}
@@ -906,6 +1121,7 @@ class MaterializedStageManager:
             state=self._store.read_state(),
             published_products_for_source=self._published_products_for_source,
             pipeline_paths=pipeline_paths,
+            runtime_bucket=self._stage_bucket(),
         )
         with self._lock:
             active_runs = [
@@ -1320,6 +1536,28 @@ class MaterializedStageManager:
             node.get("resolvedOutputFileName") or node.get("outputFileName"),
             alias=node.get("alias"),
         )
+        output_path = str(node.get("outputPath") or node.get("plannedOutputPath") or "").strip()
+        output_bucket = ""
+        output_key = ""
+        metadata_key = ""
+        query_reference = ""
+        query_sql = ""
+        if output_path:
+            try:
+                output_target = _normalize_s3_stage_output_path(output_path, alias=node.get("alias"))
+                output_path = output_target.path
+                output_bucket = output_target.bucket
+                output_key = output_target.key
+                metadata_key = _stage_output_metadata_key(output_target.key)
+                output_file_name = output_target.file_name
+                query_reference = s3_source_reference(bucket=output_target.bucket, key=output_target.key)
+                query_sql = s3_table_function_sql(
+                    bucket=output_target.bucket,
+                    key=output_target.key,
+                    file_format="parquet",
+                )
+            except ValueError:
+                pass
         return StageRecord(
             run_id=run_id,
             notebook_id=str(node.get("notebookId") or ""),
@@ -1331,7 +1569,14 @@ class MaterializedStageManager:
             started_at=normalized_started_at,
             completed_at=now if status in TERMINAL_STAGE_STATUSES else "",
             updated_at=now,
+            output_bucket=output_bucket,
+            output_key=output_key,
+            metadata_key=metadata_key,
+            output_path=output_path,
             output_file_name=output_file_name,
+            query_path=query_reference,
+            query_reference=query_reference,
+            query_sql=query_sql,
             message=message,
             error=error,
             can_cancel=status == "running",
@@ -1393,6 +1638,7 @@ class MaterializedStageManager:
             if isinstance(node.get("queryOptions"), dict)
             else {}
         )
+        query_options = materialized_stage_query_options(query_options)
         revision_seed = "|".join([sql_hash, *predecessor_revision_ids, uuid.uuid4().hex])
         revision_id = f"{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}-{_sha256_text(revision_seed)[:10]}"
 
@@ -1481,166 +1727,180 @@ class MaterializedStageManager:
             if isinstance(node.get("queryOptions"), dict)
             else {}
         )
+        query_options = materialized_stage_query_options(query_options)
         source_summaries = self._source_summaries_provider(sql, data_sources, query_options)
         runtime_source_summaries = [
             *source_summaries,
             *self._predecessor_stage_source_summaries(predecessor_records),
         ]
-        output_file_name = normalize_stage_output_file_name(
-            node.get("resolvedOutputFileName") or node.get("outputFileName"),
-            alias=stage_alias,
-        )
-        temp_dir = Path(tempfile.mkdtemp(prefix="bdw-stage-"))
-        local_output = temp_dir / output_file_name
+        output_path = str(node.get("outputPath") or node.get("plannedOutputPath") or "").strip()
+        if not output_path:
+            output_path = recommended_stage_output_path(
+                notebook_id=notebook_id,
+                notebook_title=str(graph.get("notebookTitle") or ""),
+                stage_alias=stage_alias,
+                output_file_name=node.get("resolvedOutputFileName") or node.get("outputFileName"),
+                sql=node.get("sql"),
+                predecessor_output_paths=[
+                    record.output_path
+                    for record in predecessor_records
+                    if str(record.output_path or "").strip()
+                ],
+                runtime_bucket=self._stage_bucket(),
+            )
+        output_target = _normalize_s3_stage_output_path(output_path, alias=stage_alias)
+        output_file_name = output_target.file_name
         connection = None
         try:
-            try:
-                copy_sql = materialized_stage_copy_to_parquet_sql(
-                    execution_sql,
-                    local_output.as_posix(),
+            copy_sql = materialized_stage_copy_to_parquet_sql(
+                execution_sql,
+                output_target.path,
+            )
+            result_preview_sql = f"SELECT * FROM read_parquet({sql_literal(output_target.path)})"
+            if self._query_job_runner is not None:
+                query_payload = self._query_job_runner(
+                    requested_job_id=query_job_id,
+                    display_sql=sql,
+                    execution_sql=copy_sql,
+                    result_preview_sql=result_preview_sql,
+                    notebook_id=notebook_id,
+                    notebook_title=str(graph.get("notebookTitle") or ""),
+                    cell_id=str(node.get("cellId") or ""),
+                    data_sources=data_sources,
+                    source_summaries=runtime_source_summaries,
+                    touched_relations=[
+                        str(summary.get("relation") or "").strip()
+                        for summary in runtime_source_summaries
+                        if isinstance(summary, dict) and str(summary.get("relation") or "").strip()
+                    ],
+                    touched_buckets=[
+                        str(summary.get("bucket") or "").strip()
+                        for summary in runtime_source_summaries
+                        if isinstance(summary, dict) and str(summary.get("bucket") or "").strip()
+                    ],
+                    query_options=query_options,
+                    is_cancelled=lambda: self._run_cancelled(run_id),
                 )
-                result_preview_sql = f"SELECT * FROM read_parquet({sql_literal(local_output.as_posix())})"
-                if self._query_job_runner is not None:
-                    query_payload = self._query_job_runner(
-                        requested_job_id=query_job_id,
-                        display_sql=sql,
-                        execution_sql=copy_sql,
-                        result_preview_sql=result_preview_sql,
-                        notebook_id=notebook_id,
-                        notebook_title=str(graph.get("notebookTitle") or ""),
-                        cell_id=str(node.get("cellId") or ""),
-                        data_sources=data_sources,
-                        source_summaries=runtime_source_summaries,
-                        touched_relations=[
-                            str(summary.get("relation") or "").strip()
-                            for summary in runtime_source_summaries
-                            if isinstance(summary, dict) and str(summary.get("relation") or "").strip()
-                        ],
-                        touched_buckets=[
-                            str(summary.get("bucket") or "").strip()
-                            for summary in runtime_source_summaries
-                            if isinstance(summary, dict) and str(summary.get("bucket") or "").strip()
-                        ],
-                        query_options=query_options,
-                        is_cancelled=lambda: self._run_cancelled(run_id),
-                    )
-                    query_status = str(query_payload.get("status") or "").strip().lower()
-                    if query_status == "cancelled":
-                        raise InterruptedError("Stage query job was cancelled.")
-                    if query_status != "completed":
-                        error = str(
-                            query_payload.get("error")
-                            or query_payload.get("message")
-                            or "Stage query job failed."
-                        ).strip()
-                        raise RuntimeError(error)
-                else:
-                    connection = self._connection_factory()
-                    self._bootstrap_source_views(connection, source_summaries)
-                    self._bootstrap_stage_views(connection, predecessor_records)
-                    connection.execute(copy_sql)
-                if self._run_cancelled(run_id):
-                    raise InterruptedError("Stage run was cancelled after execution.")
-                size_bytes = local_output.stat().st_size
-                if connection is None:
-                    connection = self._connection_factory()
-                row_count = int(
-                    connection.execute(
-                        f"SELECT COUNT(*) FROM read_parquet({sql_literal(local_output.as_posix())})"
-                    ).fetchone()[0]
-                    or 0
-                )
-                schema_rows = connection.execute(
-                    f"DESCRIBE SELECT * FROM read_parquet({sql_literal(local_output.as_posix())})"
-                ).fetchall()
-                schema_fingerprint = _sha256_text(json.dumps(schema_rows, default=str, sort_keys=True))
-            finally:
-                if connection is not None:
-                    try:
-                        connection.close()
-                    finally:
-                        pass
+                query_status = str(query_payload.get("status") or "").strip().lower()
+                if query_status == "cancelled":
+                    raise InterruptedError("Stage query job was cancelled.")
+                if query_status != "completed":
+                    error = str(
+                        query_payload.get("error")
+                        or query_payload.get("message")
+                        or "Stage query job failed."
+                    ).strip()
+                    raise RuntimeError(error)
+            else:
+                connection = self._connection_factory()
+                self._bootstrap_source_views(connection, source_summaries)
+                self._bootstrap_stage_views(connection, predecessor_records)
+                connection.execute(copy_sql)
+        finally:
+            if connection is not None:
+                try:
+                    connection.close()
+                finally:
+                    pass
 
-            file_fingerprint = _sha256_file(local_output)
-            result_fingerprint = _sha256_text(
+        if self._run_cancelled(run_id):
+            raise InterruptedError("Stage run was cancelled after execution.")
+
+        inspection = self._stage_output_inspector(output_target)
+        row_count = int(inspection.get("rowCount") or inspection.get("row_count") or 0)
+        schema_fingerprint = str(
+            inspection.get("schemaFingerprint") or inspection.get("schema_fingerprint") or ""
+        )
+        schema_rows = inspection.get("schemaRows") or inspection.get("schema_rows") or []
+        if not schema_fingerprint:
+            schema_fingerprint = _sha256_text(json.dumps(schema_rows, default=str, sort_keys=True))
+        size_bytes = int(inspection.get("sizeBytes") or inspection.get("size_bytes") or 0)
+        file_fingerprint = str(
+            inspection.get("fileFingerprint") or inspection.get("file_fingerprint") or ""
+        )
+        if not file_fingerprint:
+            file_fingerprint = _sha256_text(
                 json.dumps(
                     {
-                        "sqlHash": sql_hash,
-                        "predecessorRevisionIds": predecessor_revision_ids,
-                        "schemaFingerprint": schema_fingerprint,
-                        "rowCount": row_count,
-                        "fileFingerprint": file_fingerprint,
+                        "bucket": output_target.bucket,
+                        "key": output_target.key,
+                        "sizeBytes": size_bytes,
                     },
                     sort_keys=True,
                 )
             )
-            bucket = self._stage_bucket()
-            key_prefix = "/".join(
-                [
-                    STAGE_ROOT_PREFIX,
-                    notebook_slug(notebook_id, str(graph.get("notebookTitle") or "")),
-                    stage_alias,
-                    revision_id,
-                ]
+        result_fingerprint = _sha256_text(
+            json.dumps(
+                {
+                    "sqlHash": sql_hash,
+                    "predecessorRevisionIds": predecessor_revision_ids,
+                    "schemaFingerprint": schema_fingerprint,
+                    "rowCount": row_count,
+                    "fileFingerprint": file_fingerprint,
+                },
+                sort_keys=True,
             )
-            output_key = f"{key_prefix}/{output_file_name}"
-            metadata_key = f"{key_prefix}/_bdw_stage.json"
-            metadata = {
-                "notebookId": notebook_id,
-                "stageId": stage_id,
-                "stageAlias": stage_alias,
-                "stageTitle": stage_title,
-                "revisionId": revision_id,
-                "sqlHash": sql_hash,
-                "predecessorRevisionIds": predecessor_revision_ids,
-                "schemaFingerprint": schema_fingerprint,
-                "rowCount": row_count,
-                "sizeBytes": size_bytes,
-                "resultFingerprint": result_fingerprint,
-                "outputFileName": output_file_name,
-                "queryJobId": query_job_id,
-                "createdAt": utc_now_iso(),
-            }
-            self._object_writer(bucket, output_key, local_output, metadata_key, metadata)
-            now = utc_now_iso()
-            query_reference = s3_source_reference(bucket=bucket, key=output_key)
-            query_sql = s3_table_function_sql(
-                bucket=bucket,
-                key=output_key,
-                file_format="parquet",
-            )
-            return StageRecord(
-                run_id=run_id,
-                notebook_id=notebook_id,
-                stage_id=stage_id,
-                cell_id=str(node.get("cellId") or ""),
-                stage_alias=stage_alias,
-                stage_title=stage_title,
-                status="completed",
-                revision_id=revision_id,
-                sql_hash=sql_hash,
-                predecessor_revision_ids=predecessor_revision_ids,
-                schema_fingerprint=schema_fingerprint,
-                row_count=row_count,
-                size_bytes=size_bytes,
-                result_fingerprint=result_fingerprint,
-                output_bucket=bucket,
-                output_key=output_key,
-                metadata_key=metadata_key,
-                output_path=f"s3://{bucket}/{output_key}",
-                output_file_name=output_file_name,
-                query_path=query_reference,
-                query_reference=query_reference,
-                query_sql=query_sql,
-                query_job_id=query_job_id,
-                started_at=started_at or now,
-                completed_at=now,
-                updated_at=now,
-                message=f"Materialized {row_count} rows.",
-                can_cancel=False,
-            )
-        finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+        )
+        metadata_key = _stage_output_metadata_key(output_target.key)
+        query_reference = s3_source_reference(bucket=output_target.bucket, key=output_target.key)
+        query_sql = s3_table_function_sql(
+            bucket=output_target.bucket,
+            key=output_target.key,
+            file_format="parquet",
+        )
+        metadata = {
+            "notebookId": notebook_id,
+            "stageId": stage_id,
+            "stageAlias": stage_alias,
+            "stageTitle": stage_title,
+            "revisionId": revision_id,
+            "sqlHash": sql_hash,
+            "predecessorRevisionIds": predecessor_revision_ids,
+            "schemaFingerprint": schema_fingerprint,
+            "rowCount": row_count,
+            "sizeBytes": size_bytes,
+            "resultFingerprint": result_fingerprint,
+            "outputBucket": output_target.bucket,
+            "outputKey": output_target.key,
+            "outputPath": output_target.path,
+            "outputFileName": output_file_name,
+            "queryReference": query_reference,
+            "querySql": query_sql,
+            "queryJobId": query_job_id,
+            "createdAt": utc_now_iso(),
+        }
+        self._metadata_writer(output_target.bucket, metadata_key, metadata)
+        now = utc_now_iso()
+        return StageRecord(
+            run_id=run_id,
+            notebook_id=notebook_id,
+            stage_id=stage_id,
+            cell_id=str(node.get("cellId") or ""),
+            stage_alias=stage_alias,
+            stage_title=stage_title,
+            status="completed",
+            revision_id=revision_id,
+            sql_hash=sql_hash,
+            predecessor_revision_ids=predecessor_revision_ids,
+            schema_fingerprint=schema_fingerprint,
+            row_count=row_count,
+            size_bytes=size_bytes,
+            result_fingerprint=result_fingerprint,
+            output_bucket=output_target.bucket,
+            output_key=output_target.key,
+            metadata_key=metadata_key,
+            output_path=output_target.path,
+            output_file_name=output_file_name,
+            query_path=query_reference,
+            query_reference=query_reference,
+            query_sql=query_sql,
+            query_job_id=query_job_id,
+            started_at=started_at or now,
+            completed_at=now,
+            updated_at=now,
+            message=f"Materialized {row_count} rows.",
+            can_cancel=False,
+        )
 
     @staticmethod
     def _predecessor_stage_source_summaries(predecessor_records: list[StageRecord]) -> list[dict[str, object]]:
@@ -1712,6 +1972,66 @@ class MaterializedStageManager:
         if not bucket:
             raise ValueError("S3_BUCKET or BDW_SHARED_NOTEBOOKS_BUCKET is required for materialized stages.")
         return bucket
+
+    def _inspect_stage_output(self, target: StageOutputTarget) -> dict[str, object]:
+        connection = self._connection_factory()
+        try:
+            row_count = int(
+                connection.execute(
+                    f"SELECT COUNT(*) FROM read_parquet({sql_literal(target.path)})"
+                ).fetchone()[0]
+                or 0
+            )
+            schema_rows = connection.execute(
+                f"DESCRIBE SELECT * FROM read_parquet({sql_literal(target.path)})"
+            ).fetchall()
+        finally:
+            try:
+                connection.close()
+            except Exception:
+                pass
+        try:
+            head = s3_client(self._settings).head_object(Bucket=target.bucket, Key=target.key)
+        except (BotoCoreError, ClientError) as exc:
+            raise RuntimeError(f"Failed to inspect materialized stage output in S3: {exc}") from exc
+        size_bytes = int(head.get("ContentLength") or 0)
+        etag = str(head.get("ETag") or "").strip()
+        schema_fingerprint = _sha256_text(json.dumps(schema_rows, default=str, sort_keys=True))
+        file_fingerprint = _sha256_text(
+            json.dumps(
+                {
+                    "bucket": target.bucket,
+                    "key": target.key,
+                    "etag": etag,
+                    "sizeBytes": size_bytes,
+                },
+                sort_keys=True,
+            )
+        )
+        return {
+            "rowCount": row_count,
+            "schemaRows": schema_rows,
+            "schemaFingerprint": schema_fingerprint,
+            "sizeBytes": size_bytes,
+            "fileFingerprint": file_fingerprint,
+        }
+
+    def _write_stage_metadata_to_s3(
+        self,
+        bucket: str,
+        metadata_key: str,
+        metadata: dict[str, object],
+    ) -> dict[str, object]:
+        try:
+            s3_client(self._settings).put_object(
+                Bucket=bucket,
+                Key=metadata_key,
+                Body=json.dumps(metadata, indent=2).encode("utf-8"),
+                ContentType="application/json",
+            )
+        except (BotoCoreError, ClientError, OSError) as exc:
+            raise RuntimeError(f"Failed to write materialized stage metadata to S3: {exc}") from exc
+        return {"bucket": bucket, "metadataKey": metadata_key}
 
     def _write_object_to_s3(
         self,

@@ -93,6 +93,11 @@ class NotebookTreeUiRegressionTests(unittest.TestCase):
         )
 
         self.assertIn('notebookId: "result-set-storage-s3-demo"', state_source)
+        self.assertIn('notebookId: "kostenbelege-fact-builder-s3-demo"', state_source)
+        self.assertIn(
+            'notebookId: "kostenbelege-fact-builder-s3-pipeline-demo"',
+            state_source,
+        )
         self.assertIn(
             'folderPath: ["PoC Tests", "General Functionalities"]',
             state_source,

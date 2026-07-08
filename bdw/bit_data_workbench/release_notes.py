@@ -1,9 +1,43 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.39. Keep entries concise and
+# Derived from git history through version 0.10.40. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.40",
+        "releasedAt": "2026-07-08T10:23:01+02:00",
+        "features": [
+            (
+                "Pipeline Mode stages now expose one editable full S3 Parquet "
+                "output path that drives stage materialization, copy actions, "
+                "and downstream stage references."
+            ),
+            (
+                "Materialized stages now run DuckDB COPY TO directly against "
+                "the configured s3:// target and write stage metadata beside "
+                "the Parquet file, so reruns overwrite the analyst-selected "
+                "data-product path."
+            ),
+            (
+                "Pipeline result-storage controls now stay semantically on "
+                "without submitting a separate queryOptions.duckdb.resultStorage "
+                "copy operation, while Exploration Mode result storage remains "
+                "unchanged."
+            ),
+            (
+                "PoC Tests now includes Kostenbelege fact-builder Exploration "
+                "and Pipeline notebooks plus loader coverage that store and "
+                "reuse intermediate S3 Parquet outputs."
+            ),
+            (
+                "Regression coverage now verifies stage output-path planning, "
+                "direct S3 COPY targets, UI persistence and copy controls, and "
+                "a Playwright Pipeline smoke that edits a stage path and "
+                "validates the final result."
+            ),
+        ],
+    },
     {
         "version": "0.10.39",
         "releasedAt": "2026-07-07T08:30:57+02:00",

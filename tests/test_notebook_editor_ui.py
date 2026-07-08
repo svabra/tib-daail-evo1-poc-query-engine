@@ -38,6 +38,9 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
             STATIC_ROOT / "js" / "notebook-workspace-controller.js"
         ).read_text(encoding="utf-8")
         app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
+        pipeline_source = (
+            STATIC_ROOT / "js" / "notebook-stage-pipeline-controller.js"
+        ).read_text(encoding="utf-8")
         query_ui_source = (STATIC_ROOT / "js" / "query-ui.js").read_text(encoding="utf-8")
         query_state_source = (
             STATIC_ROOT / "js" / "query-job-state.js"
@@ -46,23 +49,40 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
 
         for source in (markup_source, workspace_template):
             self.assertIn("store result set in S3", source)
+            self.assertIn("cell-result-storage-path-row", source)
             self.assertIn('data-cell-query-option="duckdb.resultStorage.mode"', source)
             self.assertIn('data-cell-query-option="duckdb.resultStorage.path"', source)
+            self.assertIn('title=', source)
             self.assertIn("data-copy-result-storage-virtual", source)
             self.assertIn("data-copy-result-storage-duckdb", source)
 
         self.assertIn("runtime-info", index_template)
         self.assertIn("normalizeResultStorageOptions", model_source)
+        self.assertIn("outputPath: String", model_source)
         self.assertIn("queryOptionInput", controller_source)
         self.assertIn("queryOptionsForCellRoot(cellRoot)", controller_source)
         self.assertIn("proposedResultStorageS3Path", app_source)
+        self.assertIn("proposedPipelineStageOutputS3Path", app_source)
+        self.assertIn("pipelineResultStorageForCellRoot", app_source)
+        self.assertIn("setCellStage(notebookId, cellId, { outputPath", app_source)
+        self.assertIn('resultStorage: {\n        mode: resultStorageEnabled ? "on" : "off"', app_source)
+        self.assertIn("path: resultStorageEnabled ? resultStoragePathInput?.value || \"\" : \"\"", app_source)
         self.assertIn("syncCellResultStorageState", app_source)
+        self.assertIn("pathInput.title =", app_source)
         self.assertIn("copyResultStorageReference", app_source)
         self.assertIn("read_parquet(${sqlStringLiteral", app_source)
+        self.assertIn("outputPath: String(node.outputPath || node.plannedOutputPath", pipeline_source)
+        self.assertIn("syncResultStorageState(cellRoot)", pipeline_source)
         self.assertIn("queryResultStorageMarkup", query_ui_source)
         self.assertIn("data-result-storage-summary", query_ui_source)
         self.assertIn("resultStorage", query_state_source)
         self.assertIn(".cell-result-storage-option", css_source)
+        self.assertIn(".cell-result-storage-path-row", css_source)
+        self.assertIn("flex-direction: column;", css_source)
+        self.assertGreaterEqual(css_source.count("flex: 0 0 100%;"), 2)
+        self.assertIn("width: 100%;", css_source)
+        self.assertIn("min-width: min(100%, 520px);", css_source)
+        self.assertGreaterEqual(css_source.count("white-space: nowrap;"), 2)
         self.assertIn(".result-storage-summary", css_source)
 
     def test_editor_expand_control_has_runtime_wiring_and_styles(self) -> None:

@@ -390,9 +390,19 @@
               {% endif %}
               {% set cache_hydration = cell.query_options.get('duckdb', {}).get('cacheHydration', {}) if cell.query_options else {} %}
               {% set cache_hydration_mode = cache_hydration.get('mode', 'off') if cache_hydration else 'off' %}
-              {% set result_storage = cell.query_options.get('duckdb', {}).get('resultStorage', {}) if cell.query_options else {} %}
-              {% set result_storage_mode = result_storage.get('mode', 'off') if result_storage else 'off' %}
-              {% set result_storage_path = result_storage.get('path', '') if result_storage else '' %}
+              {% set cell_stage_for_result_storage = cell.stage if cell.stage else {} %}
+              {% if notebook_pipeline_enabled and cell_language == 'sql' %}
+                {% set result_storage_mode = 'on' %}
+                {% set result_storage_path = cell_stage_for_result_storage.get('outputPath', cell_stage_for_result_storage.get('output_path', '')) %}
+                {% set result_storage_title = 'Pipeline stage output path. DuckDB materializes this stage to this S3 Parquet file.' %}
+                {% set result_storage_placeholder = 's3://bucket/pipeline-results/notebook/stage.parquet' %}
+              {% else %}
+                {% set result_storage = cell.query_options.get('duckdb', {}).get('resultStorage', {}) if cell.query_options else {} %}
+                {% set result_storage_mode = result_storage.get('mode', 'off') if result_storage else 'off' %}
+                {% set result_storage_path = result_storage.get('path', '') if result_storage else '' %}
+                {% set result_storage_title = 'Stores the complete DuckDB result set as a Parquet file in S3 before fetching the truncated HTML preview for this cell.' %}
+                {% set result_storage_placeholder = 's3://bucket/query-results/notebook/cell/result.parquet' %}
+              {% endif %}
               {% set validation_options = cell.query_options.get('validation', {}) if cell.query_options else {} %}
               {% set source_existence_validation = validation_options.get('sourceExistence', 'off') if validation_options else 'off' %}
               <span
@@ -474,7 +484,7 @@
                   class="cell-result-storage-option"
                   data-cell-result-storage
                   data-result-storage-state="{{ 'on' if result_storage_mode == 'on' else 'off' }}"
-                  title="Stores the complete DuckDB result set as a Parquet file in S3 before fetching the truncated HTML preview for this cell."
+                  title="{{ result_storage_title }}"
                 >
                   <label class="cell-result-storage-toggle">
                     <input
@@ -483,33 +493,36 @@
                       data-cell-query-option="duckdb.resultStorage.mode"
                       data-result-storage-toggle
                       {% if result_storage_mode == 'on' %}checked{% endif %}
-                      {% if not active_notebook.can_edit or cell_language != 'sql' %}disabled{% endif %}
+                      {% if (not active_notebook.can_edit or cell_language != 'sql') or (notebook_pipeline_enabled and cell_language == 'sql') %}disabled{% endif %}
                     >
                     <span>store result set in S3</span>
                   </label>
-                  <input
-                    class="cell-result-storage-path"
-                    type="text"
-                    value="{{ result_storage_path }}"
-                    placeholder="s3://bucket/query-results/notebook/cell/result.parquet"
-                    data-cell-query-option="duckdb.resultStorage.path"
-                    data-result-storage-path
-                    {% if not active_notebook.can_edit or cell_language != 'sql' %}disabled{% endif %}
-                  >
-                  <button
-                    type="button"
-                    class="cell-result-storage-copy"
-                    data-copy-result-storage-virtual
-                    title="Copy virtual S3 source path"
-                    {% if result_storage_mode != 'on' %}disabled{% endif %}
-                  >Virtual</button>
-                  <button
-                    type="button"
-                    class="cell-result-storage-copy"
-                    data-copy-result-storage-duckdb
-                    title="Copy DuckDB read_parquet path"
-                    {% if result_storage_mode != 'on' %}disabled{% endif %}
-                  >DuckDB</button>
+                  <span class="cell-result-storage-path-row">
+                    <input
+                      class="cell-result-storage-path"
+                      type="text"
+                      value="{{ result_storage_path }}"
+                      placeholder="{{ result_storage_placeholder }}"
+                      title="{{ result_storage_path or 'S3 path for the stored result set' }}"
+                      data-cell-query-option="duckdb.resultStorage.path"
+                      data-result-storage-path
+                      {% if not active_notebook.can_edit or cell_language != 'sql' %}disabled{% endif %}
+                    >
+                    <button
+                      type="button"
+                      class="cell-result-storage-copy"
+                      data-copy-result-storage-virtual
+                      title="Copy virtual S3 source path"
+                      {% if result_storage_mode != 'on' %}disabled{% endif %}
+                    >Virtual</button>
+                    <button
+                      type="button"
+                      class="cell-result-storage-copy"
+                      data-copy-result-storage-duckdb
+                      title="Copy DuckDB read_parquet path"
+                      {% if result_storage_mode != 'on' %}disabled{% endif %}
+                    >DuckDB</button>
+                  </span>
                 </span>
               </span>
               <details class="cell-source-picker" data-cell-source-picker>

@@ -92,6 +92,9 @@ export function createNotebookModel(helpers) {
       outputFileName: String(
         source.outputFileName ?? source.output_file_name ?? fallbackSource.outputFileName ?? ""
       ).trim(),
+      outputPath: String(
+        source.outputPath ?? source.output_path ?? fallbackSource.outputPath ?? ""
+      ).trim(),
     };
   }
 

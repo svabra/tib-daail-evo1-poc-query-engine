@@ -744,13 +744,12 @@ class QuerySourceValidationTests(unittest.TestCase):
             },
         )
 
-        expected_target = (
-            Path(tempfile.gettempdir()) / "bdw-stage-<run>" / "merge_all.parquet"
-        ).as_posix()
+        expected_target = "s3://kbpoimports/pipeline-results/notebook/merge_all.parquet"
         self.assertEqual(payload["duckdbExecutionPath"], DUCKDB_EXECUTION_PATH_ISOLATED_WRITE)
         self.assertEqual(payload["stageOutputFileName"], "merge_all.parquet")
+        self.assertEqual(payload["stageOutputPath"], expected_target)
         self.assertEqual(payload["stageDuckdbCopyTarget"], expected_target)
-        self.assertTrue(payload["stageDuckdbCopyTargetIsRuntimePattern"])
+        self.assertFalse(payload["stageDuckdbCopyTargetIsRuntimePattern"])
         self.assertEqual(
             payload["executionSql"],
             "COPY (\nSELECT * FROM read_parquet('s3://kbpoimports/KBPO2020.parquet')\n)"
@@ -789,9 +788,7 @@ class QuerySourceValidationTests(unittest.TestCase):
             },
         )
 
-        expected_target = (
-            Path(tempfile.gettempdir()) / "bdw-stage-<run>" / "merge_all.parquet"
-        ).as_posix()
+        expected_target = "s3://kbpoimports/pipeline-results/notebook/merge_all.parquet"
         self.assertEqual(
             payload["executionSql"],
             "COPY (\n"
@@ -827,11 +824,10 @@ class QuerySourceValidationTests(unittest.TestCase):
             },
         )
 
-        expected_target = (
-            Path(tempfile.gettempdir()) / "bdw-stage-<run>" / "unsafe_output.parquet"
-        ).as_posix()
+        expected_target = "s3://kbpoimports/pipeline-results/notebook/unsafe_output.parquet"
         self.assertEqual(payload["duckdbExecutionPath"], DUCKDB_EXECUTION_PATH_ISOLATED_WRITE)
         self.assertEqual(payload["stageOutputFileName"], "unsafe_output.parquet")
+        self.assertEqual(payload["stageOutputPath"], expected_target)
         self.assertEqual(
             payload["executionSql"],
             "COPY (\nSELECT * FROM read_parquet('s3://kbpoimports/KBPO2020.parquet')\n)"

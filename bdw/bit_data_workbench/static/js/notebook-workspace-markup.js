@@ -96,20 +96,29 @@ export function createNotebookWorkspaceMarkup(helpers) {
     return value === "on";
   }
 
-  function resultStorageOptions(cell) {
+  function resultStorageOptions(cell, pipelineMode, cellLanguage) {
+    const stage = normalizeCellStage(cell?.stage);
+    if (pipelineMode === "pipeline" && normalizeCellLanguage(cellLanguage) === "sql") {
+      return {
+        enabled: true,
+        path: String(stage.outputPath || "").trim(),
+        pipelineStage: true,
+      };
+    }
     const options = cell?.queryOptions?.duckdb?.resultStorage || {};
     const mode = String(options.mode || "off").trim().toLowerCase();
     return {
       enabled: mode === "on",
       path: String(options.path || "").trim(),
+      pipelineStage: false,
     };
   }
 
-  function duckdbOptionsMarkup(cell, canEdit, cellLanguage) {
+  function duckdbOptionsMarkup(cell, canEdit, cellLanguage, pipelineMode) {
     const selected = parquetHivePartitioningOption(cell);
     const hydrateCache = cacheHydrationEnabled(cell);
     const checkSources = sourceExistenceValidationEnabled(cell);
-    const resultStorage = resultStorageOptions(cell);
+    const resultStorage = resultStorageOptions(cell, pipelineMode, cellLanguage);
     const hidden = cellLanguage === "sql" ? "" : " hidden";
     const disabled = canEdit && cellLanguage === "sql" ? "" : " disabled";
     const hiveTitle =
@@ -119,7 +128,9 @@ export function createNotebookWorkspaceMarkup(helpers) {
     const sourceCheckTitle =
       "Checks whether referenced sources exist before running or explaining this cell. Turn off for proven queries to skip the preflight check and let DuckDB fail only if a source is actually missing.";
     const resultStorageTitle =
-      "Stores the complete DuckDB result set as a Parquet file in S3 before fetching the truncated HTML preview for this cell.";
+      resultStorage.pipelineStage
+        ? "Pipeline stage output path. DuckDB materializes this stage to this S3 Parquet file."
+        : "Stores the complete DuckDB result set as a Parquet file in S3 before fetching the truncated HTML preview for this cell.";
     return `
       <span class="cell-duckdb-options"${hidden} data-cell-duckdb-options>
         <label class="cell-duckdb-option" title="${escapeHtml(hiveTitle)}">
@@ -185,21 +196,24 @@ export function createNotebookWorkspaceMarkup(helpers) {
               data-cell-query-option="duckdb.resultStorage.mode"
               data-result-storage-toggle
               ${resultStorage.enabled ? "checked" : ""}
-              ${disabled}
+              ${resultStorage.pipelineStage ? "disabled" : disabled}
             >
             <span>store result set in S3</span>
           </label>
-          <input
-            class="cell-result-storage-path"
-            type="text"
-            value="${escapeHtml(resultStorage.path)}"
-            placeholder="s3://bucket/query-results/notebook/cell/result.parquet"
-            data-cell-query-option="duckdb.resultStorage.path"
-            data-result-storage-path
-            ${disabled}
-          >
-          <button type="button" class="cell-result-storage-copy" data-copy-result-storage-virtual title="Copy virtual S3 source path" ${resultStorage.enabled ? "" : "disabled"}>Virtual</button>
-          <button type="button" class="cell-result-storage-copy" data-copy-result-storage-duckdb title="Copy DuckDB read_parquet path" ${resultStorage.enabled ? "" : "disabled"}>DuckDB</button>
+          <span class="cell-result-storage-path-row">
+            <input
+              class="cell-result-storage-path"
+              type="text"
+              value="${escapeHtml(resultStorage.path)}"
+              placeholder="${resultStorage.pipelineStage ? "s3://bucket/pipeline-results/notebook/stage.parquet" : "s3://bucket/query-results/notebook/cell/result.parquet"}"
+              title="${escapeHtml(resultStorage.path || "S3 path for the stored result set")}"
+              data-cell-query-option="duckdb.resultStorage.path"
+              data-result-storage-path
+              ${disabled}
+            >
+            <button type="button" class="cell-result-storage-copy" data-copy-result-storage-virtual title="Copy virtual S3 source path" ${resultStorage.enabled ? "" : "disabled"}>Virtual</button>
+            <button type="button" class="cell-result-storage-copy" data-copy-result-storage-duckdb title="Copy DuckDB read_parquet path" ${resultStorage.enabled ? "" : "disabled"}>DuckDB</button>
+          </span>
         </span>
       </span>
     `;
@@ -369,7 +383,7 @@ export function createNotebookWorkspaceMarkup(helpers) {
               <span class="workspace-access-badge workspace-access-badge-small workspace-access-badge-language" data-cell-language-badge>${escapeHtml(languageBadge)}</span>
               <span class="workspace-access-badge workspace-access-badge-small" data-cell-access-badge title="${escapeHtml(accessModeHintForDataSources(selectedSources))}">${escapeHtml(accessModeForDataSources(selectedSources))}</span>
               <span class="workspace-access-badge workspace-access-badge-small workspace-access-badge-static" title="${escapeHtml(sovereigntyHint)}">CHE Data Souvereignity</span>
-              ${duckdbOptionsMarkup(cell, canEdit, cellLanguage)}
+              ${duckdbOptionsMarkup(cell, canEdit, cellLanguage, pipelineMode)}
               <details class="cell-source-picker" data-cell-source-picker>
                 <summary class="cell-source-picker-toggle" data-cell-source-summary>${cellSourceSummaryMarkup(selectedSources)}</summary>
                 <div class="cell-source-selection" data-cell-source-selection>

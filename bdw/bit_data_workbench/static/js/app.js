@@ -1207,6 +1207,7 @@ notebookStagePipelineController = createNotebookStagePipelineController({
   setNotebookPipelineMode,
   showConfirmDialog,
   showMessageDialog,
+  syncResultStorageState: (cellRoot) => syncCellResultStorageState(cellRoot),
 });
 
 const {
@@ -2598,6 +2599,146 @@ function proposedResultStorageS3Path(cellRoot) {
   return `s3://${defaultResultStorageBucket()}/query-results/${notebookId}/${cellId}/result.parquet`;
 }
 
+function pipelineModeForCellRoot(cellRoot) {
+  const workspaceRoot = cellRoot?.closest?.("[data-workspace-notebook]");
+  const notebookId = workspaceNotebookId(workspaceRoot);
+  if (!notebookId) {
+    return "exploration";
+  }
+  return normalizeNotebookPipelineMode(
+    workspaceRoot?.dataset?.defaultPipelineMode ||
+      workspaceRoot?.querySelector?.("[data-notebook-meta]")?.dataset?.defaultPipelineMode ||
+      notebookMetadata(notebookId).pipelineMode
+  );
+}
+
+function pipelineResultStorageForCellRoot(cellRoot) {
+  return pipelineModeForCellRoot(cellRoot) === "pipeline" && cellLanguageForCellRoot(cellRoot) === "sql";
+}
+
+function currentCellStage(cellRoot) {
+  const workspaceRoot = cellRoot?.closest?.("[data-workspace-notebook]");
+  const notebookId = workspaceNotebookId(workspaceRoot);
+  const cellId = String(cellRoot?.dataset?.cellId || "").trim();
+  const cell = notebookMetadata(notebookId).cells?.find((item) => item.cellId === cellId);
+  return normalizeCellStage(cell?.stage);
+}
+
+function stageOutputFileNameForCellRoot(cellRoot) {
+  const stage = currentCellStage(cellRoot);
+  const source = String(stage.outputFileName || stage.alias || stage.title || cellRoot?.dataset?.cellId || "stage")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_") || "stage";
+  return source.toLowerCase().endsWith(".parquet") ? source : `${source}.parquet`;
+}
+
+function firstVirtualS3PathFromSql(sql) {
+  const pattern =
+    /(^|[^A-Za-z0-9_$])s3\s*\.\s*(?:"((?:[^"]|"")*)"|([A-Za-z_][A-Za-z0-9_$]*))\s*\.\s*(?:"((?:[^"]|"")*)"|([A-Za-z0-9_./*?[\]${}-]+))/gi;
+  const match = pattern.exec(String(sql || ""));
+  if (!match) {
+    return "";
+  }
+  const bucket = String(match[2] || match[3] || "").replace(/""/g, '"').trim();
+  const key = String(match[4] || match[5] || "").replace(/""/g, '"').trim();
+  return bucket && key ? `s3://${bucket}/${key}` : "";
+}
+
+function parseS3Path(path) {
+  const text = String(path || "").trim();
+  if (!text.toLowerCase().startsWith("s3://")) {
+    return null;
+  }
+  try {
+    const parsed = new URL(text);
+    const bucket = decodeURIComponent(parsed.hostname || "").trim();
+    const key = decodeURIComponent(parsed.pathname || "").replace(/^\/+/, "").trim();
+    return bucket && key ? { bucket, key } : null;
+  } catch (_error) {
+    return null;
+  }
+}
+
+function sourceBasedPipelineOutputPath(sourcePath, notebookSlug, outputFileName) {
+  const parsed = parseS3Path(sourcePath);
+  if (!parsed) {
+    return "";
+  }
+  const sourceMarker = "/source/";
+  const basePrefix = parsed.key.includes(sourceMarker)
+    ? parsed.key.split(sourceMarker, 1)[0]
+    : parsed.key.includes("/")
+      ? parsed.key.slice(0, parsed.key.lastIndexOf("/"))
+      : "";
+  const key = [basePrefix, "pipeline-results", notebookSlug, outputFileName]
+    .map((item) => String(item || "").replace(/^\/+|\/+$/g, ""))
+    .filter(Boolean)
+    .join("/");
+  return `s3://${parsed.bucket}/${key}`;
+}
+
+function predecessorPipelineOutputPath(cellRoot, notebookSlug, outputFileName) {
+  const sql = currentEditorSql(cellRoot?.querySelector?.("[data-editor-root]")) || "";
+  const aliases = [...String(sql || "").matchAll(/(^|[^A-Za-z0-9_$])stage\.([A-Za-z_][A-Za-z0-9_$]*)/gi)]
+    .map((match) => String(match[2] || "").trim().toLowerCase())
+    .filter(Boolean);
+  if (!aliases.length) {
+    return "";
+  }
+  const workspaceRoot = cellRoot.closest("[data-workspace-notebook]");
+  const notebookId = workspaceNotebookId(workspaceRoot);
+  const cells = notebookMetadata(notebookId).cells || [];
+  const aliasToCell = new Map(
+    cells.map((cell) => {
+      const stage = normalizeCellStage(cell.stage);
+      return [String(stage.alias || "").trim().toLowerCase(), cell.cellId];
+    })
+  );
+  for (const alias of aliases) {
+    const predecessorCellId = aliasToCell.get(alias);
+    if (!predecessorCellId) {
+      continue;
+    }
+    const predecessorRoot = workspaceRoot?.querySelector(
+      `[data-query-cell][data-cell-id="${CSS.escape(predecessorCellId)}"]`
+    );
+    const predecessorPath =
+      predecessorRoot?.querySelector?.("[data-cell-result-storage]")?.dataset?.resultStorageS3Path ||
+      normalizeCellStage(cells.find((cell) => cell.cellId === predecessorCellId)?.stage).outputPath ||
+      "";
+    const parsed = parseS3Path(predecessorPath);
+    if (!parsed) {
+      continue;
+    }
+    const parent = parsed.key.includes("/") ? parsed.key.slice(0, parsed.key.lastIndexOf("/")) : "";
+    const key = [parent || `pipeline-results/${notebookSlug}`, outputFileName]
+      .map((item) => String(item || "").replace(/^\/+|\/+$/g, ""))
+      .filter(Boolean)
+      .join("/");
+    return `s3://${parsed.bucket}/${key}`;
+  }
+  return "";
+}
+
+function proposedPipelineStageOutputS3Path(cellRoot) {
+  const workspaceRoot = cellRoot?.closest?.("[data-workspace-notebook]");
+  const notebookSlug = slugForResultStoragePath(workspaceNotebookId(workspaceRoot), "notebook");
+  const outputFileName = stageOutputFileNameForCellRoot(cellRoot);
+  const sql = currentEditorSql(cellRoot?.querySelector?.("[data-editor-root]")) || "";
+  const sourcePath = firstVirtualS3PathFromSql(sql);
+  if (sourcePath) {
+    return sourceBasedPipelineOutputPath(sourcePath, notebookSlug, outputFileName);
+  }
+  const predecessorPath = predecessorPipelineOutputPath(cellRoot, notebookSlug, outputFileName);
+  if (predecessorPath) {
+    return predecessorPath;
+  }
+  return `s3://${defaultResultStorageBucket()}/_bdw_stages/${notebookSlug}/${outputFileName}`;
+}
+
 function sqlStringLiteral(value) {
   return `'${String(value || "").replace(/'/g, "''")}'`;
 }
@@ -2674,12 +2815,26 @@ function syncCellResultStorageState(cellRoot, { proposeIfEmpty = true } = {}) {
   if (!root || !pathInput) {
     return null;
   }
-  const enabled = toggle?.checked === true || toggle?.getAttribute?.("aria-checked") === "true";
+  const pipelineStageStorage = pipelineResultStorageForCellRoot(cellRoot);
+  if (pipelineStageStorage && toggle) {
+    if (toggle instanceof HTMLInputElement) {
+      toggle.checked = true;
+    } else {
+      toggle.setAttribute("aria-checked", "true");
+    }
+  }
+  const enabled =
+    pipelineStageStorage ||
+    toggle?.checked === true ||
+    toggle?.getAttribute?.("aria-checked") === "true";
   if (proposeIfEmpty && !String(pathInput.value || "").trim()) {
-    pathInput.value = proposedResultStorageS3Path(cellRoot);
+    pathInput.value = pipelineStageStorage
+      ? proposedPipelineStageOutputS3Path(cellRoot)
+      : proposedResultStorageS3Path(cellRoot);
   }
   const references = resultStorageReferencesForPath(pathInput.value);
   root.dataset.resultStorageState = enabled ? (references ? "on" : "invalid") : "off";
+  root.dataset.resultStoragePurpose = pipelineStageStorage ? "pipeline-stage-output" : "exploration-result-storage";
   root.classList.toggle("is-on", enabled);
   root.classList.toggle("is-invalid", enabled && !references);
   if (references) {
@@ -2696,7 +2851,13 @@ function syncCellResultStorageState(cellRoot, { proposeIfEmpty = true } = {}) {
   root.querySelectorAll("[data-copy-result-storage-virtual], [data-copy-result-storage-duckdb]").forEach((button) => {
     button.disabled = !enabled || !references;
   });
-  pathInput.disabled = toggle?.disabled === true;
+  pathInput.title =
+    references?.path || String(pathInput.value || "").trim() || "S3 path for the stored result set";
+  const metaRoot = cellRoot.closest("[data-notebook-meta]");
+  const editable = metaRoot?.dataset.canEdit !== "false";
+  pathInput.disabled = pipelineStageStorage
+    ? !editable || cellLanguageForCellRoot(cellRoot) !== "sql"
+    : toggle?.disabled === true;
   return references;
 }
 
@@ -2719,9 +2880,11 @@ function queryOptionsForCellRoot(cellRoot) {
     cacheToggle?.checked === true || cacheToggle?.getAttribute?.("aria-checked") === "true";
   const sourceCheckEnabled =
     sourceCheckToggle?.checked === true || sourceCheckToggle?.getAttribute?.("aria-checked") === "true";
+  const pipelineStageStorage = pipelineResultStorageForCellRoot(cellRoot);
   const resultStorageEnabled =
-    resultStorageToggle?.checked === true || resultStorageToggle?.getAttribute?.("aria-checked") === "true";
-  if (resultStorageEnabled) {
+    !pipelineStageStorage &&
+    (resultStorageToggle?.checked === true || resultStorageToggle?.getAttribute?.("aria-checked") === "true");
+  if (resultStorageEnabled || pipelineStageStorage) {
     syncCellResultStorageState(cellRoot);
   }
   return normalizeCellQueryOptions({
@@ -2734,7 +2897,7 @@ function queryOptionsForCellRoot(cellRoot) {
       },
       resultStorage: {
         mode: resultStorageEnabled ? "on" : "off",
-        path: resultStoragePathInput?.value || "",
+        path: resultStorageEnabled ? resultStoragePathInput?.value || "" : "",
       },
     },
     validation: {
@@ -7245,8 +7408,9 @@ function applyWorkspaceCellState(workspaceRoot, cell, index, editable, totalCell
     }
   }
   if (resultStorageToggle) {
-    resultStorageToggle.disabled = !editable || cellLanguage !== "sql";
-    const storageEnabled = normalizedQueryOptions.duckdb.resultStorage.mode === "on";
+    const pipelineStageStorage = pipelineResultStorageForCellRoot(cellRoot);
+    resultStorageToggle.disabled = pipelineStageStorage || !editable || cellLanguage !== "sql";
+    const storageEnabled = pipelineStageStorage || normalizedQueryOptions.duckdb.resultStorage.mode === "on";
     if (resultStorageToggle instanceof HTMLInputElement) {
       resultStorageToggle.checked = storageEnabled;
     } else {
@@ -7254,8 +7418,12 @@ function applyWorkspaceCellState(workspaceRoot, cell, index, editable, totalCell
     }
   }
   if (resultStoragePathInput) {
+    const pipelineStageStorage = pipelineResultStorageForCellRoot(cellRoot);
+    const stage = normalizeCellStage(cell.stage);
     resultStoragePathInput.value =
-      normalizedQueryOptions.duckdb.resultStorage.path || resultStoragePathInput.value || "";
+      (pipelineStageStorage ? stage.outputPath : normalizedQueryOptions.duckdb.resultStorage.path) ||
+      resultStoragePathInput.value ||
+      "";
     resultStoragePathInput.disabled = !editable || cellLanguage !== "sql";
     syncCellResultStorageState(cellRoot);
   }
@@ -11751,6 +11919,17 @@ document.body.addEventListener("input", (event) => {
   if (resultStoragePathInput) {
     const cellRoot = resultStoragePathInput.closest("[data-query-cell]");
     syncCellResultStorageState(cellRoot, { proposeIfEmpty: false });
+    if (pipelineResultStorageForCellRoot(cellRoot)) {
+      const workspaceRoot = cellRoot.closest("[data-workspace-notebook]");
+      const notebookId = workspaceNotebookId(workspaceRoot);
+      const cellId = String(cellRoot?.dataset?.cellId || "").trim();
+      if (notebookId && cellId) {
+        setCellStage(notebookId, cellId, { outputPath: resultStoragePathInput.value }, { rerender: false });
+        notebookStagePipelineController?.refreshGraph?.(notebookId)?.catch?.((error) => {
+          console.error("Failed to refresh notebook pipeline after stage output path edit.", error);
+        });
+      }
+    }
     invalidatePreparedSqlViewForCell(cellRoot);
   }
 
@@ -11892,6 +12071,12 @@ document.body.addEventListener("change", async (event) => {
   if (changedCellSourceOption || changedCellQueryOption) {
     const changedCellRoot = (changedCellSourceOption || changedCellQueryOption).closest("[data-query-cell]");
     if (changedCellQueryOption?.dataset?.cellQueryOption?.startsWith("duckdb.resultStorage")) {
+      if (pipelineResultStorageForCellRoot(changedCellRoot)) {
+        const toggle = changedCellRoot.querySelector('[data-cell-query-option="duckdb.resultStorage.mode"]');
+        if (toggle instanceof HTMLInputElement) {
+          toggle.checked = true;
+        }
+      }
       syncCellResultStorageState(changedCellRoot);
     }
     invalidatePreparedSqlViewForCell(changedCellRoot);

@@ -11,6 +11,18 @@ from ..data_generator.result_set_storage_sample import (
     RESULT_SET_STORAGE_SAMPLE_RESULT_PATH,
     RESULT_SET_STORAGE_SAMPLE_TREE_PATH,
 )
+from ..data_generator.kostenbelege_fact_builder_sample import (
+    KBHP_SOURCE_KEY,
+    KBKP_SOURCE_KEY,
+    KBPO_SOURCE_KEYS,
+    KOSTENBELEGE_FACT_BUILDER_BUCKET,
+    KOSTENBELEGE_FACT_BUILDER_GENERATOR_ID,
+    KOSTENBELEGE_FACT_BUILDER_NOTEBOOK_ID,
+    KOSTENBELEGE_FACT_BUILDER_PIPELINE_NOTEBOOK_ID,
+    KOSTENBELEGE_FACT_BUILDER_TREE_PATH,
+    RESULT_SET_KEYS as KOSTENBELEGE_FACT_BUILDER_RESULT_KEYS,
+    result_path as kostenbelege_fact_builder_result_path,
+)
 from ..models import NotebookCellDefinition, NotebookDefinition
 from .source_references import s3_source_reference
 
@@ -185,6 +197,527 @@ def build_result_set_storage_s3_demo_notebook(
         linked_generator_id="result_set_storage_s3_loader",
         can_edit=False,
         can_delete=False,
+        shared=True,
+    )
+
+
+def _kostenbelege_fact_builder_reference(key: str) -> str:
+    return s3_source_reference(
+        bucket=KOSTENBELEGE_FACT_BUILDER_BUCKET,
+        key=key,
+    )
+
+
+def _kostenbelege_fact_builder_result_reference(result_name: str) -> str:
+    return _kostenbelege_fact_builder_reference(
+        KOSTENBELEGE_FACT_BUILDER_RESULT_KEYS[result_name]
+    )
+
+
+def _kostenbelege_fact_builder_pipeline_output_path(alias: str) -> str:
+    notebook_slug = KOSTENBELEGE_FACT_BUILDER_PIPELINE_NOTEBOOK_ID.replace("-", "_")
+    return (
+        f"s3://{KOSTENBELEGE_FACT_BUILDER_BUCKET}/"
+        f"generated/kostenbelege_fact_builder/pipeline-results/{notebook_slug}/{alias}.parquet"
+    )
+
+
+def _kostenbelege_fact_builder_result_options(result_name: str) -> dict[str, object]:
+    return {
+        "duckdb": {
+            "resultStorage": {
+                "mode": "on",
+                "path": kostenbelege_fact_builder_result_path(result_name),
+            }
+        },
+        "validation": {
+            "sourceExistence": "off",
+        },
+    }
+
+
+def _kostenbelege_fact_builder_pipeline_options() -> dict[str, object]:
+    return {
+        "validation": {
+            "sourceExistence": "off",
+        },
+    }
+
+
+def _build_kostenbelege_fact_builder_kbkp_sql() -> str:
+    return f"""
+-- ---- Zelle 1: KBKP heute ------------------------------------------------
+SELECT *
+FROM {_kostenbelege_fact_builder_reference(KBKP_SOURCE_KEY)}
+WHERE CURRENT_DATE BETWEEN KBKP_TechBeginnDt AND KBKP_TechEndeDt;
+""".strip()
+
+
+def _build_kostenbelege_fact_builder_kbpo_sql() -> str:
+    union_sql = "\n    UNION ALL\n    ".join(
+        f"SELECT * FROM {_kostenbelege_fact_builder_reference(key)}"
+        for key in KBPO_SOURCE_KEYS
+    )
+    return f"""
+-- ---- Zelle 2: KBPO heute ------------------------------------------------
+WITH kbpo_union AS (
+    {union_sql}
+)
+SELECT *
+FROM kbpo_union
+WHERE CURRENT_DATE BETWEEN KBPO_TechBeginnDt AND KBPO_TechEndeDt;
+""".strip()
+
+
+def _build_kostenbelege_fact_builder_kbhp_sql() -> str:
+    return f"""
+-- ---- Zelle 3: KBHP heute (positionsspezifisch) --------------------------
+SELECT *
+FROM {_kostenbelege_fact_builder_reference(KBHP_SOURCE_KEY)}
+WHERE CURRENT_DATE BETWEEN KBHP_TechBeginnDt AND KBHP_TechEndeDt;
+""".strip()
+
+
+def _build_kostenbelege_fact_builder_kbhp_pos1_sql_for_reference(kbhp_today: str) -> str:
+    return f"""
+-- ---- Zelle 4: KBHP-Fallback (nur PositionNr = 1) ------------------------
+-- Ersetzt den problematischen KBHH-Join durch eine kleine, vorgefilterte
+-- Tabelle -> sauberer Hash-Join.
+SELECT
+      KBKP_BelegNummer
+    , KBHP_SachKto
+    , KBHP_HBAbstimmschluessel
+FROM {kbhp_today}
+WHERE KBHP_VTGKtoPositionNr = 1;
+""".strip()
+
+
+def _build_kostenbelege_fact_builder_kbhp_pos1_sql() -> str:
+    return _build_kostenbelege_fact_builder_kbhp_pos1_sql_for_reference(
+        _kostenbelege_fact_builder_result_reference("kbhp_today")
+    )
+
+
+def _build_kostenbelege_fact_builder_pipeline_kbhp_pos1_sql() -> str:
+    return _build_kostenbelege_fact_builder_kbhp_pos1_sql_for_reference(
+        "stage.kbhp_today"
+    )
+
+
+def _build_kostenbelege_fact_builder_fact_sql_for_references(
+    *,
+    kbkp_today: str,
+    kbpo_today: str,
+    kbhp_today: str,
+    kbhp_pos1: str,
+) -> str:
+    return f"""
+-- ---- Zelle 5: fact_buchungsbelegposition --------------------------------
+WITH
+kbkp_today AS (
+    SELECT * FROM {kbkp_today}
+),
+kbpo_today AS (
+    SELECT * FROM {kbpo_today}
+),
+kbhp_today AS (
+    SELECT * FROM {kbhp_today}
+),
+kbhp_pos1 AS (
+    SELECT * FROM {kbhp_pos1}
+),
+unio AS (
+    -- ---------------------------------------------------------------------
+    -- Branch 1: Originalpositionen  (KBKP_Belegnummer = KBPO_Belegnummer)
+    -- ---------------------------------------------------------------------
+    SELECT
+          KBKP.KBKP_Belegnummer                                                  AS KBKP_Belegnummer
+        , KBPO.KBPO_VtgKtoWiederholPos                                           AS KBPO_VtgKtoWiederholPos
+        , KBKP.DOCO_Belegart                                                     AS DOCO_Belegart
+        , KBKP.KBKP_BelegDt                                                      AS KBKP_BelegDt
+        , KBKP.KBKP_BuchungDt                                                    AS KBKP_BuchungDt
+        , KBKP.KBKP_ErstellungVon                                                AS KBKP_ErstellungVon
+        , KBKP.KBKP_StorniertBelegNummer                                         AS KBKP_StorniertBelegNummer
+        , KBKP.KBKP_StornoBelegNummer                                            AS KBKP_StornoBelegNummer
+        , KBKP.DOCO_BelegHerkunft                                                AS DOCO_BelegHerkunft
+        , KBPO.KBPO_VtgKtoPositionNr                                             AS KBPO_VtgKtoPositionNr
+        , KBPO.KBPO_Teilposition                                                 AS KBPO_Teilposition
+        , KBPO.GEFA_GeschaeftFall                                                AS GEFA_GeschaeftFall
+        , KBPO.PART_Partner                                                      AS PART_Partner
+        , KBPO.KBPO_KtoFindMerkmal                                               AS KBPO_KtoFindMerkmal
+        , KBPO.DOCO_Hauptvorgang                                                 AS DOCO_Hauptvorgang
+        , KBPO.DOCO_Teilvorgang                                                  AS DOCO_Teilvorgang
+        , KBPO.DOCO_Belegtyp                                                     AS DOCO_Belegtyp
+        , KBPO.DOCO_VtrKtoTyp                                                    AS DOCO_VtrKtoTyp
+        , KBPO.DOCO_Waehrung                                                     AS DOCO_Waehrung
+        , KBPO.DOCO_FormArt                                                      AS DOCO_FormArt
+        , KBPO.KBPO_GesamtBetrag                                                 AS KBPO_GesamtBetrag
+        , KBPO.KBPO_TWhrBetrag                                                   AS KBPO_TWhrBetrag
+        , KBPO.KBPO_HbWaehrung                                                   AS KBPO_HbWaehrung
+        , KBPO.KBPO_HbBetrag                                                     AS KBPO_HbBetrag
+        , KBPO.KBPO_HWhrBetrag1                                                  AS KBPO_HWhrBetrag1
+        , KBPO.KBPO_Umrechnungkurs                                               AS KBPO_Umrechnungkurs
+        , KBPO.KBPO_NettoFaelligkeitDT                                           AS KBPO_NettoFaelligkeitDT
+        , KBPO.VTGP_VtrGegenstand                                                AS VTGP_VtrGegenstand
+        , KBPO.KBPO_VtrKtoNummer                                                 AS KBPO_VtrKtoNummer
+        , KBPO.KBKP_AusgleichBelegnummer                                         AS KBKP_AusgleichBelegnummer
+        , KBPO.KBPO_AusgleichStatus                                              AS KBPO_AusgleichStatus
+        , KBPO.KBPO_Ausgleichgrund                                               AS KBPO_Ausgleichgrund
+        , KBPO.KBPO_AusgleichDt                                                  AS KBPO_AusgleichDt
+        , KBPO.KBPO_AusgleichBuchungDt                                           AS KBPO_AusgleichBuchungDt
+        , KBPO.KBPO_HBSachkto                                                    AS KBPO_HBSachkto
+        , COALESCE(KBHP.KBHP_SachKto, KBHH.KBHP_SachKto)                         AS KBHP_SachKto
+        , COALESCE(KBHP.KBHP_HBAbstimmschluessel, KBHH.KBHP_HBAbstimmschluessel) AS KBHP_HBAbstimmschluessel
+        , KBPO.KBPO_Beschreibung                                                 AS KBPO_Beschreibung
+        , KBPO.DOCO_SteuerCd                                                     AS DOCO_SteuerCd
+        , KBPO.KBPO_WertInternDt                                                 AS KBPO_WertInternDt
+        , KBPO.KBPO_Bankverbindung                                               AS KBPO_Bankverbindung
+        , KBPO.DOCO_RecordArt                                                    AS DOCO_RecordArt
+        , KBKP.DOCO_Buchunggrund                                                 AS DOCO_Buchunggrund
+        , CAST('Originalposition' AS VARCHAR(20))                                AS PositionsArt
+    FROM kbkp_today KBKP
+    INNER JOIN kbpo_today KBPO
+        ON  KBKP.KBKP_Belegnummer = KBPO.KBKP_Belegnummer
+    LEFT JOIN kbhp_today KBHP
+        ON  KBKP.KBKP_BelegNummer = KBHP.KBKP_BelegNummer
+        AND KBHP.KBHP_VTGKtoPositionNr = KBPO.KBPO_VtgKtoPositionNr
+    LEFT JOIN kbhp_pos1 KBHH
+        ON  KBKP.KBKP_BelegNummer = KBHH.KBKP_BelegNummer
+
+    UNION ALL
+
+    -- ---------------------------------------------------------------------
+    -- Branch 2: Ausgleichspositionen
+    -- (KBKP_Belegnummer = KBPO_AusgleichBelegnummer; Betraege * -1)
+    -- ---------------------------------------------------------------------
+    SELECT
+          KBKP.KBKP_Belegnummer                                                  AS KBKP_Belegnummer
+        , KBPO.KBPO_VtgKtoWiederholPos                                           AS KBPO_VtgKtoWiederholPos
+        , KBKP.DOCO_Belegart                                                     AS DOCO_Belegart
+        , KBKP.KBKP_BelegDt                                                      AS KBKP_BelegDt
+        , KBKP.KBKP_BuchungDt                                                    AS KBKP_BuchungDt
+        , KBKP.KBKP_ErstellungVon                                                AS KBKP_ErstellungVon
+        , KBKP.KBKP_StorniertBelegNummer                                         AS KBKP_StorniertBelegNummer
+        , KBKP.KBKP_StornoBelegNummer                                            AS KBKP_StornoBelegNummer
+        , KBKP.DOCO_BelegHerkunft                                                AS DOCO_BelegHerkunft
+        , KBPO.KBPO_VtgKtoPositionNr                                             AS KBPO_VtgKtoPositionNr
+        , KBPO.KBPO_Teilposition                                                 AS KBPO_Teilposition
+        , KBPO.GEFA_GeschaeftFall                                                AS GEFA_GeschaeftFall
+        , KBPO.PART_Partner                                                      AS PART_Partner
+        , KBPO.KBPO_KtoFindMerkmal                                               AS KBPO_KtoFindMerkmal
+        , KBPO.DOCO_Hauptvorgang                                                 AS DOCO_Hauptvorgang
+        , KBPO.DOCO_Teilvorgang                                                  AS DOCO_Teilvorgang
+        , KBPO.DOCO_Belegtyp                                                     AS DOCO_Belegtyp
+        , KBPO.DOCO_VtrKtoTyp                                                    AS DOCO_VtrKtoTyp
+        , KBPO.DOCO_Waehrung                                                     AS DOCO_Waehrung
+        , KBPO.DOCO_FormArt                                                      AS DOCO_FormArt
+        , KBPO.KBPO_GesamtBetrag                                                 AS KBPO_GesamtBetrag
+        , KBPO.KBPO_TWhrBetrag      * -1                                         AS KBPO_TWhrBetrag
+        , KBPO.KBPO_HbWaehrung                                                   AS KBPO_HbWaehrung
+        , KBPO.KBPO_HbBetrag        * -1                                         AS KBPO_HbBetrag
+        , KBPO.KBPO_HWhrBetrag1     * -1                                         AS KBPO_HWhrBetrag1
+        , KBPO.KBPO_Umrechnungkurs                                               AS KBPO_Umrechnungkurs
+        , KBPO.KBPO_NettoFaelligkeitDT                                           AS KBPO_NettoFaelligkeitDT
+        , KBPO.VTGP_VtrGegenstand                                                AS VTGP_VtrGegenstand
+        , KBPO.KBPO_VtrKtoNummer                                                 AS KBPO_VtrKtoNummer
+        , KBPO.KBKP_AusgleichBelegnummer                                         AS KBKP_AusgleichBelegnummer
+        , KBPO.KBPO_AusgleichStatus                                              AS KBPO_AusgleichStatus
+        , KBPO.KBPO_Ausgleichgrund                                               AS KBPO_Ausgleichgrund
+        , KBKP.KBKP_BelegDt                                                      AS KBPO_AusgleichDt
+        , KBKP.KBKP_BuchungDt                                                    AS KBPO_AusgleichBuchungDt
+        , KBPO.KBPO_HBSachkto                                                    AS KBPO_HBSachkto
+        , COALESCE(KBHP.KBHP_SachKto, KBHH.KBHP_SachKto)                         AS KBHP_SachKto
+        , COALESCE(KBHP.KBHP_HBAbstimmschluessel, KBHH.KBHP_HBAbstimmschluessel) AS KBHP_HBAbstimmschluessel
+        , KBPO.KBPO_Beschreibung                                                 AS KBPO_Beschreibung
+        , KBPO.DOCO_SteuerCd                                                     AS DOCO_SteuerCd
+        , KBPO.KBPO_WertInternDt                                                 AS KBPO_WertInternDt
+        , KBPO.KBPO_Bankverbindung                                               AS KBPO_Bankverbindung
+        , KBPO.DOCO_RecordArt                                                    AS DOCO_RecordArt
+        , KBKP.DOCO_Buchunggrund                                                 AS DOCO_Buchunggrund
+        , CAST('Ausgleichsposition' AS VARCHAR(20))                              AS PositionsArt
+    FROM kbkp_today KBKP
+    INNER JOIN kbpo_today KBPO
+        ON  KBKP.KBKP_Belegnummer = KBPO.KBKP_AusgleichBelegnummer
+    LEFT JOIN kbhp_today KBHP
+        ON  KBKP.KBKP_BelegNummer = KBHP.KBKP_BelegNummer
+        AND KBHP.KBHP_VTGKtoPositionNr = KBPO.KBPO_VtgKtoPositionNr
+    LEFT JOIN kbhp_pos1 KBHH
+        ON  KBKP.KBKP_BelegNummer = KBHH.KBKP_BelegNummer
+)
+
+SELECT
+      UNIO.KBKP_Belegnummer            AS Belegnummer
+    , UNIO.KBPO_VtgKtoWiederholPos     AS Wiederholungsposition
+    , UNIO.KBPO_VtgKtoPositionNr       AS Belegposition
+    , UNIO.KBPO_Teilposition           AS Belegteilposition
+    , UNIO.DOCO_Belegart               AS BelegartID
+    , UNIO.DOCO_BelegHerkunft          AS HerkunftID
+    , UNIO.KBKP_ErstellungVon          AS AngelegtVonID
+    , UNIO.KBKP_StornoBelegNummer      AS StorniertDurch
+    , UNIO.KBKP_StorniertBelegNummer   AS StornobelegZu
+    , UNIO.GEFA_GeschaeftFall          AS GeschaeftsfallID
+    , UNIO.DOCO_Hauptvorgang           AS HauptvorgangID
+    , UNIO.PART_Partner                AS PartnerID
+    , UNIO.KBHP_SachKto                AS SachkontoHBID
+    , UNIO.DOCO_Teilvorgang            AS TeilvorgangID
+    , UNIO.DOCO_VtrKtoTyp              AS VertragskontotypID
+    , UNIO.KBKP_AusgleichBelegnummer   AS Ausgleichsbelegnummer
+    , UNIO.KBPO_AusgleichDt            AS Ausgleichsbelegdatum
+    , UNIO.KBPO_AusgleichBuchungDt     AS Ausgleichsbuchungsdatum
+    , UNIO.KBPO_Ausgleichgrund         AS AusgleichsgrundID
+    , UNIO.KBKP_BelegDt                AS Belegdatum
+    , UNIO.KBKP_BuchungDt              AS Buchungsdatum
+    , UNIO.KBPO_NettoFaelligkeitDT     AS Nettofaelligkeitsdatum
+    , UNIO.DOCO_SteuerCd               AS SteuercodeAusFachsystem
+    , UNIO.KBPO_AusgleichStatus        AS Ausgleichsstatus
+    , UNIO.KBPO_HbWaehrung             AS WaehrungHauptbuchID
+    , UNIO.KBPO_HbBetrag               AS BetragHauptbuch
+    , CAST('CHF' AS VARCHAR(3))        AS HauswaehrungID
+    , UNIO.KBPO_HWhrBetrag1            AS BetragHauswaehrung
+    , UNIO.KBPO_GesamtBetrag           AS Gesamtbetrag
+    , UNIO.DOCO_Waehrung               AS TransaktionWaehrung
+    , UNIO.KBPO_TWhrBetrag             AS BetragTransaktionswaehrung
+    , UNIO.DOCO_FormArt                AS Formart
+    , UNIO.KBPO_Umrechnungkurs         AS Umrechnungskurs
+    , UNIO.KBKP_AusgleichBelegnummer   AS Ausgleichsbeleg
+    , UNIO.VTGP_VtrGegenstand          AS Vertragsgegenstand
+    , UNIO.KBPO_VtrKtoNummer           AS Vertragskontonummer
+    , UNIO.KBHP_HBAbstimmschluessel    AS Abstimmschluessel
+    , UNIO.KBPO_Beschreibung           AS TextZurPosition
+    , UNIO.PositionsArt                AS Positionsart
+    , UNIO.KBPO_HBSachkto              AS SachkontoNBID
+    , UNIO.KBPO_WertInternDt           AS Zinsvalutadatum
+    , UNIO.KBPO_Bankverbindung         AS BankverbindungID
+    , UNIO.DOCO_RecordArt              AS RecordArt
+    , UNIO.KBPO_KtoFindMerkmal         AS Kontenfindung
+    , UNIO.DOCO_Buchunggrund           AS BuchungsgrundID
+    , CURRENT_DATE                     AS TechnischesDatum
+FROM unio UNIO;
+""".strip()
+
+
+def _build_kostenbelege_fact_builder_fact_sql() -> str:
+    return _build_kostenbelege_fact_builder_fact_sql_for_references(
+        kbkp_today=_kostenbelege_fact_builder_result_reference("kbkp_today"),
+        kbpo_today=_kostenbelege_fact_builder_result_reference("kbpo_today"),
+        kbhp_today=_kostenbelege_fact_builder_result_reference("kbhp_today"),
+        kbhp_pos1=_kostenbelege_fact_builder_result_reference("kbhp_pos1"),
+    )
+
+
+def _build_kostenbelege_fact_builder_pipeline_fact_sql() -> str:
+    return _build_kostenbelege_fact_builder_fact_sql_for_references(
+        kbkp_today="stage.kbkp_today",
+        kbpo_today="stage.kbpo_today",
+        kbhp_today="stage.kbhp_today",
+        kbhp_pos1="stage.kbhp_pos1",
+    )
+
+
+def _build_kostenbelege_fact_builder_metrics_sql_for_reference(fact_reference: str) -> str:
+    return f"""
+-- ---- Zelle 6: analytische Test-Query (warm auf dem gespeicherten Fact-Resultat) --------
+SELECT
+      COUNT(*)                  AS total_rows
+    , SUM(BetragHauswaehrung)   AS sum_betrag_hw
+    , AVG(BetragHauswaehrung)   AS avg_betrag_hw
+    , MIN(BetragHauswaehrung)   AS min_betrag_hw
+    , MAX(BetragHauswaehrung)   AS max_betrag_hw
+FROM {fact_reference};
+""".strip()
+
+
+def _build_kostenbelege_fact_builder_metrics_sql() -> str:
+    return _build_kostenbelege_fact_builder_metrics_sql_for_reference(
+        _kostenbelege_fact_builder_result_reference("fact_buchungsbelegposition")
+    )
+
+
+def _build_kostenbelege_fact_builder_pipeline_metrics_sql() -> str:
+    return _build_kostenbelege_fact_builder_metrics_sql_for_reference(
+        "stage.fact_buchungsbelegposition"
+    )
+
+
+def build_kostenbelege_fact_builder_s3_demo_notebook() -> NotebookDefinition:
+    cell_specs = (
+        (
+            "kostenbelege-fact-builder-cell-1",
+            _build_kostenbelege_fact_builder_kbkp_sql(),
+            "kbkp_today",
+        ),
+        (
+            "kostenbelege-fact-builder-cell-2",
+            _build_kostenbelege_fact_builder_kbpo_sql(),
+            "kbpo_today",
+        ),
+        (
+            "kostenbelege-fact-builder-cell-3",
+            _build_kostenbelege_fact_builder_kbhp_sql(),
+            "kbhp_today",
+        ),
+        (
+            "kostenbelege-fact-builder-cell-4",
+            _build_kostenbelege_fact_builder_kbhp_pos1_sql(),
+            "kbhp_pos1",
+        ),
+        (
+            "kostenbelege-fact-builder-cell-5",
+            _build_kostenbelege_fact_builder_fact_sql(),
+            "fact_buchungsbelegposition",
+        ),
+        (
+            "kostenbelege-fact-builder-cell-6",
+            _build_kostenbelege_fact_builder_metrics_sql(),
+            "fact_buchungsbelegposition_metrics",
+        ),
+    )
+    return NotebookDefinition(
+        notebook_id=KOSTENBELEGE_FACT_BUILDER_NOTEBOOK_ID,
+        title="Kostenbelege Fact Builder Stored Results Demo",
+        summary=(
+            "Runs the six-cell Kostenbelege fact-builder flow with every intermediate "
+            "result stored as S3 Parquet so later cells can consume the previous cell outputs."
+        ),
+        cells=[
+            NotebookCellDefinition(
+                cell_id=cell_id,
+                data_sources=["s3"],
+                query_options=_kostenbelege_fact_builder_result_options(result_name),
+                sql=sql,
+            )
+            for cell_id, sql, result_name in cell_specs
+        ],
+        tags=["s3", "parquet", "duckdb", "result-storage", "kostenbelege", "fact"],
+        tree_path=KOSTENBELEGE_FACT_BUILDER_TREE_PATH,
+        linked_generator_id=KOSTENBELEGE_FACT_BUILDER_GENERATOR_ID,
+        can_edit=False,
+        can_delete=False,
+        shared=True,
+    )
+
+
+def build_kostenbelege_fact_builder_s3_pipeline_notebook() -> NotebookDefinition:
+    pipeline_options = _kostenbelege_fact_builder_pipeline_options()
+    stage_ids = {
+        "kbkp_today": "stage-kfb-kbkp-today",
+        "kbpo_today": "stage-kfb-kbpo-today",
+        "kbhp_today": "stage-kfb-kbhp-today",
+        "kbhp_pos1": "stage-kfb-kbhp-pos1",
+        "fact_buchungsbelegposition": "stage-kfb-fact-buchungsbelegposition",
+        "fact_buchungsbelegposition_metrics": "stage-kfb-fact-buchungsbelegposition-metrics",
+    }
+
+    return NotebookDefinition(
+        notebook_id=KOSTENBELEGE_FACT_BUILDER_PIPELINE_NOTEBOOK_ID,
+        title="Kostenbelege Fact Builder Pipeline Demo",
+        summary=(
+            "Runs the same six-step Kostenbelege fact-builder flow in Pipeline Mode. "
+            "Intermediate outputs are materialized as stages and reused with stage aliases."
+        ),
+        cells=[
+            NotebookCellDefinition(
+                cell_id="kostenbelege-fact-builder-pipeline-cell-1",
+                data_sources=["s3"],
+                query_options=pipeline_options,
+                sql=_build_kostenbelege_fact_builder_kbkp_sql(),
+                stage=_kostenbelege_pipeline_stage(
+                    stage_id=stage_ids["kbkp_today"],
+                    alias="kbkp_today",
+                    title="KBKP Today",
+                    description="Filters KBKP document headers to the current technical version.",
+                    output_path=_kostenbelege_fact_builder_pipeline_output_path("kbkp_today"),
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="kostenbelege-fact-builder-pipeline-cell-2",
+                data_sources=["s3"],
+                query_options=pipeline_options,
+                sql=_build_kostenbelege_fact_builder_kbpo_sql(),
+                stage=_kostenbelege_pipeline_stage(
+                    stage_id=stage_ids["kbpo_today"],
+                    alias="kbpo_today",
+                    title="KBPO Today",
+                    description="Unions generated KBPO Parquet partitions and filters them to the current technical version.",
+                    output_path=_kostenbelege_fact_builder_pipeline_output_path("kbpo_today"),
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="kostenbelege-fact-builder-pipeline-cell-3",
+                data_sources=["s3"],
+                query_options=pipeline_options,
+                sql=_build_kostenbelege_fact_builder_kbhp_sql(),
+                stage=_kostenbelege_pipeline_stage(
+                    stage_id=stage_ids["kbhp_today"],
+                    alias="kbhp_today",
+                    title="KBHP Today",
+                    description="Filters KBHP ledger account assignments to the current technical version.",
+                    output_path=_kostenbelege_fact_builder_pipeline_output_path("kbhp_today"),
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="kostenbelege-fact-builder-pipeline-cell-4",
+                data_sources=[],
+                query_options=pipeline_options,
+                sql=_build_kostenbelege_fact_builder_pipeline_kbhp_pos1_sql(),
+                stage=_kostenbelege_pipeline_stage(
+                    stage_id=stage_ids["kbhp_pos1"],
+                    alias="kbhp_pos1",
+                    title="KBHP Position 1 Fallback",
+                    description="Prepares the document-level KBHP fallback table from the materialized KBHP stage.",
+                    predecessors=[stage_ids["kbhp_today"]],
+                    output_path=_kostenbelege_fact_builder_pipeline_output_path("kbhp_pos1"),
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="kostenbelege-fact-builder-pipeline-cell-5",
+                data_sources=[],
+                query_options=pipeline_options,
+                sql=_build_kostenbelege_fact_builder_pipeline_fact_sql(),
+                stage=_kostenbelege_pipeline_stage(
+                    stage_id=stage_ids["fact_buchungsbelegposition"],
+                    alias="fact_buchungsbelegposition",
+                    title="Fact Buchungsbelegposition",
+                    description="Builds the final Kostenbelege fact table from the materialized header, position, and ledger stages.",
+                    predecessors=[
+                        stage_ids["kbkp_today"],
+                        stage_ids["kbpo_today"],
+                        stage_ids["kbhp_today"],
+                        stage_ids["kbhp_pos1"],
+                    ],
+                    output_path=_kostenbelege_fact_builder_pipeline_output_path("fact_buchungsbelegposition"),
+                ),
+            ),
+            NotebookCellDefinition(
+                cell_id="kostenbelege-fact-builder-pipeline-cell-6",
+                data_sources=[],
+                query_options=pipeline_options,
+                sql=_build_kostenbelege_fact_builder_pipeline_metrics_sql(),
+                stage=_kostenbelege_pipeline_stage(
+                    stage_id=stage_ids["fact_buchungsbelegposition_metrics"],
+                    alias="fact_buchungsbelegposition_metrics",
+                    title="Fact Metrics",
+                    description="Computes the validation metrics from the materialized fact table.",
+                    predecessors=[stage_ids["fact_buchungsbelegposition"]],
+                    kind="final",
+                    output_path=_kostenbelege_fact_builder_pipeline_output_path("fact_buchungsbelegposition_metrics"),
+                ),
+            ),
+        ],
+        tags=["s3", "parquet", "duckdb", "pipeline", "kostenbelege", "fact"],
+        tree_path=KOSTENBELEGE_FACT_BUILDER_TREE_PATH,
+        linked_generator_id=KOSTENBELEGE_FACT_BUILDER_GENERATOR_ID,
+        pipeline_mode="pipeline",
+        pipeline_paths=[
+            {
+                "pathId": "path-kfb-fact-metrics",
+                "terminalStageId": stage_ids["fact_buchungsbelegposition_metrics"],
+                "label": "Fact metrics",
+                "priority": 1,
+            }
+        ],
+        can_edit=True,
+        can_delete=True,
         shared=True,
     )
 
@@ -1635,8 +2168,9 @@ def _kostenbelege_pipeline_stage(
     description: str,
     predecessors: list[str] | None = None,
     kind: str = "intermediate",
+    output_path: str = "",
 ) -> dict[str, object]:
-    return {
+    stage = {
         "enabled": True,
         "stageId": stage_id,
         "alias": alias,
@@ -1646,6 +2180,9 @@ def _kostenbelege_pipeline_stage(
         "materialize": True,
         "predecessorStageIds": predecessors or [],
     }
+    if output_path:
+        stage["outputPath"] = output_path
+    return stage
 
 
 def _kostenbelege_pipeline_loader_status_sql() -> str:
@@ -3237,6 +3774,8 @@ def build_static_notebooks(
             can_delete=False,
         ),
         build_result_set_storage_s3_demo_notebook(result_set_storage_source_relation),
+        build_kostenbelege_fact_builder_s3_demo_notebook(),
+        build_kostenbelege_fact_builder_s3_pipeline_notebook(),
         NotebookDefinition(
             notebook_id="postgres-oltp-write-test",
             title="PostgreSQL OLTP Write Test",

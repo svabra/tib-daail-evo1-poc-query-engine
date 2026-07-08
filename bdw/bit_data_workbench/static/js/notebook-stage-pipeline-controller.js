@@ -21,6 +21,7 @@ export function createNotebookStagePipelineController(helpers) {
     setNotebookPipelineMode,
     showConfirmDialog,
     showMessageDialog,
+    syncResultStorageState = null,
   } = helpers;
 
   let materializedStagesVersion = null;
@@ -108,6 +109,7 @@ export function createNotebookStagePipelineController(helpers) {
       kind: stage.kind || "intermediate",
       materialize: stage.materialize !== false,
       outputFileName: stage.outputFileName || "",
+      outputPath: stage.outputPath || "",
     };
   }
 
@@ -883,6 +885,8 @@ export function createNotebookStagePipelineController(helpers) {
       materialize: node.materialize !== false,
       outputFileName: String(node.outputFileName || node.resolvedOutputFileName || "").trim(),
       resolvedOutputFileName: String(node.resolvedOutputFileName || node.outputFileName || "").trim(),
+      outputPath: String(node.outputPath || node.plannedOutputPath || "").trim(),
+      plannedOutputPath: String(node.plannedOutputPath || node.outputPath || "").trim(),
     };
   }
 
@@ -1404,6 +1408,25 @@ export function createNotebookStagePipelineController(helpers) {
         if (document.activeElement !== outputFileInput) {
           outputFileInput.value = node.outputFileName || "";
         }
+      }
+      const storagePathInput = cellRoot.querySelector("[data-result-storage-path]");
+      if (storagePathInput && node && document.activeElement !== storagePathInput) {
+        const storagePath = String(node.outputPath || node.plannedOutputPath || "").trim();
+        if (storagePath && storagePathInput.value !== storagePath) {
+          storagePathInput.value = storagePath;
+          storagePathInput.title = storagePath;
+        }
+      }
+      const storageToggle = cellRoot.querySelector("[data-result-storage-toggle]");
+      if (storageToggle && node) {
+        if (storageToggle instanceof HTMLInputElement) {
+          storageToggle.checked = true;
+        } else {
+          storageToggle.setAttribute("aria-checked", "true");
+        }
+      }
+      if (node && typeof syncResultStorageState === "function") {
+        syncResultStorageState(cellRoot);
       }
       const status = strip.querySelector("[data-cell-stage-status]");
       if (status) {

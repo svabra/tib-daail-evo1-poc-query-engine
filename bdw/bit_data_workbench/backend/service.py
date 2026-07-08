@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from tempfile import TemporaryDirectory, gettempdir
+from tempfile import TemporaryDirectory
 from threading import RLock, Thread
 from typing import Any, Callable
 
@@ -86,7 +86,9 @@ from .materialized_stages import (
     StageRecord,
     materialized_stage_copy_to_parquet_sql,
     materialized_stage_query_sql,
+    normalize_stage_output_path,
     normalize_stage_output_file_name,
+    recommended_stage_output_path,
     sql_stage_alias_references,
 )
 from .python_execution import KernelSessionManager, PythonJobManager
@@ -1797,6 +1799,7 @@ class WorkbenchService:
         return self._prepare_query_sql_payload(
             prepared,
             stage=stage,
+            notebook_id=notebook_id,
             notebook_title=notebook_title,
             cell_id=cell_id,
         )
@@ -1806,6 +1809,7 @@ class WorkbenchService:
         prepared: PreparedQuery,
         *,
         stage: dict[str, object] | None,
+        notebook_id: str,
         notebook_title: str,
         cell_id: str,
     ) -> dict[str, object]:
@@ -1826,11 +1830,31 @@ class WorkbenchService:
             or stage_payload.get("output_file_name"),
             alias=stage_alias,
         )
-        preview_temp_path = (
-            Path(gettempdir()) / f"bdw-stage-<run>" / output_file_name
-        ).as_posix()
+        output_path = str(
+            stage_payload.get("outputPath")
+            or stage_payload.get("output_path")
+            or stage_payload.get("plannedOutputPath")
+            or ""
+        ).strip()
+        if output_path:
+            output_path = normalize_stage_output_path(output_path, alias=stage_alias)
+            output_file_name = normalize_stage_output_file_name(output_path, alias=stage_alias)
+        else:
+            settings = getattr(self, "_settings", None)
+            output_path = recommended_stage_output_path(
+                notebook_id=notebook_id,
+                notebook_title=notebook_title,
+                stage_alias=stage_alias,
+                output_file_name=output_file_name,
+                sql=prepared.display_sql or prepared.execution_sql,
+                runtime_bucket=(
+                    (getattr(settings, "s3_bucket", "") or getattr(settings, "shared_notebooks_bucket", ""))
+                    if settings is not None
+                    else ""
+                ),
+            )
         execution_sql = materialized_stage_query_sql(prepared.execution_sql)
-        copy_sql = materialized_stage_copy_to_parquet_sql(execution_sql, preview_temp_path)
+        copy_sql = materialized_stage_copy_to_parquet_sql(execution_sql, output_path)
         payload = replace(
             prepared,
             execution_sql=copy_sql,
@@ -1838,8 +1862,9 @@ class WorkbenchService:
             duckdb_execution_path=DUCKDB_EXECUTION_PATH_ISOLATED_WRITE,
         ).payload
         payload["stageOutputFileName"] = output_file_name
-        payload["stageDuckdbCopyTarget"] = preview_temp_path
-        payload["stageDuckdbCopyTargetIsRuntimePattern"] = True
+        payload["stageOutputPath"] = output_path
+        payload["stageDuckdbCopyTarget"] = output_path
+        payload["stageDuckdbCopyTargetIsRuntimePattern"] = False
         return payload
 
     @staticmethod
@@ -1857,6 +1882,9 @@ class WorkbenchService:
                 "title",
                 "outputFileName",
                 "output_file_name",
+                "outputPath",
+                "output_path",
+                "plannedOutputPath",
                 "resolvedOutputFileName",
             )
         )

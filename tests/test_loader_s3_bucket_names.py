@@ -15,6 +15,9 @@ from bit_data_workbench.data_generator.helpers import loader_tree_bucket_name  #
 from bit_data_workbench.data_generator.kostenbelege_3_1 import (  # noqa: E402
     GENERATOR as KOSTENBELEGE_GENERATOR,
 )
+from bit_data_workbench.data_generator.kostenbelege_fact_builder_sample import (  # noqa: E402
+    GENERATOR as KOSTENBELEGE_FACT_BUILDER_GENERATOR,
+)
 from bit_data_workbench.data_generator.mwa_abrechnung import (  # noqa: E402
     GENERATOR as MWA_GENERATOR,
 )
@@ -70,6 +73,12 @@ class LoaderS3BucketNameTests(unittest.TestCase):
         bucket_name = RESULT_SET_STORAGE_GENERATOR._loader_bucket_name("vat-smoke-test")
 
         self.assertEqual(bucket_name, "poc-tests-general-functionalities-result-set-storage")
+        self.assertFalse(bucket_name.startswith("vat-smoke-test"))
+
+    def test_kostenbelege_fact_builder_loader_uses_notebook_structure_bucket_name(self) -> None:
+        bucket_name = KOSTENBELEGE_FACT_BUILDER_GENERATOR._loader_bucket_name("vat-smoke-test")
+
+        self.assertEqual(bucket_name, "poc-tests-general-functionalities-kostenbelege-fact-builder")
         self.assertFalse(bucket_name.startswith("vat-smoke-test"))
 
     def test_tree_bucket_name_is_s3_safe_and_truncated_with_hash_when_needed(self) -> None:

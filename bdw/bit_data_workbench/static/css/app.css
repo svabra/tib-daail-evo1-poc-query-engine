@@ -6191,6 +6191,9 @@ details:not([open]) > .tree-children {
   display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
+  flex: 0 0 100%;
+  min-width: 0;
+  width: 100%;
   gap: 8px;
 }
 
@@ -6267,8 +6270,12 @@ details:not([open]) > .tree-children {
 }
 
 .cell-result-storage-option {
-  flex: 1 1 360px;
-  min-width: min(100%, 320px);
+  flex: 0 0 100%;
+  min-width: 0;
+  max-width: min(100%, 920px);
+  flex-direction: column;
+  align-items: stretch;
+  gap: 5px;
   cursor: default;
 }
 
@@ -6288,7 +6295,8 @@ details:not([open]) > .tree-children {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  flex: 0 0 auto;
+  width: fit-content;
+  max-width: 100%;
   color: var(--text);
   cursor: pointer;
   white-space: nowrap;
@@ -6301,10 +6309,19 @@ details:not([open]) > .tree-children {
   accent-color: var(--accent);
 }
 
+.cell-result-storage-path-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
 .cell-result-storage-path {
-  flex: 1 1 220px;
-  min-width: 190px;
-  max-width: 420px;
+  flex: 1 1 auto;
+  min-width: min(100%, 520px);
+  max-width: none;
+  width: 100%;
   height: 30px;
   border: 1px solid rgba(192, 202, 212, 0.9);
   border-radius: var(--radius-control);
@@ -6314,6 +6331,22 @@ details:not([open]) > .tree-children {
   font: inherit;
   font-size: 0.72rem;
   font-weight: 700;
+}
+
+@media (max-width: 760px) {
+  .cell-result-storage-option {
+    flex-basis: 100%;
+    min-width: 0;
+  }
+
+  .cell-result-storage-path-row {
+    flex-wrap: wrap;
+  }
+
+  .cell-result-storage-path {
+    flex-basis: 100%;
+    min-width: 0;
+  }
 }
 
 .cell-result-storage-copy,
@@ -9311,6 +9344,7 @@ details:not([open]) > .tree-children {
   padding: 11px 18px;
   font: inherit;
   font-weight: 700;
+  white-space: nowrap;
   background: var(--accent);
   color: #fff;
   cursor: pointer;
@@ -9341,6 +9375,7 @@ details:not([open]) > .tree-children {
   padding: 9px 13px;
   font: inherit;
   font-weight: 700;
+  white-space: nowrap;
   background: #fff;
   color: var(--text);
   cursor: pointer;

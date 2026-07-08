@@ -31,6 +31,16 @@
       "enabledByDefault": true
     },
     {
+      "id": "kostenbelege-fact-builder-stored-results",
+      "script": "playwright_kostenbelege_fact_builder_stored_results.py",
+      "enabledByDefault": false
+    },
+    {
+      "id": "kostenbelege-fact-builder-pipeline",
+      "script": "playwright_kostenbelege_fact_builder_pipeline.py",
+      "enabledByDefault": false
+    },
+    {
       "id": "query-timing-breadcrumb-phase",
       "script": "playwright_query_timing_breadcrumb_phase_regression.py",
       "enabledByDefault": true

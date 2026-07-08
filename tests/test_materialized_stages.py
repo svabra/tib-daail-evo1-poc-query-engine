@@ -23,6 +23,7 @@ def import_stage_components():
         StageRecord,
         build_notebook_stage_graph,
         materialized_stage_query_sql,
+        normalize_stage_output_path,
         utc_now_iso,
     )
 
@@ -32,6 +33,7 @@ def import_stage_components():
         StageRecord,
         build_notebook_stage_graph,
         materialized_stage_query_sql,
+        normalize_stage_output_path,
         utc_now_iso,
     )
 
@@ -65,7 +67,7 @@ def forked_priority_cells():
 
 class FakeStageManager(import_stage_components()[0]):
     def __init__(self, store, fingerprints, sql_rewriter=None):
-        MaterializedStageManager, _, _, _, _, _ = import_stage_components()
+        MaterializedStageManager, _, _, _, _, _, _ = import_stage_components()
         super().__init__(
             settings=SimpleNamespace(s3_bucket="stage-bucket", shared_notebooks_bucket=None),
             store=store,
@@ -97,7 +99,7 @@ class FakeStageManager(import_stage_components()[0]):
         started_at,
         query_job_id,
     ):
-        _, _, StageRecord, _, _, utc_now_iso = import_stage_components()
+        _, _, StageRecord, _, _, _, utc_now_iso = import_stage_components()
         stage_id = str(node["stageId"])
         self.execution_order.append(stage_id)
         self.executed_sql.append(execution_sql)
@@ -130,7 +132,7 @@ class FakeStageManager(import_stage_components()[0]):
 
 class NotebookStagePipelineTests(unittest.TestCase):
     def test_stage_record_payload_includes_duration_ms(self) -> None:
-        _, _, StageRecord, _, _, _ = import_stage_components()
+        _, _, StageRecord, _, _, _, _ = import_stage_components()
         record = StageRecord(
             run_id="run-1",
             notebook_id="nb-1",
@@ -147,7 +149,7 @@ class NotebookStagePipelineTests(unittest.TestCase):
         self.assertEqual(record.payload["durationMs"], 1250)
 
     def test_stage_record_payload_exposes_simple_s3_reference(self) -> None:
-        _, _, StageRecord, _, _, _ = import_stage_components()
+        _, _, StageRecord, _, _, _, _ = import_stage_components()
         record = StageRecord.from_payload(
             {
                 "runId": "run-1",
@@ -176,7 +178,7 @@ class NotebookStagePipelineTests(unittest.TestCase):
         )
 
     def test_graph_orders_sql_stage_references_and_reports_missing_and_cycles(self) -> None:
-        _, _, _, build_graph, _, _ = import_stage_components()
+        _, _, _, build_graph, _, _, _ = import_stage_components()
         cells = [
             stage_cell("cell-1", "raw", "select 1"),
             stage_cell("cell-2", "scope", "select * from stage.raw"),
@@ -208,8 +210,52 @@ class NotebookStagePipelineTests(unittest.TestCase):
         )
         self.assertTrue(any(item["code"] == "cycle" for item in cycle["diagnostics"]))
 
+    def test_graph_carries_explicit_stage_output_path_and_derives_file_name(self) -> None:
+        _, _, _, build_graph, _, normalize_output_path, _ = import_stage_components()
+        cell = stage_cell("cell-1", "raw", "select 1")
+        cell["stage"]["outputPath"] = "s3://analytics-bucket/custom/path/raw_output.parquet"
+        cell["stage"]["outputFileName"] = "legacy-name"
+
+        graph = build_graph(notebook_id="nb-1", cells=[cell], runtime_bucket="stage-bucket")
+        node = graph["nodes"][0]
+
+        self.assertEqual(
+            normalize_output_path(node["outputPath"], alias="raw"),
+            "s3://analytics-bucket/custom/path/raw_output.parquet",
+        )
+        self.assertEqual(node["outputFileName"], "raw_output.parquet")
+        self.assertEqual(node["resolvedOutputFileName"], "raw_output.parquet")
+
+    def test_graph_recommends_stable_source_and_predecessor_based_output_paths(self) -> None:
+        _, _, _, build_graph, _, _, _ = import_stage_components()
+        cells = [
+            stage_cell(
+                "cell-1",
+                "kbkp_today",
+                'SELECT * FROM s3."source-bucket"."generated/kosten/source/kbkpfull.parquet"',
+            ),
+            stage_cell("cell-2", "kbkp_filtered", "SELECT * FROM stage.kbkp_today"),
+            stage_cell("cell-3", "fallback_only", "SELECT 1"),
+        ]
+
+        graph = build_graph(notebook_id="nb-demo", cells=cells, runtime_bucket="runtime-bucket")
+        by_alias = {node["alias"]: node for node in graph["nodes"]}
+
+        self.assertEqual(
+            by_alias["kbkp_today"]["plannedOutputPath"],
+            "s3://source-bucket/generated/kosten/pipeline-results/nb_demo/kbkp_today.parquet",
+        )
+        self.assertEqual(
+            by_alias["kbkp_filtered"]["plannedOutputPath"],
+            "s3://source-bucket/generated/kosten/pipeline-results/nb_demo/kbkp_filtered.parquet",
+        )
+        self.assertEqual(
+            by_alias["fallback_only"]["plannedOutputPath"],
+            "s3://runtime-bucket/_bdw_stages/nb_demo/fallback_only.parquet",
+        )
+
     def test_graph_detects_terminal_priority_paths_in_forked_dag(self) -> None:
-        _, _, _, build_graph, _, _ = import_stage_components()
+        _, _, _, build_graph, _, _, _ = import_stage_components()
 
         graph = build_graph(notebook_id="nb-1", cells=forked_priority_cells())
 
@@ -235,7 +281,7 @@ class NotebookStagePipelineTests(unittest.TestCase):
         )
 
     def test_priority_paths_reorder_ready_siblings_without_skipping_stages(self) -> None:
-        _, Store, _, _, _, _ = import_stage_components()
+        _, Store, _, _, _, _, _ = import_stage_components()
         cells = forked_priority_cells()
         priority_paths = [
             {
@@ -291,7 +337,7 @@ class NotebookStagePipelineTests(unittest.TestCase):
             self.assertEqual(set(manager.execution_order), set(graph["order"]))
 
     def test_stale_priority_path_metadata_is_ignored_when_terminal_disappears(self) -> None:
-        _, _, _, build_graph, _, _ = import_stage_components()
+        _, _, _, build_graph, _, _, _ = import_stage_components()
         cells = [
             stage_cell("cell-1", "source", "select 1"),
             stage_cell("cell-2", "status_pressure", "select * from stage.source"),
@@ -315,7 +361,7 @@ class NotebookStagePipelineTests(unittest.TestCase):
         self.assertEqual(graph["paths"][0]["label"], "Status Pressure")
 
     def test_pipeline_run_order_and_fingerprint_obsolete_cascade(self) -> None:
-        _, Store, _, _, _, _ = import_stage_components()
+        _, Store, _, _, _, _, _ = import_stage_components()
         with tempfile.TemporaryDirectory() as temp_dir:
             store = Store(Path(temp_dir) / "materialized-stages.json")
             manager = FakeStageManager(
@@ -359,7 +405,7 @@ class NotebookStagePipelineTests(unittest.TestCase):
             )
 
     def test_pipeline_run_reexecutes_valid_stages_in_dependency_order(self) -> None:
-        _, Store, _, _, _, _ = import_stage_components()
+        _, Store, _, _, _, _, _ = import_stage_components()
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = FakeStageManager(
                 Store(Path(temp_dir) / "materialized-stages.json"),
@@ -394,7 +440,7 @@ class NotebookStagePipelineTests(unittest.TestCase):
             )
 
     def test_graph_keeps_completed_revision_usable_after_failed_rerun(self) -> None:
-        _, Store, _, _, _, _ = import_stage_components()
+        _, Store, _, _, _, _, _ = import_stage_components()
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = FakeStageManager(
                 Store(Path(temp_dir) / "materialized-stages.json"),
@@ -421,7 +467,7 @@ class NotebookStagePipelineTests(unittest.TestCase):
             self.assertIn("latest saved materialized revision", graph["nodes"][0]["runWarning"])
 
     def test_stop_stage_marks_matching_active_run_cancel_requested(self) -> None:
-        _, Store, _, _, _, _ = import_stage_components()
+        _, Store, _, _, _, _, _ = import_stage_components()
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = FakeStageManager(
                 Store(Path(temp_dir) / "materialized-stages.json"),
@@ -446,7 +492,7 @@ class NotebookStagePipelineTests(unittest.TestCase):
             )
 
     def test_cancel_pipeline_marks_matching_active_runs_cancel_requested(self) -> None:
-        _, Store, _, _, _, _ = import_stage_components()
+        _, Store, _, _, _, _, _ = import_stage_components()
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = FakeStageManager(
                 Store(Path(temp_dir) / "materialized-stages.json"),
@@ -478,7 +524,7 @@ class NotebookStagePipelineTests(unittest.TestCase):
             )
 
     def test_run_pipeline_from_stage_runs_selected_stage_and_successors_only(self) -> None:
-        _, Store, _, _, _, _ = import_stage_components()
+        _, Store, _, _, _, _, _ = import_stage_components()
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = FakeStageManager(
                 Store(Path(temp_dir) / "materialized-stages.json"),
@@ -508,7 +554,7 @@ class NotebookStagePipelineTests(unittest.TestCase):
             self.assertEqual(manager.execution_order, ["stage-scope", "stage-final"])
 
     def test_run_pipeline_from_unknown_stage_fails(self) -> None:
-        _, Store, _, _, _, _ = import_stage_components()
+        _, Store, _, _, _, _, _ = import_stage_components()
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = FakeStageManager(
                 Store(Path(temp_dir) / "materialized-stages.json"),
@@ -527,7 +573,7 @@ class NotebookStagePipelineTests(unittest.TestCase):
             self.assertIn("Unknown stage: stage-missing", failed["error"])
 
     def test_atomic_stage_run_ignores_unrelated_downstream_diagnostics(self) -> None:
-        _, Store, _, _, _, _ = import_stage_components()
+        _, Store, _, _, _, _, _ = import_stage_components()
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = FakeStageManager(
                 Store(Path(temp_dir) / "materialized-stages.json"),
@@ -552,7 +598,7 @@ class NotebookStagePipelineTests(unittest.TestCase):
             self.assertIn("stage.missing", failed["error"])
 
     def test_stage_execution_strips_trailing_semicolons_before_copy_wrapper(self) -> None:
-        _, Store, _, _, normalize_stage_sql, _ = import_stage_components()
+        _, Store, _, _, normalize_stage_sql, _, _ = import_stage_components()
         self.assertEqual(normalize_stage_sql(" SELECT 1; \n ; "), "SELECT 1")
         self.assertEqual(
             normalize_stage_sql(" read_parquet('s3://bucket/path/data.parquet'); "),
@@ -577,7 +623,7 @@ class NotebookStagePipelineTests(unittest.TestCase):
             self.assertEqual(manager.executed_sql, ["SELECT 1 AS id"])
 
     def test_stage_execution_uses_rewritten_sql_for_materialization(self) -> None:
-        _, Store, _, _, _, _ = import_stage_components()
+        _, Store, _, _, _, _, _ = import_stage_components()
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = FakeStageManager(
                 Store(Path(temp_dir) / "materialized-stages.json"),
@@ -606,7 +652,7 @@ class NotebookStagePipelineTests(unittest.TestCase):
             )
 
     def test_stage_execution_wraps_rewritten_bare_reader_for_materialization(self) -> None:
-        _, Store, _, _, _, _ = import_stage_components()
+        _, Store, _, _, _, _, _ = import_stage_components()
         with tempfile.TemporaryDirectory() as temp_dir:
             manager = FakeStageManager(
                 Store(Path(temp_dir) / "materialized-stages.json"),
@@ -641,7 +687,7 @@ class NotebookStagePipelineTests(unittest.TestCase):
         from bit_data_workbench.backend.query_aliases import rewrite_query_aliases
         from bit_data_workbench.backend.sql_utils import sql_literal
 
-        _, Store, _, _, _, _ = import_stage_components()
+        _, Store, _, _, _, _, _ = import_stage_components()
         file_names = [
             "KBPO_2018undvorher.parquet",
             "KBPO_2019.parquet",
@@ -707,39 +753,33 @@ class NotebookStagePipelineTests(unittest.TestCase):
                 )
 
             query_jobs = []
-            writes = []
+            metadata_writes = []
 
             def run_query_job(**kwargs):
                 query_jobs.append(kwargs)
-                connection = duckdb.connect()
-                try:
-                    connection.execute(str(kwargs["execution_sql"]))
-                finally:
-                    connection.close()
                 return {
                     "jobId": kwargs["requested_job_id"],
                     "status": "completed",
                     "progressEvents": [{"event": "completed"}],
                 }
 
-            def write_object(bucket, output_key, local_output, metadata_key, metadata):
-                connection = duckdb.connect()
-                try:
-                    rows = connection.execute(
-                        f"SELECT COUNT(*) FROM read_parquet({sql_literal(local_output.as_posix())})"
-                    ).fetchone()[0]
-                finally:
-                    connection.close()
-                writes.append(
+            def write_metadata(bucket, metadata_key, metadata):
+                metadata_writes.append(
                     {
                         "bucket": bucket,
-                        "output_key": output_key,
                         "metadata_key": metadata_key,
                         "metadata": dict(metadata),
-                        "rows": rows,
                     }
                 )
-                return {"bucket": bucket, "key": output_key, "metadataKey": metadata_key}
+                return {"bucket": bucket, "metadataKey": metadata_key}
+
+            def inspect_output(target):
+                return {
+                    "rowCount": len(file_names),
+                    "schemaRows": [("KBKP_Belegnummer", "BIGINT")],
+                    "sizeBytes": 2048,
+                    "fileFingerprint": f"fingerprint:{target.path}",
+                }
 
             manager = import_stage_components()[0](
                 settings=SimpleNamespace(s3_bucket="stage-bucket", shared_notebooks_bucket=None),
@@ -761,12 +801,16 @@ class NotebookStagePipelineTests(unittest.TestCase):
                 metadata_refresher=lambda: None,
                 state_change_callback=lambda _snapshot: None,
                 published_products_for_source=lambda _source: [],
-                object_writer=write_object,
+                metadata_writer=write_metadata,
+                stage_output_inspector=inspect_output,
                 query_job_runner=run_query_job,
             )
             cell = stage_cell("cell-kbpo", "kbpo_union", query)
             cell["dataSources"] = ["s3"]
             cell["stage"]["outputFileName"] = "kbpo_pipeline_result"
+            cell["stage"]["outputPath"] = (
+                "s3://stage-bucket/pipeline-results/nb-kbpo/kbpo_pipeline_result.parquet"
+            )
 
             manager.run_pipeline(notebook_id="nb-kbpo", notebook_title="KBPO", cells=[cell])
             manager.wait_for_idle()
@@ -776,24 +820,39 @@ class NotebookStagePipelineTests(unittest.TestCase):
             self.assertEqual(len(completed), 1, records)
             self.assertEqual(completed[0]["rowCount"], len(file_names))
             self.assertEqual(completed[0]["outputFileName"], "kbpo_pipeline_result.parquet")
-            self.assertTrue(completed[0]["outputKey"].endswith("/kbpo_pipeline_result.parquet"))
+            self.assertEqual(
+                completed[0]["outputPath"],
+                "s3://stage-bucket/pipeline-results/nb-kbpo/kbpo_pipeline_result.parquet",
+            )
+            self.assertEqual(
+                completed[0]["outputKey"],
+                "pipeline-results/nb-kbpo/kbpo_pipeline_result.parquet",
+            )
+            self.assertEqual(
+                completed[0]["metadataKey"],
+                "pipeline-results/nb-kbpo/kbpo_pipeline_result.parquet.bdw-stage.json",
+            )
             self.assertTrue(completed[0]["queryJobId"].startswith("query-pipeline-"))
-            self.assertEqual(writes[0]["rows"], len(file_names))
-            self.assertEqual(writes[0]["metadata"]["outputFileName"], "kbpo_pipeline_result.parquet")
-            self.assertEqual(writes[0]["metadata"]["queryJobId"], completed[0]["queryJobId"])
+            self.assertEqual(metadata_writes[0]["metadata"]["outputPath"], completed[0]["outputPath"])
+            self.assertEqual(metadata_writes[0]["metadata"]["outputFileName"], "kbpo_pipeline_result.parquet")
+            self.assertEqual(metadata_writes[0]["metadata"]["queryJobId"], completed[0]["queryJobId"])
             self.assertEqual(len(query_jobs), 1)
             self.assertEqual(query_jobs[0]["requested_job_id"], completed[0]["queryJobId"])
             self.assertIn("COPY (", query_jobs[0]["execution_sql"])
-            self.assertIn("kbpo_pipeline_result.parquet", query_jobs[0]["execution_sql"])
+            self.assertIn(
+                "TO 's3://stage-bucket/pipeline-results/nb-kbpo/kbpo_pipeline_result.parquet'",
+                query_jobs[0]["execution_sql"],
+            )
             self.assertIn("read_parquet(", query_jobs[0]["result_preview_sql"])
-            self.assertIn("kbpo_pipeline_result.parquet", query_jobs[0]["result_preview_sql"])
+            self.assertIn(completed[0]["outputPath"], query_jobs[0]["result_preview_sql"])
             self.assertEqual(len(query_jobs[0]["source_summaries"]), len(file_names))
+            self.assertEqual(query_jobs[0]["query_options"]["duckdb"]["resultStorage"]["mode"], "off")
 
     def test_pipeline_stage_copy_runner_payload_is_exact_rewritten_and_sanitized(self) -> None:
         from bit_data_workbench.backend.query_aliases import rewrite_query_aliases
         from bit_data_workbench.backend.sql_utils import sql_literal
 
-        _, Store, _, _, _, _ = import_stage_components()
+        _, Store, _, _, _, _, _ = import_stage_components()
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             source_path = root / "KBPO2020.parquet"
@@ -815,39 +874,33 @@ class NotebookStagePipelineTests(unittest.TestCase):
             source_query_sql = f"read_parquet({sql_literal(source_path.as_posix())})"
             alias_map = {source_relation: source_query_sql}
             query_jobs = []
-            writes = []
+            metadata_writes = []
 
             def run_query_job(**kwargs):
                 query_jobs.append(kwargs)
-                copy_connection = duckdb.connect()
-                try:
-                    copy_connection.execute(str(kwargs["execution_sql"]))
-                finally:
-                    copy_connection.close()
                 return {
                     "jobId": kwargs["requested_job_id"],
                     "status": "completed",
                     "progressEvents": [{"event": "completed"}],
                 }
 
-            def write_object(bucket, output_key, local_output, metadata_key, metadata):
-                read_connection = duckdb.connect()
-                try:
-                    rows = read_connection.execute(
-                        f"SELECT id_, code FROM read_parquet({sql_literal(local_output.as_posix())}) ORDER BY id_"
-                    ).fetchall()
-                finally:
-                    read_connection.close()
-                writes.append(
+            def write_metadata(bucket, metadata_key, metadata):
+                metadata_writes.append(
                     {
                         "bucket": bucket,
-                        "output_key": output_key,
                         "metadata_key": metadata_key,
                         "metadata": dict(metadata),
-                        "rows": rows,
                     }
                 )
-                return {"bucket": bucket, "key": output_key, "metadataKey": metadata_key}
+                return {"bucket": bucket, "metadataKey": metadata_key}
+
+            def inspect_output(target):
+                return {
+                    "rowCount": 2,
+                    "schemaRows": [("id_", "INTEGER"), ("code", "VARCHAR")],
+                    "sizeBytes": 1024,
+                    "fileFingerprint": f"fingerprint:{target.path}",
+                }
 
             manager = import_stage_components()[0](
                 settings=SimpleNamespace(s3_bucket="stage-bucket", shared_notebooks_bucket=None),
@@ -868,7 +921,8 @@ class NotebookStagePipelineTests(unittest.TestCase):
                 metadata_refresher=lambda: None,
                 state_change_callback=lambda _snapshot: None,
                 published_products_for_source=lambda _source: [],
-                object_writer=write_object,
+                metadata_writer=write_metadata,
+                stage_output_inspector=inspect_output,
                 query_job_runner=run_query_job,
             )
             cell = stage_cell(
@@ -888,9 +942,21 @@ class NotebookStagePipelineTests(unittest.TestCase):
             self.assertEqual(len(completed), 1, records)
             self.assertEqual(completed[0]["rowCount"], 2)
             self.assertEqual(completed[0]["outputFileName"], "unsafe_result.parquet")
-            self.assertTrue(completed[0]["outputKey"].endswith("/unsafe_result.parquet"))
-            self.assertEqual(writes[0]["rows"], [(1, "A"), (2, "B")])
-            self.assertEqual(writes[0]["metadata"]["outputFileName"], "unsafe_result.parquet")
+            self.assertEqual(
+                completed[0]["outputPath"],
+                "s3://KBPOimports/pipeline-results/nb_copy/unsafe_result.parquet",
+            )
+            self.assertEqual(
+                completed[0]["outputKey"],
+                "pipeline-results/nb_copy/unsafe_result.parquet",
+            )
+            self.assertEqual(
+                completed[0]["metadataKey"],
+                "pipeline-results/nb_copy/unsafe_result.parquet.bdw-stage.json",
+            )
+            self.assertEqual(metadata_writes[0]["bucket"], "KBPOimports")
+            self.assertEqual(metadata_writes[0]["metadata"]["outputFileName"], "unsafe_result.parquet")
+            self.assertEqual(metadata_writes[0]["metadata"]["outputPath"], completed[0]["outputPath"])
             self.assertEqual(len(query_jobs), 1)
 
             runner_payload = query_jobs[0]
@@ -903,7 +969,9 @@ class NotebookStagePipelineTests(unittest.TestCase):
                 runner_payload["execution_sql"],
             )
             self.assertTrue(
-                str(runner_payload["execution_sql"]).endswith("/unsafe_result.parquet' (FORMAT PARQUET)"),
+                str(runner_payload["execution_sql"]).endswith(
+                    "s3://KBPOimports/pipeline-results/nb_copy/unsafe_result.parquet' (FORMAT PARQUET)"
+                ),
                 runner_payload["execution_sql"],
             )
             copy_target = str(runner_payload["execution_sql"])[
@@ -921,6 +989,10 @@ class NotebookStagePipelineTests(unittest.TestCase):
             self.assertEqual(
                 runner_payload["query_options"]["duckdb"]["parquetHivePartitioning"],
                 "auto",
+            )
+            self.assertEqual(
+                runner_payload["query_options"]["duckdb"]["resultStorage"],
+                {"mode": "off", "path": ""},
             )
             self.assertEqual(
                 runner_payload["query_options"]["validation"]["sourceExistence"],

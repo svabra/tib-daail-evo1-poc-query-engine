@@ -376,6 +376,14 @@ export function createNotebookTreeState(helpers) {
         folderPath: ["PoC Tests", "General Functionalities"],
       },
       {
+        notebookId: "kostenbelege-fact-builder-s3-demo",
+        folderPath: ["PoC Tests", "General Functionalities"],
+      },
+      {
+        notebookId: "kostenbelege-fact-builder-s3-pipeline-demo",
+        folderPath: ["PoC Tests", "General Functionalities"],
+      },
+      {
         notebookId: "pg-vs-s3-contest-oltp",
         folderPath: ["PoC Tests", "Performance Evaluation", "Single-Table Test"],
       },
