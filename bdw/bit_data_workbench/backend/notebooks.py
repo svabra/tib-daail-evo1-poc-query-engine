@@ -27,9 +27,6 @@ from .source_references import (
     s3_source_reference,
     s3_table_function_sql,
 )
-from .sql_utils import sql_literal
-
-
 KOSTENBELEGE_3_1_GENERATED_BUCKET = (
     "poc-tests-performance-evaluation-kostenbelege-3-1"
 )

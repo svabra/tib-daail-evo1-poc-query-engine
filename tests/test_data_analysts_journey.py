@@ -32,7 +32,6 @@ from bit_data_workbench.backend.python_execution.kernel_sessions import (  # noq
 )
 from bit_data_workbench.data_generator.base import DataGeneratorContext  # noqa: E402
 from bit_data_workbench.data_generator.data_analysts_journey import (  # noqa: E402
-    CANTONS,
     GENERATOR,
     JOURNEY_AS_OF_DATE,
     JOURNEY_BUCKET,

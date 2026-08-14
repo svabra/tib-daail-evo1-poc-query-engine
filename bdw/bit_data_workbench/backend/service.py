@@ -116,7 +116,6 @@ from .query_aliases import (
     unique_query_aliases,
 )
 from .source_references import (
-    pg_source_reference,
     s3_source_reference,
     infer_s3_reference_format,
     s3_table_function_sql,

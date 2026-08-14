@@ -227,3 +227,9 @@ workspace/
 /logs/misc/*
 !/logs/misc/.gitkeep
 k8s/duckdb-secret.yaml
+
+# Generated browser evidence (the cross-system runner archives this outside Git)
+.playwright-cli/
+output/playwright/
+playwright-report/
+test-results/
