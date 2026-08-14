@@ -1,0 +1,62 @@
+<section class="workbench-expert-search" data-workbench-expert-search-page>
+  <nav class="workbench-expert-search-breadcrumb" aria-label="Breadcrumb">
+    <a href="/">Startseite</a>
+    <span aria-hidden="true">›</span>
+    <span>Expertensuche</span>
+  </nav>
+
+  <header class="workbench-expert-search-heading">
+    <div>
+      <span class="home-journey-eyebrow">DAAIF durchsuchen</span>
+      <h2>Expertensuche</h2>
+      <p>Durchsuchen Sie Notebooks, Datenquellen und in DAAIF erstellte Datenprodukte.</p>
+    </div>
+  </header>
+
+  <section class="workbench-expert-search-panel" aria-labelledby="workbench-expert-search-title">
+    <h3 id="workbench-expert-search-title" class="visually-hidden">Suchkriterien</h3>
+    <form role="search" data-workbench-expert-search-form>
+      <label class="workbench-expert-search-field" for="workbench-expert-search-input">
+        <span>Suchbegriff</span>
+        <span class="workbench-expert-search-control">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="11" cy="11" r="6.5"></circle>
+            <path d="m16 16 4 4"></path>
+          </svg>
+          <input
+            id="workbench-expert-search-input"
+            type="search"
+            autocomplete="off"
+            placeholder="z. B. Gewerbesteuer, PostgreSQL oder Notebook"
+            data-workbench-expert-search-input
+          >
+          <button type="button" aria-label="Suchbegriff löschen" data-workbench-expert-search-clear>×</button>
+        </span>
+      </label>
+
+      <label class="workbench-expert-search-kind" for="workbench-expert-search-kind">
+        <span>Inhaltstyp</span>
+        <select id="workbench-expert-search-kind" data-workbench-expert-search-kind>
+          <option value="all">Alle Inhalte</option>
+          <option value="notebook">Notebooks</option>
+          <option value="source">Datenquellen</option>
+          <option value="product">DAAIF-Datenprodukte</option>
+        </select>
+      </label>
+    </form>
+    <p class="workbench-expert-search-hint">
+      Die Suche beginnt automatisch ab zwei Zeichen. Datenprodukte stammen ausschliesslich aus DAAIF.
+    </p>
+  </section>
+
+  <section class="workbench-expert-search-results" aria-labelledby="workbench-expert-search-results-title">
+    <header>
+      <div>
+        <span class="home-journey-eyebrow">Ergebnisse</span>
+        <h2 id="workbench-expert-search-results-title" data-workbench-expert-search-heading>Suchbegriff eingeben</h2>
+      </div>
+      <p data-workbench-expert-search-summary>Mindestens zwei Zeichen erforderlich.</p>
+    </header>
+    <div class="workbench-expert-search-list" aria-live="polite" data-workbench-expert-search-results></div>
+  </section>
+</section>

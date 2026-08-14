@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 from pathlib import Path
 import sys
+import threading
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import TestCase
@@ -400,6 +401,8 @@ class CsvS3DiscoveryTests(TestCase):
     def test_startup_seed_source_sync_uses_bounded_s3_buckets(self) -> None:
         calls: list[tuple[tuple[str, ...], bool]] = []
         service = object.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = []
         service._log_startup = lambda *_args, **_kwargs: None
         service._data_source_discovery = SimpleNamespace(
             sync_s3_buckets=lambda buckets, *, emit_event=True: calls.append((tuple(buckets), emit_event)),
@@ -411,6 +414,41 @@ class CsvS3DiscoveryTests(TestCase):
         WorkbenchService._sync_startup_seed_data_sources(service)
 
         self.assertEqual(calls, [(STARTUP_SEED_S3_BUCKETS, False)])
+
+    def test_startup_seed_source_sync_skips_already_cataloged_seed_schemas(self) -> None:
+        from bit_data_workbench.models import SourceCatalog, SourceObject, SourceSchema
+
+        calls: list[tuple[tuple[str, ...], bool]] = []
+        service = object.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = [
+            SourceCatalog(
+                name="workspace",
+                schemas=[
+                    SourceSchema(
+                        name=s3_bucket_schema_name(bucket),
+                        objects=[
+                            SourceObject(
+                                name="seed.parquet",
+                                kind="view",
+                                relation=f"workspace.{s3_bucket_schema_name(bucket)}.seed",
+                            )
+                        ],
+                    )
+                    for bucket in STARTUP_SEED_S3_BUCKETS
+                ],
+            )
+        ]
+        service._log_startup = lambda *_args, **_kwargs: None
+        service._data_source_discovery = SimpleNamespace(
+            sync_s3_buckets=lambda buckets, *, emit_event=True: calls.append(
+                (tuple(buckets), emit_event)
+            )
+        )
+
+        WorkbenchService._sync_startup_seed_data_sources(service)
+
+        self.assertEqual(calls, [])
 
     def test_build_s3_parquet_query_accepts_runtime_hive_option(self) -> None:
         self.assertEqual(

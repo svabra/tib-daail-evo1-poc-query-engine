@@ -48,6 +48,44 @@ export function createIngestionUi(helpers) {
         </div>
       `
       : "";
+    const downloadableFiles = Array.isArray(generator.downloadableFiles)
+      ? generator.downloadableFiles
+      : [];
+    const downloadableFilesMarkup = downloadableFiles.length
+      ? `
+        <section class="ingestion-manual-upload" aria-label="Manueller CSV-Schritt">
+          <div class="ingestion-manual-upload-heading">
+            <span class="ingestion-manual-upload-step">Live-Demo</span>
+            <h5>CSV manuell einlesen</h5>
+          </div>
+          <ol>
+            ${downloadableFiles
+              .map(
+                (file) => `
+                  <li>
+                    <a
+                      class="ingestion-manual-download"
+                      href="${escapeHtml(file.downloadUrl)}"
+                      download="${escapeHtml(file.fileName || "")}"
+                      data-loader-downloadable-file
+                    >${escapeHtml(file.label || file.fileName || "CSV-Datei herunterladen")}</a>
+                  </li>
+                  <li>
+                    Im <a href="/ingestion-workbench" data-open-ingestion-workbench>Ingestion Workbench</a>
+                    hochladen nach <code>${escapeHtml(file.targetPath)}</code>.
+                    ${
+                      file.replaceExisting
+                        ? "Ein erneuter Upload ersetzt nur diese manuelle Datei."
+                        : ""
+                    }
+                  </li>
+                `
+              )
+              .join("")}
+          </ol>
+        </section>
+      `
+      : "";
 
     return `
       <article class="ingestion-generator-card${isSelected ? " is-selected" : ""}${isSpotlighted ? " is-spotlighted" : ""}" data-generator-card data-generator-id="${escapeHtml(generator.generatorId)}">
@@ -61,6 +99,7 @@ export function createIngestionUi(helpers) {
             ${tagsMarkup}
           </div>
         </div>
+        ${downloadableFilesMarkup}
         <div class="ingestion-generator-controls">
           <div class="ingestion-generator-size">
             <label for="generator-size-${escapeHtml(generator.generatorId)}">Generate size</label>

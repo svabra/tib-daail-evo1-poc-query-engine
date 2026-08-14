@@ -8,6 +8,7 @@ from typing import Any
 import duckdb
 
 from ...config import Settings
+from ..query_aliases import normalize_relation_key, rewrite_query_aliases
 from ..runtime_connections import create_duckdb_worker_connection
 
 
@@ -54,6 +55,7 @@ class PythonKernelRuntime:
         self._relation_entries: list[dict[str, Any]] = []
         self._relation_index: dict[str, dict[str, Any]] = {}
         self._local_relation_map: dict[str, str] = {}
+        self._query_relation_map: dict[str, str] = {}
         self.pd = self._import_pandas()
 
     def _create_connection(self, *, mode: str):
@@ -103,12 +105,14 @@ class PythonKernelRuntime:
                 selected_source.get("canonicalSourceId") or selected_source.get("sourceId") or ""
             )
             normalized_source_id = canonical_source_id.strip().lower()
-            if normalized_source_id in {"s3", "workspace.local"} or normalized_source_id.startswith("s3."):
+            if normalized_source_id == "workspace.local":
                 return True
 
         for relation_entry in context.get("relations", []) or []:
             source_id = str(relation_entry.get("sourceId") or "").strip().lower()
-            if source_id in {"s3", "workspace.local"} or source_id.startswith("s3."):
+            if source_id == "workspace.local" or bool(
+                relation_entry.get("requiresSharedCatalog")
+            ):
                 return True
 
         return bool(context.get("localRelationMap"))
@@ -146,11 +150,16 @@ class PythonKernelRuntime:
             if str(key).strip() and str(value).strip()
         }
         self._relation_index = {}
+        self._query_relation_map = dict(self._local_relation_map)
 
         for relation_entry in self._relation_entries:
+            physical_relation = str(relation_entry.get("relation") or "").strip()
             aliases = {
-                str(relation_entry.get("relation") or "").strip(),
+                physical_relation,
+                str(relation_entry.get("catalogRelation") or "").strip(),
                 str(relation_entry.get("logicalRelation") or "").strip(),
+                str(relation_entry.get("queryReference") or "").strip(),
+                str(relation_entry.get("queryAlias") or "").strip(),
                 str(relation_entry.get("name") or "").strip(),
                 str(relation_entry.get("displayName") or "").strip(),
             }
@@ -163,12 +172,14 @@ class PythonKernelRuntime:
                 if not alias:
                     continue
                 self._relation_index.setdefault(alias.lower(), relation_entry)
+                normalized_alias = normalize_relation_key(alias)
+                if normalized_alias:
+                    self._relation_index.setdefault(normalized_alias, relation_entry)
+                if physical_relation and alias != physical_relation:
+                    self._query_relation_map.setdefault(alias, physical_relation)
 
     def rewrite_query(self, query: str) -> str:
-        rewritten = str(query or "")
-        for logical_relation, physical_relation in self._local_relation_map.items():
-            rewritten = rewritten.replace(logical_relation, physical_relation)
-        return rewritten
+        return rewrite_query_aliases(str(query or ""), self._query_relation_map)
 
     def sql(self, query: str):
         if self._connection is None:
@@ -185,6 +196,8 @@ class PythonKernelRuntime:
             raise KeyError("Provide a source relation or relation alias.")
 
         direct_match = self._relation_index.get(normalized_name.lower())
+        if direct_match is None:
+            direct_match = self._relation_index.get(normalize_relation_key(normalized_name))
         if direct_match is not None:
             return PythonSourceHandle(runtime=self, relation_entry=direct_match)
 

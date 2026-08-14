@@ -26,7 +26,9 @@ class PostgresOltpSmokeDataGenerator(DataGenerator):
     min_size_gb = 0.01
     max_size_gb = 128.0
     approximate_row_bytes = 232
-    default_target_name = "vat_smoke_test_reference"
+    # Keep the generated relation distinct from the legacy Docker bootstrap table,
+    # whose historical two-column schema is intentionally still available.
+    default_target_name = "vat_filing_smoke_generated"
     tags = ("postgres", "oltp", "vat", "tax", "smoke")
 
     def run(self, context: DataGeneratorContext) -> DataGeneratorResult:
@@ -57,6 +59,7 @@ class PostgresOltpSmokeDataGenerator(DataGenerator):
             )
             connection.execute(f"DROP TABLE IF EXISTS {relation}")
             connection.execute(f"CREATE TABLE {relation} ({', '.join(VAT_SMOKE_DATASET_COLUMNS)})")
+            self._assert_expected_schema(connection, table_name=table_name)
 
             inserted_rows = 0
             for batch_index, start_row in enumerate(range(0, total_rows, batch_rows), start=1):
@@ -100,6 +103,29 @@ class PostgresOltpSmokeDataGenerator(DataGenerator):
             raise
         finally:
             connection.close()
+
+    def _assert_expected_schema(self, connection, *, table_name: str) -> None:
+        rows = connection.execute(
+            """
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_catalog = 'pg_oltp'
+              AND table_schema = 'public'
+              AND table_name = ?
+            ORDER BY ordinal_position
+            """,
+            [table_name],
+        ).fetchall()
+        actual_columns = tuple(str(row[0]) for row in rows)
+        expected_columns = tuple(
+            definition.split(" ", 1)[0]
+            for definition in VAT_SMOKE_DATASET_COLUMNS
+        )
+        if actual_columns != expected_columns:
+            raise RuntimeError(
+                f"PostgreSQL VAT loader readiness failed for public.{table_name}: "
+                f"expected columns {expected_columns!r}, got {actual_columns!r}."
+            )
 
     def cleanup(self, context: DataGeneratorContext, job) -> DataGeneratorResult:
         relation = job.target_relation.strip()

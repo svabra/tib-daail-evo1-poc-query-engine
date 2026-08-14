@@ -1,6 +1,8 @@
 {% extends "layout.html" %}
 
 {% block body %}
+  {# Runtime Storage remains available through data-open-runtime-storage in the federal header. #}
+  {% include "partials/federal_header.html" %}
   <div class="shell{% if shell_sidebar_hidden %} shell-sidebar-hidden{% endif %}" data-shell>
     {% include "partials/sidebar.html" %}
     <div
@@ -8,280 +10,20 @@
       data-sidebar-resizer
       role="separator"
       aria-orientation="vertical"
-      aria-label="Resize navigation"
+      aria-label="Navigation in der Breite anpassen"
       aria-valuemin="360"
       aria-valuemax="720"
       tabindex="0"
-      title="Drag to resize navigation"
+      title="Navigation in der Breite anpassen"
     ></div>
 
     <main class="workspace-shell">
-      <header class="topbar">
-        <div class="brand">
-          <a
-            href="/"
-            class="brand-home-link"
-            aria-label="Go to the welcome page"
-            title="Welcome page"
-          >
-            <img
-              class="brand-mark"
-              src="/static/img/swiss-confederation-logo.png"
-              alt="Schweizerische Eidgenossenschaft"
-            >
-          </a>
-          <div class="brand-copy">
-            <h1>{{ title }}</h1>
-            <p class="brand-tagline">Data Analytics and AI Feed</p>
-          </div>
-        </div>
-        <div class="topbar-actions">
-          <div class="topbar-actions-primary">
-            <div
-              class="topbar-connection-status"
-              data-sse-connection-status
-              data-connection-status="connected"
-              role="status"
-              aria-live="polite"
-              hidden
-            >
-              <span class="topbar-connection-status-dot" aria-hidden="true"></span>
-              <span data-sse-connection-status-label>Offline</span>
-            </div>
-            <a
-              href="/query-workbench"
-              class="topbar-action-button topbar-action-button-icon-only topbar-workbench-button"
-              data-open-query-workbench
-              data-open-query-workbench-navigation="true"
-              aria-label="Query Workbench"
-              aria-description="Open notebooks, run SQL, and compare execution behavior."
-            >
-              <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
-                <rect x="2.1" y="2.4" width="11.8" height="11.2" rx="1.2"></rect>
-                <path d="M2.8 6.2h10.4"></path>
-                <path d="M5.4 9.1 7 10.7 10.6 7.1"></path>
-              </svg>
-              <span class="topbar-workbench-tooltip" aria-hidden="true">
-                <strong class="topbar-workbench-tooltip-title">Query Workbench</strong>
-                <span class="topbar-workbench-tooltip-copy">
-                  Open notebooks, run SQL, and compare execution behavior.
-                </span>
-              </span>
-            </a>
-            <a
-              href="/query-workbench/data-sources"
-              class="topbar-action-button topbar-action-button-icon-only topbar-workbench-button"
-              data-open-query-data-sources
-              aria-label="Data Source Workbench"
-              aria-description="Manage available data sources for shared and local tinkering workflows."
-            >
-              <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
-                <ellipse cx="5.2" cy="4.2" rx="3.1" ry="1.35"></ellipse>
-                <path d="M2.1 4.2v4.5c0 .76 1.39 1.35 3.1 1.35s3.1-.59 3.1-1.35V4.2"></path>
-                <path d="M2.1 6.45c0 .75 1.39 1.35 3.1 1.35s3.1-.6 3.1-1.35"></path>
-                <path d="M9.2 2.8h3.35l1.35 1.35v6.15H9.2z"></path>
-                <path d="M12.55 2.8v1.35h1.35"></path>
-                <path d="M10.05 10.55h4"></path>
-                <path d="M10.05 12.15h2.55"></path>
-              </svg>
-              <span class="topbar-workbench-tooltip" aria-hidden="true">
-                <strong class="topbar-workbench-tooltip-title">Data Source Workbench</strong>
-                <span class="topbar-workbench-tooltip-copy">
-                  Manage available data sources for shared and local tinkering workflows.
-                </span>
-              </span>
-            </a>
-            <a
-              href="/data-products"
-              class="topbar-action-button topbar-action-button-icon-only topbar-workbench-button"
-              data-open-data-products-workbench
-              aria-label="Data Products Workbench"
-              aria-description="Publish live read-only endpoints from Shared Workspace and PostgreSQL sources."
-            >
-              <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
-                <rect x="2.3" y="2.2" width="11.4" height="11.6" rx="1.1"></rect>
-                <path d="M3 5.6h10"></path>
-                <path d="M5 8.9h6"></path>
-                <path d="M5 11.2h4"></path>
-              </svg>
-              <span class="topbar-workbench-tooltip" aria-hidden="true">
-                <strong class="topbar-workbench-tooltip-title">Data Products Workbench</strong>
-                <span class="topbar-workbench-tooltip-copy">
-                  Publish live read-only endpoints from Shared Workspace and PostgreSQL sources.
-                </span>
-              </span>
-            </a>
-            <a
-              href="/the-data-platform"
-              class="topbar-action-button topbar-action-button-icon-only topbar-workbench-button"
-              aria-label="Data Platform BIT"
-              aria-description="Open the Data Platform BIT oversight page."
-            >
-              <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
-                <path d="M8 1.7 13.2 4.4 8 7.1 2.8 4.4z"></path>
-                <path d="m4 7 4 2.1L12 7"></path>
-                <path d="m4 10 4 2.1L12 10"></path>
-              </svg>
-              <span class="topbar-workbench-tooltip" aria-hidden="true">
-                <strong class="topbar-workbench-tooltip-title">Data Platform BIT</strong>
-                <span class="topbar-workbench-tooltip-copy">
-                  Open the federal Data Plattform overview for governance, security, processing, storage, and products.
-                </span>
-              </span>
-            </a>
-            <a
-              href="/ingestion-workbench"
-              class="topbar-action-button topbar-action-button-icon-only topbar-workbench-button"
-              data-open-ingestion-workbench
-              aria-label="Ingestion Workbench"
-              aria-description="Start user-driven ingestion flows such as drag-and-drop CSV imports into your data sources."
-            >
-              <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
-                <path d="M8 1.1v4.9"></path>
-                <path d="M5.5 4.2 8 6.7l2.5-2.5"></path>
-                <ellipse cx="8" cy="8.6" rx="4" ry="1.7"></ellipse>
-                <path d="M4 8.6v3.6c0 .9 1.8 1.7 4 1.7s4-.8 4-1.7V8.6"></path>
-                <path d="M4 10.5c0 .9 1.8 1.7 4 1.7s4-.8 4-1.7"></path>
-              </svg>
-              <span class="topbar-workbench-tooltip" aria-hidden="true">
-                <strong class="topbar-workbench-tooltip-title">Ingestion Workbench</strong>
-                <span class="topbar-workbench-tooltip-copy">
-                  Start user-driven ingestion flows such as drag-and-drop CSV imports into your data sources.
-                </span>
-              </span>
-            </a>
-            <a
-              href="/data-exchange"
-              class="topbar-action-button topbar-action-button-icon-only topbar-workbench-button"
-              data-open-data-exchange-workbench
-              aria-label="DataExchange Workbench"
-              aria-description="Exchange files through a password-protected S3 drop area without publishing them as data sources."
-            >
-              <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
-                <path d="M4.4 1.9h4.4l2.1 2.1v10.1H4.4z"></path>
-                <path d="M8.8 1.9V4h2.1"></path>
-                <path d="M2.2 10.6h7.1"></path>
-                <path d="M4.5 8.3l-2.3 2.3 2.3 2.3"></path>
-                <path d="M13.8 5.4H6.7"></path>
-                <path d="M11.5 3.1l2.3 2.3-2.3 2.3"></path>
-              </svg>
-              <span class="topbar-workbench-tooltip" aria-hidden="true">
-                <strong class="topbar-workbench-tooltip-title">DataExchange Workbench</strong>
-                <span class="topbar-workbench-tooltip-copy">
-                  Exchange files through a password-protected S3 drop area without publishing them as data sources.
-                </span>
-              </span>
-            </a>
-            <a
-              href="/loader-workbench"
-              class="topbar-action-button topbar-action-button-icon-only topbar-workbench-button"
-              data-open-loader-workbench
-              aria-label="Loader Workbench"
-              aria-description="Run the existing server-side loader modules and monitor their job output separately from user ingestion."
-            >
-              <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
-                <rect x="2.4" y="2.2" width="11.2" height="11.6" rx="1.1"></rect>
-                <path d="M4.5 5.1h7"></path>
-                <path d="M4.5 8h7"></path>
-                <path d="M4.5 10.9h4.2"></path>
-              </svg>
-              <span class="topbar-workbench-tooltip" aria-hidden="true">
-                <strong class="topbar-workbench-tooltip-title">Loader Workbench</strong>
-                <span class="topbar-workbench-tooltip-copy">
-                  Run the existing server-side loader modules and monitor their job output separately from user ingestion.
-                </span>
-              </span>
-            </a>
-          </div>
-          <div class="topbar-actions-secondary">
-            <details class="topbar-notification-menu" data-query-notifications>
-              <summary
-                class="topbar-action-button topbar-action-button-icon-only"
-                aria-label="Notifications"
-                title="Notifications"
-              >
-                <span class="topbar-notification-badge" data-query-notification-count hidden>0</span>
-                <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
-                  <path d="M3.2 11.6h9.6l-1.1-1.6V6.8a3.7 3.7 0 0 0-7.4 0V10z"></path>
-                  <path d="M6.2 12.1a1.9 1.9 0 0 0 3.6 0"></path>
-                </svg>
-              </summary>
-              <div class="topbar-notification-panel">
-                <div class="topbar-notification-header">
-                  <strong>Messages</strong>
-                  <button type="button" class="topbar-notification-clear" data-clear-notifications hidden>
-                    Clear
-                  </button>
-                </div>
-                <div class="topbar-notification-list" data-query-notification-list>
-                  <p class="topbar-notification-empty">No notifications yet.</p>
-                </div>
-              </div>
-            </details>
-            <details class="topbar-notification-menu topbar-settings-menu" data-settings-menu data-runtime-version="{{ runtime.image_version }}">
-              <summary
-                class="topbar-action-button topbar-action-button-icon-only"
-                aria-label="Settings"
-                title="Settings"
-              >
-                <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
-                  <path d="M6.7 1.9h2.6l.4 1.4c.36.1.7.25 1.02.43l1.31-.69 1.84 1.84-.69 1.31c.18.32.33.66.43 1.02l1.4.4v2.6l-1.4.4c-.1.36-.25.7-.43 1.02l.69 1.31-1.84 1.84-1.31-.69c-.32.18-.66.33-1.02.43l-.4 1.4H6.7l-.4-1.4a4.2 4.2 0 0 1-1.02-.43l-1.31.69-1.84-1.84.69-1.31a4.2 4.2 0 0 1-.43-1.02l-1.4-.4v-2.6l1.4-.4c.1-.36.25-.7.43-1.02l-.69-1.31 1.84-1.84 1.31.69c.32-.18.66-.33 1.02-.43z"></path>
-                  <circle cx="8" cy="8" r="2.05"></circle>
-                </svg>
-              </summary>
-              <div class="topbar-notification-panel topbar-settings-panel">
-                <div class="topbar-notification-header">
-                  <strong>Settings</strong>
-                </div>
-                <div class="topbar-settings-actions">
-                  <button type="button" class="topbar-settings-action" data-open-service-consumption>
-                    <span class="topbar-settings-action-title">Service Consumption</span>
-                    <span class="topbar-settings-action-copy">
-                      Open the dedicated CPU, RAM, S3, and persistent-volume monitoring page with live and recent-history charts.
-                    </span>
-                  </button>
-                  <button type="button" class="topbar-settings-action" data-open-runtime-storage>
-                    <span class="topbar-settings-action-title">Runtime Storage</span>
-                    <span class="topbar-settings-action-copy">
-                      Review DuckDB spill usage and delete individual hydrated cache datasets from temporary compute storage.
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    class="topbar-settings-action"
-                    data-clear-local-workspace
-                    title="Deletes all browser-local Local Workspace data for this workbench."
-                  >
-                    <span class="topbar-settings-action-title">Clear Local Workspace</span>
-                    <span class="topbar-settings-action-copy">
-                      Delete all browser-local notebooks, drafts, versions, and Local Workspace state after a caution prompt.
-                    </span>
-                  </button>
-                  <button type="button" class="topbar-settings-action" data-open-about>
-                    <span class="topbar-settings-action-title">About</span>
-                    <span class="topbar-settings-action-copy">
-                      Show the running version and the purpose of this prototype.
-                    </span>
-                  </button>
-                  <button type="button" class="topbar-settings-action" data-open-feature-list>
-                    <span class="topbar-settings-action-title">Feature list</span>
-                    <span class="topbar-settings-action-copy">
-                      Review user-facing changes and major fixes by version.
-                    </span>
-                  </button>
-                </div>
-              </div>
-            </details>
-          </div>
-        </div>
-      </header>
-
-      <section id="workspace-panel">
+      <section id="workspace-panel" tabindex="-1">
         {% include workspace_partial_template %}
       </section>
     </main>
   </div>
-  <aside class="app-version-overlay" aria-label="Runtime status">
+  <aside class="app-version-overlay" aria-label="Laufzeitstatus">
     <div class="app-version-overlay-row">
       <span class="app-version-overlay-label">DAAIF Factory</span>
       <span class="app-version-overlay-value">V{{ runtime.image_version }}</span>
@@ -290,12 +32,21 @@
       <span class="app-version-overlay-label">A PoC by BIT and ESTV</span>
     </div>
     <div class="app-version-overlay-row">
-      <span class="app-version-overlay-label">Connections</span>
+      <span class="app-version-overlay-label">Verbindungen</span>
       <span class="app-version-overlay-value" data-client-connections-count>0</span>
     </div>
-    
   </aside>
-  <script id="source-options" type="application/json">{{ source_options_json | safe }}</script>
+  <script
+    id="source-options"
+    type="application/json"
+    data-deferred-url="/api/workbench/source-options"
+    data-deferred="{{ 'true' if defer_editor_metadata | default(true) else 'false' }}"
+  >{{ source_options_json | default('[]') | safe }}</script>
   <script id="runtime-info" type="application/json">{{ runtime | tojson }}</script>
-  <script id="feature-release-notes" type="application/json">{{ release_notes_json | safe }}</script>
+  <script
+    id="feature-release-notes"
+    type="application/json"
+    data-deferred-url="/api/workbench/release-notes"
+    data-deferred="{{ 'true' if defer_release_notes | default(true) else 'false' }}"
+  >{{ release_notes_json | default('[]') | safe }}</script>
 {% endblock %}

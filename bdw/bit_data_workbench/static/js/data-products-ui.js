@@ -100,6 +100,14 @@ export function createDataProductsUi() {
                 <span class="result-export-field-label">Domain</span>
                 <input class="modal-input" type="text" autocomplete="off" data-data-product-domain-input>
               </label>
+              <label class="result-export-field">
+                <span class="result-export-field-label">Update frequency</span>
+                <input class="modal-input" type="text" autocomplete="off" placeholder="monthly" data-data-product-update-frequency-input>
+              </label>
+              <label class="result-export-field">
+                <span class="result-export-field-label">Target audience</span>
+                <input class="modal-input" type="text" autocomplete="off" data-data-product-target-audience-input>
+              </label>
               <label class="result-export-field data-product-form-grid-wide">
                 <span class="result-export-field-label">Tags</span>
                 <input class="modal-input" type="text" autocomplete="off" placeholder="tax, vat, shared-workspace" data-data-product-tags-input>
@@ -125,7 +133,23 @@ export function createDataProductsUi() {
 
           <section class="data-product-step-panel" data-data-product-step-panel="4" hidden>
             <div class="data-product-preview-panel" data-data-product-preview-summary></div>
+            <div
+              class="data-product-overwrite-panel"
+              data-data-product-overwrite-panel
+              hidden
+            ></div>
             <div class="data-product-contract-panel" data-data-product-contract-panel></div>
+            <label class="data-product-daca-publication-option">
+              <input type="checkbox" data-data-product-publish-to-daca checked>
+              <span>
+                <strong>Publish to DaCa</strong>
+                <small
+                  title="DaCa receives metadata and the DAAIF REST endpoint, but no product data or credentials. Governance pre-review begins and access remains blocked by default."
+                >
+                  Send metadata to the Data Catalog and begin governance pre-review.
+                </small>
+              </span>
+            </label>
           </section>
 
           <menu class="modal-actions">

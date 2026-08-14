@@ -5,6 +5,15 @@ from __future__ import annotations
 
 import re
 
+from ..data_generator.data_analysts_journey import (
+    JOURNEY_AS_OF_DATE,
+    JOURNEY_GENERATOR_ID,
+    JOURNEY_MANUAL_QUERY_REFERENCE,
+    JOURNEY_NOTEBOOK_ID,
+    JOURNEY_POSTGRES_QUERY_REFERENCE,
+    JOURNEY_PRODUCT_PATH,
+    JOURNEY_TREE_PATH,
+)
 from ..data_generator.result_set_storage_sample import (
     RESULT_SET_STORAGE_SAMPLE_BUCKET,
     RESULT_SET_STORAGE_SAMPLE_RESULT_KEY,
@@ -83,6 +92,371 @@ def _s3_data_sources(*relations: str | None) -> list[str]:
         seen.add(source)
         sources.append(source)
     return sources
+
+
+def build_data_analysts_journey_aggregation_sql(
+    postgres_relation: str = JOURNEY_POSTGRES_QUERY_REFERENCE,
+    aargau_relation: str = JOURNEY_MANUAL_QUERY_REFERENCE,
+) -> str:
+    """Build the reviewable UNION aggregation used by the immutable journey."""
+    as_of_date = JOURNEY_AS_OF_DATE.isoformat()
+    current_month = JOURNEY_AS_OF_DATE.replace(day=1).isoformat()
+    elapsed_fraction = f"{JOURNEY_AS_OF_DATE.day}.0 / 31.0"
+    return f"""
+-- Synthetic PoC data only; not official cantonal financial statistics.
+-- Grain before UNION ALL: one canton and reporting month (26 x 60 = 1,560 rows).
+WITH electronic_normalized AS (
+  SELECT
+    CAST(record_id AS VARCHAR) AS record_id,
+    UPPER(TRIM(CAST(canton_code AS VARCHAR))) AS canton_code,
+    TRIM(CAST(canton_name AS VARCHAR)) AS canton_name,
+    CAST(report_month AS DATE) AS report_month,
+    CAST(as_of_date AS DATE) AS as_of_date,
+    CAST(tax_year AS INTEGER) AS tax_year,
+    CAST(planned_monthly_chf AS DECIMAL(18,2)) AS planned_monthly_chf,
+    CAST(actual_receipt_chf AS DECIMAL(18,2)) AS actual_receipt_chf,
+    LOWER(TRIM(CAST(status AS VARCHAR))) AS status,
+    CAST(delivery_channel AS VARCHAR) AS delivery_channel,
+    CAST(reported_at AS TIMESTAMPTZ) AS reported_at,
+    CAST(is_synthetic AS BOOLEAN) AS is_synthetic
+  FROM {postgres_relation}
+),
+aargau_normalized AS (
+  SELECT
+    CAST(record_id AS VARCHAR) AS record_id,
+    UPPER(TRIM(CAST(canton_code AS VARCHAR))) AS canton_code,
+    TRIM(CAST(canton_name AS VARCHAR)) AS canton_name,
+    CAST(report_month AS DATE) AS report_month,
+    CAST(as_of_date AS DATE) AS as_of_date,
+    CAST(tax_year AS INTEGER) AS tax_year,
+    CAST(planned_monthly_chf AS DECIMAL(18,2)) AS planned_monthly_chf,
+    CAST(actual_receipt_chf AS DECIMAL(18,2)) AS actual_receipt_chf,
+    LOWER(TRIM(CAST(status AS VARCHAR))) AS status,
+    CAST(delivery_channel AS VARCHAR) AS delivery_channel,
+    CAST(reported_at AS TIMESTAMPTZ) AS reported_at,
+    CAST(is_synthetic AS BOOLEAN) AS is_synthetic
+  FROM {aargau_relation}
+),
+monthly_union AS (
+  SELECT * FROM electronic_normalized
+  UNION ALL
+  SELECT * FROM aargau_normalized
+),
+annual_base AS (
+  SELECT
+    canton_code,
+    MAX(canton_name) AS canton_name,
+    tax_year,
+    MAX(as_of_date) AS as_of_date,
+    CAST(ROUND(SUM(planned_monthly_chf), 2) AS DECIMAL(18,2)) AS annual_plan_chf,
+    CAST(ROUND(SUM(
+      CASE
+        WHEN report_month < DATE '{current_month}' THEN planned_monthly_chf
+        WHEN report_month = DATE '{current_month}'
+          THEN planned_monthly_chf * ({elapsed_fraction})
+        ELSE 0
+      END
+    ), 2) AS DECIMAL(18,2)) AS expected_receipts_to_date_chf,
+    CAST(ROUND(SUM(actual_receipt_chf), 2) AS DECIMAL(18,2)) AS actual_receipts_to_date_chf,
+    COUNT(*) AS source_month_count,
+    COUNT(DISTINCT report_month) AS distinct_month_count,
+    SUM(CASE WHEN status = 'final' THEN 1 ELSE 0 END) AS complete_month_count,
+    SUM(CASE WHEN status IN ('final', 'month_to_date') THEN 1 ELSE 0 END) AS reported_month_count,
+    SUM(CASE WHEN planned_monthly_chf < 0 OR actual_receipt_chf < 0 THEN 1 ELSE 0 END)
+      AS negative_amount_count,
+    BOOL_AND(is_synthetic) AS is_synthetic
+  FROM monthly_union
+  GROUP BY canton_code, tax_year
+),
+projected AS (
+  SELECT
+    *,
+    CAST(ROUND(
+      CASE
+        WHEN tax_year < 2026 THEN actual_receipts_to_date_chf
+        WHEN expected_receipts_to_date_chf > 0 THEN
+          CAST(annual_plan_chf AS DOUBLE)
+            * CAST(actual_receipts_to_date_chf AS DOUBLE)
+            / CAST(expected_receipts_to_date_chf AS DOUBLE)
+        ELSE NULL
+      END,
+      2
+    ) AS DECIMAL(18,2)) AS annual_projection_chf
+  FROM annual_base
+)
+SELECT
+  canton_code,
+  canton_name,
+  tax_year,
+  DATE '{as_of_date}' AS as_of_date,
+  annual_plan_chf,
+  expected_receipts_to_date_chf,
+  actual_receipts_to_date_chf,
+  annual_projection_chf,
+  CAST(ROUND(annual_projection_chf - annual_plan_chf, 2) AS DECIMAL(18,2))
+    AS variance_chf,
+  CAST(ROUND(
+    100.0 * (annual_projection_chf - annual_plan_chf) / NULLIF(annual_plan_chf, 0),
+    2
+  ) AS DECIMAL(10,2)) AS variance_pct,
+  source_month_count,
+  distinct_month_count,
+  complete_month_count,
+  reported_month_count,
+  CAST(ROUND(100.0 * reported_month_count / 12.0, 2) AS DECIMAL(6,2))
+    AS completeness_pct,
+  source_month_count - distinct_month_count AS duplicate_month_count,
+  negative_amount_count,
+  is_synthetic
+FROM projected
+ORDER BY canton_code, tax_year;
+""".strip()
+
+
+def build_data_analysts_journey_chart_python(
+    result_path: str = JOURNEY_PRODUCT_PATH,
+) -> str:
+    escaped_path = str(result_path).replace("'", "''")
+    return f'''
+import matplotlib.pyplot as plt
+import numpy as np
+
+# Load the exact Parquet result materialized by SQL cell 1 in an in-memory DuckDB worker.
+journey_result = sql("""
+SELECT *
+FROM read_parquet('{escaped_path}')
+ORDER BY canton_code, tax_year
+""")
+if len(journey_result) != 130:
+    raise ValueError(f"Expected 130 canton/year rows, received {{len(journey_result)}}.")
+
+money_columns = [
+    "annual_plan_chf",
+    "expected_receipts_to_date_chf",
+    "actual_receipts_to_date_chf",
+    "annual_projection_chf",
+    "variance_chf",
+    "variance_pct",
+]
+for column in money_columns:
+    journey_result[column] = pd.to_numeric(journey_result[column], errors="raise")
+
+annual = (
+    journey_result.groupby("tax_year", as_index=False)
+    .agg(
+        annual_plan_chf=("annual_plan_chf", "sum"),
+        expected_receipts_to_date_chf=("expected_receipts_to_date_chf", "sum"),
+        actual_receipts_to_date_chf=("actual_receipts_to_date_chf", "sum"),
+        annual_projection_chf=("annual_projection_chf", "sum"),
+    )
+    .sort_values("tax_year")
+)
+annual["comparison_chf"] = np.where(
+    annual["tax_year"].eq(2026),
+    annual["annual_projection_chf"],
+    annual["actual_receipts_to_date_chf"],
+)
+
+# Chart contract: grouped annual comparison plus a true 26-canton distribution.
+# Explicit palette and hatches keep both panels readable without relying on colour alone.
+ink = "#17202a"
+federal_blue = "#2f4356"
+swiss_red = "#d8232a"
+gold = "#a36b00"
+grid = "#d9dee3"
+years = annual["tax_year"].astype(str).tolist()
+x = np.arange(len(years))
+width = 0.36
+
+fig, (ax_year, ax_hist) = plt.subplots(1, 2, figsize=(14, 6.6))
+fig.patch.set_facecolor("white")
+
+plan_bars = ax_year.bar(
+    x - width / 2,
+    annual["annual_plan_chf"] / 1_000_000_000,
+    width,
+    label="Jahresplan",
+    color="white",
+    edgecolor=federal_blue,
+    linewidth=1.4,
+    hatch="///",
+)
+comparison_bars = ax_year.bar(
+    x + width / 2,
+    annual["comparison_chf"] / 1_000_000_000,
+    width,
+    label="Ist 2022–2025 / Hochrechnung 2026",
+    color="#91a3b5",
+    edgecolor=ink,
+    linewidth=1.1,
+    hatch="xx",
+)
+ax_year.set_title("Jahresvergleich: Plan, Ist und Hochrechnung", loc="left", color=ink)
+ax_year.set_ylabel("Mrd. CHF")
+ax_year.set_xlabel("Steuerjahr")
+ax_year.set_xticks(x, years)
+ax_year.set_ylim(bottom=0)
+ax_year.grid(axis="y", color=grid, linewidth=0.8)
+ax_year.set_axisbelow(True)
+ax_year.bar_label(plan_bars, fmt="%.1f", padding=3, fontsize=8, color=federal_blue)
+ax_year.bar_label(comparison_bars, fmt="%.1f", padding=3, fontsize=8, color=ink)
+
+ytd_2026 = annual.loc[annual["tax_year"].eq(2026)].iloc[0]
+last_x = x[-1]
+ax_year.scatter(
+    [last_x - width / 2, last_x + width / 2],
+    [
+        ytd_2026["expected_receipts_to_date_chf"] / 1_000_000_000,
+        ytd_2026["actual_receipts_to_date_chf"] / 1_000_000_000,
+    ],
+    color=[gold, swiss_red],
+    edgecolor=ink,
+    linewidth=0.8,
+    marker="D",
+    s=55,
+    zorder=4,
+)
+ax_year.annotate(
+    "Soll bis 12.08.",
+    (last_x - width / 2, ytd_2026["expected_receipts_to_date_chf"] / 1_000_000_000),
+    xytext=(-7, -18),
+    textcoords="offset points",
+    ha="right",
+    fontsize=8,
+    color=gold,
+)
+ax_year.annotate(
+    "Ist bis 12.08.",
+    (last_x + width / 2, ytd_2026["actual_receipts_to_date_chf"] / 1_000_000_000),
+    xytext=(7, -18),
+    textcoords="offset points",
+    ha="left",
+    fontsize=8,
+    color=swiss_red,
+)
+ax_year.legend(frameon=False, loc="upper left", fontsize=8)
+
+deviations = journey_result.loc[
+    journey_result["tax_year"].eq(2026), "variance_pct"
+].dropna()
+if len(deviations) != 26:
+    raise ValueError(f"Expected 26 canton deviations for 2026, received {{len(deviations)}}.")
+mean_deviation = float(deviations.mean())
+median_deviation = float(deviations.median())
+ax_hist.hist(
+    deviations,
+    bins=8,
+    color="#d9e1e8",
+    edgecolor=federal_blue,
+    linewidth=1.1,
+    hatch="..",
+)
+ax_hist.axvline(0, color=ink, linewidth=1.4, linestyle="-", label="Nullabweichung")
+ax_hist.axvline(
+    mean_deviation,
+    color=swiss_red,
+    linewidth=1.5,
+    linestyle="--",
+    label=f"Mittelwert {{mean_deviation:+.1f}} %",
+)
+ax_hist.axvline(
+    median_deviation,
+    color=gold,
+    linewidth=1.5,
+    linestyle=":",
+    label=f"Median {{median_deviation:+.1f}} %",
+)
+ax_hist.set_title("Verteilung der kantonalen Planabweichung 2026", loc="left", color=ink)
+ax_hist.set_xlabel("Abweichung zur Jahresplanung (%)")
+ax_hist.set_ylabel("Anzahl Kantone")
+ax_hist.set_ylim(bottom=0)
+ax_hist.grid(axis="y", color=grid, linewidth=0.8)
+ax_hist.set_axisbelow(True)
+ax_hist.legend(frameon=False, fontsize=8, loc="upper left")
+
+fig.suptitle(
+    "Kantonale Gewerbesteuer: Soll/Ist und Jahreshochrechnung 2022–2026",
+    x=0.055,
+    y=0.985,
+    ha="left",
+    fontsize=15,
+    fontweight="bold",
+    color=ink,
+)
+fig.text(
+    0.055,
+    0.015,
+    "Synthetische PoC-Daten · Stichtag 12.08.2026 (Europe/Zurich) · "
+    "2026: Hochrechnung auf Basis des Soll/Ist bis Stichtag · Beträge in CHF",
+    fontsize=9,
+    color=ink,
+)
+plt.tight_layout(rect=(0.04, 0.06, 0.99, 0.92))
+plt.show()
+'''.strip()
+
+
+def build_data_analysts_journey_notebook() -> NotebookDefinition:
+    return NotebookDefinition(
+        notebook_id=JOURNEY_NOTEBOOK_ID,
+        title="A Data Analyst's Journey – Kantonale Gewerbesteuer",
+        summary=(
+            "Vereinigt 25 elektronisch gelieferte Kantone aus PostgreSQL mit der "
+            "manuell eingelesenen Aargau-CSV, aggregiert Soll/Ist und visualisiert "
+            "die vollständig synthetische Jahreshochrechnung per 12.08.2026."
+        ),
+        cells=[
+            NotebookCellDefinition(
+                cell_id=f"{JOURNEY_NOTEBOOK_ID}-cell-1",
+                language="sql",
+                data_sources=["pg_oltp", JOURNEY_MANUAL_QUERY_REFERENCE],
+                query_options={
+                    "duckdb": {
+                        "resultStorage": {
+                            "mode": "on",
+                            "path": JOURNEY_PRODUCT_PATH,
+                        }
+                    },
+                    "validation": {"sourceExistence": "off"},
+                },
+                processing_hints=(
+                    "Expected input: 1,500 PostgreSQL rows plus 60 Aargau CSV rows."
+                ),
+                result_expectations=(
+                    "Exactly 130 rows (26 cantons × 5 years), persisted as Parquet."
+                ),
+                sql=build_data_analysts_journey_aggregation_sql(),
+            ),
+            NotebookCellDefinition(
+                cell_id=f"{JOURNEY_NOTEBOOK_ID}-cell-2",
+                language="python",
+                data_sources=["s3"],
+                processing_hints=(
+                    "Loads only the materialized result from cell 1 in an in-memory DuckDB worker."
+                ),
+                result_expectations=(
+                    "One image/png containing the annual comparison and a 26-canton histogram."
+                ),
+                sql=build_data_analysts_journey_chart_python(),
+            ),
+        ],
+        tags=[
+            "customer-journey",
+            "gewerbesteuer",
+            "postgres",
+            "s3",
+            "csv",
+            "union",
+            "python",
+            "synthetic",
+        ],
+        tree_path=JOURNEY_TREE_PATH,
+        linked_generator_id=JOURNEY_GENERATOR_ID,
+        can_edit=False,
+        can_delete=False,
+        shared=True,
+        created_at="2026-08-12T07:15:00+00:00",
+    )
 
 
 def _result_set_storage_query_options() -> dict[str, object]:
@@ -3042,7 +3416,7 @@ def build_static_notebooks(
     )
     pandas_python_load_code = (
         "# Load the static VAT smoke table into pandas via the explicit source helper.\n"
-        f'vat_df = source("{preferred_postgres_relation}").df()\n'
+        f"vat_df = source({preferred_postgres_relation!r}).df()\n"
         'vat_df["tax_period_end"] = pd.to_datetime(vat_df["tax_period_end"])\n'
         'vat_df["net_gap_chf"] = vat_df["output_vat_chf"] - vat_df["input_vat_chf"]\n'
         "vat_df = (\n"
@@ -3669,6 +4043,7 @@ def build_static_notebooks(
     mwa_s3_json_sources = _s3_data_sources(*mwa_s3_json_relations.values())
 
     return [
+        build_data_analysts_journey_notebook(),
         NotebookDefinition(
             notebook_id="s3-smoke-test",
             title="S3 Smoke Test",

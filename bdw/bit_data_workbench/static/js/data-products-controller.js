@@ -22,6 +22,8 @@ export function createDataProductsController(helpers) {
     description: "",
     domain: "",
     owner: "",
+    overwriteConfirmed: false,
+    publishToDaca: true,
     preview: null,
     previewing: false,
     publishing: false,
@@ -35,8 +37,80 @@ export function createDataProductsController(helpers) {
     sourceOptions: [],
     step: 1,
     tagsText: "",
+    targetAudience: "",
     title: "",
+    updateFrequency: "",
   };
+
+  const demoUsers = {
+    "beat.stalder": { displayName: "Beat Stalder", email: "beat.stalder@sg.ch" },
+    "joel.ruod": { displayName: "Joel Ruod", email: "joel.ruod@estv.admin.ch" },
+    "kassandra.valdata": {
+      displayName: "Kassandra Valdata",
+      email: "kassandra.valdata@estv.admin.ch",
+    },
+    "noemie.rochat": { displayName: "Noémie Rochat", email: "noemie.rochat@ne.ch" },
+    "thomas.kriegli": {
+      displayName: "Thomas Kriegli",
+      email: "thomas.kriegli@estv.admin.ch",
+    },
+  };
+
+  function currentDemoUser() {
+    let storedUser = "";
+    try {
+      storedUser = window.localStorage.getItem("daaif-demo-user") || "";
+    } catch (_error) {
+      storedUser = "";
+    }
+    const userId =
+      document.documentElement.dataset.daaifDemoUser || storedUser || "joel.ruod";
+    return demoUsers[userId] || demoUsers["joel.ruod"];
+  }
+
+  function isJourneySource(source) {
+    const searchable = JSON.stringify(source || {}).toLowerCase();
+    return (
+      searchable.includes("kantonale-gewerbesteuer") ||
+      searchable.includes("kantonale_gewerbesteuer") ||
+      searchable.includes("data-analysts-journey") ||
+      searchable.includes("gewerbesteuer")
+    );
+  }
+
+  function applyMetadataDefaults(source) {
+    const user = currentDemoUser();
+    publicationState.owner = user.displayName;
+    publicationState.requestAccessContact = user.email;
+    publicationState.accessLevel = "internal";
+    publicationState.publishToDaca = true;
+
+    if (isJourneySource(source)) {
+      publicationState.title =
+        "Kantonale Gewerbesteuer: Soll/Ist und Jahreshochrechnung 2022–2026";
+      publicationState.slug = "kantonale-gewerbesteuer-soll-ist-2022-2026";
+      publicationState.description =
+        "Vollständig synthetische kantonale Gewerbesteuer-Kennzahlen: Jahresplan, Ist bis 12.08.2026 und Jahreshochrechnung für 2022–2026.";
+      publicationState.owner = "Joel Ruod";
+      publicationState.domain = "Unternehmens-/Gewerbesteuer";
+      publicationState.tagsText = "Gewerbesteuer, Kantone, Soll/Ist, synthetisch";
+      publicationState.accessNote =
+        "DaCa Default Deny bis zum Abschluss der Governance- und Vier-Augen-Freigabe.";
+      publicationState.requestAccessContact = "joel.ruod@estv.admin.ch";
+      publicationState.updateFrequency = "monthly";
+      publicationState.targetAudience = "EFD – EFV / Bundestresorerie";
+      return;
+    }
+
+    publicationState.title = source ? sourceLabel(source) : "";
+    publicationState.slug = publicationState.title ? toSlug(publicationState.title) : "";
+    publicationState.description = "";
+    publicationState.domain = "";
+    publicationState.tagsText = "";
+    publicationState.accessNote = "";
+    publicationState.updateFrequency = "";
+    publicationState.targetAudience = "";
+  }
 
   function toSlug(value) {
     return String(value ?? "")
@@ -62,6 +136,15 @@ export function createDataProductsController(helpers) {
         uniqueTags.push(tag);
       });
     return uniqueTags;
+  }
+
+  function escapeMarkup(value) {
+    return String(value ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
   }
 
   function publicationDialog() {
@@ -171,11 +254,113 @@ export function createDataProductsController(helpers) {
   function resetPublicationSourceSelection() {
     publicationState.selectedSourceOptionId = "";
     publicationState.selectedSource = null;
-    publicationState.preview = null;
+    invalidatePublicationPreview();
     if (!publicationState.slugTouched) {
       publicationState.title = "";
       publicationState.slug = "";
     }
+  }
+
+  function invalidatePublicationPreview() {
+    publicationState.preview = null;
+    publicationState.overwriteConfirmed = false;
+  }
+
+  function overwriteConflict() {
+    const preview = publicationState.preview;
+    const existingProduct = preview?.existingProduct;
+    if (!preview?.overwriteRequired || !existingProduct?.productId) {
+      return null;
+    }
+    return {
+      canOverwrite: preview.canOverwrite === true,
+      existingProduct,
+    };
+  }
+
+  function overwriteIsConfirmed() {
+    const conflict = overwriteConflict();
+    return Boolean(conflict?.canOverwrite && publicationState.overwriteConfirmed);
+  }
+
+  function existingProductSourceCopy(product) {
+    const location = product?.relation
+      ? product.relation
+      : product?.bucket && product?.key
+        ? `s3://${product.bucket}/${product.key}`
+        : product?.bucket
+          ? `s3://${product.bucket}`
+          : product?.key || "Source not available";
+    return [product?.sourcePlatform, location]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+      .join(" / ");
+  }
+
+  function overwriteConflictMarkup(conflict) {
+    if (!conflict) {
+      return "";
+    }
+    const product = conflict.existingProduct;
+    const endpoint = product.publishedUrl || product.publicPath || "Endpoint not available";
+    const dacaStatus = product.dacaManaged
+      ? `DaCa managed / ${product.dacaPublication?.state || "state unavailable"}`
+      : "Local publication only";
+    const blockedCopy = publicationState.preview?.blockedReason ||
+      "The selected slug is already in use.";
+
+    return `
+      <section class="data-product-overwrite-conflict" role="alert" aria-live="polite">
+        <div class="data-product-overwrite-conflict-heading">
+          <span class="data-product-preview-summary-label">Slug conflict</span>
+          <h3>This slug is already published</h3>
+          <p>${escapeMarkup(blockedCopy)}</p>
+        </div>
+        <dl class="data-product-overwrite-details">
+          <div>
+            <dt>Existing title</dt>
+            <dd>${escapeMarkup(product.title || product.slug)}</dd>
+          </div>
+          <div>
+            <dt>Endpoint</dt>
+            <dd>${escapeMarkup(endpoint)}</dd>
+          </div>
+          <div>
+            <dt>Current source</dt>
+            <dd>${escapeMarkup(existingProductSourceCopy(product))}</dd>
+          </div>
+          <div>
+            <dt>Governance</dt>
+            <dd>${escapeMarkup(dacaStatus)}</dd>
+          </div>
+          <div>
+            <dt>Last updated</dt>
+            <dd>${escapeMarkup(product.updatedAt || "Timestamp not available")}</dd>
+          </div>
+        </dl>
+        ${
+          conflict.canOverwrite
+            ? `
+              <label class="data-product-overwrite-confirmation">
+                <input
+                  type="checkbox"
+                  data-data-product-overwrite-confirm
+                  ${publicationState.overwriteConfirmed ? "checked" : ""}
+                >
+                <span>
+                  <strong>Replace the existing data product</strong>
+                  <small>
+                    I understand that the source and metadata for
+                    <code>${escapeMarkup(product.slug)}</code> will be replaced. Its endpoint URL,
+                    product identity and DaCa governance remain unchanged.
+                  </small>
+                </span>
+              </label>
+            `
+            : '<p class="data-product-overwrite-not-allowed">This product cannot be replaced from the current publication flow.</p>'
+        }
+      </section>
+    `;
   }
 
   function sourceKindCopy(source) {
@@ -227,8 +412,8 @@ export function createDataProductsController(helpers) {
     `;
   }
 
-  function publicationPayload() {
-    return {
+  function publicationPayload({ includeOverwrite = false } = {}) {
+    const payload = {
       source: currentSourceDescriptor(),
       title: publicationState.title,
       slug: publicationState.slug,
@@ -239,8 +424,58 @@ export function createDataProductsController(helpers) {
       accessLevel: publicationState.accessLevel,
       accessNote: publicationState.accessNote,
       requestAccessContact: publicationState.requestAccessContact,
-      customProperties: {},
+      customProperties: {
+        ...(publicationState.updateFrequency
+          ? { updateFrequency: publicationState.updateFrequency }
+          : {}),
+        ...(publicationState.targetAudience
+          ? { targetAudience: publicationState.targetAudience }
+          : {}),
+      },
+      publishToDaca: publicationState.publishToDaca,
     };
+    if (!includeOverwrite) {
+      return payload;
+    }
+
+    const existingProduct = overwriteConflict()?.existingProduct;
+    const overwriteExisting = overwriteIsConfirmed();
+    return {
+      ...payload,
+      overwriteExisting,
+      expectedProductId: overwriteExisting ? existingProduct?.productId || "" : "",
+      expectedUpdatedAt: overwriteExisting ? existingProduct?.updatedAt || "" : "",
+    };
+  }
+
+  function syncPublicationActionState(dialog) {
+    const preview = publicationState.preview;
+    const conflict = overwriteConflict();
+    const overwriteConfirmed = overwriteIsConfirmed();
+    const publishButton = dialog.querySelector("[data-data-product-dialog-publish]");
+    const publishToDacaInput = dialog.querySelector("[data-data-product-publish-to-daca]");
+    const dacaManagedExisting = Boolean(conflict?.existingProduct?.dacaManaged);
+
+    if (dacaManagedExisting) {
+      publicationState.publishToDaca = true;
+    }
+    publishToDacaInput.checked = publicationState.publishToDaca;
+    publishToDacaInput.disabled = dacaManagedExisting;
+    publishToDacaInput
+      .closest(".data-product-daca-publication-option")
+      ?.classList.toggle("is-locked", dacaManagedExisting);
+
+    publishButton.disabled =
+      publicationState.publishing ||
+      !preview ||
+      Boolean(preview?.blocked && !overwriteConfirmed);
+    publishButton.textContent = publicationState.publishing
+      ? conflict
+        ? "Replacing..."
+        : "Publishing..."
+      : conflict
+        ? "Replace existing data product"
+        : "Publish";
   }
 
   function publicationStepCanContinue(step) {
@@ -266,6 +501,7 @@ export function createDataProductsController(helpers) {
     const sourcePreview = dialog.querySelector("[data-data-product-source-preview]");
     const compatibility = dialog.querySelector("[data-data-product-compatibility-card]");
     const previewSummary = dialog.querySelector("[data-data-product-preview-summary]");
+    const overwritePanel = dialog.querySelector("[data-data-product-overwrite-panel]");
     const contractPanel = dialog.querySelector("[data-data-product-contract-panel]");
     const backButton = dialog.querySelector("[data-data-product-dialog-back]");
     const nextButton = dialog.querySelector("[data-data-product-dialog-next]");
@@ -275,12 +511,19 @@ export function createDataProductsController(helpers) {
     const descriptionInput = dialog.querySelector("[data-data-product-description-input]");
     const ownerInput = dialog.querySelector("[data-data-product-owner-input]");
     const domainInput = dialog.querySelector("[data-data-product-domain-input]");
+    const updateFrequencyInput = dialog.querySelector(
+      "[data-data-product-update-frequency-input]"
+    );
+    const targetAudienceInput = dialog.querySelector(
+      "[data-data-product-target-audience-input]"
+    );
     const tagsInput = dialog.querySelector("[data-data-product-tags-input]");
     const accessLevelInput = dialog.querySelector("[data-data-product-access-level-input]");
     const requestAccessContactInput = dialog.querySelector(
       "[data-data-product-request-access-contact-input]"
     );
     const accessNoteInput = dialog.querySelector("[data-data-product-access-note-input]");
+    const publishToDacaInput = dialog.querySelector("[data-data-product-publish-to-daca]");
     const visibleSourceOptions = filteredSourceOptions();
 
     sourceTypeSelect.innerHTML = sourceTypeOptionsMarkup();
@@ -316,6 +559,8 @@ export function createDataProductsController(helpers) {
     descriptionInput.value = publicationState.description;
     ownerInput.value = publicationState.owner;
     domainInput.value = publicationState.domain;
+    updateFrequencyInput.value = publicationState.updateFrequency;
+    targetAudienceInput.value = publicationState.targetAudience;
     tagsInput.value = publicationState.tagsText;
     accessLevelInput.value = publicationState.accessLevel;
     requestAccessContactInput.value = publicationState.requestAccessContact;
@@ -347,16 +592,11 @@ export function createDataProductsController(helpers) {
           ? "Preparing preview..."
           : "Preview Endpoint"
         : "Continue";
-    publishButton.disabled =
-      publicationState.publishing ||
-      !publicationState.preview ||
-      Boolean(publicationState.preview?.blocked);
-    publishButton.textContent = publicationState.publishing
-      ? "Publishing..."
-      : "Publish";
+    syncPublicationActionState(dialog);
 
     if (publicationState.step === 4) {
       const preview = publicationState.preview;
+      const conflict = overwriteConflict();
       previewSummary.innerHTML = preview
         ? `
             <div class="data-product-preview-summary-grid">
@@ -386,13 +626,18 @@ export function createDataProductsController(helpers) {
               </article>
             </div>
             ${
-              preview.blocked
+              preview.blocked && !conflict
                 ? `<p class="data-product-preview-blocked">${preview.blockedReason}</p>`
                 : `<p class="modal-copy">${preview.liveReadOnlyCopy}</p>`
             }
           `
         : '<p class="modal-copy">Generate a preview to review the endpoint contract.</p>';
       contractPanel.innerHTML = previewContractMarkup(preview);
+      overwritePanel.hidden = !conflict;
+      overwritePanel.innerHTML = overwriteConflictMarkup(conflict);
+    } else {
+      overwritePanel.hidden = true;
+      overwritePanel.innerHTML = "";
     }
   }
 
@@ -406,29 +651,19 @@ export function createDataProductsController(helpers) {
     publicationState.sourceOptions = readSourceOptions();
     publicationState.selectedSource = source;
     publicationState.selectedSourceOptionId = "";
-    publicationState.preview = null;
+    invalidatePublicationPreview();
     publicationState.previewing = false;
     publicationState.publishing = false;
     publicationState.slugTouched = false;
     publicationState.selectedSourceType = "all";
-    publicationState.title = sourceLabel(source === null ? null : source);
-    if (!source) {
-      publicationState.title = "";
-    }
-    publicationState.slug = publicationState.title ? toSlug(publicationState.title) : "";
-    publicationState.description = "";
-    publicationState.owner = "";
-    publicationState.domain = "";
-    publicationState.tagsText = "";
-    publicationState.accessLevel = "internal";
-    publicationState.accessNote = "";
-    publicationState.requestAccessContact = "";
+    applyMetadataDefaults(source);
 
     renderPublicationDialog();
     publicationDialog().showModal();
   }
 
   async function previewPublication() {
+    publicationState.overwriteConfirmed = false;
     publicationState.previewing = true;
     renderPublicationDialog();
     try {
@@ -440,6 +675,9 @@ export function createDataProductsController(helpers) {
         },
         body: JSON.stringify(publicationPayload()),
       });
+      if (publicationState.preview?.existingProduct?.dacaManaged) {
+        publicationState.publishToDaca = true;
+      }
       publicationState.step = 4;
       renderPublicationDialog();
     } catch (error) {
@@ -459,6 +697,10 @@ export function createDataProductsController(helpers) {
   }
 
   async function publishDataProduct() {
+    if (publicationState.publishing) {
+      return;
+    }
+    const overwriteExisting = overwriteIsConfirmed();
     publicationState.publishing = true;
     renderPublicationDialog();
     try {
@@ -468,14 +710,36 @@ export function createDataProductsController(helpers) {
           Accept: "application/json",
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(publicationPayload()),
+        body: JSON.stringify(publicationPayload({ includeOverwrite: true })),
       });
       closeDialog(publicationDialog(), "confirm");
       await loadDataProductsPage();
+      const dacaPublication = payload.dacaPublication;
       await showMessageDialog({
-        title: "Data product published",
-        copy: `${payload.product.title} is now published. Data product page: ${payload.product.documentationUrl}.`,
+        title: overwriteExisting
+          ? dacaPublication
+            ? "Data product replaced and updated in DaCa"
+            : "Data product replaced"
+          : dacaPublication
+            ? "Data product published and sent to DaCa"
+            : "Data product published",
+        copy: overwriteExisting
+          ? dacaPublication
+            ? `${payload.product.title} was replaced while retaining its endpoint, product identity and DaCa governance. The updated metadata was sent to DaCa.`
+            : `${payload.product.title} was replaced while retaining its endpoint and product identity.`
+          : dacaPublication
+            ? `${payload.product.title} is locally published and registered for DaCa pre-review. Nobody has a DaCa access grant yet; configure governance and access in DaCa.`
+            : `${payload.product.title} is now published. Data product page: ${payload.product.documentationUrl}.`,
         links: [
+          ...(dacaPublication?.catalogUrl
+            ? [
+                {
+                  href: dacaPublication.catalogUrl,
+                  label: "Open DaCa quality wizard as Joel Ruod",
+                  external: true,
+                },
+              ]
+            : []),
           {
             href: payload.product.documentationUrl,
             label: "Open data product page",
@@ -776,6 +1040,7 @@ export function createDataProductsController(helpers) {
     }
 
     if (event.target.matches("[data-data-product-title-input]")) {
+      const previousSlug = publicationState.slug;
       publicationState.title = event.target.value;
       if (!publicationState.slugTouched) {
         publicationState.slug = toSlug(publicationState.title);
@@ -784,12 +1049,19 @@ export function createDataProductsController(helpers) {
           slugInput.value = publicationState.slug;
         }
       }
+      if (publicationState.slug !== previousSlug) {
+        invalidatePublicationPreview();
+      }
       return true;
     }
     if (event.target.matches("[data-data-product-slug-input]")) {
+      const previousSlug = publicationState.slug;
       publicationState.slugTouched = true;
       publicationState.slug = toSlug(event.target.value);
       event.target.value = publicationState.slug;
+      if (publicationState.slug !== previousSlug) {
+        invalidatePublicationPreview();
+      }
       return true;
     }
     if (event.target.matches("[data-data-product-description-input]")) {
@@ -802,6 +1074,14 @@ export function createDataProductsController(helpers) {
     }
     if (event.target.matches("[data-data-product-domain-input]")) {
       publicationState.domain = event.target.value;
+      return true;
+    }
+    if (event.target.matches("[data-data-product-update-frequency-input]")) {
+      publicationState.updateFrequency = event.target.value;
+      return true;
+    }
+    if (event.target.matches("[data-data-product-target-audience-input]")) {
+      publicationState.targetAudience = event.target.value;
       return true;
     }
     if (event.target.matches("[data-data-product-tags-input]")) {
@@ -837,16 +1117,23 @@ export function createDataProductsController(helpers) {
       if (event.target.matches("[data-data-product-source-select]")) {
         publicationState.selectedSourceOptionId = event.target.value;
         publicationState.selectedSource = currentSourceDescriptor();
-        if (!publicationState.slugTouched) {
-          publicationState.title = sourceLabel(currentSourceDescriptor());
-          publicationState.slug = toSlug(publicationState.title);
-        }
-        publicationState.preview = null;
+        publicationState.slugTouched = false;
+        applyMetadataDefaults(currentSourceDescriptor());
+        invalidatePublicationPreview();
         renderPublicationDialog();
         return true;
       }
       if (event.target.matches("[data-data-product-access-level-input]")) {
         publicationState.accessLevel = event.target.value;
+        return true;
+      }
+      if (event.target.matches("[data-data-product-publish-to-daca]")) {
+        publicationState.publishToDaca = event.target.checked;
+        return true;
+      }
+      if (event.target.matches("[data-data-product-overwrite-confirm]")) {
+        publicationState.overwriteConfirmed = event.target.checked;
+        syncPublicationActionState(dialog);
         return true;
       }
     }

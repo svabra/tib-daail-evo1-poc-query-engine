@@ -108,6 +108,9 @@
               {{ data_product_icon(product.sourceKind) }}
             </span>
             <span class="data-product-badge">{{ product.accessLevel | upper }}</span>
+            {% if product.dacaManaged %}
+              <span class="data-product-badge data-product-badge-daca">DaCa · {{ product.dacaPublication.state }}</span>
+            {% endif %}
             <details class="workspace-action-menu data-product-card-menu" data-workspace-action-menu data-data-product-card-menu>
               <summary
                 class="workspace-action-menu-toggle data-product-card-menu-toggle"
@@ -140,6 +143,16 @@
                 >
                   Open Endpoint
                 </a>
+                {% if product.dacaPublication and product.dacaPublication.catalogUrl %}
+                  <a
+                    href="{{ product.dacaPublication.catalogUrl }}"
+                    target="_blank"
+                    rel="noreferrer"
+                    class="workspace-action-menu-item data-product-link-button"
+                  >
+                    Open DaCa Governance
+                  </a>
+                {% endif %}
                 <div class="workspace-action-menu-separator" aria-hidden="true"></div>
                 <button type="button" class="workspace-action-menu-item" data-edit-data-product>
                   Edit Metadata
@@ -190,6 +203,12 @@
               <span class="data-product-card-detail-label">Endpoint</span>
               <span class="data-product-card-detail-value data-product-card-detail-value-mono">{{ product.publicPath }}</span>
             </div>
+            {% if product.dacaManaged %}
+              <div>
+                <span class="data-product-card-detail-label">DaCa governance</span>
+                <span class="data-product-card-detail-value">Default Deny · no grant before approval</span>
+              </div>
+            {% endif %}
           </div>
           {% if product.owner or product.domain or product.tags %}
             <div class="data-product-card-chip-row">

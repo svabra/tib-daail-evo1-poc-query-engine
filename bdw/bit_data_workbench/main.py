@@ -9,6 +9,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from .api.router import router as api_router
+from .backend.static_assets import VersionedStaticFiles
 from .backend.service import WorkbenchService
 from .config import Settings
 from .web.router import router as web_router
@@ -99,7 +100,7 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
-app.mount("/static", StaticFiles(directory=BASE_DIR / "static"), name="static")
+app.mount("/static", VersionedStaticFiles(directory=BASE_DIR / "static"), name="static")
 app.mount("/node", StaticFiles(directory=BASE_DIR / "static" / "vendor" / "node"), name="node")
 app.include_router(api_router)
 app.include_router(web_router)

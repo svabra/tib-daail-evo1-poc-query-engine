@@ -1040,6 +1040,9 @@ export function createQueryUi(helpers) {
     const path = String(storage.path || "").trim();
     const virtualPath = String(storage.virtualPath || "").trim();
     const duckdbReference = String(storage.duckdbReference || storage.duckdbPath || "").trim();
+    const journeyResult = path.endsWith(
+      "/products/kantonale-gewerbesteuer-soll-ist-2022-2026.parquet"
+    );
     return `
       <div
         class="result-storage-summary is-${escapeHtml(status)}"
@@ -1057,6 +1060,11 @@ export function createQueryUi(helpers) {
           <span class="result-storage-status">${escapeHtml(statusLabel)}</span>
           <button type="button" class="result-storage-copy-button" data-copy-result-storage-virtual title="Copy virtual S3 source path">Virtual</button>
           <button type="button" class="result-storage-copy-button" data-copy-result-storage-duckdb title="Copy DuckDB read_parquet path">DuckDB</button>
+          ${
+            journeyResult && status === "completed"
+              ? `<button type="button" class="result-storage-copy-button result-storage-publish-button" data-publish-journey-data-product>Publish data product</button>`
+              : ""
+          }
         </div>
       </div>
     `;

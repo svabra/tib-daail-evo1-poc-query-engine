@@ -8,6 +8,7 @@ export function createHomeUi(helpers) {
     homePageRoot,
     homeRecentIngestionsRoot,
     homeRecentNotebooksRoot,
+    initializeHomeNotebookSearch,
     notebookLinks,
     readNotebookActivity,
   } = helpers;
@@ -130,9 +131,11 @@ export function createHomeUi(helpers) {
     renderRecentNotebooks(homeRecentNotebooksRoot(), { limit: 3 });
     updateQueryWorkbenchShortcuts();
 
-    if (!homePageRoot()) {
+    const pageRoot = homePageRoot();
+    if (!pageRoot) {
       return;
     }
+    initializeHomeNotebookSearch?.(pageRoot);
 
     const recentIngestionsRoot = homeRecentIngestionsRoot();
     if (recentIngestionsRoot) {

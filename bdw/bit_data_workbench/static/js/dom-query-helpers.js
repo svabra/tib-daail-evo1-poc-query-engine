@@ -82,6 +82,10 @@ export function homePageRoot() {
   return document.querySelector("[data-home-page]");
 }
 
+export function workbenchExpertSearchPageRoot() {
+  return document.querySelector("[data-workbench-expert-search-page]");
+}
+
 export function queryWorkbenchEntryPageRoot() {
   return document.querySelector("[data-query-workbench-entry-page]");
 }

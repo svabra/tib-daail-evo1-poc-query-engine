@@ -120,6 +120,152 @@ async def assert_ingestion_returns_to_landing_after_navigation(page, timeout_ms:
         state="hidden",
         timeout=timeout_ms,
     )
+    await page.reload(wait_until="domcontentloaded")
+    await page.locator("[data-ingestion-workbench-page]").wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
+    await page.wait_for_timeout(500)
+
+
+async def assert_ingestion_state_survives_out_of_order_back_forward(
+    page, timeout_ms: int
+) -> None:
+    await open_csv_ingestor(page, timeout_ms)
+    file_input = page.locator("[data-csv-file-input]").first
+    await file_input.set_input_files(
+        files=[
+            {
+                "name": "playwright-history.csv",
+                "mimeType": "text/csv",
+                "buffer": b"canton;amount\nAG;42\n",
+            }
+        ]
+    )
+    await page.locator("[data-csv-delimiter-mode]").select_option("semicolon")
+    await page.locator('[data-csv-target-option][value="s3"]').check()
+    await page.locator("[data-csv-s3-bucket]").fill("playwright-history")
+    prefix = page.locator("[data-csv-s3-prefix]")
+    await prefix.fill("manual/aargau/")
+    await prefix.scroll_into_view_if_needed()
+    await prefix.focus()
+    scroll_before = await page.evaluate(
+        """
+        () => {
+          const input = document.querySelector('[data-csv-s3-prefix]');
+          window.scrollTo(0, Math.max(0, document.documentElement.scrollHeight - window.innerHeight));
+          input?.scrollIntoView({ block: 'center' });
+          input?.focus();
+          return {
+            scrollY: window.scrollY,
+            prefixTop: input?.getBoundingClientRect().top ?? null,
+          };
+        }
+        """
+    )
+    await page.evaluate(
+        """
+        () => {
+          const originalFetch = window.fetch.bind(window);
+          window.__pwHistoryFetch = originalFetch;
+          window.__pwLateNotebookStarted = false;
+          window.__pwLateNotebookReturned = false;
+          window.__pwForwardIngestionReturned = false;
+          window.fetch = async (input, init = {}) => {
+            const raw = typeof input === 'string' ? input : input?.url || '';
+            const url = new URL(raw, location.origin);
+            if (
+              url.pathname === '/notebooks/data-analysts-journey-cantonal-business-tax' &&
+              init?.headers?.['HX-Request'] === 'true'
+            ) {
+              window.__pwLateNotebookStarted = true;
+              const response = await originalFetch(raw, { ...init, signal: undefined });
+              await new Promise((resolve) => window.setTimeout(resolve, 1200));
+              window.__pwLateNotebookReturned = true;
+              return response;
+            }
+            if (url.pathname === '/ingestion-workbench' && init?.headers?.['HX-Request'] === 'true') {
+              const response = await originalFetch(input, init);
+              window.__pwForwardIngestionReturned = true;
+              return response;
+            }
+            return originalFetch(input, init);
+          };
+          history.replaceState({ pw: 'ingestion-origin' }, '', '/ingestion-workbench');
+          history.pushState(
+            { pw: 'notebook' },
+            '',
+            '/notebooks/data-analysts-journey-cantonal-business-tax'
+          );
+          history.pushState({ pw: 'ingestion-final' }, '', '/ingestion-workbench');
+        }
+        """
+    )
+    await page.go_back()
+    await page.wait_for_function("window.__pwLateNotebookStarted === true", timeout=timeout_ms)
+    await page.go_forward()
+    await page.wait_for_function("window.__pwForwardIngestionReturned === true", timeout=timeout_ms)
+    await page.wait_for_function("window.__pwLateNotebookReturned === true", timeout=timeout_ms)
+    await page.wait_for_timeout(250)
+    state = await page.evaluate(
+        """
+        () => ({
+          pathname: location.pathname,
+          historyState: history.state?.pw || '',
+          fileName: document.querySelector('[data-csv-file-input]')?.files?.[0]?.name || '',
+          delimiter: document.querySelector('[data-csv-delimiter-mode]')?.value || '',
+          target: document.querySelector('[data-csv-target-option]:checked')?.value || '',
+          bucket: document.querySelector('[data-csv-s3-bucket]')?.value || '',
+          prefix: document.querySelector('[data-csv-s3-prefix]')?.value || '',
+          focusPreserved: document.activeElement?.matches('[data-csv-s3-prefix]') === true,
+          scrollY: window.scrollY,
+          prefixTop: document.querySelector('[data-csv-s3-prefix]')?.getBoundingClientRect().top ?? null,
+          notebookVisible: Boolean(document.querySelector('[data-notebook-meta]')),
+        })
+        """
+    )
+    await page.evaluate(
+        """
+        () => {
+          if (window.__pwHistoryFetch) window.fetch = window.__pwHistoryFetch;
+          delete window.__pwHistoryFetch;
+        }
+        """
+    )
+    expected = {
+        "pathname": "/ingestion-workbench",
+        "historyState": "ingestion-final",
+        "fileName": "playwright-history.csv",
+        "delimiter": "semicolon",
+        "target": "s3",
+        "bucket": "playwright-history",
+        "prefix": "manual/aargau/",
+        "focusPreserved": True,
+        "notebookVisible": False,
+    }
+    scroll_after = state.pop("scrollY")
+    prefix_after = state.pop("prefixTop")
+    scroll_clamped_to_document = (
+        abs(scroll_after - scroll_before["scrollY"]) <= 2
+        or abs(prefix_after - scroll_before["prefixTop"]) <= 24
+    )
+    if state != expected or not scroll_clamped_to_document:
+        raise RuntimeError(
+            "Ingestion state changed after out-of-order Back/Forward: "
+            f"{state!r}, scroll {scroll_after!r}, prefixTop {prefix_after!r} != "
+            f"{expected!r}, scroll {scroll_before!r}"
+        )
+    await page.locator("[data-close-ingestion-entry]").first.click()
+    await page.locator('[data-ingestion-entry-panel="csv"]').wait_for(
+        state="hidden",
+        timeout=timeout_ms,
+    )
+    await page.reload(wait_until="domcontentloaded")
+    await page.locator("[data-ingestion-workbench-page]").wait_for(
+        state="visible",
+        timeout=timeout_ms,
+    )
+    await page.wait_for_timeout(500)
 
 
 async def reject_invalid_csv_file(page, timeout_ms: int) -> None:
@@ -862,6 +1008,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
             await open_ingestion_workbench(page, args.base_url, args.timeout_ms)
             await assert_ingestion_tile_copy(page, args.timeout_ms)
             await assert_ingestion_returns_to_landing_after_navigation(page, args.timeout_ms)
+            await assert_ingestion_state_survives_out_of_order_back_forward(page, args.timeout_ms)
             await open_csv_ingestor(page, args.timeout_ms)
             await reject_invalid_csv_file(page, args.timeout_ms)
             await import_local_csv_file(page, args.timeout_ms)

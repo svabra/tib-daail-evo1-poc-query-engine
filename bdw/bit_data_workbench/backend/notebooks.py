@@ -27,9 +27,6 @@ from .source_references import (
     s3_source_reference,
     s3_table_function_sql,
 )
-from .sql_utils import sql_literal
-
-
 KOSTENBELEGE_3_1_GENERATED_BUCKET = (
     "poc-tests-performance-evaluation-kostenbelege-3-1"
 )
@@ -387,7 +384,7 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         catalogs,
         catalog_name="pg_oltp",
         schema_name="public",
-        object_names=("vat_smoke_test_reference",),
+        object_names=("vat_filing_smoke_generated",),
     )
     preferred_postgres_olap_relation = _find_relation_by_object_name(
         catalogs,

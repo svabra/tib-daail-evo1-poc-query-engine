@@ -22,6 +22,12 @@ import {
 import { createIngestionController } from "./ingestion-controller.js";
 import { createIngestionUi } from "./ingestion-ui.js";
 import { createHomeUi } from "./home-ui.js";
+import { initializeWorkbenchExpertSearch } from "./expert-search.js";
+import {
+  initializeDaaifDemoIdentity,
+  syncDaaifFederalNavigation,
+} from "./demo-identity.js";
+import { initializeHomeNotebookSearch } from "./home-notebook-search.js";
 import { createCsvIngestionController } from "./ingestion-types/csv/index.js";
 import { createFileIngestionController } from "./ingestion-types/file/index.js";
 import { createDataProductsController } from "./data-products-controller.js";
@@ -112,6 +118,7 @@ import {
   sourceInspector,
   sourceInspectorPanel,
   sourceObjectNodes,
+  workbenchExpertSearchPageRoot,
 } from "./dom-query-helpers.js";
 import { createSourceInspectorController } from "./source-inspector-controller.js";
 import { createSourceInspectorUi } from "./source-inspector-ui.js";
@@ -141,6 +148,16 @@ import { createSidebarLayoutManager } from "./sidebar-layout-manager.js";
 import { createSidebarRefreshController } from "./sidebar-refresh-controller.js";
 import { createSidebarSearchFilter } from "./sidebar-search-filter.js";
 import { createWorkspaceScrollManager } from "./workspace-scroll-manager.js";
+import { createWorkspaceNavigationEpoch } from "./workspace-navigation-epoch.js";
+import {
+  captureIngestionWorkbenchNavigationState,
+  restoreIngestionWorkbenchNavigationState,
+} from "./ingestion-workbench-navigation-state.js";
+import { createVisibilityAwareClock } from "./visibility-clock.js";
+import {
+  ensureFeatureReleaseNotes,
+  ensureNotebookEditorMetadata,
+} from "./workbench-metadata-cache.js";
 import {
   accessModeForDataSources,
   accessModeHintForDataSources,
@@ -176,11 +193,12 @@ import { createWorkbenchNavigationController } from "./workbench-navigation-cont
 import { createWorkbenchStorage } from "./workbench-storage.js";
 
 createAppTooltipController().install();
+initializeDaaifDemoIdentity();
 
 const editorRegistry = new WeakMap();
 const editorSizingRegistry = new WeakMap();
 let draggedNotebook = null;
-let restoreController = null;
+const workspaceNavigation = createWorkspaceNavigationEpoch();
 let applyingNotebookState = false;
 let activeCellId = null;
 let queryJobsStateVersion = null;
@@ -190,6 +208,7 @@ let queryPerformanceState = { recent: [], stats: {} };
 let queryJobsReconcileHandle = null;
 let queryJobsReconcileInFlight = false;
 let sidebarNotebookTreeLoadPromise = null;
+let sidebarRunbookTreeLoadPromise = null;
 const queryJobsReconcileInitialDelayMs = 1500;
 const queryJobsReconcilePollMs = 4000;
 const collapsedQueryResultKeys = new Set();
@@ -198,7 +217,6 @@ const visibleQueryTimingDetailKeys = new Set();
 let pythonJobsStateVersion = null;
 let pythonJobsSnapshot = [];
 let pythonJobsSummary = { runningCount: 0, totalCount: 0 };
-let pythonJobsClockHandle = null;
 let realtimeEventsEventSource = null;
 let serviceConsumptionStateVersion = null;
 let clientConnectionsStateVersion = 0;
@@ -672,6 +690,7 @@ const { renderHomePage } = createHomeUi({
   homeRecentNotebooksRoot,
   notebookLinks,
   readNotebookActivity,
+  initializeHomeNotebookSearch,
 });
 
 const {
@@ -882,6 +901,7 @@ const {
   getQueryNotificationMenu: queryNotificationMenu,
   openDataExchangeWorkbench,
   openDataProductsWorkbench,
+  openHomePage: loadHomePage,
   openLoaderWorkbench,
   loadQueryWorkbenchDataSourceExplorer,
   loadQueryWorkbenchDataSources,
@@ -928,6 +948,13 @@ const {
   getSetSelectedSourceObjectState: () => setSelectedSourceObjectState,
   listLocalWorkspaceExports,
   loadNotebookWorkspace,
+  isWorkspaceNavigationSettled: () => {
+    const panel = document.getElementById("workspace-panel");
+    const epochMarker = panel?.dataset?.workspaceNavigationEpoch;
+    return epochMarker
+      ? Number(epochMarker) === workspaceNavigation.currentEpoch()
+      : workspaceNavigation.currentEpoch() === 0;
+  },
   localWorkspaceCatalogSourceId,
   localWorkspaceRelationPrefix,
   localWorkspaceSchemaKey,
@@ -1370,6 +1397,10 @@ function currentWorkbenchSection() {
     return "home";
   }
 
+  if (workbenchExpertSearchPageRoot()) {
+    return "expert-search";
+  }
+
   if (dataProductsPageRoot()) {
     return "data-products";
   }
@@ -1430,6 +1461,10 @@ function workbenchTitle(section = currentWorkbenchSection()) {
     return "DAAIF Factory";
   }
 
+  if (section === "expert-search") {
+    return "DAAIF Factory - Expertensuche";
+  }
+
   if (section === "data-sources") {
     return "DAAIF Factory - Data Source Workbench";
   }
@@ -1486,6 +1521,7 @@ function applyWorkbenchTitle(section = currentWorkbenchSection()) {
   if (typeof document !== "undefined") {
     document.title = workbenchBrowserTitle(section);
   }
+  syncDaaifFederalNavigation(section);
 }
 
 function formatRelativeTimestamp(value) {
@@ -1749,7 +1785,12 @@ function showAboutDialog() {
   });
 }
 
-function showFeatureListDialog() {
+async function showFeatureListDialog() {
+  try {
+    await ensureFeatureReleaseNotes();
+  } catch (error) {
+    console.error("Failed to load feature history.", error);
+  }
   const dialog = ensureFeatureListDialog();
   const body = dialog.querySelector("[data-feature-list-body]");
   const currentVersion = applicationVersion();
@@ -1832,6 +1873,26 @@ function loadDeferredSidebarNotebookTree() {
   return sidebarNotebookTreeLoadPromise;
 }
 
+function loadDeferredSidebarRunbookTree() {
+  const placeholder = document.querySelector("[data-deferred-runbook-tree]");
+  if (!placeholder) {
+    return Promise.resolve();
+  }
+  if (sidebarRunbookTreeLoadPromise) {
+    return sidebarRunbookTreeLoadPromise;
+  }
+
+  placeholder.classList.add("is-loading");
+  sidebarRunbookTreeLoadPromise = refreshSidebar("loader", { force: true })
+    .catch((error) => {
+      console.error("Failed to load deferred Loader runbooks.", error);
+    })
+    .finally(() => {
+      sidebarRunbookTreeLoadPromise = null;
+    });
+  return sidebarRunbookTreeLoadPromise;
+}
+
 function restoreSidebarVisibilityForWorkspace() {
   setShellSidebarHidden(false);
   applySidebarCollapsedState(readSidebarCollapsed());
@@ -1858,6 +1919,9 @@ function openLoaderNavigation(generatorId = "") {
   applySidebarCollapsedState(false);
   writeSidebarCollapsed(false);
   ingestionRunbookSection()?.setAttribute("open", "");
+  loadDeferredSidebarRunbookTree().finally(() => {
+    ingestionRunbookSection()?.setAttribute("open", "");
+  });
 
   if (!generatorId) {
     return;
@@ -1873,6 +1937,7 @@ function openLoaderNavigation(generatorId = "") {
 function syncShellVisibility() {
   if (
     homePageRoot() ||
+    workbenchExpertSearchPageRoot() ||
     dataProductsPageRoot() ||
     dataExchangePageRoot() ||
     serviceConsumptionPageRoot() ||
@@ -2445,6 +2510,27 @@ function normalizeDataGenerator(generator) {
         })
         .filter(Boolean)
     : [];
+  const downloadableFiles = Array.isArray(generator.downloadableFiles)
+    ? generator.downloadableFiles
+        .map((file) => {
+          if (!file || typeof file !== "object") {
+            return null;
+          }
+          const downloadUrl = String(file.downloadUrl ?? file.href ?? "").trim();
+          const targetPath = String(file.targetPath ?? "").trim();
+          if (!downloadUrl || !targetPath) {
+            return null;
+          }
+          return {
+            fileName: String(file.fileName ?? "").trim(),
+            label: String(file.label ?? file.fileName ?? "CSV-Datei").trim(),
+            downloadUrl,
+            targetPath,
+            replaceExisting: file.replaceExisting === true,
+          };
+        })
+        .filter(Boolean)
+    : [];
 
   return {
     ...generator,
@@ -2463,6 +2549,7 @@ function normalizeDataGenerator(generator) {
     supportsCleanup: Boolean(generator.supportsCleanup),
     tags: Array.isArray(generator.tags) ? generator.tags : [],
     linkedNotebooks,
+    downloadableFiles,
   };
 }
 
@@ -8057,20 +8144,12 @@ function refreshLivePythonClock() {
   });
 }
 
+const pythonJobsClock = createVisibilityAwareClock(refreshLivePythonClock);
+
 function syncPythonClockLoop() {
   const hasRunningJobs = pythonJobsSnapshot.some((job) => pythonJobIsRunning(job));
-  if (hasRunningJobs && pythonJobsClockHandle === null) {
-    refreshLivePythonClock();
-    pythonJobsClockHandle = window.setInterval(refreshLivePythonClock, 100);
-    return;
-  }
-
-  if (!hasRunningJobs && pythonJobsClockHandle !== null) {
-    window.clearInterval(pythonJobsClockHandle);
-    pythonJobsClockHandle = null;
-  }
-
-  refreshLivePythonClock();
+  pythonJobsClock.setEnabled(hasRunningJobs);
+  pythonJobsClock.refresh();
 }
 
 function syncPythonCellJobState(cellRoot) {
@@ -8230,8 +8309,19 @@ async function applyNotebookEvent(eventPayload) {
   }
   const mode = currentWorkspaceMode();
   const activeNotebookId = currentWorkspaceNotebookId();
+  const navigationSnapshot = workspaceNavigation.snapshot({
+    notebookId: activeNotebookId,
+    reason: "notebook-sse",
+  });
+  const stillOnCapturedWorkspace = () =>
+    workspaceNavigationIsCurrent(navigationSnapshot) &&
+    currentWorkspaceMode() === mode &&
+    currentWorkspaceNotebookId() === activeNotebookId;
 
-  await refreshSidebar(mode);
+  await refreshSidebar(mode, { isCurrent: stillOnCapturedWorkspace });
+  if (!stillOnCapturedWorkspace()) {
+    return;
+  }
 
   if (eventPayload.eventType === "deleted" && activeNotebookId === notebookId) {
     const fallbackNotebookId = visibleNotebookLinks()[0]?.dataset.notebookId ?? "";
@@ -8287,13 +8377,28 @@ function applyNotebookEventsState(snapshot) {
 }
 
 async function openQueryWorkbench(notebookId = "") {
+  const navigationToken = workspaceNavigation.begin({
+    path: notebookId && !isLocalNotebookId(notebookId)
+      ? `/notebooks/${encodeURIComponent(notebookId)}`
+      : "/query-workbench",
+    notebookId,
+  });
   if (currentSidebarMode() !== "notebook") {
-    await refreshSidebar("notebook");
+    await refreshSidebar("notebook", {
+      signal: navigationToken.signal,
+      isCurrent: () => workspaceNavigationIsCurrent(navigationToken),
+    });
+    if (!workspaceNavigationIsCurrent(navigationToken)) {
+      return;
+    }
   }
 
   if (notebookId) {
     openNotebookNavigation(notebookId);
-    await loadNotebookWorkspace(notebookId);
+    await loadNotebookWorkspace(notebookId, { navigationToken });
+    if (!workspaceNavigationIsCurrent(navigationToken)) {
+      return;
+    }
     if (isLocalNotebookId(notebookId)) {
       pushQueryWorkbenchHistory();
     } else {
@@ -8302,19 +8407,30 @@ async function openQueryWorkbench(notebookId = "") {
     return;
   }
 
-  await loadQueryWorkbenchEntry();
+  await loadQueryWorkbenchEntry({ navigationToken });
 }
 
 async function openQueryWorkbenchNavigation() {
-  if (currentSidebarMode() !== "notebook") {
-    await refreshSidebar("notebook");
-  }
-
   const preferredNotebookId = [
     currentActiveNotebookId(),
     readLastNotebookId(),
     visibleNotebookLinks()[0]?.dataset.notebookId ?? "",
   ].find((candidate) => candidate && !notebookMetadata(candidate).deleted);
+  const navigationToken = workspaceNavigation.begin({
+    path: preferredNotebookId && !isLocalNotebookId(preferredNotebookId)
+      ? `/notebooks/${encodeURIComponent(preferredNotebookId)}`
+      : "/query-workbench",
+    notebookId: preferredNotebookId || "",
+  });
+  if (currentSidebarMode() !== "notebook") {
+    await refreshSidebar("notebook", {
+      signal: navigationToken.signal,
+      isCurrent: () => workspaceNavigationIsCurrent(navigationToken),
+    });
+    if (!workspaceNavigationIsCurrent(navigationToken)) {
+      return;
+    }
+  }
 
   if (preferredNotebookId) {
     openNotebookNavigation(preferredNotebookId);
@@ -8335,7 +8451,10 @@ async function openQueryWorkbenchNavigation() {
       return;
     }
 
-    await loadNotebookWorkspace(preferredNotebookId);
+    await loadNotebookWorkspace(preferredNotebookId, { navigationToken });
+    if (!workspaceNavigationIsCurrent(navigationToken)) {
+      return;
+    }
     if (isLocalNotebookId(preferredNotebookId)) {
       pushQueryWorkbenchHistory();
     } else {
@@ -8344,26 +8463,47 @@ async function openQueryWorkbenchNavigation() {
     return;
   }
 
-  await loadQueryWorkbenchEntry();
+  await loadQueryWorkbenchEntry({ navigationToken });
 }
 
-async function loadWorkspacePanelPartial(path) {
+function workspaceNavigationIsCurrent(token) {
+  return workspaceNavigation.isCurrent(token);
+}
+
+function workspacePanelNavigationIsCurrent(panel) {
+  if (!(panel instanceof Element) || !panel.isConnected) {
+    return false;
+  }
+  return Number(panel.dataset.workspaceNavigationEpoch) === workspaceNavigation.currentEpoch();
+}
+
+async function loadWorkspacePanelPartial(path, { navigationToken = null } = {}) {
   const panel = document.getElementById("workspace-panel");
   if (!panel) {
     return null;
   }
 
+  const token = navigationToken ?? workspaceNavigation.begin({ path });
   const response = await window.fetch(path, {
     headers: {
       Accept: "text/html",
       "HX-Request": "true",
     },
+    signal: token.signal,
   });
+  if (!workspaceNavigationIsCurrent(token)) {
+    return null;
+  }
   if (!response.ok) {
     throw new Error(`Failed to load ${path}: ${response.status}`);
   }
 
-  panel.innerHTML = await response.text();
+  const markup = await response.text();
+  if (!workspaceNavigationIsCurrent(token)) {
+    return null;
+  }
+  panel.innerHTML = markup;
+  panel.dataset.workspaceNavigationEpoch = String(token.epoch);
   processHtmx(panel);
   initializeEditors(panel);
   applyNotebookMetadata();
@@ -8376,8 +8516,8 @@ async function loadWorkspacePanelPartial(path) {
   return panel;
 }
 
-async function loadQueryWorkbenchEntry({ pushHistory = true } = {}) {
-  const panel = await loadWorkspacePanelPartial("/query-workbench");
+async function loadQueryWorkbenchEntry({ pushHistory = true, navigationToken = null } = {}) {
+  const panel = await loadWorkspacePanelPartial("/query-workbench", { navigationToken });
   if (!panel) {
     return;
   }
@@ -8497,6 +8637,9 @@ async function loadQueryWorkbenchDataSources(
   activateNotebookLink("");
   applyWorkbenchTitle("data-sources");
   await initializeDataSourceManagementPage();
+  if (!workspacePanelNavigationIsCurrent(panel)) {
+    return;
+  }
   if (pushHistory) {
     pushQueryWorkbenchDataSourcesHistory(sourceId, { browse });
   }
@@ -8532,6 +8675,9 @@ async function loadQueryWorkbenchDataSourceExplorer(sourceId = "", { pushHistory
   activateNotebookLink("");
   applyWorkbenchTitle("data-sources");
   await dataSourceExplorerController.initializeCurrentPage();
+  if (!workspacePanelNavigationIsCurrent(panel)) {
+    return;
+  }
   if (pushHistory) {
     pushQueryWorkbenchDataSourceExplorerHistory(sourceId);
   }
@@ -8547,6 +8693,9 @@ async function loadServiceConsumptionPage({ pushHistory = true } = {}) {
   activateNotebookLink("");
   applyWorkbenchTitle("service-consumption");
   await serviceConsumptionUi.initializeCurrentPage();
+  if (!workspacePanelNavigationIsCurrent(panel)) {
+    return;
+  }
   if (pushHistory) {
     pushServiceConsumptionHistory();
   }
@@ -8804,52 +8953,83 @@ function ensureRealtimeEventsEventSource() {
   realtimeEventsEventSource = eventSource;
 }
 
-async function openIngestionWorkbench() {
+async function openIngestionWorkbench({ pushHistory = true, navigationToken = null } = {}) {
   const panel = document.getElementById("workspace-panel");
   if (!panel) {
     return;
   }
 
+  const previousState = captureIngestionWorkbenchNavigationState(panel.querySelector("[data-ingestion-workbench-page]"));
+  const token = navigationToken ?? workspaceNavigation.begin({ path: "/ingestion-workbench" });
   const response = await window.fetch("/ingestion-workbench", {
     headers: { "HX-Request": "true" },
+    signal: token.signal,
   });
+  if (!workspaceNavigationIsCurrent(token)) {
+    return;
+  }
   if (!response.ok) {
     throw new Error(`Failed to load the ingestion workbench: ${response.status}`);
   }
 
-  panel.innerHTML = await response.text();
+  const markup = await response.text();
+  if (!workspaceNavigationIsCurrent(token)) {
+    return;
+  }
+  panel.innerHTML = markup;
+  panel.dataset.workspaceNavigationEpoch = String(token.epoch);
   processHtmx(panel);
   setShellSidebarHidden(true);
   applyWorkbenchTitle("ingestion");
-  if (window.location.pathname !== "/ingestion-workbench") {
+  if (pushHistory && window.location.pathname !== "/ingestion-workbench") {
     window.history.pushState({}, "", "/ingestion-workbench");
   }
-  showIngestionLanding();
+  if (!restoreIngestionWorkbenchNavigationState(previousState, panel.querySelector("[data-ingestion-workbench-page]"))) {
+    showIngestionLanding();
+  }
   renderQueryNotificationMenu();
 }
 
-async function openLoaderWorkbench({ focusJobId = "", focusGeneratorId = "" } = {}) {
+async function openLoaderWorkbench({
+  focusJobId = "",
+  focusGeneratorId = "",
+  pushHistory = true,
+  navigationToken = null,
+} = {}) {
   const panel = document.getElementById("workspace-panel");
   if (!panel) {
     return;
   }
 
+  const token = navigationToken ?? workspaceNavigation.begin({ path: "/loader-workbench" });
   openLoaderNavigation();
 
   const response = await window.fetch("/loader-workbench", {
     headers: { "HX-Request": "true" },
+    signal: token.signal,
   });
+  if (!workspaceNavigationIsCurrent(token)) {
+    return;
+  }
   if (!response.ok) {
     throw new Error(`Failed to load the Loader Workbench: ${response.status}`);
   }
 
-  panel.innerHTML = await response.text();
+  const markup = await response.text();
+  if (!workspaceNavigationIsCurrent(token)) {
+    return;
+  }
+  panel.innerHTML = markup;
+  panel.dataset.workspaceNavigationEpoch = String(token.epoch);
   processHtmx(panel);
   applyWorkbenchTitle("loader");
-  if (window.location.pathname !== "/loader-workbench") {
+  if (pushHistory && window.location.pathname !== "/loader-workbench") {
     window.history.pushState({}, "", "/loader-workbench");
   }
   await Promise.allSettled([loadDataGeneratorCatalog(), loadDataGenerationJobsState()]);
+  if (!workspaceNavigationIsCurrent(token)) {
+    return;
+  }
   const focusedJob = focusJobId
     ? dataGenerationJobsSnapshot.find((job) => job.jobId === focusJobId) ?? null
     : null;
@@ -8859,7 +9039,13 @@ async function openLoaderWorkbench({ focusJobId = "", focusGeneratorId = "" } = 
   );
   renderIngestionWorkbench();
   if (currentSidebarMode() !== "loader") {
-    await refreshSidebar("loader");
+    await refreshSidebar("loader", {
+      signal: token.signal,
+      isCurrent: () => workspaceNavigationIsCurrent(token),
+    });
+    if (!workspaceNavigationIsCurrent(token)) {
+      return;
+    }
   } else {
     syncSelectedIngestionRunbookState();
     renderDataGenerationMonitor();
@@ -11210,49 +11396,62 @@ async function downloadQueryResultExport(job, exportFormat, exportSettings = {},
 async function loadNotebookWorkspace(notebookId, options = {}) {
   const panel = document.getElementById("workspace-panel");
   if (!panel || !notebookId) {
-    return;
+    return false;
   }
 
-  const { scrollToTop = true } = options;
+  const { scrollToTop = true, navigationToken = null } = options;
+  const token =
+    navigationToken ??
+    workspaceNavigation.begin({
+      path: isLocalNotebookId(notebookId)
+        ? "/query-workbench"
+        : `/notebooks/${encodeURIComponent(notebookId)}`,
+      notebookId,
+    });
   if (notebookMetadata(notebookId).deleted) {
     const fallbackNotebookId = nextVisibleNotebookId(notebookId);
     if (!fallbackNotebookId) {
-      renderEmptyWorkspace();
-      writeLastNotebookId("");
-      return;
+      if (workspaceNavigationIsCurrent(token)) {
+        renderEmptyWorkspace();
+        writeLastNotebookId("");
+      }
+      return false;
     }
 
     notebookId = fallbackNotebookId;
   }
 
   if (isLocalNotebookId(notebookId)) {
-    renderLocalNotebookWorkspace(notebookId, { scrollToTop });
-    return;
+    if (workspaceNavigationIsCurrent(token)) {
+      renderLocalNotebookWorkspace(notebookId, { scrollToTop });
+      panel.dataset.workspaceNavigationEpoch = String(token.epoch);
+    }
+    return workspaceNavigationIsCurrent(token);
   }
-
-  const controller = new AbortController();
-  restoreController = controller;
 
   const response = await window.fetch(`/notebooks/${encodeURIComponent(notebookId)}`, {
     headers: { "HX-Request": "true" },
-    signal: controller.signal,
+    signal: token.signal,
   });
-  if (controller.signal.aborted || restoreController !== controller) {
-    return;
-  }
-  if (restoreController === controller) {
-    restoreController = null;
+  if (!workspaceNavigationIsCurrent(token)) {
+    return false;
   }
   if (!response.ok) {
     throw new Error(`Failed to load notebook ${notebookId}: ${response.status}`);
   }
 
   const workspaceMarkup = await response.text();
-  if (controller.signal.aborted) {
-    return;
+  if (!workspaceNavigationIsCurrent(token)) {
+    return false;
+  }
+
+  await ensureNotebookEditorMetadata({ signal: token.signal });
+  if (!workspaceNavigationIsCurrent(token)) {
+    return false;
   }
 
   panel.innerHTML = workspaceMarkup;
+  panel.dataset.workspaceNavigationEpoch = String(token.epoch);
   syncShellVisibility();
   applyWorkbenchTitle("query");
   if (panel.querySelector(`[data-notebook-meta][data-notebook-id="${CSS.escape(notebookId)}"][data-shared="true"]`)) {
@@ -11262,7 +11461,13 @@ async function loadNotebookWorkspace(notebookId, options = {}) {
   initializeEditors(panel);
   applyNotebookMetadata();
   if (currentSidebarMode() !== "notebook") {
-    await refreshSidebar("notebook");
+    await refreshSidebar("notebook", {
+      signal: token.signal,
+      isCurrent: () => workspaceNavigationIsCurrent(token),
+    });
+    if (!workspaceNavigationIsCurrent(token)) {
+      return false;
+    }
   }
   activateNotebookLink(notebookId);
   revealNotebookLink(notebookId);
@@ -11282,6 +11487,7 @@ async function loadNotebookWorkspace(notebookId, options = {}) {
   if (scrollToTop) {
     scrollWorkspaceNotebookIntoView();
   }
+  return workspaceNavigationIsCurrent(token);
 }
 
 async function restoreLastNotebook() {
@@ -11694,6 +11900,27 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  const publishJourneyDataProductTrigger = event.target.closest(
+    "[data-publish-journey-data-product]"
+  );
+  if (publishJourneyDataProductTrigger) {
+    event.preventDefault();
+    event.stopPropagation();
+    await dataProductsController.openPublishDialog({
+      source: {
+        sourceKind: "relation",
+        sourceId: "s3",
+        relation:
+          "data_analysts_journey_6f15a669.kantonale_gewerbesteuer_soll_ist_2022_2026",
+        sourceDisplayName: "Kantonale Gewerbesteuer Soll/Ist 2022–2026",
+        sourcePlatform: "s3",
+      },
+      lockSource: true,
+      startStep: 2,
+    });
+    return;
+  }
+
   const resultStorageDuckdbCopyTrigger = event.target.closest("[data-copy-result-storage-duckdb]");
   if (resultStorageDuckdbCopyTrigger) {
     event.preventDefault();
@@ -11872,10 +12099,10 @@ document.body.addEventListener("click", async (event) => {
     }
 
     event.preventDefault();
-    restoreController?.abort();
-    restoreController = null;
-    await loadNotebookWorkspace(link.dataset.notebookId);
-    pushNotebookHistory(link.dataset.notebookId);
+    const loaded = await loadNotebookWorkspace(link.dataset.notebookId);
+    if (loaded) {
+      pushNotebookHistory(link.dataset.notebookId);
+    }
     return;
   }
 
@@ -12197,6 +12424,12 @@ document.body.addEventListener(
         console.error("Failed to load deferred notebook tree.", error);
       });
     }
+    const runbookRoot = event.target?.closest?.("[data-ingestion-runbook-section]");
+    if (runbookRoot === event.target && runbookRoot.open) {
+      loadDeferredSidebarRunbookTree().catch((error) => {
+        console.error("Failed to load deferred Loader runbooks.", error);
+      });
+    }
     const dataSourcesRoot = event.target?.closest?.("[data-data-sources-section]");
     if (dataSourcesRoot === event.target && dataSourcesRoot.open) {
       loadDeferredSidebarSourceTree().catch((error) => {
@@ -12263,6 +12496,7 @@ document.body.addEventListener("htmx:afterSwap", (event) => {
   });
   renderQueryNotificationMenu();
   dataProductsController.initializeCurrentPage();
+  initializeWorkbenchExpertSearch(event.target);
   dataExchangeController.initializeCurrentPage();
   serviceConsumptionUi.initializeCurrentPage().catch((error) => {
     console.error("Failed to initialize the service-consumption page after a partial swap.", error);
@@ -12362,7 +12596,7 @@ window.addEventListener("popstate", async () => {
 
   if (window.location.pathname === "/loader-workbench") {
     try {
-      await openLoaderWorkbench();
+      await openLoaderWorkbench({ pushHistory: false });
     } catch (error) {
       if (error?.name !== "AbortError") {
         console.error("Failed to restore the Loader Workbench from browser history.", error);
@@ -12373,7 +12607,7 @@ window.addEventListener("popstate", async () => {
 
   if (window.location.pathname === "/ingestion-workbench") {
     try {
-      await openIngestionWorkbench();
+      await openIngestionWorkbench({ pushHistory: false });
     } catch (error) {
       if (error?.name !== "AbortError") {
         console.error("Failed to restore the Ingestion Workbench from browser history.", error);
@@ -12440,7 +12674,8 @@ syncShellVisibility();
 applyWorkbenchTitle();
 applyNotebookMetadata();
 restoreSelectedSourceObject();
-const initialWorkspaceMode = currentWorkspaceMode();
+const startupWorkspaceMode = currentWorkspaceMode();
+const startupNavigationEpoch = workspaceNavigation.currentEpoch();
 const initialLoadTasks = [
   loadQueryJobsState().catch((error) => {
     console.error("Failed to load query jobs.", error);
@@ -12470,7 +12705,7 @@ const initialLoadTasks = [
   }),
 ];
 
-if (initialWorkspaceMode === "loader") {
+if (startupWorkspaceMode === "loader") {
   initialLoadTasks.push(
     loadDataGeneratorCatalog().catch((error) => {
       console.error("Failed to load data generators.", error);
@@ -12481,9 +12716,14 @@ if (initialWorkspaceMode === "loader") {
 Promise.allSettled(initialLoadTasks)
   .finally(() => {
     ensureRealtimeEventsEventSource();
-    const initialSidebarMode = initialWorkspaceMode === "loader" ? "loader" : "notebook";
+    if (workspaceNavigation.currentEpoch() !== startupNavigationEpoch) {
+      return;
+    }
+    const visibleWorkspaceMode = currentWorkspaceMode();
+    const initialSidebarMode = visibleWorkspaceMode === "loader" ? "loader" : "notebook";
     const shouldRefreshSidebarDuringStartup = !(
       homePageRoot() ||
+      workbenchExpertSearchPageRoot() ||
       dataProductsPageRoot() ||
       dataExchangePageRoot() ||
       serviceConsumptionPageRoot() ||
@@ -12499,14 +12739,14 @@ Promise.allSettled(initialLoadTasks)
         })
       : Promise.resolve();
 
-    if (initialWorkspaceMode === "loader") {
+    if (visibleWorkspaceMode === "loader") {
       renderIngestionWorkbench();
       renderDataGenerationMonitor();
       renderQueryNotificationMenu();
       return;
     }
 
-    if (initialWorkspaceMode === "ingestion") {
+    if (visibleWorkspaceMode === "ingestion") {
       renderCsvIngestionWorkbench();
       renderFileIngestionWorkbench();
       renderQueryNotificationMenu();
@@ -12523,6 +12763,12 @@ Promise.allSettled(initialLoadTasks)
 
     if (dataProductsPageRoot()) {
       dataProductsController.initializeCurrentPage();
+      renderQueryNotificationMenu();
+      return;
+    }
+
+    if (workbenchExpertSearchPageRoot()) {
+      initializeWorkbenchExpertSearch();
       renderQueryNotificationMenu();
       return;
     }

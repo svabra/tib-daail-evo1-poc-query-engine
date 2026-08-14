@@ -73,11 +73,17 @@
             <span class="section-count">{{ data_generators | length }}</span>
           </div>
         </summary>
-        <div class="runbook-tree" data-runbook-tree>
-          {% for node in runbook_tree %}
-            {% include "partials/runbook_tree_node.html" %}
-          {% endfor %}
-        </div>
+        {% if defer_sidebar_runbook_tree | default(false) %}
+          <div class="notebook-tree-deferred" data-deferred-runbook-tree role="status">
+            <span>Open Loader Runbooks to load the runbook structure.</span>
+          </div>
+        {% else %}
+          <div class="runbook-tree" data-runbook-tree>
+            {% for node in runbook_tree %}
+              {% include "partials/runbook_tree_node.html" %}
+            {% endfor %}
+          </div>
+        {% endif %}
       </details>
     {% else %}
       <details class="sidebar-section notebook-section" data-notebook-section>

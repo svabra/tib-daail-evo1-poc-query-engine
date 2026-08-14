@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 import mimetypes
 from pathlib import PurePosixPath
 import re
+from threading import RLock
 import uuid
 
 import duckdb
@@ -15,7 +16,7 @@ from ...models import DataProductDefinition, DataProductSourceDescriptor, Source
 from ..data_sources.s3.explorer import normalize_s3_prefix
 from ..s3_storage import list_s3_buckets, s3_client
 from ..sql_utils import qualified_name
-from .registry import DataProductStore
+from .registry import DataProductOverwriteConflict, DataProductStore
 
 
 DEFAULT_PUBLIC_DATA_PRODUCT_LIMIT = 100
@@ -77,6 +78,14 @@ class DataProductPublicStreamArtifact:
     iterator: Iterator[bytes]
 
 
+@dataclass(slots=True)
+class _DataProductPublicationReservation:
+    product: DataProductDefinition
+    operation: str
+    expected_product_id: str = ""
+    expected_updated_at: str = ""
+
+
 class DataProductManager:
     def __init__(
         self,
@@ -94,6 +103,10 @@ class DataProductManager:
         self._relation_fields_provider = relation_fields_provider
         self._catalog_provider = catalog_provider
         self._s3_bucket_snapshot_provider = s3_bucket_snapshot_provider
+        self._publication_lock = RLock()
+        self._publication_reservations: dict[
+            str, _DataProductPublicationReservation
+        ] = {}
 
     def list_products(
         self,
@@ -106,6 +119,42 @@ class DataProductManager:
             reverse=True,
         )
         return [product.payload(base_url=base_url) for product in products]
+
+    def managed_product_definitions(self) -> list[DataProductDefinition]:
+        return [
+            product
+            for product in self._store.list_products()
+            if product.daca_publication is not None
+        ]
+
+    def reconcile_daca_publication(
+        self,
+        *,
+        product_id: str,
+        state: str,
+        missing_fields: list[str],
+    ) -> DataProductDefinition:
+        with self._publication_lock:
+            existing = self.product_by_id(product_id)
+            if existing.product_id in self._publication_reservations:
+                return existing
+            reference = existing.daca_publication
+            if reference is None:
+                return existing
+            if reference.state == state and reference.missing_fields == missing_fields:
+                return existing
+            updated = replace(
+                existing,
+                daca_publication=replace(
+                    reference,
+                    state=state,
+                    missing_fields=list(missing_fields),
+                    synced_at=utc_now_iso(),
+                ),
+                updated_at=utc_now_iso(),
+            )
+            self._store.update_product(updated)
+            return updated
 
     def published_products_for_source(
         self,
@@ -248,11 +297,15 @@ class DataProductManager:
         custom_properties: dict[str, str] | None = None,
         base_url: str | None = None,
     ) -> dict[str, object]:
-        descriptor = self._resolve_source_descriptor(source, allow_unsupported=True)
+        existing_product = self._existing_product_hint(title=title, slug=slug)
+        descriptor = self._reusable_source_descriptor(existing_product, source)
+        if descriptor is None:
+            descriptor = self._resolve_source_descriptor(source, allow_unsupported=True)
         normalized_title = self._normalized_title(title, descriptor)
         normalized_slug = normalize_slug(slug or normalized_title)
         blocked_reason = descriptor.unsupported_reason
-        if not blocked_reason and self._slug_exists(normalized_slug):
+        existing_product = self._existing_product_for_slug(normalized_slug)
+        if not blocked_reason and existing_product is not None:
             blocked_reason = (
                 f"The data product slug '{normalized_slug}' is already in use."
             )
@@ -285,7 +338,19 @@ class DataProductManager:
             "compatible": not blocked_reason,
             "blocked": bool(blocked_reason),
             "blockedReason": blocked_reason,
-            **self._documentation_contract(product, base_url=base_url),
+            "operation": "replace" if existing_product is not None else "create",
+            "overwriteRequired": existing_product is not None,
+            "canOverwrite": bool(existing_product is not None and not descriptor.unsupported_reason),
+            "existingProduct": (
+                existing_product.payload(base_url=base_url)
+                if existing_product is not None
+                else None
+            ),
+            **self._documentation_contract(
+                product,
+                base_url=base_url,
+                resolve_relation_fields=existing_product is None,
+            ),
             "openApiNamespace": PUBLIC_DATA_PRODUCTS_PATH_PREFIX + "/{slug}",
         }
 
@@ -303,43 +368,208 @@ class DataProductManager:
         access_note: str = "",
         request_access_contact: str = "",
         custom_properties: dict[str, str] | None = None,
+        overwrite_existing: bool = False,
+        expected_product_id: str = "",
+        expected_updated_at: str = "",
         base_url: str | None = None,
     ) -> dict[str, object]:
-        descriptor = self._resolve_source_descriptor(source, allow_unsupported=False)
-        normalized_title = self._normalized_title(title, descriptor)
-        normalized_slug = normalize_slug(slug or normalized_title)
-        if self._slug_exists(normalized_slug):
-            raise ValueError(
-                f"The data product slug '{normalized_slug}' is already in use."
-            )
-
-        now = utc_now_iso()
-        product = DataProductDefinition(
-            product_id=f"data-product-{uuid.uuid4().hex}",
-            slug=normalized_slug,
-            title=normalized_title,
-            description=str(description or "").strip(),
-            source=descriptor,
-            public_path=self.public_path(normalized_slug),
-            owner=str(owner or "").strip(),
-            domain=str(domain or "").strip(),
-            tags=normalize_tags(tags),
-            access_level=normalize_access_level(access_level),
-            access_note=str(access_note or "").strip(),
-            request_access_contact=str(request_access_contact or "").strip(),
-            custom_properties={
-                str(name).strip(): str(value).strip()
-                for name, value in (custom_properties or {}).items()
-                if str(name).strip() and str(value).strip()
-            },
-            created_at=now,
-            updated_at=now,
+        product = self.reserve_product(
+            source=source,
+            title=title,
+            slug=slug,
+            description=description,
+            owner=owner,
+            domain=domain,
+            tags=tags,
+            access_level=access_level,
+            access_note=access_note,
+            request_access_contact=request_access_contact,
+            custom_properties=custom_properties,
+            overwrite_existing=overwrite_existing,
+            expected_product_id=expected_product_id,
+            expected_updated_at=expected_updated_at,
         )
-        created = self._store.create_product(product)
+        operation = self.reservation_operation(product.product_id)
+        try:
+            created = self.activate_reserved_product(product)
+        except Exception:
+            self.cancel_reserved_product(product.product_id)
+            raise
         return {
-            "action": "created",
+            "action": "replaced" if operation == "replace" else "created",
             "product": created.payload(base_url=base_url),
         }
+
+    def reserve_product(
+        self,
+        *,
+        source: dict[str, object],
+        title: str,
+        slug: str = "",
+        description: str = "",
+        owner: str = "",
+        domain: str = "",
+        tags: list[str] | None = None,
+        access_level: str = "internal",
+        access_note: str = "",
+        request_access_contact: str = "",
+        custom_properties: dict[str, str] | None = None,
+        overwrite_existing: bool = False,
+        expected_product_id: str = "",
+        expected_updated_at: str = "",
+        allow_managed_overwrite: bool = False,
+    ) -> DataProductDefinition:
+        existing_hint = self._existing_product_hint(title=title, slug=slug)
+        if existing_hint is not None and not overwrite_existing:
+            raise ValueError(
+                f"The data product slug '{existing_hint.slug}' is already in use."
+            )
+        descriptor = self._reusable_source_descriptor(existing_hint, source)
+        if descriptor is None:
+            descriptor = self._resolve_source_descriptor(source, allow_unsupported=False)
+        normalized_title = self._normalized_title(title, descriptor)
+        normalized_slug = normalize_slug(slug or normalized_title)
+        normalized_expected_product_id = str(expected_product_id or "").strip()
+        normalized_expected_updated_at = str(expected_updated_at or "").strip()
+        with self._publication_lock:
+            existing = self._existing_product_for_slug(normalized_slug)
+            reservation_conflict = any(
+                item.product.slug.lower() == normalized_slug.lower()
+                for item in self._publication_reservations.values()
+            )
+            if reservation_conflict:
+                raise DataProductOverwriteConflict(
+                    f"The data product slug '{normalized_slug}' is currently being published."
+                )
+
+            if existing is not None and not overwrite_existing:
+                raise ValueError(
+                    f"The data product slug '{normalized_slug}' is already in use."
+                )
+            if existing is None and overwrite_existing:
+                raise DataProductOverwriteConflict(
+                    f"The data product slug '{normalized_slug}' no longer exists. Review the preview and try again."
+                )
+            if overwrite_existing and (
+                not normalized_expected_product_id or not normalized_expected_updated_at
+            ):
+                raise DataProductOverwriteConflict(
+                    "Replacing a data product requires its preview identity and update timestamp."
+                )
+            if not overwrite_existing and (
+                normalized_expected_product_id or normalized_expected_updated_at
+            ):
+                raise DataProductOverwriteConflict(
+                    "Overwrite preview tokens require overwriteExisting=true."
+                )
+
+            if existing is not None:
+                if existing.product_id != normalized_expected_product_id:
+                    raise DataProductOverwriteConflict(
+                        "The data product identity changed after the overwrite preview."
+                    )
+                if existing.updated_at != normalized_expected_updated_at:
+                    raise DataProductOverwriteConflict(
+                        "The data product changed after the overwrite preview. Review it and confirm again."
+                    )
+                if existing.daca_publication is not None and not allow_managed_overwrite:
+                    raise DataProductOverwriteConflict(
+                        "DaCa-managed data products must be replaced with Publish to DaCa enabled."
+                    )
+
+            now = utc_now_iso()
+            product = DataProductDefinition(
+                product_id=(
+                    existing.product_id
+                    if existing is not None
+                    else f"data-product-{uuid.uuid4().hex}"
+                ),
+                slug=normalized_slug,
+                title=normalized_title,
+                description=str(description or "").strip(),
+                source=descriptor,
+                public_path=self.public_path(normalized_slug),
+                owner=str(owner or "").strip(),
+                domain=str(domain or "").strip(),
+                tags=normalize_tags(tags),
+                access_level=normalize_access_level(access_level),
+                access_note=str(access_note or "").strip(),
+                request_access_contact=str(request_access_contact or "").strip(),
+                custom_properties={
+                    str(name).strip(): str(value).strip()
+                    for name, value in (custom_properties or {}).items()
+                    if str(name).strip() and str(value).strip()
+                },
+                daca_publication=(
+                    existing.daca_publication if existing is not None else None
+                ),
+                created_at=existing.created_at if existing is not None else now,
+                updated_at=now,
+            )
+            self._publication_reservations[product.product_id] = (
+                _DataProductPublicationReservation(
+                    product=product,
+                    operation="replace" if existing is not None else "create",
+                    expected_product_id=normalized_expected_product_id,
+                    expected_updated_at=normalized_expected_updated_at,
+                )
+            )
+            return product
+
+    def activate_reserved_product(
+        self,
+        product: DataProductDefinition,
+    ) -> DataProductDefinition:
+        with self._publication_lock:
+            reserved = self._publication_reservations.get(product.product_id)
+            if reserved is None or reserved.product.slug != product.slug:
+                raise ValueError("The data product publication reservation is no longer active.")
+            if reserved.operation == "replace":
+                created = self._store.replace_product(
+                    product,
+                    expected_product_id=reserved.expected_product_id,
+                    expected_updated_at=reserved.expected_updated_at,
+                )
+            else:
+                created = self._store.create_product(product)
+            self._publication_reservations.pop(product.product_id, None)
+            return created
+
+    def reservation_operation(self, product_id: str) -> str:
+        with self._publication_lock:
+            reservation = self._publication_reservations.get(
+                str(product_id or "").strip()
+            )
+            if reservation is None:
+                raise ValueError("The data product publication reservation is no longer active.")
+            return reservation.operation
+
+    def cancel_reserved_product(self, product_id: str) -> None:
+        with self._publication_lock:
+            self._publication_reservations.pop(str(product_id or "").strip(), None)
+
+    def publication_schema_fields(
+        self,
+        product: DataProductDefinition,
+    ) -> list[dict[str, object]]:
+        fields = self._relation_source_fields(product.source)
+        if not fields:
+            raise ValueError(
+                "Publishing to DaCa requires a relation source with at least one schema field."
+            )
+        key_names = {"canton_code", "tax_year"}
+        return [
+            {
+                "name": str(getattr(field, "name", "")).strip(),
+                "dataType": str(getattr(field, "data_type", "")).strip()
+                or "VARCHAR",
+                "nullable": bool(getattr(field, "nullable", False)),
+                "keyField": str(getattr(field, "name", "")).strip().lower()
+                in key_names,
+            }
+            for field in fields[:100]
+            if str(getattr(field, "name", "")).strip()
+        ]
 
     def update_product_metadata(
         self,
@@ -356,30 +586,36 @@ class DataProductManager:
         custom_properties: dict[str, str] | None = None,
         base_url: str | None = None,
     ) -> dict[str, object]:
-        existing = self.product_by_id(product_id)
-        updated = DataProductDefinition(
-            product_id=existing.product_id,
-            slug=existing.slug,
-            title=self._normalized_title(title, existing.source),
-            description=str(description or "").strip(),
-            source=existing.source,
-            public_path=existing.public_path,
-            publication_mode=existing.publication_mode,
-            owner=str(owner or "").strip(),
-            domain=str(domain or "").strip(),
-            tags=normalize_tags(tags),
-            access_level=normalize_access_level(access_level),
-            access_note=str(access_note or "").strip(),
-            request_access_contact=str(request_access_contact or "").strip(),
-            custom_properties={
-                str(name).strip(): str(value).strip()
-                for name, value in (custom_properties or {}).items()
-                if str(name).strip() and str(value).strip()
-            },
-            created_at=existing.created_at,
-            updated_at=utc_now_iso(),
-        )
-        self._store.update_product(updated)
+        with self._publication_lock:
+            existing = self.product_by_id(product_id)
+            if existing.product_id in self._publication_reservations:
+                raise DataProductOverwriteConflict(
+                    "The data product is currently being replaced."
+                )
+            updated = DataProductDefinition(
+                product_id=existing.product_id,
+                slug=existing.slug,
+                title=self._normalized_title(title, existing.source),
+                description=str(description or "").strip(),
+                source=existing.source,
+                public_path=existing.public_path,
+                publication_mode=existing.publication_mode,
+                owner=str(owner or "").strip(),
+                domain=str(domain or "").strip(),
+                tags=normalize_tags(tags),
+                access_level=normalize_access_level(access_level),
+                access_note=str(access_note or "").strip(),
+                request_access_contact=str(request_access_contact or "").strip(),
+                custom_properties={
+                    str(name).strip(): str(value).strip()
+                    for name, value in (custom_properties or {}).items()
+                    if str(name).strip() and str(value).strip()
+                },
+                daca_publication=existing.daca_publication,
+                created_at=existing.created_at,
+                updated_at=utc_now_iso(),
+            )
+            self._store.update_product(updated)
         return {
             "action": "updated",
             "product": updated.payload(base_url=base_url),
@@ -391,7 +627,12 @@ class DataProductManager:
         product_id: str,
         base_url: str | None = None,
     ) -> dict[str, object]:
-        removed = self._store.delete_product(product_id)
+        with self._publication_lock:
+            if str(product_id or "").strip() in self._publication_reservations:
+                raise DataProductOverwriteConflict(
+                    "The data product is currently being replaced."
+                )
+            removed = self._store.delete_product(product_id)
         return {
             "action": "deleted",
             "product": removed.payload(base_url=base_url),
@@ -543,10 +784,19 @@ class DataProductManager:
         return f"{PUBLIC_DATA_PRODUCTS_PATH_PREFIX}/{slug}"
 
     def _slug_exists(self, slug: str) -> bool:
+        return self._existing_product_for_slug(slug) is not None
+
+    def _existing_product_for_slug(
+        self, slug: str
+    ) -> DataProductDefinition | None:
         normalized_slug = str(slug or "").strip().lower()
-        return any(
-            product.slug.lower() == normalized_slug
-            for product in self._store.list_products()
+        return next(
+            (
+                product
+                for product in self._store.list_products()
+                if product.slug.lower() == normalized_slug
+            ),
+            None,
         )
 
     def _normalized_title(
@@ -636,6 +886,52 @@ class DataProductManager:
                 "key": key,
             }
         return None
+
+    def _existing_product_hint(
+        self,
+        *,
+        title: str,
+        slug: str,
+    ) -> DataProductDefinition | None:
+        raw_slug = str(slug or title or "").strip()
+        if not raw_slug:
+            return None
+        try:
+            normalized_slug = normalize_slug(raw_slug)
+        except ValueError:
+            return None
+        return self._existing_product_for_slug(normalized_slug)
+
+    def _reusable_source_descriptor(
+        self,
+        existing_product: DataProductDefinition | None,
+        source: dict[str, object],
+    ) -> DataProductSourceDescriptor | None:
+        if existing_product is None:
+            return None
+        normalized_source = self._normalized_match_source(source)
+        if normalized_source is None or not self._product_matches_source(
+            existing_product,
+            normalized_source,
+        ):
+            return None
+
+        display_name = str(
+            source.get("sourceDisplayName")
+            or source.get("source_display_name")
+            or existing_product.source.source_display_name
+        ).strip()
+        platform = str(
+            source.get("sourcePlatform")
+            or source.get("source_platform")
+            or existing_product.source.source_platform
+        ).strip()
+        return replace(
+            existing_product.source,
+            source_display_name=display_name,
+            source_platform=platform,
+            unsupported_reason="",
+        )
 
     def _product_matches_source(
         self,
@@ -804,9 +1100,14 @@ class DataProductManager:
         response_kind: str,
         *,
         base_url: str | None = None,
+        relation_fields: list[object] | None = None,
     ) -> dict[str, object]:
         if response_kind == "relation":
-            fields = self._relation_source_fields(product.source)
+            fields = (
+                relation_fields
+                if relation_fields is not None
+                else self._relation_source_fields(product.source)
+            )
             item = {
                 str(getattr(field, "name", "")).strip(): self._example_value_for_type(
                     str(getattr(field, "data_type", ""))
@@ -860,28 +1161,42 @@ class DataProductManager:
         product: DataProductDefinition,
         *,
         base_url: str | None = None,
+        resolve_relation_fields: bool = True,
     ) -> dict[str, object]:
         response_kind = self._response_kind_for_source(product.source)
+        relation_fields: list[object] | None = None
+        if response_kind == "relation":
+            relation_fields = (
+                self._relation_source_fields(product.source)
+                if resolve_relation_fields
+                else []
+            )
         return {
             "product": product.payload(base_url=base_url),
             "sourceSummary": self._source_summary(product.source),
             "liveReadOnlyCopy": "Published data products are live and read-only in v1.",
             "responseKind": response_kind,
-            "requestParameters": self._request_parameters(product.source),
+            "requestParameters": [
+                *self._request_parameters(product.source),
+                *self._authorization_parameters(product),
+            ],
             "responseSchema": self._response_schema(
                 product,
                 response_kind,
                 base_url=base_url,
+                relation_fields=relation_fields,
             ),
             "sampleResponse": self._sample_response(
                 product,
                 response_kind,
                 base_url=base_url,
+                relation_fields=relation_fields,
             ),
             "openApiDocument": self._openapi_document(
                 product,
                 response_kind,
                 base_url=base_url,
+                relation_fields=relation_fields,
             ),
         }
 
@@ -920,6 +1235,25 @@ class DataProductManager:
                 }
             ]
         return []
+
+    def _authorization_parameters(
+        self,
+        product: DataProductDefinition,
+    ) -> list[dict[str, object]]:
+        if product.daca_publication is None:
+            return []
+        return [
+            {
+                "name": "X-DaCa-User",
+                "in": "header",
+                "type": "string",
+                "required": True,
+                "description": (
+                    "PoC identity evaluated by DaCa OPA. This demo header is not "
+                    "a production authentication mechanism."
+                ),
+            }
+        ]
 
     def _relation_source_fields(
         self,
@@ -960,6 +1294,8 @@ class DataProductManager:
                 "accessNote",
                 "requestAccessContact",
                 "customProperties",
+                "dacaManaged",
+                "dacaPublication",
                 "createdAt",
                 "updatedAt",
             ],
@@ -990,6 +1326,44 @@ class DataProductManager:
                 "customProperties": {
                     "type": "object",
                     "additionalProperties": {"type": "string"},
+                },
+                "dacaManaged": {"type": "boolean"},
+                "dacaPublication": {
+                    "anyOf": [
+                        {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "required": [
+                                "sourceProductId",
+                                "publicationId",
+                                "productId",
+                                "state",
+                                "created",
+                                "taskIds",
+                                "missingFields",
+                                "catalogUrl",
+                                "syncedAt",
+                            ],
+                            "properties": {
+                                "sourceProductId": {"type": "string"},
+                                "publicationId": {"type": "string", "format": "uuid"},
+                                "productId": {"type": "string", "format": "uuid"},
+                                "state": {"type": "string"},
+                                "created": {"type": "boolean"},
+                                "taskIds": {
+                                    "type": "array",
+                                    "items": {"type": "string", "format": "uuid"},
+                                },
+                                "missingFields": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                },
+                                "catalogUrl": {"type": "string", "format": "uri"},
+                                "syncedAt": {"type": "string", "format": "date-time"},
+                            },
+                        },
+                        {"type": "null"},
+                    ]
                 },
                 "createdAt": {"type": "string", "format": "date-time"},
                 "updatedAt": {"type": "string", "format": "date-time"},
@@ -1090,9 +1464,14 @@ class DataProductManager:
         response_kind: str,
         *,
         base_url: str | None = None,
+        relation_fields: list[object] | None = None,
     ) -> dict[str, object]:
         if response_kind == "relation":
-            fields = self._relation_source_fields(product.source)
+            fields = (
+                relation_fields
+                if relation_fields is not None
+                else self._relation_source_fields(product.source)
+            )
             item_properties = {
                 str(getattr(field, "name", "")).strip(): self._field_schema_for_type(
                     str(getattr(field, "data_type", ""))
@@ -1153,11 +1532,13 @@ class DataProductManager:
         response_kind: str,
         *,
         base_url: str | None = None,
+        relation_fields: list[object] | None = None,
     ) -> dict[str, object]:
         response_schema = self._response_schema(
             product,
             response_kind,
             base_url=base_url,
+            relation_fields=relation_fields,
         )
         media_type = self._json_media_type_for_source(product.source)
         success_response: dict[str, object] = {
@@ -1173,6 +1554,7 @@ class DataProductManager:
                 product,
                 response_kind,
                 base_url=base_url,
+                relation_fields=relation_fields,
             )
 
         openapi_document: dict[str, object] = {
@@ -1190,7 +1572,7 @@ class DataProductManager:
                         "parameters": [
                             {
                                 "name": parameter["name"],
-                                "in": "query",
+                                "in": parameter.get("in", "query"),
                                 "required": bool(parameter.get("required")),
                                 "description": parameter.get("description", ""),
                                 "schema": {
@@ -1202,10 +1584,28 @@ class DataProductManager:
                                     ),
                                 },
                             }
-                            for parameter in self._request_parameters(product.source)
+                            for parameter in [
+                                *self._request_parameters(product.source),
+                                *self._authorization_parameters(product),
+                            ]
                         ],
                         "responses": {
                             "200": success_response,
+                            **(
+                                {
+                                    "401": {
+                                        "description": "The X-DaCa-User header is missing."
+                                    },
+                                    "403": {
+                                        "description": "DaCa policy denied data.read."
+                                    },
+                                    "503": {
+                                        "description": "DaCa OPA returned no valid decision."
+                                    },
+                                }
+                                if product.daca_publication is not None
+                                else {}
+                            ),
                         },
                     }
                 }

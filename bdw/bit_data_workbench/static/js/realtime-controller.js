@@ -1,3 +1,5 @@
+import { createVisibilityAwareClock } from "./visibility-clock.js";
+
 export function createRealtimeController(helpers) {
   const {
     collectVisibleNotifications,
@@ -51,9 +53,7 @@ export function createRealtimeController(helpers) {
     workspaceNotebookId,
   } = helpers;
 
-  let queryJobsClockHandle = null;
   let queryJobsLoaded = false;
-  let dataGenerationClockHandle = null;
   let dataGenerationJobsLoaded = false;
   const refreshedDataGenerationJobIds = new Set();
 
@@ -189,18 +189,8 @@ export function createRealtimeController(helpers) {
 
   function syncDataGenerationClockLoop() {
     const hasRunningJobs = dataGenerationState().snapshot.some((job) => dataGenerationJobIsRunning(job));
-    if (hasRunningJobs && dataGenerationClockHandle === null) {
-      refreshLiveDataGenerationClock();
-      dataGenerationClockHandle = window.setInterval(refreshLiveDataGenerationClock, 100);
-      return;
-    }
-
-    if (!hasRunningJobs && dataGenerationClockHandle !== null) {
-      window.clearInterval(dataGenerationClockHandle);
-      dataGenerationClockHandle = null;
-    }
-
-    refreshLiveDataGenerationClock();
+    dataGenerationClock.setEnabled(hasRunningJobs);
+    dataGenerationClock.refresh();
   }
 
   function maybeRefreshSidebarForCompletedGenerationJobs() {
@@ -266,19 +256,12 @@ export function createRealtimeController(helpers) {
 
   function syncQueryClockLoop() {
     const hasRunningJobs = queryState().snapshot.some((job) => queryJobIsRunning(job));
-    if (hasRunningJobs && queryJobsClockHandle === null) {
-      refreshLiveQueryClock();
-      queryJobsClockHandle = window.setInterval(refreshLiveQueryClock, 100);
-      return;
-    }
-
-    if (!hasRunningJobs && queryJobsClockHandle !== null) {
-      window.clearInterval(queryJobsClockHandle);
-      queryJobsClockHandle = null;
-    }
-
-    refreshLiveQueryClock();
+    queryJobsClock.setEnabled(hasRunningJobs);
+    queryJobsClock.refresh();
   }
+
+  const dataGenerationClock = createVisibilityAwareClock(refreshLiveDataGenerationClock);
+  const queryJobsClock = createVisibilityAwareClock(refreshLiveQueryClock);
 
   function renderQueryMonitor() {
     const listRoot = queryMonitorList();
@@ -303,13 +286,19 @@ export function createRealtimeController(helpers) {
       toggleCountRoot.classList.toggle("is-live", runningCount > 0);
     });
 
-    if (!queryJobsSnapshot.length) {
-      listRoot.innerHTML = '<p class="query-monitor-empty">No query jobs yet.</p>';
-    } else {
-      listRoot.innerHTML = `
+    const listMarkup = !queryJobsSnapshot.length
+      ? '<p class="query-monitor-empty">No query jobs yet.</p>'
+      : `
         <p class="query-monitor-process-summary">Running processes: ${runningProcessCount}</p>
         ${queryJobsSnapshot.slice(0, 8).map((job) => queryMonitorItemMarkup(job)).join("")}
       `;
+    const monitorSignature = JSON.stringify([
+      queryState().version,
+      queryJobsSnapshot.slice(0, 8).map((job) => [job.jobId, job.status, job.updatedAt]),
+    ]);
+    if (listRoot.dataset.renderSignature !== monitorSignature) {
+      listRoot.innerHTML = listMarkup;
+      listRoot.dataset.renderSignature = monitorSignature;
     }
 
     if (performanceRoot && performanceStatsRoot && performanceChartRoot && performanceDistributionRoot) {
@@ -356,15 +345,21 @@ export function createRealtimeController(helpers) {
       clearButton.hidden = !visibleNotifications.length;
     }
 
-    if (!visibleNotifications.length) {
-      listRoot.innerHTML = '<p class="topbar-notification-empty">No notifications yet.</p>';
-      return;
+    const notificationMarkup = visibleNotifications.length
+      ? visibleNotifications.slice(0, 12).map((item) => item.markup).join("")
+      : '<p class="topbar-notification-empty">No notifications yet.</p>';
+    const notificationSignature = JSON.stringify([
+      queryState().version,
+      dataGenerationState().version,
+      downloadState().version,
+      s3DeleteState().version,
+      pipelineNotificationSummary?.version,
+      [...getDismissedNotificationKeys()],
+    ]);
+    if (listRoot.dataset.renderSignature !== notificationSignature) {
+      listRoot.innerHTML = notificationMarkup;
+      listRoot.dataset.renderSignature = notificationSignature;
     }
-
-    listRoot.innerHTML = visibleNotifications
-      .slice(0, 12)
-      .map((item) => item.markup)
-      .join("");
   }
 
   function syncQueryCellJobState(cellRoot) {
@@ -426,12 +421,21 @@ export function createRealtimeController(helpers) {
       cancelButton.classList.toggle("is-cancelling", cancelling);
     }
 
-    if (resultRoot) {
+    const resultSignature = JSON.stringify(job ?? null);
+    if (resultRoot && resultRoot.dataset.resultSignature !== resultSignature) {
       resultRoot.outerHTML = queryResultPanelMarkup(cellId, job);
+      const nextResultRoot = cellRoot.querySelector("[data-cell-result]");
+      if (nextResultRoot) {
+        nextResultRoot.dataset.resultSignature = resultSignature;
+      }
     } else if (cellId) {
       cellRoot
         .querySelector("[data-query-form]")
         ?.insertAdjacentHTML("afterend", queryResultPanelMarkup(cellId, job));
+      const nextResultRoot = cellRoot.querySelector("[data-cell-result]");
+      if (nextResultRoot) {
+        nextResultRoot.dataset.resultSignature = resultSignature;
+      }
     }
 
     querySourceValidationController?.syncQueryJobState?.(cellRoot, job);
