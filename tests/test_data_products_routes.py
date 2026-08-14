@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import unittest
 
+from fastapi import HTTPException
 from starlette.requests import Request
 
 
@@ -25,6 +26,9 @@ from bit_data_workbench.api.data_products import (  # noqa: E402
     preview_data_product,
     read_public_data_product,
     update_data_product,
+)
+from bit_data_workbench.backend.data_products.registry import (  # noqa: E402
+    DataProductOverwriteConflict,
 )
 from bit_data_workbench.models import (  # noqa: E402
     DataProductDefinition,
@@ -109,6 +113,8 @@ class FakeWorkbenchService:
         )()
         self.products_by_id: dict[str, DataProductDefinition] = {}
         self.products_by_slug: dict[str, DataProductDefinition] = {}
+        self.last_create_kwargs: dict[str, object] | None = None
+        self.last_daca_create_kwargs: dict[str, object] | None = None
 
         for product in (
             build_product(
@@ -275,9 +281,22 @@ class FakeWorkbenchService:
         }
 
     def create_data_product(self, **kwargs) -> dict[str, object]:
+        self.last_create_kwargs = dict(kwargs)
+        slug = kwargs.get("slug") or "new-product"
+        replaced_product = self.products_by_id.get(
+            str(kwargs.get("expected_product_id") or "")
+        )
         product = build_product(
-            product_id="created-product",
-            slug=kwargs.get("slug") or "new-product",
+            product_id=(
+                replaced_product.product_id
+                if replaced_product is not None
+                else (
+                    "created-product"
+                    if slug == "vat-orders"
+                    else f"created-{slug}"
+                )
+            ),
+            slug=slug,
             title=kwargs["title"],
             source=DataProductSourceDescriptor(
                 source_kind=kwargs["source"]["sourceKind"],
@@ -289,9 +308,27 @@ class FakeWorkbenchService:
                 source_platform=kwargs["source"].get("sourcePlatform", ""),
             ),
         )
+        if replaced_product is not None:
+            product.created_at = replaced_product.created_at
+            product.updated_at = "2026-04-20T09:00:00+00:00"
         self.products_by_id[product.product_id] = product
         self.products_by_slug[product.slug] = product
-        return {"action": "created", "product": product.payload(base_url=kwargs.get("base_url"))}
+        return {
+            "action": "replaced" if replaced_product is not None else "created",
+            "product": product.payload(base_url=kwargs.get("base_url")),
+        }
+
+    def create_daca_data_product(self, **kwargs) -> dict[str, object]:
+        self.last_daca_create_kwargs = dict(kwargs)
+        created = self.create_data_product(**kwargs)
+        created["dacaPublication"] = {
+            "publicationId": "70fcab5b-233f-4191-bf6e-99ea63de1bd9",
+            "productId": "8431e889-8d70-49e4-b790-7ef9fe8bb1df",
+            "state": "pending_review",
+            "taskIds": [],
+            "catalogUrl": "http://localhost:8080/products/8431e889-8d70-49e4-b790-7ef9fe8bb1df/quality?demoUser=joel.ruod",
+        }
+        return created
 
     def update_data_product_metadata(self, **kwargs) -> dict[str, object]:
         existing = self.products_by_id[kwargs["product_id"]]
@@ -619,6 +656,38 @@ class DataProductsRouteTests(unittest.TestCase):
         self.assertEqual(created_payload["action"], "created")
         self.assertEqual(created_payload["product"]["slug"], "vat-orders")
 
+        self.assertFalse(
+            DataProductCreatePayload.model_validate(
+                {
+                    "source": {
+                        "sourceKind": "relation",
+                        "sourceId": "pg_oltp",
+                        "relation": "pg_oltp.finance.orders",
+                    },
+                    "title": "Compatible client",
+                }
+            ).publish_to_daca
+        )
+
+        daca_created = create_data_product(
+            payload=DataProductCreatePayload.model_validate(
+                {
+                    "source": {
+                        "sourceKind": "relation",
+                        "sourceId": "pg_oltp",
+                        "relation": "pg_oltp.finance.orders",
+                    },
+                    "title": "DaCa managed",
+                    "slug": "daca-managed",
+                    "publishToDaca": True,
+                }
+            ),
+            request=build_request("/api/data-products"),
+            service=service,
+        )
+        daca_payload = json.loads(daca_created.body.decode("utf-8"))
+        self.assertEqual(daca_payload["dacaPublication"]["state"], "pending_review")
+
         updated = update_data_product(
             product_id="created-product",
             payload=DataProductUpdatePayload.model_validate(
@@ -649,6 +718,96 @@ class DataProductsRouteTests(unittest.TestCase):
         deleted_payload = json.loads(deleted.body.decode("utf-8"))
         self.assertEqual(deleted_payload["action"], "deleted")
         self.assertEqual(deleted_payload["product"]["slug"], "vat-orders")
+
+    def test_create_overwrite_fields_default_and_forward_with_replaced_action(
+        self,
+    ) -> None:
+        defaults = DataProductCreatePayload.model_validate(
+            {
+                "source": {
+                    "sourceKind": "relation",
+                    "sourceId": "pg_oltp",
+                    "relation": "pg_oltp.finance.orders",
+                },
+                "title": "Compatible client",
+            }
+        )
+        self.assertFalse(defaults.overwrite_existing)
+        self.assertEqual(defaults.expected_product_id, "")
+        self.assertEqual(defaults.expected_updated_at, "")
+
+        payload = DataProductCreatePayload.model_validate(
+            {
+                "source": {
+                    "sourceKind": "relation",
+                    "sourceId": "pg_olap",
+                    "relation": "pg_olap.finance.curated_orders",
+                },
+                "title": "Curated Published Orders",
+                "slug": "published-orders",
+                "overwriteExisting": True,
+                "expectedProductId": "product-relation",
+                "expectedUpdatedAt": "2026-04-20T08:00:00+00:00",
+            }
+        )
+        serialized = payload.model_dump(by_alias=True)
+        self.assertTrue(serialized["overwriteExisting"])
+        self.assertEqual(serialized["expectedProductId"], "product-relation")
+        self.assertEqual(
+            serialized["expectedUpdatedAt"],
+            "2026-04-20T08:00:00+00:00",
+        )
+
+        service = FakeWorkbenchService()
+        response = create_data_product(
+            payload=payload,
+            request=build_request("/api/data-products"),
+            service=service,
+        )
+        response_payload = json.loads(response.body.decode("utf-8"))
+
+        self.assertEqual(response_payload["action"], "replaced")
+        self.assertEqual(response_payload["product"]["productId"], "product-relation")
+        self.assertIsNotNone(service.last_create_kwargs)
+        self.assertTrue(service.last_create_kwargs["overwrite_existing"])
+        self.assertEqual(
+            service.last_create_kwargs["expected_product_id"],
+            "product-relation",
+        )
+        self.assertEqual(
+            service.last_create_kwargs["expected_updated_at"],
+            "2026-04-20T08:00:00+00:00",
+        )
+
+    def test_create_overwrite_conflict_is_exposed_as_http_409(self) -> None:
+        class ConflictService(FakeWorkbenchService):
+            def create_data_product(self, **_kwargs) -> dict[str, object]:
+                raise DataProductOverwriteConflict("stale overwrite preview")
+
+        payload = DataProductCreatePayload.model_validate(
+            {
+                "source": {
+                    "sourceKind": "relation",
+                    "sourceId": "pg_oltp",
+                    "relation": "pg_oltp.finance.orders",
+                },
+                "title": "Published Orders",
+                "slug": "published-orders",
+                "overwriteExisting": True,
+                "expectedProductId": "product-relation",
+                "expectedUpdatedAt": "2026-04-20T08:00:00+00:00",
+            }
+        )
+
+        with self.assertRaises(HTTPException) as context:
+            create_data_product(
+                payload=payload,
+                request=build_request("/api/data-products"),
+                service=ConflictService(),
+            )
+
+        self.assertEqual(context.exception.status_code, 409)
+        self.assertEqual(context.exception.detail, "stale overwrite preview")
 
     def test_public_relation_route_returns_paginated_rows(self) -> None:
         response = read_public_data_product(

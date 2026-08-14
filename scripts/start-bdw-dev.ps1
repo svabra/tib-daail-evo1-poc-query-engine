@@ -158,6 +158,10 @@ $env:PG_USER = "evo1"
 $env:PG_PASSWORD = "evo1"
 $env:PG_OLTP_DATABASE = "evo1_oltp"
 $env:PG_OLAP_DATABASE = "evo1_olap"
+$env:DACA_BASE_URL = "http://127.0.0.1:8080"
+$env:DACA_UI_URL = "http://localhost:8080"
+$env:DACA_OPA_URL = "http://127.0.0.1:8181/v1/data/daca/authz/decision"
+$env:DAAIF_PUBLIC_BASE_URL = "http://localhost:$Port"
 
 Resolve-PortConflicts -LocalPort $Port
 

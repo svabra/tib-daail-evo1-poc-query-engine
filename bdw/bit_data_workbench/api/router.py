@@ -2171,9 +2171,11 @@ from .data_products import router as data_products_router
 from .data_exchange import router as data_exchange_router
 from .data_source_explorer import router as data_source_explorer_router
 from .download_jobs import router as download_jobs_router
+from .workbench_metadata import router as workbench_metadata_router
 
 
 router.include_router(data_source_explorer_router)
 router.include_router(data_products_router)
 router.include_router(data_exchange_router)
 router.include_router(download_jobs_router)
+router.include_router(workbench_metadata_router)

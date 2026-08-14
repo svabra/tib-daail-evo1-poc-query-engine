@@ -12,7 +12,6 @@ from ..backend.pure_duckdb import pure_duckdb_cells_payload
 from ..backend.service import WorkbenchService
 from ..dependencies import get_workbench_service
 from ..models import SourceCatalog
-from ..release_notes import release_notes
 from .data_sources import (
     data_source_explorer_context as build_data_source_explorer_context,
     data_source_management_context as build_data_source_management_context,
@@ -468,11 +467,21 @@ def shell_context(
     shell_sidebar_hidden: bool = False,
     shared_notebooks: list | None = None,
 ) -> dict[str, object]:
-    catalogs = service.catalogs()
-    defer_sidebar_source_tree = workspace_mode == "notebook"
-    defer_sidebar_notebook_tree = workspace_mode == "notebook" and shell_sidebar_hidden
-    source_options = service.source_options()
-    notebooks = service.notebooks()
+    # Compatibility note: the earlier notebook-only policy used
+    # defer_sidebar_source_tree = workspace_mode == "notebook" and
+    # defer_sidebar_notebook_tree = workspace_mode == "notebook" and shell_sidebar_hidden.
+    # The safer policy below now defers those trees for every hidden shell.
+    # Sidebar trees and editor metadata dominate the shell response.  The
+    # initial shell only includes them when they are immediately visible or
+    # executable; the browser loads everything else on first use.
+    defer_sidebar_source_tree = True
+    defer_sidebar_notebook_tree = workspace_mode == "notebook"
+    catalogs = [] if shell_sidebar_hidden else service.catalogs()
+    notebooks = [] if defer_sidebar_notebook_tree else service.notebooks()
+    include_editor_metadata = active_notebook is not None
+    source_options = service.source_options() if include_editor_metadata else []
+    data_generators = service.data_generators() if workspace_mode == "loader" else []
+    runbook_tree = []
     return {
         "title": brand_title_for_mode(workspace_mode),
         "runtime": service.runtime_info(),
@@ -482,11 +491,13 @@ def shell_context(
         else build_source_tree_s3_hierarchy(catalogs),
         "defer_sidebar_source_tree": defer_sidebar_source_tree,
         "defer_sidebar_notebook_tree": defer_sidebar_notebook_tree,
+        "defer_sidebar_runbook_tree": workspace_mode == "loader",
         "notebooks": notebooks,
-        "notebook_tree": service.notebook_tree(),
+        "notebook_tree": [] if defer_sidebar_notebook_tree else service.notebook_tree(),
         "source_options": source_options,
         "source_options_json": json.dumps(source_options),
-        "release_notes_json": json.dumps(release_notes()),
+        "release_notes_json": "[]",
+        "defer_release_notes": True,
         "active_notebook_id": (
             active_notebook.notebook_id if active_notebook else None
         ),
@@ -497,9 +508,12 @@ def shell_context(
         "shared_notebooks": shared_notebooks
         if shared_notebooks is not None
         else [notebook for notebook in notebooks if notebook.shared],
-        "data_generators": service.data_generators(),
-        "runbook_tree": service.runbook_tree(),
-        "completion_schema_json": json.dumps(service.completion_schema()),
+        "data_generators": data_generators,
+        "runbook_tree": runbook_tree,
+        "completion_schema_json": json.dumps(
+            service.completion_schema() if include_editor_metadata else {}
+        ),
+        "defer_editor_metadata": not include_editor_metadata,
     }
 
 
@@ -536,6 +550,36 @@ def index(
             ),
             "title": "DAAIF Factory",
             **build_home_data_source_context(service),
+        },
+    )
+
+
+@router.get("/search", response_class=HTMLResponse)
+def expert_search_page(
+    request: Request,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> HTMLResponse:
+    if is_partial_request(request):
+        return templates.TemplateResponse(
+            request=request,
+            name="partials/expert_search.html",
+            context={},
+        )
+
+    return templates.TemplateResponse(
+        request=request,
+        name="index.html",
+        context={
+            **shell_context(
+                request,
+                service,
+                active_notebook=None,
+                workspace_mode="notebook",
+                workspace_partial_template="partials/expert_search.html",
+                shell_sidebar_hidden=True,
+            ),
+            "title": "DAAIF Factory - Expertensuche",
+            "document_title": "DAAIF Factory - Expertensuche",
         },
     )
 
@@ -774,12 +818,15 @@ def sidebar_partial(
     mode: str = Query(default="notebook"),
     source_tree: str = Query(default="deferred"),
     notebook_tree: str = Query(default="full"),
+    runbook_tree: str = Query(default="deferred"),
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> HTMLResponse:
     workspace_mode = "loader" if mode == "loader" else "notebook"
     catalogs = service.catalogs()
-    defer_sidebar_source_tree = workspace_mode == "notebook" and source_tree != "full"
+    defer_sidebar_source_tree = source_tree != "full"
     defer_sidebar_notebook_tree = workspace_mode == "notebook" and notebook_tree != "full"
+    defer_sidebar_runbook_tree = workspace_mode == "loader" and runbook_tree != "full"
+    notebooks = service.notebooks() if workspace_mode == "notebook" else []
     return templates.TemplateResponse(
         request=request,
         name="partials/sidebar.html",
@@ -792,12 +839,17 @@ def sidebar_partial(
             else build_source_tree_s3_hierarchy(catalogs),
             "defer_sidebar_source_tree": defer_sidebar_source_tree,
             "defer_sidebar_notebook_tree": defer_sidebar_notebook_tree,
-            "notebooks": service.notebooks(),
-            "notebook_tree": service.notebook_tree(),
+            "defer_sidebar_runbook_tree": defer_sidebar_runbook_tree,
+            "notebooks": notebooks,
+            "notebook_tree": []
+            if workspace_mode != "notebook" or defer_sidebar_notebook_tree
+            else service.notebook_tree(),
             "active_notebook_id": active_notebook_id,
             "workspace_mode": workspace_mode,
             "data_generators": service.data_generators(),
-            "runbook_tree": service.runbook_tree(),
+            "runbook_tree": []
+            if defer_sidebar_runbook_tree
+            else service.runbook_tree(),
         },
     )
 

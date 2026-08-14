@@ -107,6 +107,37 @@ class DataProductSourceDescriptor:
 
 
 @dataclass(slots=True)
+class DacaPublicationReference:
+    """Durable linkage between a DAAIF product and its DaCa catalog record."""
+
+    source_product_id: str
+    publication_id: str
+    product_id: str
+    state: str
+    created: bool
+    task_ids: list[str] = field(default_factory=list)
+    missing_fields: list[str] = field(default_factory=list)
+    catalog_url: str = ""
+    synced_at: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {
+            "sourceProductId": self.source_product_id,
+            "publicationId": self.publication_id,
+            "productId": self.product_id,
+            "state": self.state,
+            "created": self.created,
+            "taskIds": list(self.task_ids),
+            "missingFields": list(self.missing_fields),
+            "catalogUrl": self.catalog_url,
+            "syncedAt": self.synced_at,
+        }
+
+
+@dataclass(slots=True)
 class DataProductDefinition:
     product_id: str
     slug: str
@@ -122,6 +153,7 @@ class DataProductDefinition:
     access_note: str = ""
     request_access_contact: str = ""
     custom_properties: dict[str, str] = field(default_factory=dict)
+    daca_publication: DacaPublicationReference | None = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -159,6 +191,12 @@ class DataProductDefinition:
             "accessNote": self.access_note,
             "requestAccessContact": self.request_access_contact,
             "customProperties": dict(self.custom_properties),
+            "dacaManaged": self.daca_publication is not None,
+            "dacaPublication": (
+                self.daca_publication.payload
+                if self.daca_publication is not None
+                else None
+            ),
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
         }
@@ -833,6 +871,7 @@ class DataGeneratorDefinition:
     supports_cancel: bool = True
     supports_cleanup: bool = True
     tags: list[str] = field(default_factory=list)
+    downloadable_files: list[dict[str, Any]] = field(default_factory=list)
     linked_notebooks: list[LinkedNotebookReference] = field(default_factory=list)
 
     @property
@@ -852,6 +891,7 @@ class DataGeneratorDefinition:
             "supportsCancel": self.supports_cancel,
             "supportsCleanup": self.supports_cleanup,
             "tags": list(self.tags),
+            "downloadableFiles": [dict(item) for item in self.downloadable_files],
             "linkedNotebooks": [notebook.payload for notebook in self.linked_notebooks],
         }
 

@@ -14,6 +14,7 @@ export function createSourceTreeController(helpers) {
     getSetSelectedSourceObjectState,
     listLocalWorkspaceExports,
     loadNotebookWorkspace,
+    isWorkspaceNavigationSettled = () => true,
     localWorkspaceCatalogSourceId,
     localWorkspaceRelationPrefix,
     localWorkspaceSchemaKey,
@@ -359,7 +360,35 @@ export function createSourceTreeController(helpers) {
     });
   }
 
-  async function refreshDataSourcesSection(mode = currentWorkspaceMode()) {
+  function markSourceTreeDirty() {
+    const section = dataSourcesSection();
+    if (section instanceof HTMLElement) {
+      section.dataset.sourceTreeDirty = "true";
+    }
+    document.documentElement.dataset.daaifSourceTreeDirty = "true";
+  }
+
+  function clearSourceTreeDirty(section = dataSourcesSection()) {
+    if (section instanceof HTMLElement) {
+      delete section.dataset.sourceTreeDirty;
+    }
+    delete document.documentElement.dataset.daaifSourceTreeDirty;
+  }
+
+  function sourceTreeCanRefreshNow() {
+    const section = dataSourcesSection();
+    return (
+      section instanceof HTMLDetailsElement &&
+      section.open &&
+      !document.querySelector("[data-shell]")?.classList.contains("shell-sidebar-hidden") &&
+      isWorkspaceNavigationSettled()
+    );
+  }
+
+  async function refreshDataSourcesSection(
+    mode = currentWorkspaceMode(),
+    { isCurrent = () => true } = {}
+  ) {
     const currentSection = dataSourcesSection();
     if (!currentSection) {
       return;
@@ -376,8 +405,13 @@ export function createSourceTreeController(helpers) {
       throw new Error(`Failed to refresh the data sources section: ${response.status}`);
     }
 
+    const markup = await response.text();
+    if (!isCurrent()) {
+      markSourceTreeDirty();
+      return false;
+    }
     const container = document.createElement("div");
-    container.innerHTML = await response.text();
+    container.innerHTML = markup;
     const nextSection = container.querySelector("[data-data-sources-section]");
     if (!(nextSection instanceof Element)) {
       throw new Error("Failed to locate the refreshed data sources section.");
@@ -389,13 +423,24 @@ export function createSourceTreeController(helpers) {
     getRestoreSelectedSourceObject()?.();
     getRenderSidebarSourceOperationStatus()?.();
     replayPendingSourceCatalogBlinks();
+    clearSourceTreeDirty(dataSourcesSection());
+    return true;
   }
 
   async function loadDeferredSidebarSourceTree() {
     const currentSection = dataSourcesSection();
     const deferredRoot = currentSection?.querySelector?.("[data-deferred-source-tree]");
-    if (!(currentSection instanceof HTMLDetailsElement) || !(deferredRoot instanceof HTMLElement)) {
+    const isDirty =
+      currentSection?.dataset?.sourceTreeDirty === "true" ||
+      document.documentElement.dataset.daaifSourceTreeDirty === "true";
+    if (!(currentSection instanceof HTMLDetailsElement)) {
       return false;
+    }
+    if (!(deferredRoot instanceof HTMLElement) && !isDirty) {
+      return false;
+    }
+    if (!(deferredRoot instanceof HTMLElement)) {
+      return refreshDataSourcesSection(currentWorkspaceMode());
     }
     if (deferredRoot.dataset.loading === "true") {
       return true;
@@ -419,8 +464,9 @@ export function createSourceTreeController(helpers) {
       throw new Error(`Failed to load source objects: ${response.status}`);
     }
 
+    const markup = await response.text();
     const container = document.createElement("div");
-    container.innerHTML = await response.text();
+    container.innerHTML = markup;
     const nextSection = container.querySelector("[data-data-sources-section]");
     if (!(nextSection instanceof Element)) {
       deferredRoot.dataset.loading = "false";
@@ -435,10 +481,15 @@ export function createSourceTreeController(helpers) {
     getRestoreSelectedSourceObject()?.();
     getRenderSidebarSourceOperationStatus()?.();
     replayPendingSourceCatalogBlinks();
+    clearSourceTreeDirty(dataSourcesSection());
     return true;
   }
 
   function queueDataSourcesSectionRefresh() {
+    if (!sourceTreeCanRefreshNow()) {
+      markSourceTreeDirty();
+      return;
+    }
     if (pendingDataSourceSidebarRefreshHandle !== null) {
       return;
     }
@@ -451,14 +502,30 @@ export function createSourceTreeController(helpers) {
         return;
       }
 
+      if (!sourceTreeCanRefreshNow()) {
+        markSourceTreeDirty();
+        return;
+      }
+      const capturedMode = currentWorkspaceMode();
+      const capturedNotebookId = currentActiveNotebookId() || workspaceNotebookId() || "";
+      const refreshStillCurrent = () =>
+        sourceTreeCanRefreshNow() &&
+        currentWorkspaceMode() === capturedMode &&
+        (currentActiveNotebookId() || workspaceNotebookId() || "") === capturedNotebookId;
       const runRefresh = async () => {
-        await refreshDataSourcesSection(currentWorkspaceMode());
-
-        if (currentWorkspaceMode() !== "notebook") {
+        const refreshed = await refreshDataSourcesSection(capturedMode, {
+          isCurrent: refreshStillCurrent,
+        });
+        if (!refreshed || !refreshStillCurrent()) {
+          markSourceTreeDirty();
           return;
         }
 
-        const notebookId = currentActiveNotebookId() || workspaceNotebookId();
+        if (capturedMode !== "notebook") {
+          return;
+        }
+
+        const notebookId = capturedNotebookId;
         if (!notebookId || currentWorkspaceCanEdit()) {
           return;
         }

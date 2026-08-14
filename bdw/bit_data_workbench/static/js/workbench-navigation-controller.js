@@ -18,6 +18,7 @@ export function createWorkbenchNavigationController(helpers) {
     openQueryWorkbenchNavigation,
     openQueryRunsPage,
     openRuntimeStorageDialog,
+    openHomePage,
     promptClearLocalWorkspace,
     selectIngestionRunbook,
     showAboutDialog,
@@ -30,6 +31,15 @@ export function createWorkbenchNavigationController(helpers) {
   }
 
   async function handleClick(event) {
+    const openHomePageButton = event.target.closest("[data-open-home-page]");
+    if (openHomePageButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeNotificationMenu();
+      await openHomePage();
+      return true;
+    }
+
     const sidebarToggleButton = event.target.closest("[data-sidebar-toggle]");
     if (sidebarToggleButton) {
       event.preventDefault();

@@ -387,7 +387,7 @@ def build_notebooks(catalogs: list[SourceCatalog]) -> list[NotebookDefinition]:
         catalogs,
         catalog_name="pg_oltp",
         schema_name="public",
-        object_names=("vat_smoke_test_reference",),
+        object_names=("vat_filing_smoke_generated",),
     )
     preferred_postgres_olap_relation = _find_relation_by_object_name(
         catalogs,

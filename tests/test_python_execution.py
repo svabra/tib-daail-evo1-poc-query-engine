@@ -231,6 +231,84 @@ class PythonExecutionContextTests(unittest.TestCase):
             ["pg_oltp.public.orders"],
         )
 
+    def test_python_execution_context_preserves_query_references_and_builds_worker_local_s3_scans(self) -> None:
+        service = WorkbenchService.__new__(WorkbenchService)
+        service._lock = threading.RLock()
+        service._catalogs = [
+            SourceCatalog(
+                name="pg_oltp",
+                connection_source_id="pg_oltp",
+                schemas=[
+                    SourceSchema(
+                        name="public",
+                        objects=[
+                            SourceObject(
+                                name="orders",
+                                kind="table",
+                                relation="pg_oltp.public.orders",
+                                query_reference='pg.pg_oltp."public.orders"',
+                            )
+                        ],
+                    )
+                ],
+            ),
+            SourceCatalog(
+                name="workspace",
+                connection_source_id="s3",
+                schemas=[
+                    SourceSchema(
+                        name="journey",
+                        objects=[
+                            SourceObject(
+                                name="journey_result",
+                                kind="view",
+                                relation="journey.journey_result",
+                                query_reference='s3."data-analysts-journey"."products/result.parquet"',
+                                s3_bucket="data-analysts-journey",
+                                s3_key="products/result.parquet",
+                                s3_path="s3://data-analysts-journey/products/result.parquet",
+                                s3_file_format="parquet",
+                            )
+                        ],
+                    )
+                ],
+            ),
+        ]
+        service._source_options = [
+            {"source_id": "pg_oltp", "label": "PostgreSQL OLTP"},
+            {"source_id": "s3", "label": "S3 Object Storage"},
+        ]
+        introspected_relations: list[str] = []
+
+        def source_object_fields(relation: str):
+            introspected_relations.append(relation)
+            if relation == "journey.journey_result":
+                self.fail("S3 Python context must not probe the shared DuckDB catalog.")
+            return []
+
+        service.source_object_fields = source_object_fields
+
+        context = service._python_execution_context(
+            data_sources=["pg_oltp", "s3"],
+            local_relation_map={},
+        )
+        relations = {item["name"]: item for item in context["relations"]}
+        self.assertEqual(
+            relations["orders"]["queryReference"],
+            'pg.pg_oltp."public.orders"',
+        )
+        self.assertIn(
+            'pg.pg_oltp."public.orders"',
+            relations["orders"]["aliases"],
+        )
+        self.assertEqual(
+            relations["journey_result"]["relation"],
+            "read_parquet('s3://data-analysts-journey/products/result.parquet')",
+        )
+        self.assertFalse(relations["journey_result"]["requiresSharedCatalog"])
+        self.assertEqual(introspected_relations, ["pg_oltp.public.orders"])
+        self.assertEqual(relations["journey_result"]["fields"], [])
+
 
 class PythonKernelRuntimeTests(unittest.TestCase):
     def test_kernel_runtime_uses_in_memory_connection_for_postgres_only_context(self) -> None:
@@ -266,12 +344,94 @@ class PythonKernelRuntimeTests(unittest.TestCase):
             {"database_path": ":memory:"},
         )
 
-    def test_kernel_runtime_raises_clear_error_for_workspace_lock_conflict(self) -> None:
+    def test_kernel_runtime_uses_in_memory_connection_for_s3_context(self) -> None:
+        connection = object()
         context = {
             "selectedSources": [
                 {
                     "sourceId": "s3",
                     "canonicalSourceId": "s3",
+                }
+            ],
+            "relations": [
+                {
+                    "sourceId": "s3",
+                    "relation": "read_parquet('s3://example/result.parquet')",
+                    "requiresSharedCatalog": False,
+                }
+            ],
+            "localRelationMap": {},
+        }
+
+        with (
+            patch(
+                "bit_data_workbench.backend.python_execution.kernel_runtime.Settings.from_env",
+                return_value=object(),
+            ),
+            patch(
+                "bit_data_workbench.backend.python_execution.kernel_runtime.create_duckdb_worker_connection",
+                return_value=connection,
+            ) as create_connection,
+            patch.object(PythonKernelRuntime, "_import_pandas", return_value=object()),
+        ):
+            runtime = PythonKernelRuntime()
+            runtime.configure(context)
+
+        self.assertIs(runtime._connection, connection)
+        self.assertEqual(create_connection.call_args.kwargs, {"database_path": ":memory:"})
+
+    def test_sql_and_source_df_resolve_the_same_pg_query_reference(self) -> None:
+        connection = duckdb.connect(":memory:")
+        connection.execute("CREATE TABLE physical_orders (order_id INTEGER, amount INTEGER)")
+        connection.execute("INSERT INTO physical_orders VALUES (1, 12), (2, 30)")
+        query_reference = 'pg.pg_oltp."public.orders"'
+        context = {
+            "selectedSources": [
+                {"sourceId": "pg_oltp", "canonicalSourceId": "pg_oltp"}
+            ],
+            "relations": [
+                {
+                    "sourceId": "pg_oltp",
+                    "name": "orders",
+                    "displayName": "Orders",
+                    "relation": "physical_orders",
+                    "catalogRelation": "pg_oltp.public.orders",
+                    "logicalRelation": query_reference,
+                    "queryReference": query_reference,
+                    "aliases": [query_reference, "pg_oltp.public.orders", "orders"],
+                    "fields": [],
+                }
+            ],
+            "localRelationMap": {},
+        }
+
+        with (
+            patch(
+                "bit_data_workbench.backend.python_execution.kernel_runtime.Settings.from_env",
+                return_value=object(),
+            ),
+            patch(
+                "bit_data_workbench.backend.python_execution.kernel_runtime.create_duckdb_worker_connection",
+                return_value=connection,
+            ),
+        ):
+            runtime = PythonKernelRuntime()
+            runtime.configure(context)
+            sql_frame = runtime.sql(
+                f"SELECT SUM(amount) AS total FROM {query_reference}"
+            )
+            source_frame = runtime.source(query_reference).df()
+
+        self.assertEqual(int(sql_frame.iloc[0]["total"]), 42)
+        self.assertEqual(source_frame["order_id"].tolist(), [1, 2])
+        runtime.close()
+
+    def test_kernel_runtime_raises_clear_error_for_local_workspace_lock_conflict(self) -> None:
+        context = {
+            "selectedSources": [
+                {
+                    "sourceId": "workspace.local",
+                    "canonicalSourceId": "workspace.local",
                 }
             ],
             "relations": [],

@@ -136,6 +136,7 @@ class DataGenerator(ABC):
     supports_cancel = True
     supports_cleanup = True
     tags: tuple[str, ...] = ()
+    downloadable_files: tuple[dict[str, object], ...] = ()
 
     def definition(self) -> DataGeneratorDefinition:
         return DataGeneratorDefinition(
@@ -153,6 +154,7 @@ class DataGenerator(ABC):
             supports_cancel=self.supports_cancel,
             supports_cleanup=self.supports_cleanup,
             tags=list(self.tags),
+            downloadable_files=[dict(item) for item in self.downloadable_files],
         )
 
     def normalize_size_gb(self, value: float) -> float:

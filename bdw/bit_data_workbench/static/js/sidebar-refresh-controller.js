@@ -103,31 +103,41 @@ export function createSidebarRefreshController(helpers) {
     applySidebarSearchFilter();
   }
 
-  async function refreshSidebar(mode = currentWorkspaceMode()) {
+  async function refreshSidebar(
+    mode = currentWorkspaceMode(),
+    { signal = null, isCurrent = null, force = false } = {}
+  ) {
     const sidebar = document.querySelector("[data-sidebar]");
     if (!sidebar) {
+      return;
+    }
+    if (!force && document.querySelector("[data-shell]")?.classList.contains("shell-sidebar-hidden")) {
+      document.documentElement.dataset.daaifSourceTreeDirty = "true";
       return;
     }
 
     const requestId = ++sidebarRefreshRequestId;
     const sidebarState = captureSidebarState();
     const activeNotebookId = currentActiveNotebookId() || workspaceNotebookId() || "";
-    const sourceTreeMode =
-      sidebarState.dataSourcesSectionOpen || !document.querySelector("[data-deferred-source-tree]")
-        ? "full"
-        : "deferred";
+    const sourceTreeMode = sidebarState.dataSourcesSectionOpen ? "full" : "deferred";
+    const notebookTreeMode = sidebarState.notebookSectionOpen ? "full" : "deferred";
+    const runbookTreeMode = sidebarState.ingestionRunbookSectionOpen ? "full" : "deferred";
     const response = await window.fetch(
-      `/sidebar?active_notebook_id=${encodeURIComponent(activeNotebookId)}&mode=${encodeURIComponent(mode)}&source_tree=${sourceTreeMode}`,
+      `/sidebar?active_notebook_id=${encodeURIComponent(activeNotebookId)}&mode=${encodeURIComponent(mode)}&source_tree=${sourceTreeMode}&notebook_tree=${notebookTreeMode}&runbook_tree=${runbookTreeMode}`,
       {
         headers: { Accept: "text/html" },
+        signal,
       }
     );
+    if (isCurrent?.() === false) {
+      return;
+    }
     if (!response.ok) {
       throw new Error(`Failed to refresh the sidebar: ${response.status}`);
     }
 
     const markup = await response.text();
-    if (requestId !== sidebarRefreshRequestId) {
+    if (requestId !== sidebarRefreshRequestId || isCurrent?.() === false) {
       return;
     }
 
@@ -143,6 +153,9 @@ export function createSidebarRefreshController(helpers) {
     getInitializeSidebarResizer()?.();
     applyNotebookMetadata();
     await getRenderLocalWorkspaceSidebarEntries()?.();
+    if (isCurrent?.() === false) {
+      return;
+    }
     restoreSidebarState(sidebarState);
     getSyncSelectedIngestionRunbookState()?.();
     getRestoreSelectedSourceObject()?.();
@@ -151,6 +164,7 @@ export function createSidebarRefreshController(helpers) {
     getRenderQueryMonitor()?.();
     getRenderQueryNotificationMenu()?.();
     getRenderHomePage()?.();
+    delete document.documentElement.dataset.daaifSourceTreeDirty;
   }
 
   return {

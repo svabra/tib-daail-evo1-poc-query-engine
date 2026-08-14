@@ -3,7 +3,15 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ...models import DataProductDefinition, DataProductSourceDescriptor
+from ...models import (
+    DacaPublicationReference,
+    DataProductDefinition,
+    DataProductSourceDescriptor,
+)
+
+
+class DataProductOverwriteConflict(ValueError):
+    """The requested replacement no longer matches the published product."""
 
 
 def deserialize_source(payload: object) -> DataProductSourceDescriptor | None:
@@ -57,6 +65,11 @@ def serialize_product(product: DataProductDefinition) -> dict[str, object]:
         "accessNote": product.access_note,
         "requestAccessContact": product.request_access_contact,
         "customProperties": dict(product.custom_properties),
+        "dacaPublication": (
+            product.daca_publication.payload
+            if product.daca_publication is not None
+            else None
+        ),
         "createdAt": product.created_at,
         "updatedAt": product.updated_at,
     }
@@ -80,6 +93,56 @@ def deserialize_product(payload: object) -> DataProductDefinition | None:
     ) or {}
     if not isinstance(custom_properties, dict):
         custom_properties = {}
+
+    daca_payload = payload.get("dacaPublication") or payload.get(
+        "daca_publication"
+    )
+    daca_publication: DacaPublicationReference | None = None
+    if isinstance(daca_payload, dict):
+        source_product_id = str(
+            daca_payload.get("sourceProductId")
+            or daca_payload.get("source_product_id")
+            or ""
+        ).strip()
+        publication_id = str(
+            daca_payload.get("publicationId")
+            or daca_payload.get("publication_id")
+            or ""
+        ).strip()
+        daca_product_id = str(
+            daca_payload.get("productId")
+            or daca_payload.get("product_id")
+            or ""
+        ).strip()
+        state = str(daca_payload.get("state") or "").strip()
+        if source_product_id and publication_id and daca_product_id and state:
+            daca_publication = DacaPublicationReference(
+                source_product_id=source_product_id,
+                publication_id=publication_id,
+                product_id=daca_product_id,
+                state=state,
+                created=bool(daca_payload.get("created")),
+                task_ids=[
+                    str(item).strip()
+                    for item in daca_payload.get("taskIds", []) or []
+                    if str(item).strip()
+                ],
+                missing_fields=[
+                    str(item).strip()
+                    for item in daca_payload.get("missingFields", []) or []
+                    if str(item).strip()
+                ],
+                catalog_url=str(
+                    daca_payload.get("catalogUrl")
+                    or daca_payload.get("catalog_url")
+                    or ""
+                ).strip(),
+                synced_at=str(
+                    daca_payload.get("syncedAt")
+                    or daca_payload.get("synced_at")
+                    or ""
+                ).strip(),
+            )
 
     return DataProductDefinition(
         product_id=product_id,
@@ -120,6 +183,7 @@ def deserialize_product(payload: object) -> DataProductDefinition | None:
             for name, value in custom_properties.items()
             if str(name).strip() and str(value).strip()
         },
+        daca_publication=daca_publication,
         created_at=str(
             payload.get("createdAt") or payload.get("created_at") or ""
         ).strip(),
@@ -186,6 +250,54 @@ class DataProductStore:
                 raise ValueError(
                     f"The data product slug '{product.slug}' is already in use."
                 )
+
+        products[product_index] = serialize_product(product)
+        self._write_state({"products": products})
+        return product
+
+    def replace_product(
+        self,
+        product: DataProductDefinition,
+        *,
+        expected_product_id: str,
+        expected_updated_at: str,
+    ) -> DataProductDefinition:
+        """Atomically compare-and-replace one product without an endpoint gap."""
+
+        state = self._read_state()
+        products = list(state.get("products", []))
+        matching_indexes = [
+            index
+            for index, item in enumerate(products)
+            if str(item.get("slug") or "").strip().lower() == product.slug.lower()
+        ]
+        if len(matching_indexes) != 1:
+            raise DataProductOverwriteConflict(
+                f"The data product slug '{product.slug}' is no longer available for replacement."
+            )
+
+        product_index = matching_indexes[0]
+        existing = deserialize_product(products[product_index])
+        if existing is None:
+            raise DataProductOverwriteConflict(
+                f"The existing data product '{product.slug}' could not be read."
+            )
+        if existing.product_id != str(expected_product_id or "").strip():
+            raise DataProductOverwriteConflict(
+                "The data product identity changed after the overwrite preview."
+            )
+        if existing.updated_at != str(expected_updated_at or "").strip():
+            raise DataProductOverwriteConflict(
+                "The data product changed after the overwrite preview. Review it and confirm again."
+            )
+        if product.product_id != existing.product_id:
+            raise DataProductOverwriteConflict(
+                "A replacement must preserve the existing data product identity."
+            )
+        if product.created_at != existing.created_at:
+            raise DataProductOverwriteConflict(
+                "A replacement must preserve the existing creation timestamp."
+            )
 
         products[product_index] = serialize_product(product)
         self._write_state({"products": products})

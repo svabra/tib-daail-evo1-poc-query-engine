@@ -383,7 +383,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
                     source_schema_type(
                         name="public",
                         objects=[
-                            pg_object("vat_smoke_test_reference"),
+                            pg_object("vat_filing_smoke_generated"),
                             pg_object("tax_assessment_pg_vs_s3"),
                             pg_object("pg_union_tax_reference"),
                             pg_object("pg_union_tax_reference_s3"),
@@ -462,7 +462,10 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             sql = "\n".join(cell.sql for cell in notebook.cells)
             self.assertNotRegex(sql, legacy_virtual_s3_pattern, notebook.notebook_id)
             if "s3." in sql:
-                self.assertIn('"generated/', sql, notebook.notebook_id)
+                if notebook.notebook_id == "data-analysts-journey-cantonal-business-tax":
+                    self.assertIn('"manual/aargau/', sql, notebook.notebook_id)
+                else:
+                    self.assertIn('"generated/', sql, notebook.notebook_id)
 
     def test_build_generator_notebook_links_skips_empty_and_duplicate_entries(
         self,
@@ -598,11 +601,11 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
                         name="public",
                         objects=[
                             source_object_type(
-                                name="vat_smoke_test_reference",
+                                name="vat_filing_smoke_generated",
                                 kind="table",
                                 relation=(
                                     "pg_oltp.public."
-                                    "vat_smoke_test_reference"
+                                    "vat_filing_smoke_generated"
                                 ),
                             )
                         ],
@@ -621,7 +624,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             notebooks["s3-smoke-test"].cells[0].sql,
         )
         self.assertIn(
-            "FROM pg_oltp.public.vat_smoke_test_reference",
+            "FROM pg_oltp.public.vat_filing_smoke_generated",
             notebooks["postgres-smoke-test"].cells[0].sql,
         )
 
@@ -1597,7 +1600,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             source_schema_type,
         ) = import_notebook_helpers()
 
-        postgres_relation = "pg_oltp.public.vat_smoke_test_reference"
+        postgres_relation = "pg_oltp.public.vat_filing_smoke_generated"
         result_set_storage_relation = (
             f"{RESULT_SET_STORAGE_SAMPLE_SCHEMA}.{RESULT_SET_STORAGE_SAMPLE_SOURCE_NAME}"
         )
@@ -1609,7 +1612,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
                         name="public",
                         objects=[
                             source_object_type(
-                                name="vat_smoke_test_reference",
+                                name="vat_filing_smoke_generated",
                                 kind="table",
                                 relation=postgres_relation,
                             )
@@ -1655,7 +1658,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             all(cell.data_sources == ["pg_oltp"] for cell in pandas_demo.cells)
         )
         self.assertIn(
-            f'vat_df = source("{postgres_relation}").df()',
+            f"vat_df = source({postgres_relation!r}).df()",
             pandas_demo.cells[1].sql,
         )
         self.assertIn(

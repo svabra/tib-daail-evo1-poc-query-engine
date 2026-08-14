@@ -1,0 +1,226 @@
+<a class="federal-skip-link" href="#workspace-panel">Zum Inhalt springen</a>
+<header class="federal-header topbar" data-federal-header>
+  {# Preserve the established English shell-description contract for
+     assistive clients and downstream smoke tests while the visible PoC
+     navigation follows the German federal-shell wording. #}
+  <span class="visually-hidden" data-workbench-shell-description>
+    Data Analytics and AI Feed.
+    Query Workbench: Open notebooks, run SQL, and compare execution behavior.
+    Data Sources Workbench: Manage available data sources for shared and local tinkering workflows.
+    Data Products Workbench: Publish live read-only endpoints from Shared Workspace and PostgreSQL sources.
+  </span>
+  <div class="federal-authority-strip" aria-label="Navigation der Bundesbehörden">
+    <div class="federal-header-inner federal-authority-inner">
+      <a
+        class="federal-authority-link"
+        href="https://www.admin.ch/"
+        target="_blank"
+        rel="noreferrer"
+      >
+        <span>Alle Schweizer Bundesbehörden</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5.7 10 6.7 3.9L19 10l.4.7-7 4-7-4z"></path></svg>
+      </a>
+
+      <label class="federal-demo-user" title="Reiner PoC-Arbeitskontext; keine Anmeldung oder Mandantentrennung.">
+        <img data-demo-user-avatar src="" alt="" hidden>
+        <span class="federal-demo-user-initials" data-demo-user-initials aria-hidden="true">JR</span>
+        <span class="federal-demo-user-copy">
+          <span class="federal-demo-user-label">Demo-Benutzer/in</span>
+          <select data-demo-user-select aria-label="Demo-Benutzer wechseln">
+            <option value="kassandra.valdata">Kassandra Valdata · Eidgenössische Steuerverwaltung ESTV</option>
+            <option value="noemie.rochat">Noémie Rochat · Kanton Neuchâtel</option>
+            <option value="beat.stalder">Beat Stalder · Kanton St. Gallen</option>
+            <option value="joel.ruod" selected>Joel Ruod · Eidgenössische Steuerverwaltung ESTV</option>
+            <option value="thomas.kriegli">Thomas Kriegli · Eidgenössische Steuerverwaltung ESTV</option>
+          </select>
+          <span class="federal-demo-user-role" data-demo-user-role-copy>Data Analyst / Data Owner</span>
+        </span>
+      </label>
+
+      <details class="topbar-notification-menu federal-authority-action" data-query-notifications>
+        <summary
+          class="topbar-action-button topbar-action-button-icon-only"
+          aria-label="Benachrichtigungen"
+          title="Benachrichtigungen"
+        >
+          <span class="topbar-notification-badge" data-query-notification-count hidden>0</span>
+          <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M3.2 11.6h9.6l-1.1-1.6V6.8a3.7 3.7 0 0 0-7.4 0V10z"></path>
+            <path d="M6.2 12.1a1.9 1.9 0 0 0 3.6 0"></path>
+          </svg>
+        </summary>
+        <div class="topbar-notification-panel">
+          <div class="topbar-notification-header">
+            <strong>Meldungen</strong>
+            <button type="button" class="topbar-notification-clear" data-clear-notifications hidden>
+              Leeren
+            </button>
+          </div>
+          <div class="topbar-notification-list" data-query-notification-list>
+            <p class="topbar-notification-empty">Noch keine Meldungen.</p>
+          </div>
+        </div>
+      </details>
+
+      <span class="federal-language" lang="de" aria-current="true">
+        DE
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5.7 10 6.7 3.9L19 10l.4.7-7 4-7-4z"></path></svg>
+      </span>
+    </div>
+  </div>
+
+  <div class="federal-brand-row">
+    <div class="federal-header-inner federal-brand-inner">
+      <a href="/" class="brand-home-link" aria-label="Zur DAAIF-Startseite">
+        <img
+          class="brand-mark"
+          src="/static/img/swiss-confederation-logo.png"
+          alt="Schweizerische Eidgenossenschaft"
+          width="206"
+          height="70"
+        >
+      </a>
+      <div class="brand-copy federal-brand-copy">
+        <h1>{{ title }}</h1>
+        <p class="brand-tagline">Data Analytics and AI Factory · Data Platform BIT</p>
+      </div>
+      <div class="federal-environment" aria-label="Lokale PoC-Umgebung">
+        <strong>POC-UMGEBUNG</strong>
+        <span><i aria-hidden="true"></i> Lokale Workbench</span>
+      </div>
+      <div class="federal-brand-actions">
+        <div
+          class="topbar-connection-status"
+          data-sse-connection-status
+          data-connection-status="connected"
+          role="status"
+          aria-live="polite"
+          hidden
+        >
+          <span class="topbar-connection-status-dot" aria-hidden="true"></span>
+          <span data-sse-connection-status-label>Offline</span>
+        </div>
+        <details
+          class="topbar-notification-menu topbar-settings-menu federal-settings-menu"
+          data-settings-menu
+          data-runtime-version="{{ runtime.image_version }}"
+        >
+          <summary
+            class="topbar-action-button topbar-action-button-icon-only"
+            aria-label="Einstellungen"
+            title="Einstellungen"
+          >
+            <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M6.7 1.9h2.6l.4 1.4c.36.1.7.25 1.02.43l1.31-.69 1.84 1.84-.69 1.31c.18.32.33.66.43 1.02l1.4.4v2.6l-1.4.4c-.1.36-.25.7-.43 1.02l.69 1.31-1.84 1.84-1.31-.69c-.32.18-.66.33-1.02.43l-.4 1.4H6.7l-.4-1.4a4.2 4.2 0 0 1-1.02-.43l-1.31.69-1.84-1.84.69-1.31a4.2 4.2 0 0 1-.43-1.02l-1.4-.4v-2.6l1.4-.4c.1-.36.25-.7.43-1.02l-.69-1.31 1.84-1.84 1.31.69c.32-.18.66-.33 1.02-.43z"></path>
+              <circle cx="8" cy="8" r="2.05"></circle>
+            </svg>
+          </summary>
+          <div class="topbar-notification-panel topbar-settings-panel">
+            <div class="topbar-notification-header"><strong>Einstellungen</strong></div>
+            <div class="topbar-settings-actions">
+              <button type="button" class="topbar-settings-action" data-open-service-consumption>
+                <span class="topbar-settings-action-title">Service Consumption</span>
+                <span class="topbar-settings-action-copy">CPU, RAM, S3 und Persistent Volumes prüfen.</span>
+              </button>
+              <button type="button" class="topbar-settings-action" data-open-runtime-storage>
+                <span class="topbar-settings-action-title">Runtime Storage</span>
+                <span class="topbar-settings-action-copy">Temporären Compute-Speicher und Cache-Datensätze prüfen.</span>
+              </button>
+              <button type="button" class="topbar-settings-action" data-clear-local-workspace>
+                <span class="topbar-settings-action-title">Local Workspace leeren</span>
+                <span class="topbar-settings-action-copy">Browser-lokale Notebooks, Entwürfe und Daten löschen.</span>
+              </button>
+              <button type="button" class="topbar-settings-action" data-open-about>
+                <span class="topbar-settings-action-title">Über DAAIF</span>
+                <span class="topbar-settings-action-copy">Version und Zweck dieses Proof of Concept anzeigen.</span>
+              </button>
+              <button type="button" class="topbar-settings-action" data-open-feature-list>
+                <span class="topbar-settings-action-title">Feature-Liste</span>
+                <span class="topbar-settings-action-copy">Änderungen und wichtige Korrekturen nach Version anzeigen.</span>
+              </button>
+            </div>
+          </div>
+        </details>
+      </div>
+    </div>
+  </div>
+
+  <nav class="federal-workbench-nav" aria-label="DAAIF-Hauptnavigation">
+    <div class="federal-header-inner topbar-actions-primary">
+      <a href="/" class="federal-workbench-link" data-federal-nav-section="home" data-open-home-page>
+        <span>Startseite</span>
+      </a>
+      <a
+        href="/query-workbench"
+        class="federal-workbench-link topbar-workbench-button"
+        data-federal-nav-section="query"
+        data-open-query-workbench
+        data-open-query-workbench-navigation="true"
+      >
+        <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.1" y="2.4" width="11.8" height="11.2" rx="1.2"></rect><path d="M2.8 6.2h10.4M5.4 9.1 7 10.7 10.6 7.1"></path></svg>
+        <span>Notebooks</span>
+        <span class="topbar-workbench-tooltip" aria-hidden="true"><strong class="topbar-workbench-tooltip-title">Query Workbench</strong><span class="topbar-workbench-tooltip-copy">Notebooks öffnen und SQL- oder Python-Zellen ausführen.</span></span>
+      </a>
+      <a
+        href="/query-workbench/data-sources"
+        class="federal-workbench-link topbar-workbench-button"
+        data-federal-nav-section="data-sources"
+        data-open-query-data-sources
+      >
+        <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true"><ellipse cx="5.2" cy="4.2" rx="3.1" ry="1.35"></ellipse><path d="M2.1 4.2v4.5c0 .76 1.39 1.35 3.1 1.35s3.1-.59 3.1-1.35V4.2M2.1 6.45c0 .75 1.39 1.35 3.1 1.35s3.1-.6 3.1-1.35M9.2 2.8h3.35l1.35 1.35v6.15H9.2z"></path></svg>
+        <span>Datenquellen</span>
+        <span class="topbar-workbench-tooltip" aria-hidden="true"><strong class="topbar-workbench-tooltip-title">Data Source Workbench</strong><span class="topbar-workbench-tooltip-copy">Gemeinsame und browser-lokale Datenquellen verwalten.</span></span>
+      </a>
+      <a
+        href="/ingestion-workbench"
+        class="federal-workbench-link topbar-workbench-button"
+        data-federal-nav-section="ingestion"
+        data-open-ingestion-workbench
+      >
+        <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.1v4.9M5.5 4.2 8 6.7l2.5-2.5"></path><ellipse cx="8" cy="8.6" rx="4" ry="1.7"></ellipse><path d="M4 8.6v3.6c0 .9 1.8 1.7 4 1.7s4-.8 4-1.7V8.6"></path></svg>
+        <span>Ingestion</span>
+        <span class="topbar-workbench-tooltip" aria-hidden="true"><strong class="topbar-workbench-tooltip-title">Ingestion Workbench</strong><span class="topbar-workbench-tooltip-copy">Dateien kontrolliert in lokale oder gemeinsame Datenquellen einlesen.</span></span>
+      </a>
+      <a
+        href="/loader-workbench"
+        class="federal-workbench-link topbar-workbench-button"
+        data-federal-nav-section="loader"
+        data-open-loader-workbench
+      >
+        <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.4" y="2.2" width="11.2" height="11.6" rx="1.1"></rect><path d="M4.5 5.1h7M4.5 8h7M4.5 10.9h4.2"></path></svg>
+        <span>Loader</span>
+        <span class="topbar-workbench-tooltip" aria-hidden="true"><strong class="topbar-workbench-tooltip-title">Loader Workbench</strong><span class="topbar-workbench-tooltip-copy">Reproduzierbare PoC-Loader starten und überwachen.</span></span>
+      </a>
+      <a
+        href="/data-products"
+        class="federal-workbench-link topbar-workbench-button"
+        data-federal-nav-section="data-products"
+        data-open-data-products-workbench
+      >
+        <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.3" y="2.2" width="11.4" height="11.6" rx="1.1"></rect><path d="M3 5.6h10M5 8.9h6M5 11.2h4"></path></svg>
+        <span>Datenprodukte</span>
+        <span class="topbar-workbench-tooltip" aria-hidden="true"><strong class="topbar-workbench-tooltip-title">Data Products Workbench</strong><span class="topbar-workbench-tooltip-copy">Abfrageergebnisse als verwaltete Datenprodukte publizieren.</span></span>
+      </a>
+      <a
+        href="/data-exchange"
+        class="federal-workbench-link topbar-workbench-button"
+        data-federal-nav-section="data-exchange"
+        data-open-data-exchange-workbench
+      >
+        <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.4 1.9h4.4l2.1 2.1v10.1H4.4zM2.2 10.6h7.1M4.5 8.3l-2.3 2.3 2.3 2.3M13.8 5.4H6.7"></path></svg>
+        <span>DataExchange</span>
+        <span class="topbar-workbench-tooltip" aria-hidden="true"><strong class="topbar-workbench-tooltip-title">DataExchange Workbench</strong><span class="topbar-workbench-tooltip-copy">Dateien geschützt austauschen, ohne ein Datenprodukt zu publizieren.</span></span>
+      </a>
+      <a
+        href="/the-data-platform"
+        class="federal-workbench-link topbar-workbench-button"
+        data-federal-nav-section="data-platform"
+        title="Open the Data Platform BIT oversight page."
+      >
+        <svg class="topbar-action-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.7 13.2 4.4 8 7.1 2.8 4.4zM4 7l4 2.1L12 7M4 10l4 2.1L12 10"></path></svg>
+        <span>Data Platform BIT</span>
+        <span class="topbar-workbench-tooltip" aria-hidden="true"><strong class="topbar-workbench-tooltip-title">Data Platform BIT</strong><span class="topbar-workbench-tooltip-copy">Open the Data Platform BIT oversight page.</span></span>
+      </a>
+    </div>
+  </nav>
+</header>

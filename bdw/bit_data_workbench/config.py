@@ -70,6 +70,11 @@ WORKBENCH_ENVIRONMENT_VARIABLES = (
     "BDW_DOWNLOAD_COMPRESSION_LEVEL",
     "BDW_DOWNLOAD_PREPARE_THRESHOLD_BYTES",
     "BDW_SHARED_NOTEBOOKS_BUCKET",
+    "DACA_BASE_URL",
+    "DACA_UI_URL",
+    "DACA_OPA_URL",
+    "DACA_HTTP_TIMEOUT_SECONDS",
+    "DAAIF_PUBLIC_BASE_URL",
     "MAX_RESULT_ROWS",
     "S3_ENDPOINT",
     "S3_BUCKET",
@@ -642,6 +647,11 @@ class Settings:
     download_compression_level: int = 9
     download_prepare_threshold_bytes: int = DEFAULT_DOWNLOAD_PREPARE_THRESHOLD_BYTES
     shared_notebooks_bucket: str | None = None
+    daca_base_url: str = "http://127.0.0.1:8080"
+    daca_ui_url: str = "http://localhost:8080"
+    daca_opa_url: str = "http://127.0.0.1:8181/v1/data/daca/authz/decision"
+    daca_http_timeout_seconds: float = 5.0
+    daaif_public_base_url: str | None = None
     _generated_s3_ca_cert_file: Path | None = field(init=False, default=None, repr=False)
 
     @classmethod
@@ -857,6 +867,17 @@ class Settings:
                 ),
             ),
             shared_notebooks_bucket=env_optional("BDW_SHARED_NOTEBOOKS_BUCKET"),
+            daca_base_url=env("DACA_BASE_URL", "http://127.0.0.1:8080"),
+            daca_ui_url=env("DACA_UI_URL", "http://localhost:8080"),
+            daca_opa_url=env(
+                "DACA_OPA_URL",
+                "http://127.0.0.1:8181/v1/data/daca/authz/decision",
+            ),
+            daca_http_timeout_seconds=max(
+                0.1,
+                env_float("DACA_HTTP_TIMEOUT_SECONDS", 5.0),
+            ),
+            daaif_public_base_url=env_optional("DAAIF_PUBLIC_BASE_URL"),
             max_result_rows=int(env("MAX_RESULT_ROWS", "200")),
             s3_endpoint=env_optional("S3_ENDPOINT"),
             s3_bucket=env_optional("S3_BUCKET"),

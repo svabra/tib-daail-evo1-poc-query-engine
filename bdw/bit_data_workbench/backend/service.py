@@ -54,7 +54,12 @@ from .data_sources.publication_links import annotate_catalogs_with_published_pro
 from .data_sources.postgres import PostgresDataSourcePlugin
 from .data_sources.s3 import S3DataSourcePlugin
 from .data_sources.s3.explorer import normalize_s3_bucket_name, normalize_s3_object_key
-from .data_products import DataProductManager, DataProductStore
+from .data_products import (
+    DacaMetadataPublicationClient,
+    DacaPublicationCoordinator,
+    DataProductManager,
+    DataProductStore,
+)
 from .data_exchange import (
     DataExchangeManager,
     DataExchangeStore,
@@ -92,6 +97,10 @@ from .materialized_stages import (
     sql_stage_alias_references,
 )
 from .python_execution import KernelSessionManager, PythonJobManager
+from .python_execution.source_context import (
+    python_runtime_relation,
+    python_source_aliases,
+)
 from .pure_duckdb_jobs import PureDuckDBJobManager
 from .query_analysis import (
     KnownRelationReference,
@@ -473,6 +482,15 @@ class WorkbenchService:
             relation_fields_provider=self.source_object_fields,
             catalog_provider=self.catalogs,
             s3_bucket_snapshot_provider=self.s3_explorer_snapshot,
+        )
+        self._daca_publications = DacaPublicationCoordinator(
+            manager=self._data_products,
+            client=DacaMetadataPublicationClient(
+                base_url=settings.daca_base_url,
+                timeout_seconds=settings.daca_http_timeout_seconds,
+            ),
+            daca_ui_url=settings.daca_ui_url,
+            public_base_url=settings.daaif_public_base_url,
         )
         self._materialized_stage_store = MaterializedStageStore(
             self._materialized_stage_store_path()
@@ -861,6 +879,7 @@ class WorkbenchService:
         *,
         base_url: str | None = None,
     ) -> list[dict[str, object]]:
+        self._daca_publications.reconcile_products()
         return self._data_products.list_products(base_url=base_url)
 
     def preview_data_product(
@@ -908,6 +927,9 @@ class WorkbenchService:
         access_note: str = "",
         request_access_contact: str = "",
         custom_properties: dict[str, str] | None = None,
+        overwrite_existing: bool = False,
+        expected_product_id: str = "",
+        expected_updated_at: str = "",
         base_url: str | None = None,
     ) -> dict[str, object]:
         return self._data_products.create_product(
@@ -922,6 +944,46 @@ class WorkbenchService:
             access_note=access_note,
             request_access_contact=request_access_contact,
             custom_properties=custom_properties,
+            overwrite_existing=overwrite_existing,
+            expected_product_id=expected_product_id,
+            expected_updated_at=expected_updated_at,
+            base_url=base_url,
+        )
+
+    def create_daca_data_product(
+        self,
+        *,
+        source: dict[str, object],
+        title: str,
+        slug: str = "",
+        description: str = "",
+        owner: str = "",
+        domain: str = "",
+        tags: list[str] | None = None,
+        access_level: str = "internal",
+        access_note: str = "",
+        request_access_contact: str = "",
+        custom_properties: dict[str, str] | None = None,
+        overwrite_existing: bool = False,
+        expected_product_id: str = "",
+        expected_updated_at: str = "",
+        base_url: str | None = None,
+    ) -> dict[str, object]:
+        return self._daca_publications.create_managed_product(
+            source=source,
+            title=title,
+            slug=slug,
+            description=description,
+            owner=owner,
+            domain=domain,
+            tags=tags,
+            access_level=access_level,
+            access_note=access_note,
+            request_access_contact=request_access_contact,
+            custom_properties=custom_properties,
+            overwrite_existing=overwrite_existing,
+            expected_product_id=expected_product_id,
+            expected_updated_at=expected_updated_at,
             base_url=base_url,
         )
 
@@ -4418,23 +4480,46 @@ class WorkbenchService:
                 continue
             for source_schema in catalog.schemas:
                 for source_object in source_schema.objects:
-                    relation = str(source_object.relation or "").strip()
-                    if not relation or relation in relation_seen:
+                    catalog_relation = str(source_object.relation or "").strip()
+                    if not catalog_relation or catalog_relation in relation_seen:
                         continue
-                    relation_seen.add(relation)
+                    relation_seen.add(catalog_relation)
+                    runtime_relation, requires_shared_catalog = python_runtime_relation(
+                        source_object,
+                        canonical_source_id=catalog_source_id,
+                    )
+                    logical_relation = str(
+                        source_object.query_reference
+                        or source_object.query_alias
+                        or catalog_relation
+                    ).strip()
                     relation_entry = {
                         "sourceId": catalog_source_id,
                         "name": source_object.name,
                         "displayName": source_object.display_name or source_object.name,
-                        "relation": relation,
-                        "logicalRelation": "",
-                        "fields": fields_for_relation(relation),
-                        "aliases": [
-                            relation,
-                            source_object.name,
-                            f"{source_schema.name}.{source_object.name}" if source_schema.name else source_object.name,
-                            source_object.display_name or source_object.name,
-                        ],
+                        "relation": runtime_relation,
+                        "catalogRelation": catalog_relation,
+                        "logicalRelation": logical_relation,
+                        "queryReference": str(source_object.query_reference or "").strip(),
+                        "queryAlias": str(source_object.query_alias or "").strip(),
+                        "requiresSharedCatalog": requires_shared_catalog,
+                        # S3 relations are executed by the isolated in-memory
+                        # DuckDB worker from their object metadata. Introspecting
+                        # every selected S3 object through the shared catalog
+                        # here can contend on its file lock and used to block the
+                        # synchronous job submission for minutes. Field metadata
+                        # is optional on Python source handles; the dataframe has
+                        # the authoritative schema after the referenced object is
+                        # scanned by the worker.
+                        "fields": (
+                            []
+                            if catalog_source_id == "s3"
+                            else fields_for_relation(catalog_relation)
+                        ),
+                        "aliases": python_source_aliases(
+                            source_object,
+                            schema_name=source_schema.name,
+                        ),
                     }
                     relation_entries.append(relation_entry)
                     relations_by_source.setdefault(catalog_source_id, []).append(relation_entry)
@@ -4532,6 +4617,24 @@ class WorkbenchService:
                 pass
 
     def _sync_startup_seed_data_sources(self) -> None:
+        expected_schema_names = {
+            s3_bucket_schema_name(bucket) for bucket in STARTUP_SEED_S3_BUCKETS
+        }
+        with self._lock:
+            cataloged_schema_names = {
+                str(schema.name or "").strip()
+                for catalog in self._catalogs
+                for schema in catalog.schemas
+                if schema.objects
+            }
+        if expected_schema_names.issubset(cataloged_schema_names):
+            self._log_startup(
+                "Startup seed S3 discovery skipped because all %d seed schemas "
+                "are already cataloged; background discovery will refresh them.",
+                len(expected_schema_names),
+            )
+            return
+
         sync_s3_buckets = getattr(self._data_source_discovery, "sync_s3_buckets", None)
         if callable(sync_s3_buckets):
             self._log_startup(

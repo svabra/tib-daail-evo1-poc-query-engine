@@ -21,12 +21,96 @@
 {%- endmacro %}
 
 <section class="home-page" data-home-page>
-  <div class="home-hero">
-    <div class="home-hero-copy">
-      <span class="home-eyebrow">Welcome</span>
-      <h2>Welcome to DAAIF Factory</h2>
+  <section class="home-journey-hero" aria-labelledby="home-journey-title">
+    <picture class="home-journey-hero-picture" data-home-hero-picture aria-hidden="true">
+      <source
+        data-home-hero-source="avif"
+        type="image/avif"
+        srcset="/static/img/daca/swiss-federal-palace-summer-960.avif 960w, /static/img/daca/swiss-federal-palace-summer-1600.avif 1600w"
+        sizes="(max-width: 760px) 960px, 1600px"
+      >
+      <source
+        data-home-hero-source="webp"
+        type="image/webp"
+        srcset="/static/img/daca/swiss-federal-palace-summer-960.webp 960w, /static/img/daca/swiss-federal-palace-summer-1600.webp 1600w"
+        sizes="(max-width: 760px) 960px, 1600px"
+      >
+      <img
+        data-home-hero-image
+        src="/static/img/daca/swiss-federal-palace-summer-1600.webp"
+        width="1600"
+        height="800"
+        alt=""
+        loading="lazy"
+        decoding="async"
+        fetchpriority="low"
+      >
+    </picture>
+    <div class="home-journey-copy">
+      <span class="home-journey-eyebrow">DAAIF</span>
+      <h2 id="home-journey-title">Von Rohdaten zum verantwortungsvoll publizierten Datenprodukt</h2>
       <p>
-        Choose a workbench to enter, then continue from your recent notebooks or ingestion runs.
+        Daten einlesen, mit SQL/Jupyter/R analysieren, zeitgesteuerte Data Pipelines bauen und als nachvollziehbares Datenprodukt
+        für die Schweizer Verwaltung bereitstellen.
+      </p>
+      <div class="home-journey-actions">
+        <a class="home-primary-button" href="/query-workbench" data-open-query-workbench>
+          Notebooks öffnen
+        </a>
+        <a class="home-secondary-button" href="/ingestion-workbench" data-open-ingestion-workbench>
+          Daten einlesen
+        </a>
+      </div>
+      <p class="home-journey-context"><strong>Proof of Concept</strong> Demo-Identitäten sind keine Anmeldung.</p>
+    </div>
+
+    <form class="home-notebook-search" role="search" data-home-notebook-search-form>
+      <div>
+        <span class="home-journey-eyebrow">DAAIF durchsuchen</span>
+        <h3>Woran möchten Sie arbeiten?</h3>
+        <p>Finden Sie Notebooks, Datenquellen und Datenprodukte aus DAAIF.</p>
+      </div>
+      <label for="home-notebook-search-input">Suchbegriff</label>
+      <div class="home-notebook-search-control">
+        <input
+          id="home-notebook-search-input"
+          type="search"
+          autocomplete="off"
+          placeholder="z. B. Gewerbesteuer oder Journey"
+          aria-controls="home-notebook-search-results"
+          aria-describedby="home-notebook-search-feedback"
+          aria-autocomplete="list"
+          aria-expanded="false"
+          role="combobox"
+          data-home-notebook-search-input
+        >
+        <button type="submit">Suchen</button>
+      </div>
+      <div
+        id="home-notebook-search-feedback"
+        class="home-notebook-search-feedback"
+        aria-live="polite"
+      >
+        <p
+          data-home-notebook-search-feedback
+        >Suchindex wird geladen …</p>
+        <ul
+          id="home-notebook-search-results"
+          class="home-notebook-search-results"
+          role="listbox"
+          aria-label="Gefundene DAAIF-Inhalte"
+          data-home-notebook-search-results
+        ></ul>
+      </div>
+    </form>
+  </section>
+
+  <div class="home-hero home-workbench-section">
+    <div class="home-hero-copy">
+      <span class="home-eyebrow">Direkteinstieg</span>
+      <h2>Werkzeuge der DAAIF Factory</h2>
+      <p>
+        Öffnen Sie den passenden Arbeitsbereich oder setzen Sie Ihre letzte Analyse fort.
       </p>
     </div>
     <div class="home-workbench-grid">
