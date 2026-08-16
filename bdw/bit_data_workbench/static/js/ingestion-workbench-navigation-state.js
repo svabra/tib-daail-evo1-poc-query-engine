@@ -87,6 +87,33 @@ function restoreNamedControls(root, controls) {
   });
 }
 
+function syncRestoredCsvObjectNames(root, controls) {
+  const states = (Array.isArray(controls) ? controls : [])
+    .filter((state) => String(state?.selector || "").includes("data-csv-import-base-name"));
+  states.forEach((state, index) => {
+      const control = Array.from(root.querySelectorAll("[data-csv-import-base-name]"))[index];
+      if (control instanceof HTMLInputElement) {
+        control.value = String(state?.value || "");
+        control.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+    });
+}
+
+function restoredCsvObjectNameFocus(root, state) {
+  const objectNameStates = (Array.isArray(state?.controls) ? state.controls : [])
+    .filter((controlState) =>
+      String(controlState?.selector || "").includes("data-csv-import-base-name")
+    );
+  const focusIndex = objectNameStates.findIndex(
+    (controlState) => controlState.selector === state?.focusSelector
+  );
+  if (focusIndex < 0) {
+    return null;
+  }
+  const control = Array.from(root.querySelectorAll("[data-csv-import-base-name]"))[focusIndex];
+  return control instanceof HTMLElement ? control : null;
+}
+
 export function captureIngestionWorkbenchNavigationState(root = document.querySelector("[data-ingestion-workbench-page]")) {
   if (!(root instanceof Element)) {
     return null;
@@ -155,7 +182,10 @@ export function restoreIngestionWorkbenchNavigationState(
     assignFiles(input, files);
   });
   restoreNamedControls(root, state.controls);
-  const focusTarget = state.focusSelector ? root.querySelector(state.focusSelector) : null;
+  syncRestoredCsvObjectNames(root, state.controls);
+  const focusTarget =
+    restoredCsvObjectNameFocus(root, state) ||
+    (state.focusSelector ? root.querySelector(state.focusSelector) : null);
   if (focusTarget instanceof HTMLElement) {
     focusTarget.focus({ preventScroll: true });
   }
@@ -171,7 +201,9 @@ export function restoreIngestionWorkbenchNavigationState(
   }
   scrollRestoreFrame = window.requestAnimationFrame(() => {
     scrollRestoreFrame = null;
-    const delayedFocusTarget = state.focusSelector ? root.querySelector(state.focusSelector) : null;
+    const delayedFocusTarget =
+      restoredCsvObjectNameFocus(root, state) ||
+      (state.focusSelector ? root.querySelector(state.focusSelector) : null);
     if (delayedFocusTarget instanceof HTMLElement) {
       delayedFocusTarget.focus({ preventScroll: true });
     }

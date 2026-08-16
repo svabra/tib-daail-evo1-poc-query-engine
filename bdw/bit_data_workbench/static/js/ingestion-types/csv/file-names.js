@@ -5,12 +5,19 @@ import {
 
 const DEFAULT_CSV_IMPORT_BASE_NAME = "csv-import";
 
-function sanitizeCsvImportBaseName(value) {
+function cleanCsvImportBaseName(value) {
   return String(value || "")
     .replace(/[\\/]+/g, " ")
     .replace(/[\u0000-\u001f\u007f]+/g, " ")
-    .replace(/\.[^.]+$/, "")
     .trim();
+}
+
+function stripSourceFileExtension(value) {
+  return String(value || "").replace(/\.[^.]+$/, "");
+}
+
+function stripKnownDestinationExtension(value) {
+  return String(value || "").replace(/\.(?:csv|jsonl|parquet)$/i, "");
 }
 
 export function csvImportBaseNameFromFileName(fileName) {
@@ -19,12 +26,12 @@ export function csvImportBaseNameFromFileName(fileName) {
       .split(/[\\/]/)
       .pop()
       ?.trim() || "";
-  return sanitizeCsvImportBaseName(normalizedFileName) || DEFAULT_CSV_IMPORT_BASE_NAME;
+  return stripSourceFileExtension(cleanCsvImportBaseName(normalizedFileName)) || DEFAULT_CSV_IMPORT_BASE_NAME;
 }
 
 export function normalizeCsvImportBaseName(value, fallbackFileName = "") {
   return (
-    sanitizeCsvImportBaseName(value) ||
+    stripKnownDestinationExtension(cleanCsvImportBaseName(value)) ||
     csvImportBaseNameFromFileName(fallbackFileName) ||
     DEFAULT_CSV_IMPORT_BASE_NAME
   );

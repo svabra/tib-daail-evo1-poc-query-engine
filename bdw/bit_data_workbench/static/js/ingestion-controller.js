@@ -30,7 +30,64 @@ export function createIngestionController(helpers) {
     resolveSelectedIngestionRunbookId,
     sidebarQueryCounts,
     dataGeneratorCardMarkup,
+    writeTextToClipboard,
   } = helpers;
+
+  const loaderTargetFeedbackTimers = new WeakMap();
+
+  function showLoaderTargetCopyFeedback(copyButton, message, { isError = false } = {}) {
+    const feedback = copyButton
+      .closest(".ingestion-manual-target")
+      ?.querySelector("[data-loader-target-copy-feedback]");
+    if (!(feedback instanceof Element)) {
+      return;
+    }
+
+    const activeTimer = loaderTargetFeedbackTimers.get(feedback);
+    if (activeTimer) {
+      window.clearTimeout(activeTimer);
+    }
+
+    feedback.textContent = message;
+    feedback.classList.toggle("is-error", isError);
+    feedback.classList.add("is-visible");
+    copyButton.classList.toggle("is-copied", !isError);
+
+    const timer = window.setTimeout(() => {
+      feedback.classList.remove("is-visible", "is-error");
+      copyButton.classList.remove("is-copied");
+      loaderTargetFeedbackTimers.delete(feedback);
+      window.setTimeout(() => {
+        if (!feedback.classList.contains("is-visible")) {
+          feedback.textContent = "";
+        }
+      }, 180);
+    }, 1600);
+    loaderTargetFeedbackTimers.set(feedback, timer);
+  }
+
+  async function handleClick(event) {
+    const copyButton = event.target?.closest?.("[data-copy-loader-target-path]");
+    if (!copyButton) {
+      return false;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    try {
+      await writeTextToClipboard(copyButton.dataset.copyLoaderTargetPath || "", {
+        emptyMessage: "There is no storage path to copy.",
+      });
+      showLoaderTargetCopyFeedback(
+        copyButton,
+        copyButton.dataset.copySuccessMessage || "Copied to Clipbard"
+      );
+    } catch (error) {
+      console.error("Failed to copy the loader storage path.", error);
+      showLoaderTargetCopyFeedback(copyButton, "Copy failed", { isError: true });
+    }
+    return true;
+  }
 
   function filteredIngestionGenerators() {
     const selectedGenerator = ingestionGeneratorById(resolveSelectedIngestionRunbookId());
@@ -258,6 +315,7 @@ export function createIngestionController(helpers) {
 
   return {
     collectVisibleNotifications,
+    handleClick,
     renderDataGenerationMonitor,
     renderIngestionWorkbench,
   };

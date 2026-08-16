@@ -72,7 +72,24 @@ export function createIngestionUi(helpers) {
                   </li>
                   <li>
                     Im <a href="/ingestion-workbench" data-open-ingestion-workbench>Ingestion Workbench</a>
-                    hochladen nach <code>${escapeHtml(file.targetPath)}</code>.
+                    hochladen nach
+                    <span class="ingestion-manual-target">
+                      <button
+                        type="button"
+                        class="ingestion-manual-target-copy"
+                        data-copy-loader-target-path="${escapeHtml(file.targetPath)}"
+                        data-copy-success-message="Copied to Clipbard"
+                        aria-label="Speicherpfad in die Zwischenablage kopieren: ${escapeHtml(file.targetPath)}"
+                        title="Speicherpfad kopieren"
+                      ><code>${escapeHtml(file.targetPath)}</code></button>
+                      <span
+                        class="ingestion-manual-copy-feedback"
+                        data-loader-target-copy-feedback
+                        role="status"
+                        aria-live="polite"
+                        aria-atomic="true"
+                      ></span>
+                    </span>.
                     ${
                       file.replaceExisting
                         ? "Ein erneuter Upload ersetzt nur diese manuelle Datei."

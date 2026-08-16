@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import base64
+from io import BytesIO
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
 import unittest
 
 import duckdb
+from PIL import Image
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -121,15 +124,24 @@ class PythonPresetIntegrationTests(unittest.TestCase):
                     notebook_id=chart_notebook.notebook_id,
                 )
                 chart_outputs = []
-                for cell in chart_notebook.cells:
-                    chart_outputs.extend(
-                        sessions.execute(
+                chart_outputs_by_cell = []
+                ranking_outputs = []
+                for index, cell in enumerate(chart_notebook.cells):
+                    cell_outputs = sessions.execute(
+                        chart_session,
+                        code=cell.sql,
+                        context=context,
+                        is_cancelled=lambda: False,
+                    )
+                    chart_outputs.extend(cell_outputs)
+                    chart_outputs_by_cell.append(cell_outputs)
+                    if index == 0:
+                        ranking_outputs = sessions.execute(
                             chart_session,
-                            code=cell.sql,
+                            code='print("|".join(top_five_vat["canton_code"].tolist()))',
                             context=context,
                             is_cancelled=lambda: False,
                         )
-                    )
             finally:
                 sessions.shutdown_all()
 
@@ -145,13 +157,47 @@ class PythonPresetIntegrationTests(unittest.TestCase):
             [output.text for output in chart_outputs if output.output_type == "error"],
             [],
         )
+        self.assertEqual(len(chart_outputs_by_cell), 3)
+        self.assertEqual(
+            [output.output_type for output in chart_outputs_by_cell[0]],
+            ["table"],
+        )
+        self.assertTrue(
+            any(
+                "ZH|VD|AG|LU|FR" in output.text
+                for output in ranking_outputs
+                if output.output_type == "stream"
+            ),
+            "Cell 1 must calculate the requested Top-5 canton order.",
+        )
         chart_images = [
             output
             for output in chart_outputs
             if output.output_type == "image" and output.mime_type == "image/png"
         ]
-        self.assertEqual(len(chart_images), 1)
-        self.assertGreater(len(str(chart_images[0].data)), 10_000)
+        self.assertEqual(
+            [
+                len(
+                    [
+                        output
+                        for output in cell_outputs
+                        if output.output_type == "image" and output.mime_type == "image/png"
+                    ]
+                )
+                for cell_outputs in chart_outputs_by_cell
+            ],
+            [0, 1, 1],
+        )
+        self.assertEqual(len(chart_images), 2)
+        for chart_image in chart_images:
+            image_bytes = base64.b64decode(str(chart_image.data))
+            self.assertTrue(image_bytes.startswith(b"\x89PNG\r\n\x1a\n"))
+            self.assertGreater(len(image_bytes), 10_000)
+            with Image.open(BytesIO(image_bytes)) as image:
+                self.assertGreaterEqual(image.width, 1_000)
+                self.assertGreaterEqual(image.height, 500)
+                grayscale_extrema = image.convert("L").getextrema()
+                self.assertNotEqual(grayscale_extrema[0], grayscale_extrema[1])
 
 
 if __name__ == "__main__":

@@ -5438,6 +5438,21 @@ details:not([open]) > .tree-children {
   padding: 16px 18px;
 }
 
+.home-sample-notebooks-section {
+  grid-column: 1 / -1;
+}
+
+.home-sample-notebook-list {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.home-sample-notebook-card {
+  min-height: 150px;
+  color: inherit;
+  text-decoration: none;
+  align-content: start;
+}
+
 .home-activity-title-row {
   display: flex;
   align-items: flex-start;
@@ -8364,6 +8379,29 @@ details:not([open]) > .tree-children {
   gap: 12px;
 }
 
+.ingestion-csv-s3-uri-paste-status {
+  display: block;
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.ingestion-csv-s3-uri-paste-status.is-success {
+  color: #187a4b;
+  font-weight: 650;
+}
+
+.ingestion-csv-s3-uri-paste-status.is-error {
+  color: #b42318;
+  font-weight: 650;
+}
+
+[data-csv-s3-bucket][aria-invalid="true"] {
+  border-color: #b42318;
+  box-shadow: 0 0 0 1px rgba(180, 35, 24, 0.12);
+}
+
 .ingestion-csv-storage-format-group {
   display: grid;
   gap: 10px;
@@ -8548,6 +8586,34 @@ details:not([open]) > .tree-children {
 .ingestion-csv-s3-summary-row dd {
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+.ingestion-csv-s3-summary-row.is-uri-preview {
+  margin-top: 4px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(11, 68, 121, 0.12);
+}
+
+.ingestion-csv-s3-summary-row.is-uri-preview dt {
+  color: var(--accent-strong);
+}
+
+.ingestion-csv-s3-summary-row.is-uri-preview code {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px 6px;
+  border-radius: 3px;
+  background: rgba(11, 68, 121, 0.08);
+  color: var(--accent-strong);
+  font-weight: 700;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.ingestion-csv-s3-uri-unavailable {
+  color: var(--text-muted);
+  font-size: 0.85rem;
 }
 
 .ingestion-csv-review-name-input {
@@ -11923,6 +11989,10 @@ body.data-platform-document {
     grid-template-columns: 1fr;
   }
 
+  .home-sample-notebook-list {
+    grid-template-columns: 1fr;
+  }
+
   .home-workbench-card-featured,
   .home-workbench-card-compact {
     grid-column: auto;
@@ -14650,6 +14720,99 @@ body.data-platform-document {
   overflow-wrap: anywhere;
 }
 
+.ingestion-manual-target {
+  position: relative;
+  display: inline-flex;
+  max-width: 100%;
+  vertical-align: baseline;
+}
+
+.ingestion-manual-target-copy {
+  min-width: 0;
+  max-width: 100%;
+  margin: -0.08rem -0.22rem;
+  padding: 0.08rem 0.22rem;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  cursor: copy;
+}
+
+.ingestion-manual-target-copy:hover {
+  border-color: rgba(11, 68, 121, 0.2);
+  background: rgba(11, 68, 121, 0.07);
+}
+
+.ingestion-manual-target-copy:focus-visible {
+  outline: 2px solid var(--focus-ring, #0b4479);
+  outline-offset: 2px;
+}
+
+.ingestion-manual-target-copy.is-copied {
+  border-color: rgba(24, 122, 75, 0.28);
+  background: rgba(24, 122, 75, 0.09);
+}
+
+.ingestion-manual-copy-feedback {
+  position: absolute;
+  bottom: calc(100% + 0.45rem);
+  left: 50%;
+  z-index: 10;
+  padding: 0.26rem 0.48rem;
+  border-radius: 4px;
+  background: #243746;
+  box-shadow: 0 4px 10px rgba(17, 33, 51, 0.18);
+  color: #fff;
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: translate(-50%, 0.2rem);
+  transition:
+    opacity 120ms ease,
+    transform 120ms ease,
+    visibility 120ms ease;
+}
+
+.ingestion-manual-copy-feedback::after {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border: 0.28rem solid transparent;
+  border-top-color: #243746;
+  content: "";
+  transform: translateX(-50%);
+}
+
+.ingestion-manual-copy-feedback.is-visible {
+  opacity: 1;
+  visibility: visible;
+  transform: translate(-50%, 0);
+}
+
+.ingestion-manual-copy-feedback.is-error {
+  background: #9d261d;
+}
+
+.ingestion-manual-copy-feedback.is-error::after {
+  border-top-color: #9d261d;
+}
+
 .ingestion-manual-download {
   font-weight: 750;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ingestion-manual-copy-feedback {
+    transition: none;
+  }
 }

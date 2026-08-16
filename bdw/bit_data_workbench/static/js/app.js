@@ -991,6 +991,7 @@ const {
   handleCsvDrop,
   handleCsvIngestionChange,
   handleCsvIngestionInput,
+  handleCsvIngestionPaste,
   renderCsvIngestionWorkbench,
   showIngestionLanding,
   submitCsvIngestionForm,
@@ -1315,6 +1316,7 @@ const {
 
 const {
   collectVisibleNotifications,
+  handleClick: handleIngestionClick,
   renderDataGenerationMonitor,
   renderIngestionWorkbench,
 } = createIngestionController({
@@ -1360,6 +1362,7 @@ const {
   resolveSelectedIngestionRunbookId,
   sidebarQueryCounts,
   dataGeneratorCardMarkup,
+  writeTextToClipboard,
 });
 
 function currentActiveNotebookId() {
@@ -12017,6 +12020,10 @@ document.body.addEventListener("click", async (event) => {
     return;
   }
 
+  if (await handleIngestionClick(event)) {
+    return;
+  }
+
   if (handleCsvIngestionClick(event)) {
     return;
   }
@@ -12115,6 +12122,10 @@ document.body.addEventListener("focusin", (event) => {
 
 document.body.addEventListener("contextmenu", (event) => {
   notebookStagePipelineController.handleContextMenu(event);
+});
+
+document.body.addEventListener("paste", (event) => {
+  handleCsvIngestionPaste(event);
 });
 
 document.body.addEventListener("input", (event) => {

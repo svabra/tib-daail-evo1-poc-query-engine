@@ -227,9 +227,13 @@ export function createNotebookTreeState(helpers) {
       (node) => node.type === "folder" && (node.folderId === folderId || node.name === folderName)
     );
 
+    const occurrenceCount = collectNotebookIdsFromStoredTree(rootNodes).filter(
+      (candidateId) => candidateId === notebookId
+    ).length;
     if (
       existingFolderIndex >= 0 &&
-      folderContainsNotebookState(rootNodes[existingFolderIndex], notebookId)
+      folderContainsNotebookState(rootNodes[existingFolderIndex], notebookId) &&
+      occurrenceCount === 1
     ) {
       return {
         state: rootNodes,
@@ -290,7 +294,14 @@ export function createNotebookTreeState(helpers) {
     }
 
     const existingFolder = findStoredFolderPathState(rootNodes, normalizedPath);
-    if (existingFolder && folderContainsNotebookState(existingFolder, notebookId)) {
+    const occurrenceCount = collectNotebookIdsFromStoredTree(rootNodes).filter(
+      (candidateId) => candidateId === notebookId
+    ).length;
+    if (
+      existingFolder &&
+      folderContainsNotebookState(existingFolder, notebookId) &&
+      occurrenceCount === 1
+    ) {
       return {
         state: rootNodes,
         changed: false,
@@ -372,6 +383,14 @@ export function createNotebookTreeState(helpers) {
         folderPath: ["PoC Tests", "SQL Functionalities"],
       },
       {
+        notebookId: "python-pandas-vat-demo",
+        folderPath: ["PoC Tests", "Jupyter/Python"],
+      },
+      {
+        notebookId: "python-chart-vat-demo",
+        folderPath: ["PoC Tests", "Jupyter/Python"],
+      },
+      {
         notebookId: "result-set-storage-s3-demo",
         folderPath: ["PoC Tests", "General Functionalities"],
       },
@@ -381,7 +400,7 @@ export function createNotebookTreeState(helpers) {
       },
       {
         notebookId: "kostenbelege-fact-builder-s3-pipeline-demo",
-        folderPath: ["PoC Tests", "General Functionalities"],
+        folderPath: ["PoC Tests", "Data Pipelines"],
       },
       {
         notebookId: "pg-vs-s3-contest-oltp",

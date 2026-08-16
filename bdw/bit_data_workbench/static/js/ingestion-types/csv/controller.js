@@ -15,7 +15,10 @@ import {
   csvS3StorageFormatDefinition,
   normalizeCsvS3StorageFormat,
 } from "./s3-storage-formats.js";
-import { resolveCsvS3LocationDetails } from "./s3-location.js";
+import {
+  parseCsvS3LocationInput,
+  resolveCsvS3LocationDetails,
+} from "./s3-location.js";
 import {
   buildCsvZipPreviewState,
   isZipFile,
@@ -30,11 +33,17 @@ import {
   recommendedPartitionColumns,
   recommendedSortColumns,
 } from "../parquet-optimization-columns.js";
+import {
+  isValidS3BucketName,
+  S3_BUCKET_NAME_VALIDATION_MESSAGE,
+} from "../../source-metadata-utils.js";
 
 const DEFAULT_CSV_UPLOAD_CHUNK_BYTES = 5 * 1024 * 1024;
 const CSV_UPLOAD_CHUNK_ATTEMPTS = 5;
 const CSV_UPLOAD_COMPLETION_POLL_INTERVAL_MS = 2000;
 const CSV_UPLOAD_COMPLETION_TIMEOUT_MS = 60 * 60 * 1000;
+const CSV_S3_URI_PASTE_HELP =
+  "Paste a complete s3://bucket/prefix/object.csv URI here to fill Bucket, Object key prefix, and Object name automatically.";
 
 function normalizeCsvIdentifier(value, defaultPrefix) {
   let normalized = String(value || "")
@@ -106,6 +115,11 @@ export function createCsvIngestionController(helpers) {
   let activeEntryId = "";
   let previewState = emptyPreviewState();
   let previewRequestVersion = 0;
+  let pendingPastedS3Target = null;
+  let s3UriPasteFeedback = {
+    tone: "",
+    copy: CSV_S3_URI_PASTE_HELP,
+  };
   let lastLoggedProcessingSignature = "";
   let optimizationColumnSelection = {
     partitionColumns: [],
@@ -177,6 +191,61 @@ export function createCsvIngestionController(helpers) {
     return document.querySelector(
       `[data-csv-config-panel="${CSS.escape(String(targetId || "").trim())}"]`
     );
+  }
+
+  function s3BucketInput() {
+    return document.querySelector("[data-csv-s3-bucket]");
+  }
+
+  function s3PrefixInput() {
+    return document.querySelector("[data-csv-s3-prefix]");
+  }
+
+  function s3UriPasteStatus() {
+    return document.querySelector("[data-csv-s3-uri-paste-status]");
+  }
+
+  function setS3UriPasteFeedback(copy = CSV_S3_URI_PASTE_HELP, tone = "") {
+    s3UriPasteFeedback = {
+      tone: String(tone || "").trim(),
+      copy: String(copy || CSV_S3_URI_PASTE_HELP).trim(),
+    };
+  }
+
+  function s3BucketValueIsValid() {
+    const value = String(s3BucketInput()?.value || "").trim();
+    return s3UriPasteFeedback.tone !== "error" && (!value || isValidS3BucketName(value));
+  }
+
+  function syncS3BucketFieldState() {
+    const input = s3BucketInput();
+    const status = s3UriPasteStatus();
+    if (!(input instanceof HTMLInputElement)) {
+      return;
+    }
+    const bucket = String(input.value || "").trim();
+    const invalidBucket = Boolean(bucket) && !isValidS3BucketName(bucket);
+    const pasteError = s3UriPasteFeedback.tone === "error";
+    const invalid = invalidBucket || pasteError;
+    const invalidCopy = invalidBucket
+      ? `${S3_BUCKET_NAME_VALIDATION_MESSAGE} Put path segments in Object key prefix, or paste the complete S3 URI.`
+      : pasteError
+        ? s3UriPasteFeedback.copy
+        : "";
+    input.setCustomValidity(invalidCopy);
+    if (invalid) {
+      input.setAttribute("aria-invalid", "true");
+    } else {
+      input.removeAttribute("aria-invalid");
+    }
+    if (!(status instanceof Element)) {
+      return;
+    }
+    const error = invalid;
+    status.textContent = invalid ? invalidCopy : s3UriPasteFeedback.copy;
+    status.setAttribute("role", error ? "alert" : "status");
+    status.classList.toggle("is-error", error);
+    status.classList.toggle("is-success", !invalid && s3UriPasteFeedback.tone === "success");
   }
 
   function resetOptimizationColumnSelection() {
@@ -445,6 +514,14 @@ export function createCsvIngestionController(helpers) {
     return imports.filter((item) => normalizedCsvImportStatus(item) === "imported").length;
   }
 
+  function csvFailedCount(payload, imports = csvImportResultsFromPayload(payload)) {
+    const failedCount = Number(payload?.failedCount);
+    if (Number.isFinite(failedCount)) {
+      return failedCount;
+    }
+    return imports.filter((item) => normalizedCsvImportStatus(item) === "failed").length;
+  }
+
   function isCsvOrZipFile(file) {
     const fileName = String(file?.name || "").trim().toLowerCase();
     return fileName.endsWith(".csv") || fileName.endsWith(".zip");
@@ -558,11 +635,44 @@ export function createCsvIngestionController(helpers) {
     return `${prefix}${resolvedDestinationFileName(entry, "s3", config)}`;
   }
 
+  function reviewS3Location(entry, config = currentConfig()) {
+    if (isZipFile(entry?.file)) {
+      return {
+        objectName: "Multiple extracted objects",
+        objectKey: "",
+        uri: "",
+        uriUnavailableCopy:
+          "Multiple extracted objects; exact S3 URIs are shown after import.",
+      };
+    }
+
+    let objectName = resolvedDestinationFileName(entry, "s3", config);
+    let objectKey = resolvedS3ObjectKey(entry, config);
+    let uri = "";
+    const partitionedParquet =
+      config.s3StorageFormat === "parquet" &&
+      config.parquetOptimization?.mode === "manual" &&
+      Array.isArray(config.parquetOptimization?.partitionColumns) &&
+      config.parquetOptimization.partitionColumns.length > 0;
+    if (partitionedParquet) {
+      objectName = objectName.replace(/\.parquet$/i, "");
+      objectKey = config.prefix ? `${config.prefix}/${objectName}` : objectName;
+      uri = resolveCsvS3LocationDetails({
+        bucket: config.bucket,
+        objectKey: `${objectKey}/**/*.parquet`,
+      }).uri;
+    }
+    return { objectName, objectKey, uri, uriUnavailableCopy: "" };
+  }
+
   function s3LocationSummaryMarkup({
     bucket = "",
     prefix = "",
     objectName = "",
     objectKey = "",
+    uri = "",
+    uriLabel = "Full S3 URI",
+    uriUnavailableCopy = "",
     mode = "review",
   } = {}) {
     const details = resolveCsvS3LocationDetails({
@@ -573,6 +683,12 @@ export function createCsvIngestionController(helpers) {
     });
     const emptyPrefixCopy =
       mode === "result" ? "No key prefix" : "No key prefix configured";
+    const fullS3Uri = String(uri || "").trim() || details.uri;
+    const uriValueMarkup = uriUnavailableCopy
+      ? `<span class="ingestion-csv-s3-uri-unavailable" data-csv-s3-summary-uri-unavailable>${escapeHtml(
+          uriUnavailableCopy
+        )}</span>`
+      : `<code data-csv-s3-summary-uri>${escapeHtml(fullS3Uri)}</code>`;
     return `
       <dl class="ingestion-csv-s3-summary" data-csv-s3-summary>
         <div class="ingestion-csv-s3-summary-row">
@@ -586,6 +702,10 @@ export function createCsvIngestionController(helpers) {
         <div class="ingestion-csv-s3-summary-row">
           <dt>Object name</dt>
           <dd data-csv-s3-summary-object-name>${escapeHtml(details.objectName)}</dd>
+        </div>
+        <div class="ingestion-csv-s3-summary-row is-uri-preview">
+          <dt>${escapeHtml(uriLabel)}</dt>
+          <dd>${uriValueMarkup}</dd>
         </div>
       </dl>
     `;
@@ -672,6 +792,7 @@ export function createCsvIngestionController(helpers) {
           const importNameSuffix = isZipFile(entry.file)
             ? ".zip"
             : csvImportNameSuffix(targetId, config.s3StorageFormat);
+          const s3Location = targetId === "s3" ? reviewS3Location(entry, config) : null;
           return `
           <article class="ingestion-csv-review-card">
             <span class="ingestion-csv-review-name">${escapeHtml(entry.file.name)}</span>
@@ -703,8 +824,10 @@ export function createCsvIngestionController(helpers) {
                   ${s3LocationSummaryMarkup({
                     bucket: config.bucket || "<bucket>",
                     prefix: config.prefix,
-                    objectName: resolvedDestinationFileName(entry, targetId, config),
-                    objectKey: resolvedS3ObjectKey(entry, config),
+                    objectName: s3Location.objectName,
+                    objectKey: s3Location.objectKey,
+                    uri: s3Location.uri,
+                    uriUnavailableCopy: s3Location.uriUnavailableCopy,
                     mode: "review",
                   })}
                 `
@@ -919,6 +1042,8 @@ export function createCsvIngestionController(helpers) {
                     prefix: s3LocationDetails.keyPrefix,
                     objectName: s3LocationDetails.objectName,
                     objectKey: s3LocationDetails.objectKey,
+                    uri: item.path,
+                    uriLabel: item.partitioned ? "S3 dataset URI" : "Full S3 URI",
                     mode: "result",
                   })}
                 `
@@ -1030,21 +1155,30 @@ export function createCsvIngestionController(helpers) {
       dataSourcesRoot.open = true;
     }
 
-    const catalogRoot = sourceObjectRoot.closest("[data-source-catalog]");
-    if (catalogRoot instanceof HTMLDetailsElement) {
-      catalogRoot.open = true;
-    }
-
-    const schemaRoot = sourceObjectRoot.closest("[data-source-schema]");
-    if (schemaRoot instanceof HTMLDetailsElement) {
-      schemaRoot.open = true;
+    let ancestor = sourceObjectRoot.parentElement;
+    while (ancestor instanceof Element) {
+      if (
+        ancestor instanceof HTMLDetailsElement &&
+        ancestor.matches("[data-source-catalog], [data-source-schema]")
+      ) {
+        ancestor.open = true;
+      }
+      ancestor = ancestor.parentElement;
     }
 
     sourceObjectRoot.scrollIntoView({ block: "nearest" });
   }
 
   async function openImportedSourceInNewNotebook(querySource) {
-    await refreshSidebar("notebook");
+    const dataSourcesRoot = document.querySelector("[data-data-sources-section]");
+    if (dataSourcesRoot instanceof HTMLDetailsElement) {
+      dataSourcesRoot.open = true;
+    }
+    const notebookSectionRoot = document.querySelector("[data-notebook-section]");
+    if (notebookSectionRoot instanceof HTMLDetailsElement) {
+      notebookSectionRoot.open = true;
+    }
+    await refreshSidebar("notebook", { force: true });
     const sourceObjectRoot = await waitForQuerySourceObject(querySource);
     if (!(sourceObjectRoot instanceof Element)) {
       throw new Error(
@@ -1289,11 +1423,13 @@ export function createCsvIngestionController(helpers) {
     if (!button) {
       return;
     }
+    syncS3BucketFieldState();
     button.disabled =
       busy ||
       !selectedFiles.length ||
       previewState.status === "loading" ||
-      previewState.status === "error";
+      previewState.status === "error" ||
+      (selectedTargetId() === "s3" && !s3BucketValueIsValid());
     if (!busy) {
       button.textContent = "Import CSV files";
     } else if (busyPhase === "uploading") {
@@ -1344,9 +1480,33 @@ export function createCsvIngestionController(helpers) {
   }
 
   function setSelectedFiles(files) {
+    const pendingTarget = pendingPastedS3Target;
+    pendingPastedS3Target = null;
     selectedFiles = Array.from(files || [])
       .filter((file) => isCsvOrZipFile(file))
       .map((file) => buildSelectedFileEntry(file));
+    if (
+      selectedFiles.length === 1 &&
+      pendingTarget?.objectName &&
+      !isZipFile(selectedFiles[0]?.file)
+    ) {
+      selectedFiles[0] = {
+        ...selectedFiles[0],
+        importBaseName: normalizeCsvImportBaseName(
+          pendingTarget.objectName,
+          selectedFiles[0]?.file?.name || ""
+        ),
+      };
+      setS3UriPasteFeedback(
+        "S3 URI split into Bucket, Object key prefix, and Object name.",
+        "success"
+      );
+    } else if (pendingTarget?.objectName && selectedFiles.length) {
+      setS3UriPasteFeedback(
+        "S3 URI split into Bucket and Object key prefix. The pasted object name was not applied to a batch or ZIP archive.",
+        "success"
+      );
+    }
     latestResults = [];
     latestImportPayload = null;
     uploadProgress = null;
@@ -1380,6 +1540,81 @@ export function createCsvIngestionController(helpers) {
       };
     });
     return changed;
+  }
+
+  function selectPastedS3StorageFormat(storageFormat) {
+    const normalizedStorageFormat = String(storageFormat || "").trim();
+    if (!normalizedStorageFormat) {
+      return;
+    }
+    const option = document.querySelector(
+      `[data-csv-s3-storage-format][value="${CSS.escape(normalizedStorageFormat)}"]`
+    );
+    if (option instanceof HTMLInputElement) {
+      option.checked = true;
+    }
+  }
+
+  function applyPastedS3ObjectName(target) {
+    if (!target?.objectName || selectedFileEntries().length !== 1) {
+      return false;
+    }
+    const entry = selectedFileEntries()[0];
+    if (isZipFile(entry?.file)) {
+      return false;
+    }
+    updateSelectedFileImportBaseName(entry.id, target.objectName);
+    return true;
+  }
+
+  function applyPastedS3Location(rawValue) {
+    const target = parseCsvS3LocationInput(rawValue);
+    if (!target) {
+      return false;
+    }
+    pendingPastedS3Target = null;
+    if (!isValidS3BucketName(target.bucket)) {
+      setS3UriPasteFeedback(S3_BUCKET_NAME_VALIDATION_MESSAGE, "error");
+      renderCsvIngestionWorkbench();
+      return true;
+    }
+
+    const bucketInput = s3BucketInput();
+    const prefixInput = s3PrefixInput();
+    if (!(bucketInput instanceof HTMLInputElement) || !(prefixInput instanceof HTMLInputElement)) {
+      return false;
+    }
+    bucketInput.value = target.bucket;
+    prefixInput.value = target.keyPrefix;
+    selectPastedS3StorageFormat(target.storageFormat);
+    const objectNameApplied = applyPastedS3ObjectName(target);
+    if (target.objectName && !selectedFileEntries().length) {
+      pendingPastedS3Target = target;
+    }
+
+    if (!target.objectName) {
+      setS3UriPasteFeedback(
+        "S3 path split into Bucket and Object key prefix. The existing object name is unchanged.",
+        "success"
+      );
+    } else if (objectNameApplied) {
+      setS3UriPasteFeedback(
+        "S3 URI split into Bucket, Object key prefix, and Object name.",
+        "success"
+      );
+    } else if (!selectedFileEntries().length) {
+      setS3UriPasteFeedback(
+        "S3 URI split into Bucket and Object key prefix. The object name will be applied after selecting one CSV file.",
+        "success"
+      );
+    } else {
+      setS3UriPasteFeedback(
+        "S3 URI split into Bucket and Object key prefix. The pasted object name was not applied to a batch or ZIP archive.",
+        "success"
+      );
+    }
+    renderCsvIngestionWorkbench();
+    return true;
   }
 
   function openIngestionEntry(entryId) {
@@ -1780,6 +2015,12 @@ export function createCsvIngestionController(helpers) {
     if (!selectedFiles.length || busy) {
       return false;
     }
+    if (selectedTargetId() === "s3" && !s3BucketValueIsValid()) {
+      syncS3BucketFieldState();
+      s3BucketInput()?.focus();
+      s3BucketInput()?.reportValidity?.();
+      return false;
+    }
 
     busy = true;
     busyPhase = selectedTargetId() === "workspace.local" ? "processing" : "uploading";
@@ -1798,12 +2039,20 @@ export function createCsvIngestionController(helpers) {
       }
       renderCsvIngestionWorkbench();
       const completedCount = csvImportedCount(latestImportPayload, latestResults);
+      const failedCount = csvFailedCount(latestImportPayload, latestResults);
+      const outcomeTitle = failedCount > 0
+        ? completedCount > 0
+          ? "CSV import partially completed"
+          : "CSV import failed"
+        : "CSV import finished";
+      const outcomeCopy = failedCount > 0
+        ? `${completedCount} file(s) imported; ${failedCount} failed. See the file details below.`
+        : selectedTargetId() === "workspace.local"
+          ? `${completedCount} file(s) stored in Local Workspace (IndexDB) and ready for Query Workbench handoff.`
+          : `${completedCount} file(s) processed for ${targetLabel()}.`;
       await showMessageDialog({
-        title: "CSV import finished",
-        copy:
-          selectedTargetId() === "workspace.local"
-            ? `${completedCount} file(s) stored in Local Workspace (IndexDB) and ready for Query Workbench handoff.`
-            : `${completedCount} file(s) processed for ${targetLabel()}.`,
+        title: outcomeTitle,
+        copy: outcomeCopy,
       });
     } finally {
       busy = false;
@@ -1816,8 +2065,29 @@ export function createCsvIngestionController(helpers) {
   }
 
   function handleCsvIngestionInput(event) {
+    const bucketInput = event.target.closest("[data-csv-s3-bucket]");
+    if (bucketInput instanceof HTMLInputElement) {
+      const rawValue = String(bucketInput.value || "").trim();
+      if (/^s3:\/\//i.test(rawValue)) {
+        if (!applyPastedS3Location(rawValue)) {
+          setS3UriPasteFeedback(
+            "Enter a complete S3 URI such as s3://bucket/prefix/object.csv.",
+            "error"
+          );
+          renderCsvIngestionWorkbench();
+        }
+        return true;
+      }
+      pendingPastedS3Target = null;
+      setS3UriPasteFeedback();
+      renderCsvIngestionWorkbench();
+      return true;
+    }
+
     const importBaseNameInput = event.target.closest("[data-csv-import-base-name]");
     if (importBaseNameInput instanceof HTMLInputElement) {
+      pendingPastedS3Target = null;
+      setS3UriPasteFeedback();
       if (
         updateSelectedFileImportBaseName(
           importBaseNameInput.dataset.csvFileId,
@@ -1830,12 +2100,39 @@ export function createCsvIngestionController(helpers) {
     }
 
     const relevantInput = event.target.closest(
-      "[data-csv-folder-path], [data-csv-s3-bucket], [data-csv-s3-prefix], [data-csv-schema-name], [data-csv-table-prefix]"
+      "[data-csv-folder-path], [data-csv-s3-prefix], [data-csv-schema-name], [data-csv-table-prefix]"
     );
     if (!relevantInput) {
       return false;
     }
+    if (relevantInput.matches("[data-csv-s3-prefix]")) {
+      pendingPastedS3Target = null;
+      setS3UriPasteFeedback();
+    }
     renderCsvIngestionWorkbench();
+    return true;
+  }
+
+  function handleCsvIngestionPaste(event) {
+    const bucketInput = event.target.closest("[data-csv-s3-bucket]");
+    if (!(bucketInput instanceof HTMLInputElement)) {
+      return false;
+    }
+    const pastedValue = String(event.clipboardData?.getData("text/plain") || "").trim();
+    const looksLikeLocation = pastedValue.includes("/") || /^[a-z][a-z0-9+.-]*:\/\//i.test(pastedValue);
+    if (!looksLikeLocation) {
+      return false;
+    }
+    event.preventDefault();
+    pendingPastedS3Target = null;
+    if (applyPastedS3Location(pastedValue)) {
+      return true;
+    }
+    setS3UriPasteFeedback(
+      "Paste a valid S3 URI or path without queries, fragments, backslashes, or encoded characters.",
+      "error"
+    );
+    syncSubmitState();
     return true;
   }
 
@@ -1869,6 +2166,10 @@ export function createCsvIngestionController(helpers) {
       "[data-csv-delimiter-mode], [data-csv-has-header], [data-csv-replace-existing], [data-csv-s3-storage-format], [data-csv-parquet-optimization-mode], [data-csv-hive-partitioning], [data-csv-create-duckdb-cache]"
     );
     if (previewOption) {
+      if (previewOption.matches("[data-csv-s3-storage-format]")) {
+        pendingPastedS3Target = null;
+        setS3UriPasteFeedback();
+      }
       renderCsvIngestionWorkbench();
       if (
         previewOption.matches("[data-csv-delimiter-mode]") ||
@@ -1881,6 +2182,8 @@ export function createCsvIngestionController(helpers) {
 
     const importBaseNameInput = event.target.closest("[data-csv-import-base-name]");
     if (importBaseNameInput instanceof HTMLInputElement) {
+      pendingPastedS3Target = null;
+      setS3UriPasteFeedback();
       if (
         updateSelectedFileImportBaseName(
           importBaseNameInput.dataset.csvFileId,
@@ -1976,6 +2279,7 @@ export function createCsvIngestionController(helpers) {
     handleCsvDrop,
     handleCsvIngestionChange,
     handleCsvIngestionInput,
+    handleCsvIngestionPaste,
     renderCsvIngestionWorkbench,
     showIngestionLanding,
     submitCsvIngestionForm,

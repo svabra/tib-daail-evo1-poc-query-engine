@@ -227,7 +227,17 @@
                   name="bucket"
                   data-csv-s3-bucket
                   placeholder="csv-imports"
+                  aria-describedby="csv-s3-uri-paste-status"
+                  autocomplete="off"
+                  spellcheck="false"
                 >
+                <span
+                  id="csv-s3-uri-paste-status"
+                  class="ingestion-csv-s3-uri-paste-status"
+                  data-csv-s3-uri-paste-status
+                  role="status"
+                  aria-live="polite"
+                >Paste a complete s3://bucket/prefix/object.csv URI here to fill Bucket, Object key prefix, and Object name automatically.</span>
               </label>
               <label class="result-export-field">
                 <span class="result-export-field-label ingestion-csv-storage-format-label">

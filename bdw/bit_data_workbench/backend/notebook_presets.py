@@ -28,6 +28,7 @@ from ..data_generator.kostenbelege_fact_builder_sample import (
     KOSTENBELEGE_FACT_BUILDER_GENERATOR_ID,
     KOSTENBELEGE_FACT_BUILDER_NOTEBOOK_ID,
     KOSTENBELEGE_FACT_BUILDER_PIPELINE_NOTEBOOK_ID,
+    KOSTENBELEGE_FACT_BUILDER_PIPELINE_TREE_PATH,
     KOSTENBELEGE_FACT_BUILDER_TREE_PATH,
     RESULT_SET_KEYS as KOSTENBELEGE_FACT_BUILDER_RESULT_KEYS,
     result_path as kostenbelege_fact_builder_result_path,
@@ -41,6 +42,7 @@ DATA_PIPELINES_TREE_PATH = (
     "Performance Evaluation",
     "Data Pipelines",
 )
+JUPYTER_PYTHON_TREE_PATH = ("PoC Tests", "Jupyter/Python")
 MWA_PARQUET_PIPELINE_NOTEBOOK_ID = "mwa-abrechnung-s3-parquet-pipeline"
 MWA_PARQUET_PIPELINE_CREATED_AT = "2026-06-06T00:00:00+00:00"
 MWA_PARQUET_PIPELINE_TREE_PATH = DATA_PIPELINES_TREE_PATH
@@ -1079,7 +1081,7 @@ def build_kostenbelege_fact_builder_s3_pipeline_notebook() -> NotebookDefinition
             ),
         ],
         tags=["s3", "parquet", "duckdb", "pipeline", "kostenbelege", "fact"],
-        tree_path=KOSTENBELEGE_FACT_BUILDER_TREE_PATH,
+        tree_path=KOSTENBELEGE_FACT_BUILDER_PIPELINE_TREE_PATH,
         linked_generator_id=KOSTENBELEGE_FACT_BUILDER_GENERATOR_ID,
         pipeline_mode="pipeline",
         pipeline_paths=[
@@ -3450,55 +3452,120 @@ def build_static_notebooks(
         else 'print("Run the PostgreSQL OLTP VAT Smoke Loader from the Loader Workbench first.")\n'
     )
     chart_python_load_code = (
-        "# Use the sql(...) helper to pull an aggregated slice into pandas.\n"
-        'quarterly_vat = sql("""\n'
+        "# Cell 1: aggregate and retain the five strongest synthetic VAT cantons.\n"
+        "# Provisorische ständige Wohnbevölkerung, BFS STATPOP, Stand 31.12.2025.\n"
+        "CANTON_POPULATION_2025 = {\n"
+        '    "ZH": 1_632_191,\n'
+        '    "VD": 863_375,\n'
+        '    "AG": 743_563,\n'
+        '    "LU": 441_400,\n'
+        '    "FR": 350_807,\n'
+        "}\n\n"
+        'quarterly_all = sql("""\n'
         "SELECT\n"
         "  canton_code,\n"
         "  CAST(date_trunc('quarter', tax_period_end) AS DATE) AS tax_quarter_start,\n"
-        "  net_vat_due_chf,\n"
-        "  filing_status,\n"
-        "  audit_flag\n"
+        "  CAST(SUM(net_vat_due_chf) AS DOUBLE) AS mwst_umsatz_chf,\n"
+        "  COUNT(*) AS filing_count\n"
         f"FROM {preferred_postgres_relation}\n"
         "WHERE tax_period_end >= DATE '2025-01-01'\n"
+        "GROUP BY canton_code, tax_quarter_start\n"
+        "ORDER BY tax_quarter_start, mwst_umsatz_chf DESC\n"
         '""")\n'
-        'quarterly_vat["tax_quarter_start"] = pd.to_datetime(quarterly_vat["tax_quarter_start"])\n'
-        "quarterly_vat = (\n"
-        "    quarterly_vat.groupby([\"tax_quarter_start\", \"canton_code\"], as_index=False)\n"
+        'quarterly_all["tax_quarter_start"] = pd.to_datetime(quarterly_all["tax_quarter_start"])\n'
+        'quarterly_all["mwst_umsatz_chf"] = pd.to_numeric(quarterly_all["mwst_umsatz_chf"])\n\n'
+        "canton_ranking = (\n"
+        '    quarterly_all.groupby("canton_code", as_index=False)\n'
         "    .agg(\n"
-        '        net_vat_total_chf=("net_vat_due_chf", "sum"),\n'
-        '        filing_count=("net_vat_due_chf", "size"),\n'
-        '        audit_cases=("audit_flag", "sum"),\n'
+        '        mwst_umsatz_chf=("mwst_umsatz_chf", "sum"),\n'
+        '        average_quarter_chf=("mwst_umsatz_chf", "mean"),\n'
+        '        filing_count=("filing_count", "sum"),\n'
         "    )\n"
-        "    .sort_values([\"tax_quarter_start\", \"net_vat_total_chf\"], ascending=[True, False])\n"
+        '    .sort_values(["mwst_umsatz_chf", "canton_code"], ascending=[False, True])\n'
         "    .reset_index(drop=True)\n"
         ")\n"
-        "quarterly_vat.head(12)\n"
+        "top_five_vat = canton_ranking.head(5).copy()\n"
+        'top_five_vat.insert(0, "rank", range(1, len(top_five_vat) + 1))\n'
+        'top_five_vat["population"] = top_five_vat["canton_code"].map(CANTON_POPULATION_2025)\n'
+        'top_five_vat["population_mio"] = top_five_vat["population"] / 1_000_000\n'
+        'top_five_vat["mwst_umsatz_mio_chf"] = top_five_vat["mwst_umsatz_chf"] / 1_000_000\n'
+        'top_five_vat["average_quarter_mio_chf"] = top_five_vat["average_quarter_chf"] / 1_000_000\n'
+        'top_cantons = top_five_vat["canton_code"].tolist()\n'
+        'expected_top_cantons = ["ZH", "VD", "AG", "LU", "FR"]\n'
+        "if top_cantons != expected_top_cantons:\n"
+        '    raise RuntimeError(f"Expected {expected_top_cantons}, got {top_cantons}. Re-run the PostgreSQL OLTP VAT Smoke Loader.")\n\n'
+        'quarterly_vat = quarterly_all[quarterly_all["canton_code"].isin(top_cantons)].copy()\n'
+        'quarterly_vat["mwst_umsatz_mio_chf"] = quarterly_vat["mwst_umsatz_chf"] / 1_000_000\n\n'
+        "top_five_display = top_five_vat.rename(columns={\n"
+        '    "rank": "Rang",\n'
+        '    "canton_code": "Kanton",\n'
+        '    "mwst_umsatz_mio_chf": "MWST-Umsatz (Mio. CHF)",\n'
+        '    "average_quarter_mio_chf": "Ø je Quartal (Mio. CHF)",\n'
+        '    "population_mio": "Bevölkerung (Mio.)",\n'
+        "})[[\n"
+        '    "Rang", "Kanton", "MWST-Umsatz (Mio. CHF)",\n'
+        '    "Ø je Quartal (Mio. CHF)", "Bevölkerung (Mio.)",\n'
+        "]]\n"
+        "top_five_display.round(2)\n"
         if preferred_postgres_relation
         else 'print("Run the PostgreSQL OLTP VAT Smoke Loader from the Loader Workbench first.")\n'
     )
     chart_python_plot_code = (
+        "# Cell 2: compare the quarterly VAT turnover of the Top 5.\n"
         "import matplotlib.pyplot as plt\n\n"
-        "# Reuse the aggregated DataFrame from the previous cell and render a chart.\n"
-        "top_cantons = (\n"
-        "    quarterly_vat.groupby(\"canton_code\", as_index=False)[\"net_vat_total_chf\"]\n"
-        "    .sum()\n"
-        "    .sort_values(\"net_vat_total_chf\", ascending=False)\n"
-        "    .head(4)[\"canton_code\"]\n"
-        "    .tolist()\n"
-        ")\n\n"
+        'plt.close("all")\n'
         "chart_ready = (\n"
-        "    quarterly_vat[quarterly_vat[\"canton_code\"].isin(top_cantons)]\n"
-        "    .assign(quarter_label=quarterly_vat[quarterly_vat[\"canton_code\"].isin(top_cantons)][\"tax_quarter_start\"].dt.to_period(\"Q\").astype(str))\n"
-        "    .pivot(index=\"quarter_label\", columns=\"canton_code\", values=\"net_vat_total_chf\")\n"
+        '    quarterly_vat.assign(quarter_label=quarterly_vat["tax_quarter_start"].dt.to_period("Q").astype(str))\n'
+        '    .pivot(index="quarter_label", columns="canton_code", values="mwst_umsatz_mio_chf")\n'
         "    .fillna(0)\n"
         "    .sort_index()\n"
+        "    .reindex(columns=top_cantons)\n"
         ")\n\n"
-        'ax = chart_ready.plot(kind="bar", figsize=(10, 5), rot=0)\n'
-        'ax.set_title("Quarterly VAT Total by Canton")\n'
-        'ax.set_xlabel("Quarter")\n'
-        'ax.set_ylabel("Net VAT due (CHF)")\n'
-        'ax.legend(title="Canton", ncols=2)\n'
-        "plt.tight_layout()\n"
+        'colors = ["#2166ac", "#b2182b", "#4d9221", "#762a83", "#e08214"]\n'
+        'hatches = ["", "//", "xx", "..", "\\\\"]\n'
+        'fig, ax = plt.subplots(figsize=(12, 6.2))\n'
+        'chart_ready.plot(kind="bar", ax=ax, width=0.82, rot=0, color=colors, edgecolor="#25364a", linewidth=0.7)\n'
+        "for container, hatch in zip(ax.containers, hatches):\n"
+        "    for bar in container:\n"
+        "        bar.set_hatch(hatch)\n"
+        'ax.set_title("MWST-Umsatz der fünf umsatzstärksten Kantone nach Quartal", loc="left", fontweight="bold")\n'
+        'ax.set_xlabel("Quartal")\n'
+        'ax.set_ylabel("MWST-Umsatz (in Mio. CHF)")\n'
+        "ax.set_ylim(bottom=0)\n"
+        'ax.grid(axis="y", alpha=0.25)\n'
+        'ax.legend(title="Kanton", ncols=5, loc="upper center", bbox_to_anchor=(0.5, 1.0))\n'
+        'fig.text(0.01, 0.01, "Synthetische PoC-Daten · Netto-MWST-Schuld · Zeitraum ab 2025", fontsize=9, color="#52657a")\n'
+        "fig.tight_layout(rect=(0, 0.05, 1, 1))\n"
+        "plt.show()\n"
+        if preferred_postgres_relation
+        else 'print("Run the PostgreSQL OLTP VAT Smoke Loader from the Loader Workbench first.")\n'
+    )
+    chart_python_scatter_code = (
+        "# Cell 3: compare average quarterly VAT turnover with population.\n"
+        "import matplotlib.pyplot as plt\n\n"
+        'plt.close("all")\n'
+        'scatter_ready = top_five_vat.sort_values("rank").copy()\n'
+        'colors = ["#2166ac", "#b2182b", "#4d9221", "#762a83", "#e08214"]\n'
+        'markers = ["o", "s", "^", "D", "P"]\n'
+        'fig, ax = plt.subplots(figsize=(11.5, 6.2))\n'
+        "for (_, row), color, marker in zip(scatter_ready.iterrows(), colors, markers):\n"
+        "    ax.scatter(\n"
+        '        row["population_mio"], row["average_quarter_mio_chf"],\n'
+        '        s=180, color=color, marker=marker, edgecolor="#25364a", linewidth=0.9, zorder=3,\n'
+        "    )\n"
+        "    ax.annotate(\n"
+        '        f"{row[\'canton_code\']}  #{int(row[\'rank\'])}",\n'
+        '        (row["population_mio"], row["average_quarter_mio_chf"]),\n'
+        '        xytext=(8, 8), textcoords="offset points", fontweight="bold",\n'
+        "    )\n"
+        'ax.set_title("MWST-Umsatz vs. Bevölkerung der Top-5-Kantone", loc="left", fontweight="bold")\n'
+        'ax.set_xlabel("Bevölkerung (in Mio.)")\n'
+        'ax.set_ylabel("MWST-Umsatz (in Mio. CHF)")\n'
+        "ax.set_xlim(left=0)\n"
+        "ax.set_ylim(bottom=0)\n"
+        'ax.grid(alpha=0.25)\n'
+        'fig.text(0.01, 0.01, "MWST: synthetische PoC-Daten · Bevölkerung: BFS STATPOP, provisorischer Stand 31.12.2025", fontsize=9, color="#52657a")\n'
+        "fig.tight_layout(rect=(0, 0.05, 1, 1))\n"
         "plt.show()\n"
         if preferred_postgres_relation
         else 'print("Run the PostgreSQL OLTP VAT Smoke Loader from the Loader Workbench first.")\n'
@@ -4119,7 +4186,7 @@ def build_static_notebooks(
                 ),
             ],
             tags=["python", "pandas", "demo", "postgres"],
-            tree_path=("PoC Tests", "General Functionalities"),
+            tree_path=JUPYTER_PYTHON_TREE_PATH,
             linked_generator_id="postgres_oltp_smoke_orders",
             can_edit=False,
             can_delete=False,
@@ -4127,7 +4194,7 @@ def build_static_notebooks(
         NotebookDefinition(
             notebook_id="python-chart-vat-demo",
             title="Python Chart VAT Demo",
-            summary="Shows how an immutable notebook can use Python, pandas, and matplotlib to chart the static PostgreSQL VAT smoke reference table inside a headless Jupyter kernel.",
+            summary="Filters the five highest-turnover VAT cantons and visualizes their quarterly totals and population relationship with pandas and matplotlib in a headless Jupyter kernel.",
             cells=[
                 NotebookCellDefinition(
                     cell_id="python-chart-vat-demo-cell-1",
@@ -4141,9 +4208,15 @@ def build_static_notebooks(
                     language="python",
                     sql=chart_python_plot_code,
                 ),
+                NotebookCellDefinition(
+                    cell_id="python-chart-vat-demo-cell-3",
+                    data_sources=["pg_oltp"],
+                    language="python",
+                    sql=chart_python_scatter_code,
+                ),
             ],
-            tags=["python", "pandas", "chart", "matplotlib", "demo", "postgres"],
-            tree_path=("PoC Tests", "General Functionalities"),
+            tags=["python", "pandas", "chart", "scatter", "matplotlib", "demo", "postgres"],
+            tree_path=JUPYTER_PYTHON_TREE_PATH,
             linked_generator_id="postgres_oltp_smoke_orders",
             can_edit=False,
             can_delete=False,

@@ -72,11 +72,15 @@ async def open_csv_ingestion(page, base_url: str, timeout_ms: int) -> None:
     await form.wait_for(state="visible", timeout=timeout_ms)
 
 
-async def import_csv_to_s3(page, args: argparse.Namespace) -> tuple[str, str, str]:
+async def import_csv_to_s3(page, args: argparse.Namespace) -> tuple[str, str, str, str]:
     unique_id = uuid4().hex[:10]
     file_name = f"playwright-s3-handoff-{unique_id}.csv"
     object_base_name = f"playwright-renamed-{unique_id}"
     prefix = f"playwright/csv-imports/{unique_id}"
+    expected_s3_uri = f"s3://{args.bucket}/{prefix}/{object_base_name}.jsonl"
+    expected_query_reference = (
+        f's3."{args.bucket}"."{prefix}/{object_base_name}.jsonl"'
+    )
     expected_alias = ".".join(
         [
             "s3",
@@ -90,9 +94,6 @@ async def import_csv_to_s3(page, args: argparse.Namespace) -> tuple[str, str, st
     )
 
     await page.locator('[data-csv-target-option][value="s3"]').check()
-    await page.locator('[data-csv-config-panel="s3"] [data-csv-s3-bucket]').fill(args.bucket)
-    await page.locator('[data-csv-config-panel="s3"] [data-csv-s3-prefix]').fill(prefix)
-    await page.locator('[data-csv-s3-storage-format][value="json"]').check()
     await page.locator("[data-csv-file-input]").set_input_files(
         files=[
             {
@@ -111,12 +112,70 @@ async def import_csv_to_s3(page, args: argparse.Namespace) -> tuple[str, str, st
         state="visible",
         timeout=args.timeout_ms,
     )
-    await page.locator("[data-csv-import-base-name]").first.fill(object_base_name)
-    await page.locator("[data-csv-import-base-name]").first.evaluate("node => node.blur()")
+    bucket_input = page.locator('[data-csv-config-panel="s3"] [data-csv-s3-bucket]')
+    await page.context.grant_permissions(
+        ["clipboard-read", "clipboard-write"],
+        origin=args.base_url.rstrip("/"),
+    )
+    await bucket_input.fill(args.bucket)
+    await page.evaluate(
+        "value => navigator.clipboard.writeText(value)",
+        "s3://ab/path/object.csv",
+    )
+    await bucket_input.focus()
+    await page.keyboard.press("Control+V")
+    invalid_aria = await bucket_input.get_attribute("aria-invalid")
+    if invalid_aria != "true":
+        invalid_status = (
+            await page.locator("[data-csv-s3-uri-paste-status]").text_content() or ""
+        ).strip()
+        raise RuntimeError(
+            "An invalid pasted S3 URI did not mark the Bucket field invalid: "
+            f"value={await bucket_input.input_value()!r}, aria-invalid={invalid_aria!r}, "
+            f"status={invalid_status!r}."
+        )
+    if not await page.locator("[data-csv-import-submit]").is_disabled():
+        raise RuntimeError("An invalid pasted S3 URI did not block the import action.")
+
+    await page.evaluate(
+        "value => navigator.clipboard.writeText(value)",
+        expected_s3_uri,
+    )
+    await bucket_input.focus()
+    await page.keyboard.press("Control+V")
+    split_state = {
+        "bucket": await page.locator("[data-csv-s3-bucket]").input_value(),
+        "prefix": await page.locator("[data-csv-s3-prefix]").input_value(),
+        "objectName": await page.locator("[data-csv-import-base-name]").first.input_value(),
+        "storageFormat": await page.locator(
+            "[data-csv-s3-storage-format]:checked"
+        ).get_attribute("value"),
+    }
+    expected_split_state = {
+        "bucket": args.bucket,
+        "prefix": prefix,
+        "objectName": object_base_name,
+        "storageFormat": "json",
+    }
+    if split_state != expected_split_state:
+        raise RuntimeError(
+            f"Full S3 URI was not split correctly: {split_state!r} != {expected_split_state!r}"
+        )
+    paste_status = (
+        await page.locator("[data-csv-s3-uri-paste-status]").text_content() or ""
+    ).strip()
+    if "split into Bucket, Object key prefix, and Object name" not in paste_status:
+        raise RuntimeError(f"Expected successful S3 URI split feedback, got: {paste_status!r}")
     review_card = page.locator("[data-csv-review-list] .ingestion-csv-review-card").first
     review_copy = (await review_card.text_content() or "").strip()
-    if "s3://" in review_copy:
-        raise RuntimeError(f"S3 review card should not render a path-like URI anymore: {review_copy!r}")
+    review_s3_uri = (
+        await review_card.locator("[data-csv-s3-summary-uri]").text_content() or ""
+    ).strip()
+    if "Full S3 URI" not in review_copy or review_s3_uri != expected_s3_uri:
+        raise RuntimeError(
+            "S3 review card does not show the complete object URI: "
+            f"expected {expected_s3_uri!r}, got {review_s3_uri!r}"
+        )
     if "Key prefix" not in review_copy or prefix not in review_copy:
         raise RuntimeError(f"S3 review card does not show the key prefix explicitly: {review_copy!r}")
     if "Object name" not in review_copy or f"{object_base_name}.jsonl" not in review_copy:
@@ -136,9 +195,12 @@ async def import_csv_to_s3(page, args: argparse.Namespace) -> tuple[str, str, st
     if not response.ok:
         raise RuntimeError(f"S3 CSV import failed with status {response.status}.")
 
-    await page.locator("[data-csv-result-list] .ingestion-csv-result-card-imported").first.wait_for(
+    result_card = page.locator(
+        "[data-csv-result-list] .ingestion-csv-result-card-imported"
+    ).first
+    await result_card.wait_for(
         state="visible",
-        timeout=args.timeout_ms,
+        timeout=max(args.timeout_ms, 90_000),
     )
     message_dialog = page.locator("[data-message-dialog]")
     if await message_dialog.is_visible():
@@ -165,26 +227,36 @@ async def import_csv_to_s3(page, args: argparse.Namespace) -> tuple[str, str, st
             f"Expected relation to start with {args.bucket!r}, got {relation!r}."
         )
 
-    result_copy = (
-        await page.locator(".ingestion-csv-result-card-imported").first.text_content() or ""
-    ).strip()
+    result_copy = (await result_card.text_content() or "").strip()
     if "stored as JSONL" not in result_copy:
         raise RuntimeError(f"Expected JSONL storage copy, got: {result_copy!r}")
-    if "s3://" in result_copy:
-        raise RuntimeError(f"S3 result card should not render a path-like URI anymore: {result_copy!r}")
+    result_s3_uri = (
+        await result_card.locator("[data-csv-s3-summary-uri]").text_content() or ""
+    ).strip()
+    if "Full S3 URI" not in result_copy or result_s3_uri != expected_s3_uri:
+        raise RuntimeError(
+            "S3 result card does not show the complete object URI: "
+            f"expected {expected_s3_uri!r}, got {result_s3_uri!r}"
+        )
     if "Key prefix" not in result_copy or prefix not in result_copy:
         raise RuntimeError(f"Expected explicit key prefix in result copy, got: {result_copy!r}")
     if "Object name" not in result_copy or f"{object_base_name}.jsonl" not in result_copy:
         raise RuntimeError(f"Expected explicit object name in result copy, got: {result_copy!r}")
 
     await query_button.click()
-    return relation, f"{prefix}/{object_base_name}.jsonl", expected_alias
+    return (
+        relation,
+        f"{prefix}/{object_base_name}.jsonl",
+        expected_alias,
+        expected_query_reference,
+    )
 
 
 async def assert_query_handoff(
     page,
     expected_relation: str,
     expected_alias: str,
+    expected_query_reference: str,
     timeout_ms: int,
 ) -> None:
     await page.locator("[data-workspace-notebook]").wait_for(
@@ -201,11 +273,21 @@ async def assert_query_handoff(
     actual_alias = (await selected_source.get_attribute("data-source-object-query-alias") or "").strip()
     if actual_alias != expected_alias:
         raise RuntimeError(f"Expected S3 query alias {expected_alias!r}, got {actual_alias!r}.")
+    actual_query_reference = (
+        await selected_source.get_attribute("data-source-object-query-reference") or ""
+    ).strip()
+    if actual_query_reference != expected_query_reference:
+        raise RuntimeError(
+            "Expected canonical S3 query reference "
+            f"{expected_query_reference!r}, got {actual_query_reference!r}."
+        )
 
     editor = page.locator("[data-query-cell] [data-editor-source]").first
     sql_text = (await editor.input_value()).strip()
-    if expected_alias not in sql_text:
-        raise RuntimeError(f"The new notebook SQL does not use the readable S3 alias: {sql_text!r}.")
+    if expected_query_reference not in sql_text:
+        raise RuntimeError(
+            f"The new notebook SQL does not use the canonical S3 query reference: {sql_text!r}."
+        )
     if expected_relation in sql_text:
         raise RuntimeError(f"The new notebook SQL still exposes the physical S3 relation: {sql_text!r}.")
     if "record_id" not in sql_text or "canton_code" not in sql_text:
@@ -242,8 +324,16 @@ async def run_smoke(args: argparse.Namespace) -> int:
 
         try:
             await open_csv_ingestion(page, args.base_url, args.timeout_ms)
-            relation, uploaded_key, expected_alias = await import_csv_to_s3(page, args)
-            await assert_query_handoff(page, relation, expected_alias, args.timeout_ms)
+            relation, uploaded_key, expected_alias, expected_query_reference = (
+                await import_csv_to_s3(page, args)
+            )
+            await assert_query_handoff(
+                page,
+                relation,
+                expected_alias,
+                expected_query_reference,
+                args.timeout_ms,
+            )
         except (PlaywrightTimeoutError, RuntimeError) as exc:
             print(str(exc), file=sys.stderr)
             for message in console_messages:

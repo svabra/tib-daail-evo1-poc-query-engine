@@ -259,12 +259,108 @@ class CustomerJourneyUiTests(unittest.TestCase):
 
     def test_loader_manual_csv_instruction_contract(self) -> None:
         app = (STATIC_ROOT / "js/app.js").read_text(encoding="utf-8")
+        controller = (STATIC_ROOT / "js/ingestion-controller.js").read_text(
+            encoding="utf-8"
+        )
         loader_ui = (STATIC_ROOT / "js/ingestion-ui.js").read_text(encoding="utf-8")
+        styles = (STATIC_ROOT / "css/app.css").read_text(encoding="utf-8")
         self.assertIn("downloadableFiles", app)
         self.assertIn("data-loader-downloadable-file", loader_ui)
         self.assertIn("CSV manuell einlesen", loader_ui)
         self.assertIn("data-open-ingestion-workbench", loader_ui)
         self.assertIn("Ein erneuter Upload ersetzt nur diese manuelle Datei.", loader_ui)
+        self.assertIn("data-copy-loader-target-path", loader_ui)
+        self.assertIn("Copied to Clipbard", loader_ui)
+        self.assertIn('role="status"', loader_ui)
+        self.assertIn('aria-live="polite"', loader_ui)
+        self.assertIn("writeTextToClipboard", controller)
+        self.assertIn("handleIngestionClick", app)
+        self.assertIn(".ingestion-manual-copy-feedback", styles)
+        self.assertIn("bottom: calc(100% + 0.45rem)", styles)
+
+    def test_csv_s3_review_previews_the_complete_uri(self) -> None:
+        controller = (
+            STATIC_ROOT / "js/ingestion-types/csv/controller.js"
+        ).read_text(encoding="utf-8")
+        styles = (STATIC_ROOT / "css/app.css").read_text(encoding="utf-8")
+
+        self.assertIn("Full S3 URI", controller)
+        self.assertIn("data-csv-s3-summary-uri", controller)
+        self.assertIn("reviewS3Location", controller)
+        self.assertIn("Multiple extracted objects; exact S3 URIs are shown after import.", controller)
+        self.assertIn('objectKey: `${objectKey}/**/*.parquet`', controller)
+        self.assertIn("uri: item.path", controller)
+        self.assertIn("S3 dataset URI", controller)
+        self.assertIn(".ingestion-csv-s3-summary-row.is-uri-preview", styles)
+        self.assertIn("user-select: all", styles)
+
+    def test_csv_s3_uri_paste_splits_the_complete_location(self) -> None:
+        controller = (
+            STATIC_ROOT / "js/ingestion-types/csv/controller.js"
+        ).read_text(encoding="utf-8")
+        template = (
+            BDW_ROOT / "bit_data_workbench/templates/partials/ingestion_workbench.html"
+        ).read_text(encoding="utf-8")
+        app = (STATIC_ROOT / "js/app.js").read_text(encoding="utf-8")
+        navigation_state = (
+            STATIC_ROOT / "js/ingestion-workbench-navigation-state.js"
+        ).read_text(encoding="utf-8")
+        source_inspector = (
+            STATIC_ROOT / "js/source-inspector-controller.js"
+        ).read_text(encoding="utf-8")
+        styles = (STATIC_ROOT / "css/app.css").read_text(encoding="utf-8")
+        module_uri = (
+            STATIC_ROOT / "js/ingestion-types/csv/s3-location.js"
+        ).resolve().as_uri()
+        file_names_uri = (
+            STATIC_ROOT / "js/ingestion-types/csv/file-names.js"
+        ).resolve().as_uri()
+        script = f"""
+          import assert from 'node:assert/strict';
+          const {{ parseCsvS3LocationInput }} = await import({module_uri!r});
+          const {{ normalizeCsvImportBaseName, resolveCsvDestinationFileName }} = await import({file_names_uri!r});
+          assert.deepEqual(
+            parseCsvS3LocationInput('s3://data-analysts-journey/manual/aargau/gewerbesteuer_aargau_2022_2026.csv'),
+            {{
+              bucket: 'data-analysts-journey',
+              keyPrefix: 'manual/aargau',
+              objectName: 'gewerbesteuer_aargau_2022_2026.csv',
+              objectKey: 'manual/aargau/gewerbesteuer_aargau_2022_2026.csv',
+              storageFormat: 'csv',
+            }}
+          );
+          assert.equal(parseCsvS3LocationInput('s3://demo-bucket/file.parquet').keyPrefix, '');
+          assert.equal(parseCsvS3LocationInput('demo-bucket/manual/aargau').objectName, '');
+          for (const invalid of ['demo-bucket', 's3://demo-bucket/', 's3:///file.csv', 'https://demo-bucket/file.csv', 's3://demo-bucket/file.csv?x=1', 's3://demo-bucket/file%2Fname.csv']) {{
+            assert.equal(parseCsvS3LocationInput(invalid), null);
+          }}
+          assert.equal(normalizeCsvImportBaseName('tax.v2.csv'), 'tax.v2');
+          assert.equal(normalizeCsvImportBaseName(normalizeCsvImportBaseName('tax.v2.csv')), 'tax.v2');
+          assert.equal(
+            resolveCsvDestinationFileName('tax.v2', {{ targetId: 's3', storageFormat: 'parquet' }}),
+            'tax.v2.parquet'
+          );
+        """
+        subprocess.run(
+            ["node", "--input-type=module", "--eval", script],
+            check=True,
+            cwd=REPO_ROOT,
+        )
+
+        self.assertIn("handleCsvIngestionPaste", controller)
+        self.assertIn("applyPastedS3Location", controller)
+        self.assertIn("S3 URI split into Bucket, Object key prefix, and Object name.", controller)
+        self.assertIn("CSV import partially completed", controller)
+        self.assertIn('s3UriPasteFeedback.tone !== "error"', controller)
+        self.assertIn("const pendingTarget = pendingPastedS3Target", controller)
+        self.assertIn("data-csv-s3-uri-paste-status", template)
+        self.assertIn("handleCsvIngestionPaste(event)", app)
+        self.assertIn("syncRestoredCsvObjectNames", navigation_state)
+        self.assertIn('root.querySelectorAll("[data-csv-import-base-name]")', navigation_state)
+        self.assertIn("revealSelectedSourceObject(sourceObjectRoot)", source_inspector)
+        self.assertIn("[data-source-s3-folder]", source_inspector)
+        self.assertIn(".ingestion-csv-s3-uri-paste-status.is-success", styles)
+        self.assertIn('[data-csv-s3-bucket][aria-invalid="true"]', styles)
 
     def test_publish_wizard_requires_explicit_duplicate_slug_overwrite(self) -> None:
         controller = (STATIC_ROOT / "js/data-products-controller.js").read_text(

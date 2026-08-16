@@ -26,8 +26,9 @@ from .helpers import approximate_size_gb, loader_tree_bucket_name, qualified_nam
 
 
 KOSTENBELEGE_FACT_BUILDER_TREE_PATH = ("PoC Tests", "General Functionalities")
+KOSTENBELEGE_FACT_BUILDER_PIPELINE_TREE_PATH = ("PoC Tests", "Data Pipelines")
 KOSTENBELEGE_FACT_BUILDER_BUCKET = loader_tree_bucket_name(
-    (*KOSTENBELEGE_FACT_BUILDER_TREE_PATH, "kostenbelege-fact-builder"),
+    (*KOSTENBELEGE_FACT_BUILDER_PIPELINE_TREE_PATH, "kostenbelege-fact-builder"),
     "kostenbelege-fact-builder",
 )
 KOSTENBELEGE_FACT_BUILDER_SCHEMA = s3_bucket_schema_name(KOSTENBELEGE_FACT_BUILDER_BUCKET)
@@ -301,17 +302,25 @@ class KostenbelegeFactBuilderSampleDataGenerator(DataGenerator):
     generator_id = KOSTENBELEGE_FACT_BUILDER_GENERATOR_ID
     title = "Kostenbelege Fact Builder S3 Loader"
     description = (
-        "Generates deterministic S3 Parquet test data for the six-cell "
-        "Kostenbelege fact-builder notebook with stored intermediate result sets."
+        "Generates deterministic S3 Parquet test data for the linked six-cell "
+        "Kostenbelege exploration and pipeline notebooks."
     )
     target_kind = "s3"
-    tree_path = KOSTENBELEGE_FACT_BUILDER_TREE_PATH
+    tree_path = KOSTENBELEGE_FACT_BUILDER_PIPELINE_TREE_PATH
     default_size_gb = 0.005
     min_size_gb = 0.001
     max_size_gb = 4.0
     approximate_row_bytes = 512
     default_target_name = "kostenbelege_fact_builder"
-    tags = ("s3", "parquet", "duckdb", "result-storage", "kostenbelege", "fact")
+    tags = (
+        "s3",
+        "parquet",
+        "duckdb",
+        "result-storage",
+        "pipeline",
+        "kostenbelege",
+        "fact",
+    )
 
     def _loader_bucket_name(self, base_bucket: str) -> str:
         return KOSTENBELEGE_FACT_BUILDER_BUCKET
@@ -467,7 +476,7 @@ class KostenbelegeFactBuilderSampleDataGenerator(DataGenerator):
                 ),
                 message=(
                     f"Generated Kostenbelege fact-builder sample data in s3://{bucket_name}. "
-                    "Run the linked notebook to create the stored intermediate result sets."
+                    "Run one of the linked notebooks to build the stored or staged result sets."
                 ),
             )
         except DataGenerationCancelled:

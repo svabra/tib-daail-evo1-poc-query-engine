@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 import unittest
 
 
@@ -87,7 +88,7 @@ class NotebookTreeUiRegressionTests(unittest.TestCase):
             state_source,
         )
 
-    def test_tree_state_places_result_storage_sample_in_general_functionalities(self) -> None:
+    def test_tree_state_places_non_pipeline_samples_in_general_functionalities(self) -> None:
         state_source = (STATIC_JS_ROOT / "notebook-tree-state.js").read_text(
             encoding="utf-8"
         )
@@ -95,12 +96,151 @@ class NotebookTreeUiRegressionTests(unittest.TestCase):
         self.assertIn('notebookId: "result-set-storage-s3-demo"', state_source)
         self.assertIn('notebookId: "kostenbelege-fact-builder-s3-demo"', state_source)
         self.assertIn(
-            'notebookId: "kostenbelege-fact-builder-s3-pipeline-demo"',
-            state_source,
-        )
-        self.assertIn(
             'folderPath: ["PoC Tests", "General Functionalities"]',
             state_source,
+        )
+
+    def test_tree_state_migrates_python_demos_to_direct_jupyter_python_folder(self) -> None:
+        module_uri = (STATIC_JS_ROOT / "notebook-tree-state.js").resolve().as_uri()
+        script = f"""
+          import assert from 'node:assert/strict';
+          const {{ createNotebookTreeState }} = await import({module_uri!r});
+          const storage = new Map();
+          globalThis.window = {{
+            localStorage: {{
+              getItem: key => storage.get(key) ?? null,
+              setItem: (key, value) => storage.set(key, value),
+            }},
+          }};
+          const oldTree = [{{
+            type: 'folder',
+            name: 'PoC Tests',
+            folderId: 'poc-tests',
+            children: [{{
+              type: 'folder',
+              name: 'General Functionalities',
+              folderId: 'poc-tests-general-functionalities',
+              children: [
+                {{ type: 'notebook', notebookId: 'python-pandas-vat-demo' }},
+                {{ type: 'notebook', notebookId: 'result-set-storage-s3-demo' }},
+                {{ type: 'notebook', notebookId: 'python-chart-vat-demo' }},
+              ],
+            }}, {{
+              type: 'folder',
+              name: 'Jupyter/Python',
+              folderId: 'poc-tests-jupyter/python',
+              children: [
+                {{ type: 'notebook', notebookId: 'python-chart-vat-demo' }},
+              ],
+            }}],
+          }}];
+          storage.set('test-tree', JSON.stringify(oldTree));
+          const treeState = createNotebookTreeState({{
+            deleteStoredNotebookState: () => {{}},
+            isLocalNotebookId: () => false,
+            notebookTreeStorageKey: 'test-tree',
+          }});
+          const migrated = treeState.readStoredNotebookTree();
+          const poc = migrated.find(node => node.type === 'folder' && node.name === 'PoC Tests');
+          const jupyter = poc.children.find(
+            node => node.type === 'folder' && node.name === 'Jupyter/Python'
+          );
+          const general = poc.children.find(
+            node => node.type === 'folder' && node.name === 'General Functionalities'
+          );
+          assert.deepEqual(
+            jupyter.children.map(node => node.notebookId).sort(),
+            ['python-chart-vat-demo', 'python-pandas-vat-demo']
+          );
+          assert.deepEqual(
+            general.children.map(node => node.notebookId),
+            ['result-set-storage-s3-demo']
+          );
+          const ids = [];
+          const visit = nodes => nodes.forEach(node => {{
+            if (node.type === 'notebook') ids.push(node.notebookId);
+            if (Array.isArray(node.children)) visit(node.children);
+          }});
+          visit(migrated);
+          assert.equal(ids.length, 3);
+          assert.equal(new Set(ids).size, 3);
+        """
+        subprocess.run(
+            ["node", "--input-type=module", "--eval", script],
+            check=True,
+            cwd=REPO_ROOT,
+        )
+
+    def test_tree_state_migrates_fact_builder_pipeline_to_direct_data_pipelines_folder(self) -> None:
+        module_uri = (STATIC_JS_ROOT / "notebook-tree-state.js").resolve().as_uri()
+        script = f"""
+          import assert from 'node:assert/strict';
+          const {{ createNotebookTreeState }} = await import({module_uri!r});
+          const storage = new Map();
+          globalThis.window = {{
+            localStorage: {{
+              getItem: key => storage.get(key) ?? null,
+              setItem: (key, value) => storage.set(key, value),
+            }},
+          }};
+          const oldTree = [{{
+            type: 'folder',
+            name: 'PoC Tests',
+            folderId: 'poc-tests',
+            children: [{{
+              type: 'folder',
+              name: 'General Functionalities',
+              folderId: 'poc-tests-general-functionalities',
+              children: [
+                {{ type: 'notebook', notebookId: 'kostenbelege-fact-builder-s3-demo' }},
+                {{ type: 'notebook', notebookId: 'kostenbelege-fact-builder-s3-pipeline-demo' }},
+              ],
+            }}, {{
+              type: 'folder',
+              name: 'Data Pipelines',
+              folderId: 'poc-tests-data-pipelines',
+              children: [
+                {{ type: 'notebook', notebookId: 'kostenbelege-fact-builder-s3-pipeline-demo' }},
+              ],
+            }}],
+          }}];
+          storage.set('test-tree', JSON.stringify(oldTree));
+          const treeState = createNotebookTreeState({{
+            deleteStoredNotebookState: () => {{}},
+            isLocalNotebookId: () => false,
+            notebookTreeStorageKey: 'test-tree',
+          }});
+          const migrated = treeState.readStoredNotebookTree();
+          const poc = migrated.find(node => node.type === 'folder' && node.name === 'PoC Tests');
+          const pipelines = poc.children.find(
+            node => node.type === 'folder' && node.name === 'Data Pipelines'
+          );
+          const general = poc.children.find(
+            node => node.type === 'folder' && node.name === 'General Functionalities'
+          );
+          assert.deepEqual(
+            pipelines.children.map(node => node.notebookId),
+            ['kostenbelege-fact-builder-s3-pipeline-demo']
+          );
+          assert.deepEqual(
+            general.children.map(node => node.notebookId),
+            ['kostenbelege-fact-builder-s3-demo']
+          );
+          const ids = [];
+          const visit = nodes => nodes.forEach(node => {{
+            if (node.type === 'notebook') ids.push(node.notebookId);
+            if (Array.isArray(node.children)) visit(node.children);
+          }});
+          visit(migrated);
+          assert.deepEqual(ids.sort(), [
+            'kostenbelege-fact-builder-s3-demo',
+            'kostenbelege-fact-builder-s3-pipeline-demo',
+          ]);
+        """
+        subprocess.run(
+            ["node", "--input-type=module", "--eval", script],
+            check=True,
+            cwd=REPO_ROOT,
         )
 
     def test_drop_target_resolves_folder_summary_before_parent_container(self) -> None:

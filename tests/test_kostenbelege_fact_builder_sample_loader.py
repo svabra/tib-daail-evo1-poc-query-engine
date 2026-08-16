@@ -19,7 +19,10 @@ from bit_data_workbench.backend.notebook_presets import (  # noqa: E402
     build_kostenbelege_fact_builder_s3_demo_notebook,
     build_kostenbelege_fact_builder_s3_pipeline_notebook,
 )
-from bit_data_workbench.backend.notebooks import build_notebooks  # noqa: E402
+from bit_data_workbench.backend.notebooks import (  # noqa: E402
+    build_generator_notebook_links,
+    build_notebooks,
+)
 from bit_data_workbench.backend.source_references import s3_source_reference  # noqa: E402
 from bit_data_workbench.backend.service import WorkbenchService  # noqa: E402
 from bit_data_workbench.data_generator.kostenbelege_fact_builder_sample import (  # noqa: E402
@@ -34,6 +37,7 @@ from bit_data_workbench.data_generator.kostenbelege_fact_builder_sample import (
     KOSTENBELEGE_FACT_BUILDER_GENERATOR_ID,
     KOSTENBELEGE_FACT_BUILDER_NOTEBOOK_ID,
     KOSTENBELEGE_FACT_BUILDER_PIPELINE_NOTEBOOK_ID,
+    KOSTENBELEGE_FACT_BUILDER_PIPELINE_TREE_PATH,
     KOSTENBELEGE_FACT_BUILDER_TREE_PATH,
     RESULT_SET_KEYS,
     kbhp_full_select,
@@ -156,14 +160,18 @@ class KostenbelegeFactBuilderSampleLoaderTests(unittest.TestCase):
         self.assertEqual(payload["generatorId"], KOSTENBELEGE_FACT_BUILDER_GENERATOR_ID)
         self.assertEqual(payload["targetKind"], "s3")
         self.assertEqual(payload["title"], "Kostenbelege Fact Builder S3 Loader")
-        self.assertEqual(payload["treePath"], list(KOSTENBELEGE_FACT_BUILDER_TREE_PATH))
+        self.assertEqual(
+            payload["treePath"],
+            list(KOSTENBELEGE_FACT_BUILDER_PIPELINE_TREE_PATH),
+        )
+        self.assertIn("pipeline", payload["tags"])
         self.assertIn("result-storage", payload["tags"])
         self.assertIn("kostenbelege", payload["tags"])
 
     def test_loader_bucket_name_matches_notebook_folder(self) -> None:
         self.assertEqual(
             GENERATOR._loader_bucket_name("configured-bucket"),
-            "poc-tests-general-functionalities-kostenbelege-fact-builder",
+            "poc-tests-data-pipelines-kostenbelege-fact-builder",
         )
         self.assertEqual(
             GENERATOR._loader_bucket_name("configured-bucket"),
@@ -253,7 +261,10 @@ class KostenbelegeFactBuilderSampleLoaderTests(unittest.TestCase):
         notebook = build_kostenbelege_fact_builder_s3_demo_notebook()
 
         self.assertEqual(notebook.notebook_id, KOSTENBELEGE_FACT_BUILDER_NOTEBOOK_ID)
-        self.assertEqual(notebook.tree_path, KOSTENBELEGE_FACT_BUILDER_TREE_PATH)
+        self.assertEqual(
+            notebook.tree_path,
+            KOSTENBELEGE_FACT_BUILDER_TREE_PATH,
+        )
         self.assertEqual(notebook.linked_generator_id, KOSTENBELEGE_FACT_BUILDER_GENERATOR_ID)
         self.assertFalse(notebook.can_edit)
         self.assertFalse(notebook.can_delete)
@@ -292,7 +303,10 @@ class KostenbelegeFactBuilderSampleLoaderTests(unittest.TestCase):
             notebook.notebook_id,
             KOSTENBELEGE_FACT_BUILDER_PIPELINE_NOTEBOOK_ID,
         )
-        self.assertEqual(notebook.tree_path, KOSTENBELEGE_FACT_BUILDER_TREE_PATH)
+        self.assertEqual(
+            notebook.tree_path,
+            KOSTENBELEGE_FACT_BUILDER_PIPELINE_TREE_PATH,
+        )
         self.assertEqual(notebook.linked_generator_id, KOSTENBELEGE_FACT_BUILDER_GENERATOR_ID)
         self.assertEqual(notebook.pipeline_mode, "pipeline")
         self.assertTrue(notebook.can_edit)
@@ -409,11 +423,22 @@ class KostenbelegeFactBuilderSampleLoaderTests(unittest.TestCase):
         self.assertIn(KOSTENBELEGE_FACT_BUILDER_PIPELINE_NOTEBOOK_ID, notebooks)
         self.assertEqual(
             notebooks[KOSTENBELEGE_FACT_BUILDER_PIPELINE_NOTEBOOK_ID].tree_path,
-            KOSTENBELEGE_FACT_BUILDER_TREE_PATH,
+            KOSTENBELEGE_FACT_BUILDER_PIPELINE_TREE_PATH,
         )
         self.assertEqual(
             notebooks[KOSTENBELEGE_FACT_BUILDER_PIPELINE_NOTEBOOK_ID].pipeline_mode,
             "pipeline",
+        )
+
+        linked_notebooks = build_generator_notebook_links(notebooks.values())[
+            KOSTENBELEGE_FACT_BUILDER_GENERATOR_ID
+        ]
+        self.assertEqual(
+            [reference.notebook_id for reference in linked_notebooks],
+            [
+                KOSTENBELEGE_FACT_BUILDER_NOTEBOOK_ID,
+                KOSTENBELEGE_FACT_BUILDER_PIPELINE_NOTEBOOK_ID,
+            ],
         )
 
 

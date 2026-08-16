@@ -563,6 +563,43 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
         self.assertTrue(poc_folder.is_shared)
         self.assertTrue(all(child.is_shared for child in poc_folder.folders))
 
+    def test_poc_tree_has_direct_jupyter_and_data_pipeline_folders(self) -> None:
+        (
+            _,
+            build_notebook_tree,
+            build_notebooks,
+            _,
+            _,
+            _,
+            _,
+            _,
+        ) = import_notebook_helpers()
+
+        tree = build_notebook_tree(build_notebooks([]))
+        poc_folder = next(folder for folder in tree if folder.name == "PoC Tests")
+        direct_folders = {folder.name: folder for folder in poc_folder.folders}
+
+        self.assertIn("Jupyter/Python", direct_folders)
+        self.assertIn("Data Pipelines", direct_folders)
+        self.assertEqual(
+            {notebook.notebook_id for notebook in direct_folders["Jupyter/Python"].notebooks},
+            {"python-pandas-vat-demo", "python-chart-vat-demo"},
+        )
+        self.assertEqual(
+            [
+                notebook.notebook_id
+                for notebook in direct_folders["Data Pipelines"].notebooks
+            ],
+            ["kostenbelege-fact-builder-s3-pipeline-demo"],
+        )
+        self.assertNotIn(
+            "kostenbelege-fact-builder-s3-pipeline-demo",
+            {
+                notebook.notebook_id
+                for notebook in direct_folders["General Functionalities"].notebooks
+            },
+        )
+
     def test_build_notebooks_uses_discovered_relations_for_smoke_presets(
         self,
     ) -> None:
@@ -1645,7 +1682,7 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
         pandas_demo = notebooks["python-pandas-vat-demo"]
         self.assertEqual(
             pandas_demo.tree_path,
-            ("PoC Tests", "General Functionalities"),
+            ("PoC Tests", "Jupyter/Python"),
         )
         self.assertFalse(pandas_demo.can_edit)
         self.assertFalse(pandas_demo.can_delete)
@@ -1669,14 +1706,22 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
         chart_demo = notebooks["python-chart-vat-demo"]
         self.assertEqual(
             chart_demo.tree_path,
-            ("PoC Tests", "General Functionalities"),
+            ("PoC Tests", "Jupyter/Python"),
         )
         self.assertFalse(chart_demo.can_edit)
         self.assertFalse(chart_demo.can_delete)
         self.assertTrue(chart_demo.shared)
         self.assertEqual(
             [cell.language for cell in chart_demo.cells],
-            ["python", "python"],
+            ["python", "python", "python"],
+        )
+        self.assertEqual(
+            [cell.cell_id for cell in chart_demo.cells],
+            [
+                "python-chart-vat-demo-cell-1",
+                "python-chart-vat-demo-cell-2",
+                "python-chart-vat-demo-cell-3",
+            ],
         )
         self.assertTrue(
             all(cell.data_sources == ["pg_oltp"] for cell in chart_demo.cells)
@@ -1686,8 +1731,30 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             chart_demo.cells[0].sql,
         )
         self.assertIn(
+            'expected_top_cantons = ["ZH", "VD", "AG", "LU", "FR"]',
+            chart_demo.cells[0].sql,
+        )
+        self.assertIn('"ZH": 1_632_191', chart_demo.cells[0].sql)
+        self.assertIn('"VD": 863_375', chart_demo.cells[0].sql)
+        self.assertIn('"FR": 350_807', chart_demo.cells[0].sql)
+        self.assertIn("BFS STATPOP, Stand 31.12.2025", chart_demo.cells[0].sql)
+        self.assertIn("top_five_display.round(2)", chart_demo.cells[0].sql)
+        self.assertIn(
             "import matplotlib.pyplot as plt",
             chart_demo.cells[1].sql,
+        )
+        self.assertIn(
+            'ax.set_ylabel("MWST-Umsatz (in Mio. CHF)")',
+            chart_demo.cells[1].sql,
+        )
+        self.assertIn("ax.scatter(", chart_demo.cells[2].sql)
+        self.assertIn(
+            'ax.set_xlabel("Bevölkerung (in Mio.)")',
+            chart_demo.cells[2].sql,
+        )
+        self.assertIn(
+            'ax.set_ylabel("MWST-Umsatz (in Mio. CHF)")',
+            chart_demo.cells[2].sql,
         )
 
         result_storage_demo = notebooks["result-set-storage-s3-demo"]

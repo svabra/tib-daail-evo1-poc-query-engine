@@ -232,6 +232,30 @@ export function createSourceInspectorController(helpers) {
     return loadSourceObjectFields(sourceObjectRoot, { renderLoading });
   }
 
+  function revealSelectedSourceObject(sourceObjectRoot) {
+    if (!(sourceObjectRoot instanceof Element)) {
+      return;
+    }
+
+    const dataSourcesRoot = sourceObjectRoot.closest("[data-data-sources-section]");
+    if (dataSourcesRoot instanceof HTMLDetailsElement) {
+      dataSourcesRoot.open = true;
+    }
+
+    let ancestor = sourceObjectRoot.parentElement;
+    while (ancestor instanceof Element) {
+      if (
+        ancestor instanceof HTMLDetailsElement &&
+        ancestor.matches(
+          "[data-source-catalog], [data-source-schema], [data-source-s3-folder]"
+        )
+      ) {
+        ancestor.open = true;
+      }
+      ancestor = ancestor.parentElement;
+    }
+  }
+
   function restoreSelectedSourceObject() {
     sourceBrowserScopes().forEach((scopeRoot) => {
       const activeRelation = getActiveSourceObjectRelation(scopeRoot);
@@ -251,6 +275,8 @@ export function createSourceInspectorController(helpers) {
         renderSourceInspectorMarkup("", true, scopeRoot);
         return;
       }
+
+      revealSelectedSourceObject(sourceObjectRoot);
 
       if (
         isLocalWorkspaceSourceObject(sourceObjectRoot) &&

@@ -405,6 +405,24 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
         self.assertIn("Continue with last notebook", body)
         self.assertIn("Open Query Monitoring", body)
 
+    def test_home_partial_links_curated_sample_notebooks(self) -> None:
+        response = index(
+            request=build_request("/", partial=True),
+            service=FakeWorkbenchService(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.body.decode("utf-8")
+        self.assertIn("Sample Notebooks", body)
+        for notebook_id in (
+            "kostenbelege-fact-builder-s3-pipeline-demo",
+            "python-chart-vat-demo",
+            "postgres-oltp-s3-union-test",
+        ):
+            self.assertIn(f'href="/notebooks/{notebook_id}"', body)
+            self.assertIn(f'data-home-sample-notebook="{notebook_id}"', body)
+            self.assertIn(f'data-open-recent-notebook="{notebook_id}"', body)
+
     def test_management_page_uses_standalone_url_and_explorer_launcher(self) -> None:
         response = query_workbench_data_sources(
             request=build_request("/data-sources", partial=True),

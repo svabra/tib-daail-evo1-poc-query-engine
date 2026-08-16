@@ -78,7 +78,7 @@ class LoaderS3BucketNameTests(unittest.TestCase):
     def test_kostenbelege_fact_builder_loader_uses_notebook_structure_bucket_name(self) -> None:
         bucket_name = KOSTENBELEGE_FACT_BUILDER_GENERATOR._loader_bucket_name("vat-smoke-test")
 
-        self.assertEqual(bucket_name, "poc-tests-general-functionalities-kostenbelege-fact-builder")
+        self.assertEqual(bucket_name, "poc-tests-data-pipelines-kostenbelege-fact-builder")
         self.assertFalse(bucket_name.startswith("vat-smoke-test"))
 
     def test_tree_bucket_name_is_s3_safe_and_truncated_with_hash_when_needed(self) -> None:

@@ -121,7 +121,20 @@ def vat_smoke_dataset_select(start_row: int, end_row: int) -> str:
 
     return f"""
         WITH base AS (
-            SELECT row_id
+            SELECT
+                row_id,
+                CASE row_id % 10
+                    WHEN 0 THEN 1.25  -- ZH
+                    WHEN 1 THEN 0.65  -- BE
+                    WHEN 2 THEN 0.65  -- GE
+                    WHEN 3 THEN 1.10  -- VD
+                    WHEN 4 THEN 0.95  -- AG
+                    WHEN 5 THEN 0.60  -- SG
+                    WHEN 6 THEN 0.55  -- TI
+                    WHEN 7 THEN 0.50  -- BS
+                    WHEN 8 THEN 0.80  -- LU
+                    ELSE 0.70         -- FR
+                END AS synthetic_canton_turnover_factor
             FROM range({int(start_row)}, {int(end_row)}) AS series(row_id)
         ),
         prepared AS (
@@ -130,9 +143,11 @@ def vat_smoke_dataset_select(start_row: int, end_row: int) -> str:
                 DATE '2024-01-01' + CAST((row_id % 730) AS INTEGER) AS period_start,
                 DATE '2024-01-01' + CAST((row_id % 730) AS INTEGER) + CAST(89 AS INTEGER) AS period_end,
                 round(
-                    120000.0
-                    + (((row_id * 193) % 3500000) / 10.0)
-                    + ((row_id % 17) * 275.0),
+                    (
+                        120000.0
+                        + (((row_id * 193) % 3500000) / 10.0)
+                        + ((row_id % 17) * 275.0)
+                    ) * synthetic_canton_turnover_factor,
                     2
                 ) AS turnover_raw,
                 CASE row_id % 5
