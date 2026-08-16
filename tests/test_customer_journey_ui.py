@@ -179,7 +179,7 @@ class CustomerJourneyUiTests(unittest.TestCase):
         self.assertIn('"swiss-aarau-old-town-summer"', search)
         self.assertIn('"swiss-neuchatel-castle-lake"', search)
         self.assertIn("/search?q=", search)
-        self.assertIn("/api/workbench/source-options", search)
+        self.assertIn("/api/workbench/catalog-search-index", search)
         self.assertIn("/api/data-products", search)
 
     def test_expert_search_covers_notebooks_sources_and_daaif_products(self) -> None:
@@ -190,12 +190,48 @@ class CustomerJourneyUiTests(unittest.TestCase):
         search = (STATIC_ROOT / "js/expert-search.js").read_text(encoding="utf-8")
 
         self.assertIn('@router.get("/search"', router)
-        self.assertIn("Notebooks, Datenquellen und in DAAIF erstellte Datenprodukte", template)
+        self.assertIn("Notebooks, Data Sources, Datenobjekte", template)
         self.assertIn('value="notebook"', template)
-        self.assertIn('value="source"', template)
+        self.assertIn('<option value="source">Data Sources</option>', template)
+        self.assertIn('<option value="object">Datenobjekte</option>', template)
         self.assertIn('value="product"', template)
+        self.assertIn("Ohne Suchbegriff werden alle Inhalte", template)
+        self.assertIn("Die Filterung beginnt mit dem ersten Zeichen", template)
         self.assertIn("loadWorkbenchSearchIndex", search)
-        self.assertIn("searchWorkbenchIndex", search)
+        self.assertIn("searchExpertWorkbenchIndex", search)
+        self.assertIn("data-workbench-expert-search-result-kind", search)
+
+        module_uri = (STATIC_ROOT / "js/expert-search-filter.js").resolve().as_uri()
+        script = f"""
+          import {{ expertSearchKindFromParams, searchExpertWorkbenchIndex }} from {module_uri!r};
+          const items = [
+            {{id:'n1', kind:'notebook', title:'Zürcher Analyse', summary:'', tags:[], path:'PoC'}},
+            {{id:'s1', kind:'source', title:'PostgreSQL OLAP', summary:'Zürich', tags:[], path:'pg'}},
+            {{id:'s2', kind:'source', title:'S3 Object Storage', summary:'', tags:[], path:'s3'}},
+            {{id:'o1', kind:'object', title:'orders.parquet', summary:'', tags:['S3'], path:'s3://data/orders.parquet'}},
+            {{id:'p1', kind:'product', title:'Steuerzahlen', summary:'', tags:[], path:'DAAIF'}},
+          ];
+          const sources = searchExpertWorkbenchIndex(items, '', 'source');
+          if (sources.length !== 2 || sources.some((item) => item.kind !== 'source')) process.exit(2);
+          const products = searchExpertWorkbenchIndex(items, '', 'product');
+          if (products.length !== 1 || products[0].id !== 'p1') process.exit(3);
+          const objects = searchExpertWorkbenchIndex(items, '', 'object');
+          if (objects.length !== 1 || objects[0].id !== 'o1') process.exit(9);
+          const notebooks = searchExpertWorkbenchIndex(items, '', 'notebook');
+          if (notebooks.length !== 1 || notebooks[0].id !== 'n1') process.exit(4);
+          const firstCharacter = searchExpertWorkbenchIndex(items, 'b', 'all');
+          if (firstCharacter.length !== 1 || firstCharacter[0].id !== 's2') process.exit(5);
+          const cleared = searchExpertWorkbenchIndex(items, '   ', 'all');
+          if (cleared.length !== items.length) process.exit(6);
+          if (expertSearchKindFromParams('?kind=source') !== 'source') process.exit(7);
+          if (expertSearchKindFromParams('?kind=unknown') !== 'all') process.exit(8);
+          if (expertSearchKindFromParams('?kind=object') !== 'object') process.exit(10);
+        """
+        subprocess.run(
+            ["node", "--input-type=module", "--eval", script],
+            check=True,
+            cwd=REPO_ROOT,
+        )
 
     def test_navigation_epoch_aborts_stale_request_and_clocks_are_one_hz(self) -> None:
         epoch = (STATIC_ROOT / "js/workspace-navigation-epoch.js").read_text(encoding="utf-8")
@@ -420,6 +456,24 @@ class CustomerJourneyUiTests(unittest.TestCase):
             unversioned.headers["cache-control"],
             "public, max-age=3600",
         )
+
+    def test_static_asset_cache_header_can_be_overridden_for_development(self) -> None:
+        static_app = FastAPI()
+        static_app.mount(
+            "/static",
+            VersionedStaticFiles(
+                directory=STATIC_ROOT,
+                cache_control_override="no-store",
+            ),
+            name="static",
+        )
+        with TestClient(static_app) as client:
+            versioned = client.get("/static/js/demo-identity.js?v=test-build")
+            unversioned = client.get("/static/js/demo-identity.js")
+
+        self.assertEqual(versioned.status_code, 200)
+        self.assertEqual(versioned.headers["cache-control"], "no-store")
+        self.assertEqual(unversioned.headers["cache-control"], "no-store")
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse, Response
 
 from ..backend.notebook_search import versioned_notebook_search_document
 from ..backend.service import WorkbenchService
+from ..backend.workbench_search import versioned_workbench_catalog_search_document
 from ..dependencies import get_workbench_service
 from ..release_notes import release_notes
 
@@ -60,6 +61,24 @@ def source_options(
     if_none_match: str | None = Header(default=None, alias="If-None-Match"),
 ) -> Response:
     return _etagged_json(service.source_options(), if_none_match=if_none_match)
+
+
+@router.get("/api/workbench/catalog-search-index")
+def catalog_search_index(
+    service: WorkbenchService = Depends(get_workbench_service),
+    if_none_match: str | None = Header(default=None, alias="If-None-Match"),
+) -> Response:
+    payload, version = versioned_workbench_catalog_search_document(service.catalogs())
+    etag = f'"{version}"'
+    headers = {
+        "Cache-Control": "private, max-age=0, must-revalidate",
+        "ETag": etag,
+    }
+    if if_none_match and etag in {
+        candidate.strip() for candidate in if_none_match.split(",")
+    }:
+        return Response(status_code=304, headers=headers)
+    return JSONResponse(payload, headers=headers)
 
 
 @router.get("/api/workbench/completion-schema")

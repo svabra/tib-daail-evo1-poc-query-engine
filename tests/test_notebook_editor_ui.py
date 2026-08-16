@@ -445,6 +445,24 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn(".topbar-notification-item-status.is-cancelling", css_source)
         self.assertIn(".topbar-notification-item-status-notice.is-cancelling", css_source)
 
+    def test_realtime_pipeline_rendering_does_not_duplicate_or_overlap(self) -> None:
+        realtime_source = (
+            STATIC_ROOT / "js" / "realtime-controller.js"
+        ).read_text(encoding="utf-8")
+        pipeline_source = (
+            STATIC_ROOT / "js" / "notebook-stage-pipeline-controller.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("} else if (!resultRoot && cellId) {", realtime_source)
+        self.assertIn("const graphRefreshQueueByNotebookId = new Map();", pipeline_source)
+        self.assertIn("queuedRefresh.requested += 1;", pipeline_source)
+        self.assertIn("async function performGraphRefresh(notebookId)", pipeline_source)
+        self.assertIn("function materializedStagesSnapshotSignature(snapshot)", pipeline_source)
+        self.assertIn(
+            "if (nextStateSignature === materializedStagesStateSignature)",
+            pipeline_source,
+        )
+
     def test_pipeline_stage_runs_refresh_cell_query_monitoring(self) -> None:
         app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
         query_runs_source = (
@@ -696,6 +714,9 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         workspace_template = (
             REPO_ROOT / "bdw" / "bit_data_workbench" / "templates" / "partials" / "workspace.html"
         ).read_text(encoding="utf-8")
+        layout_template = (
+            REPO_ROOT / "bdw" / "bit_data_workbench" / "templates" / "layout.html"
+        ).read_text(encoding="utf-8")
         notebook_tree_source = (
             REPO_ROOT / "bdw" / "bit_data_workbench" / "templates" / "partials" / "notebook_tree_node.html"
         ).read_text(encoding="utf-8")
@@ -717,6 +738,10 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("data-notebook-pipeline-total-duration", markup_source)
         self.assertIn("data-notebook-pipeline-table-duration-total", markup_source)
         self.assertIn("data-notebook-pipeline-running-indicator", markup_source)
+        self.assertIn("data-notebook-pipeline-running-slot", markup_source)
+        self.assertIn("notebook-pipeline-button-spinner", markup_source)
+        self.assertIn("data-notebook-pipeline-run-label", markup_source)
+        self.assertIn("data-notebook-pipeline-cancel-label", markup_source)
         self.assertIn("data-cancel-notebook-pipeline", markup_source)
         self.assertIn("<th>Duration</th>", markup_source)
         self.assertIn("data-cell-stage-title-input", markup_source)
@@ -816,6 +841,8 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("graphHasActiveWholePipelineRun(graph)", controller_source)
         self.assertIn("runCoversWholePipeline(run, graph)", controller_source)
         self.assertIn("data-notebook-pipeline-running-indicator", controller_source)
+        self.assertIn("data-notebook-pipeline-run-label", controller_source)
+        self.assertIn("data-notebook-pipeline-cancel-label", controller_source)
         self.assertIn("wholePipelineRunning: !normalizedStartStageId", controller_source)
         self.assertIn("pipeline-stage-row-${rowStatus}", controller_source)
         self.assertIn('action: "navigate-target"', controller_source)
@@ -864,7 +891,11 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn(".cell-source-navigation-item", css_source)
         self.assertIn(".notebook-pipeline-table", css_source)
         self.assertIn(".notebook-pipeline-title-row", css_source)
+        self.assertIn(".notebook-pipeline-running-slot", css_source)
         self.assertIn(".notebook-pipeline-running-indicator", css_source)
+        self.assertIn(".notebook-pipeline-button-spinner", css_source)
+        self.assertIn("grid-template-columns: 36px auto;", css_source)
+        self.assertIn("flex: 0 0 160px;", css_source)
         self.assertIn(".notebook-pipeline-total-duration", css_source)
         self.assertIn(".pipeline-table-total-duration", css_source)
         self.assertIn("flex: 0 0 190px;", css_source)
@@ -946,6 +977,38 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("data-notebook-pipeline-graph", workspace_template)
         self.assertIn("data-notebook-pipeline-total-duration", workspace_template)
         self.assertIn("data-notebook-pipeline-running-indicator", workspace_template)
+        self.assertIn("data-notebook-pipeline-running-slot", workspace_template)
+        self.assertIn("notebook-pipeline-button-spinner", workspace_template)
+        self.assertIn("data-notebook-pipeline-run-label", workspace_template)
+        self.assertIn("data-notebook-pipeline-cancel-label", workspace_template)
+        self.assertEqual(layout_template.count("-2026-08-16-pipeline-ui-1"), 2)
+        self.assertIn(
+            'notebook-stage-pipeline-controller.js?v=2026-08-16-pipeline-ui-1',
+            app_source,
+        )
+        self.assertIn(
+            'notebook-workspace-markup.js?v=2026-08-16-pipeline-ui-1',
+            app_source,
+        )
+        self.assertIn(
+            'realtime-controller.js?v=2026-08-16-pipeline-ui-1',
+            app_source,
+        )
+        self.assertIn(
+            'class="notebook-pipeline-button-spinner" aria-hidden="true"></i>',
+            markup_source,
+        )
+        self.assertIn(
+            'class="notebook-pipeline-button-spinner" aria-hidden="true"></i>',
+            workspace_template,
+        )
+        for pipeline_markup in (markup_source, workspace_template):
+            spinner_position = pipeline_markup.index("data-notebook-pipeline-running-slot")
+            title_position = pipeline_markup.index(
+                '<span class="workspace-tags-label">Notebook Pipeline</span>',
+                spinner_position,
+            )
+            self.assertLess(spinner_position, title_position)
         self.assertIn("data-pipeline-priority-paths", workspace_template)
         self.assertIn("data-pipeline-priority-summary", workspace_template)
         self.assertIn("data-default-pipeline-paths", workspace_template)

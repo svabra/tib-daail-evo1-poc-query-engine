@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import logging
+import os
 from pathlib import Path
 import time
 
@@ -100,7 +101,14 @@ app = FastAPI(
     redoc_url=None,
     openapi_url=None,
 )
-app.mount("/static", VersionedStaticFiles(directory=BASE_DIR / "static"), name="static")
+app.mount(
+    "/static",
+    VersionedStaticFiles(
+        directory=BASE_DIR / "static",
+        cache_control_override=os.getenv("BDW_STATIC_ASSET_CACHE_CONTROL"),
+    ),
+    name="static",
+)
 app.mount("/node", StaticFiles(directory=BASE_DIR / "static" / "vendor" / "node"), name="node")
 app.include_router(api_router)
 app.include_router(web_router)

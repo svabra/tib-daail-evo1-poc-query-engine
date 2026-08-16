@@ -1,10 +1,11 @@
 import {
   WORKBENCH_SEARCH_KINDS,
-  WORKBENCH_SEARCH_MIN_LENGTH,
   loadWorkbenchSearchIndex,
-  searchWorkbenchIndex,
-  workbenchSearchIsReady,
 } from "./home-notebook-search.js";
+import {
+  expertSearchKindFromParams,
+  searchExpertWorkbenchIndex,
+} from "./expert-search-filter.js";
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -18,7 +19,10 @@ function escapeHtml(value) {
 function resultMarkup(item) {
   const tags = (item.tags || []).slice(0, 4);
   return `
-    <article class="workbench-expert-search-result">
+    <article
+      class="workbench-expert-search-result"
+      data-workbench-expert-search-result-kind="${escapeHtml(item.kind || "content")}"
+    >
       <div>
         <span class="workbench-expert-search-result-kind">${escapeHtml(
           item.kindLabel || WORKBENCH_SEARCH_KINDS[item.kind] || "Inhalt"
@@ -69,9 +73,7 @@ export function initializeWorkbenchExpertSearch(root = document) {
   page.dataset.bound = "true";
   const params = new URLSearchParams(window.location.search);
   input.value = params.get("q") || "";
-  kindSelect.value = ["all", "notebook", "source", "product"].includes(params.get("kind"))
-    ? params.get("kind")
-    : "all";
+  kindSelect.value = expertSearchKindFromParams(params);
   let items = [];
   let loaded = false;
 
@@ -87,24 +89,20 @@ export function initializeWorkbenchExpertSearch(root = document) {
     const query = input.value.trim();
     updateUrl();
     clearButton.hidden = !query;
-    if (!workbenchSearchIsReady(query)) {
-      heading.textContent = query ? "Suchbegriff zu kurz" : "Suchbegriff eingeben";
-      summary.textContent = `Mindestens ${WORKBENCH_SEARCH_MIN_LENGTH} Zeichen erforderlich.`;
-      resultsRoot.replaceChildren();
-      return;
-    }
     if (!loaded) {
       heading.textContent = "Suchindex wird geladen …";
-      summary.textContent = "Notebooks, Datenquellen und DAAIF-Datenprodukte werden vorbereitet.";
+      summary.textContent = "Notebooks, Data Sources, Datenobjekte und DAAIF-Datenprodukte werden vorbereitet.";
       resultsRoot.replaceChildren();
       return;
     }
-    const results = searchWorkbenchIndex(items, query, Number.POSITIVE_INFINITY, kindSelect.value);
+    const results = searchExpertWorkbenchIndex(items, query, kindSelect.value);
     heading.textContent = `${results.length} ${results.length === 1 ? "Ergebnis" : "Ergebnisse"}`;
     summary.textContent = kindSelect.options[kindSelect.selectedIndex]?.textContent || "Alle Inhalte";
     resultsRoot.innerHTML = results.length
       ? results.map(resultMarkup).join("")
-      : `<div class="workbench-expert-search-empty"><strong>Keine passenden Inhalte gefunden.</strong><p>Versuchen Sie einen anderen Suchbegriff oder wählen Sie alle Inhaltstypen.</p></div>`;
+      : query
+        ? `<div class="workbench-expert-search-empty"><strong>Keine passenden Inhalte gefunden.</strong><p>Versuchen Sie einen anderen Suchbegriff oder wählen Sie alle Inhaltstypen.</p></div>`
+        : `<div class="workbench-expert-search-empty"><strong>Keine Inhalte vorhanden.</strong><p>Für den gewählten Inhaltstyp sind noch keine Einträge verfügbar.</p></div>`;
   }
 
   form.addEventListener("submit", (event) => event.preventDefault());

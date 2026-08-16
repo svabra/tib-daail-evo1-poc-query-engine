@@ -236,6 +236,11 @@
       "enabledByDefault": true
     },
     {
+      "id": "realtime-pipeline-render-regression",
+      "script": "playwright_realtime_pipeline_render_regression.py",
+      "enabledByDefault": true
+    },
+    {
       "id": "pipeline-sample-graph",
       "script": "playwright_pipeline_sample_graph_regression.py",
       "enabledByDefault": false

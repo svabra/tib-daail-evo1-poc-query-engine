@@ -270,8 +270,10 @@
       <div class="notebook-pipeline-header">
         <div>
           <span class="notebook-pipeline-title-row">
+            <span class="notebook-pipeline-running-slot" data-notebook-pipeline-running-slot>
+              <i class="notebook-pipeline-running-indicator" data-notebook-pipeline-running-indicator hidden role="status" aria-label="Pipeline is running"></i>
+            </span>
             <span class="workspace-tags-label">Notebook Pipeline</span>
-            <span class="notebook-pipeline-running-indicator" data-notebook-pipeline-running-indicator hidden aria-label="Pipeline is running"></span>
           </span>
         </div>
         <div class="notebook-pipeline-header-actions">
@@ -290,11 +292,11 @@
         <div class="notebook-pipeline-actions" data-notebook-pipeline-actions {% if active_notebook.pipeline_mode != 'pipeline' %}hidden{% endif %}>
           <button type="button" class="notebook-pipeline-run-button" data-run-notebook-pipeline aria-label="Run all pipeline stages in dependency order" data-pipeline-tooltip="Runs all stages in dependency order; priority paths run first when branches fork.">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4v16l14-8z"></path></svg>
-            <span>Run pipeline</span>
+            <span data-notebook-pipeline-run-label>Run pipeline</span>
           </button>
           <button type="button" class="notebook-pipeline-cancel-button" data-cancel-notebook-pipeline aria-label="Abort the active pipeline run" data-pipeline-tooltip="Abort the active pipeline run" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10"></rect></svg>
-            <span>Abort pipeline</span>
+            <i class="notebook-pipeline-button-spinner" aria-hidden="true"></i>
+            <span data-notebook-pipeline-cancel-label>Abort pipeline</span>
           </button>
         </div>
       </div>

@@ -9,7 +9,7 @@
     <div>
       <span class="home-journey-eyebrow">DAAIF durchsuchen</span>
       <h2>Expertensuche</h2>
-      <p>Durchsuchen Sie Notebooks, Datenquellen und in DAAIF erstellte Datenprodukte.</p>
+      <p>Durchsuchen Sie Notebooks, Data Sources, Datenobjekte und in DAAIF erstellte Datenprodukte.</p>
     </div>
   </header>
 
@@ -39,13 +39,14 @@
         <select id="workbench-expert-search-kind" data-workbench-expert-search-kind>
           <option value="all">Alle Inhalte</option>
           <option value="notebook">Notebooks</option>
-          <option value="source">Datenquellen</option>
+          <option value="source">Data Sources</option>
+          <option value="object">Datenobjekte</option>
           <option value="product">DAAIF-Datenprodukte</option>
         </select>
       </label>
     </form>
     <p class="workbench-expert-search-hint">
-      Die Suche beginnt automatisch ab zwei Zeichen. Datenprodukte stammen ausschliesslich aus DAAIF.
+      Ohne Suchbegriff werden alle Inhalte des gewählten Typs angezeigt. Die Filterung beginnt mit dem ersten Zeichen. Data Sources sind Anbindungen wie S3, PostgreSQL OLTP oder OLAP; Datenobjekte sind die darin enthaltenen Dateien, Tabellen und Views. Datenprodukte stammen ausschliesslich aus DAAIF.
     </p>
   </section>
 
@@ -53,9 +54,9 @@
     <header>
       <div>
         <span class="home-journey-eyebrow">Ergebnisse</span>
-        <h2 id="workbench-expert-search-results-title" data-workbench-expert-search-heading>Suchbegriff eingeben</h2>
+        <h2 id="workbench-expert-search-results-title" data-workbench-expert-search-heading>Inhalte werden geladen</h2>
       </div>
-      <p data-workbench-expert-search-summary>Mindestens zwei Zeichen erforderlich.</p>
+      <p data-workbench-expert-search-summary>Alle Inhalte werden angezeigt.</p>
     </header>
     <div class="workbench-expert-search-list" aria-live="polite" data-workbench-expert-search-results></div>
   </section>

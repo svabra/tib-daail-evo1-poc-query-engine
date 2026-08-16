@@ -54,9 +54,10 @@ import {
   readResultExportSettings,
   renderResultExportSettings,
 } from "./data-exporters/export-settings.js";
+import { resultStorageExportTarget } from "./data-exporters/result-storage-export-target.js";
 import { createNotebookModel } from "./notebook-model.js";
-import { createNotebookStagePipelineController } from "./notebook-stage-pipeline-controller.js";
-import { createNotebookWorkspaceMarkup } from "./notebook-workspace-markup.js";
+import { createNotebookStagePipelineController } from "./notebook-stage-pipeline-controller.js?v=2026-08-16-pipeline-ui-1";
+import { createNotebookWorkspaceMarkup } from "./notebook-workspace-markup.js?v=2026-08-16-pipeline-ui-1";
 import { createNotebookWorkspaceController } from "./notebook-workspace-controller.js";
 import { createNotebookUrlHelpers } from "./notebook-url-helpers.js";
 import { createNotebookTreeController } from "./notebook-tree-controller.js";
@@ -141,7 +142,7 @@ import {
   queryJobStatusCopy,
 } from "./query-job-state.js";
 import { createS3ExplorerLoader, s3ExplorerPath } from "./s3-explorer-loader.js";
-import { createRealtimeController } from "./realtime-controller.js";
+import { createRealtimeController } from "./realtime-controller.js?v=2026-08-16-pipeline-ui-1";
 import { createRealtimeConnectionStatusController } from "./realtime-connection-status-controller.js";
 import { createServiceConsumptionUi } from "./service-consumption-ui.js?v=2026-04-19-service-mix-refresh-2";
 import { createSidebarLayoutManager } from "./sidebar-layout-manager.js";
@@ -11256,10 +11257,18 @@ async function openResultExportDialog(job, exportFormat = "csv") {
   }
 
   const dialog = ensureResultExportDialog();
+  const configuredTarget = resultStorageExportTarget(job);
   resultExportDialogState.jobId = job.jobId;
-  resultExportDialogState.exportFormat = normalizeResultExportFormat(exportFormat);
+  resultExportDialogState.exportFormat = normalizeResultExportFormat(
+    configuredTarget?.exportFormat || exportFormat
+  );
   resultExportDialogState.exportSettings = defaultResultExportSettings(resultExportDialogState.exportFormat);
-  resultExportDialogState.fileName = defaultQueryResultExportFilename(job, resultExportDialogState.exportFormat);
+  resultExportDialogState.fileName = configuredTarget?.fileName ||
+    defaultQueryResultExportFilename(job, resultExportDialogState.exportFormat);
+  if (configuredTarget) {
+    resultExportDialogState.selectedBucket = configuredTarget.bucket;
+    resultExportDialogState.selectedPrefix = configuredTarget.prefix;
+  }
   resultExportDialogState.saving = false;
 
   const titleNode = dialog.querySelector("[data-result-export-title]");
@@ -11268,8 +11277,9 @@ async function openResultExportDialog(job, exportFormat = "csv") {
     titleNode.textContent = "Save Results in S3 Object Storage ...";
   }
   if (copyNode) {
-    copyNode.textContent =
-      "Choose a S3 Object Storage location, then select the export format and any format-specific settings.";
+    copyNode.textContent = configuredTarget
+      ? `This result is already materialized at ${configuredTarget.path}. Its canonical destination is preselected; saving again replaces that object.`
+      : "Choose a S3 Object Storage location, then select the export format and any format-specific settings.";
   }
 
   syncResultExportSelectionState();

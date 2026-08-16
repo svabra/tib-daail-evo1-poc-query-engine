@@ -31,11 +31,13 @@ export function createNotebookStagePipelineController(helpers) {
     activeRuns: [],
   };
   const graphByNotebookId = new Map();
+  const graphRefreshQueueByNotebookId = new Map();
   const selectedStageByNotebookId = new Map();
   let contextMenu = null;
   let priorityPopover = null;
   let modeChangeVersion = 0;
   let materializedOutputSignature = "";
+  let materializedStagesStateSignature = "";
   const passThroughCellRuns = new Set();
   const defaultFirstStageTitle = "my first stage";
   const defaultFirstStageDescription = "This is the stage description";
@@ -1550,7 +1552,7 @@ export function createNotebookStagePipelineController(helpers) {
     refreshRunCellButtonLabels(workspaceRoot);
   }
 
-  async function refreshGraph(notebookId = getCurrentNotebookId()) {
+  async function performGraphRefresh(notebookId) {
     if (!notebookId || !pipelineEnabled(notebookId)) {
       return null;
     }
@@ -1596,6 +1598,39 @@ export function createNotebookStagePipelineController(helpers) {
     graphByNotebookId.set(notebookId, graph);
     renderWorkspaceGraph(workspaceRoot, graph);
     return graph;
+  }
+
+  async function refreshGraph(notebookId = getCurrentNotebookId()) {
+    const normalizedNotebookId = String(notebookId || "").trim();
+    if (!normalizedNotebookId) {
+      return null;
+    }
+    const queuedRefresh = graphRefreshQueueByNotebookId.get(normalizedNotebookId);
+    if (queuedRefresh) {
+      queuedRefresh.requested += 1;
+      return queuedRefresh.promise;
+    }
+
+    const refreshState = {
+      requested: 1,
+      completed: 0,
+      promise: null,
+    };
+    refreshState.promise = (async () => {
+      let graph = null;
+      while (refreshState.completed < refreshState.requested) {
+        const requested = refreshState.requested;
+        graph = await performGraphRefresh(normalizedNotebookId);
+        refreshState.completed = requested;
+      }
+      return graph;
+    })().finally(() => {
+      if (graphRefreshQueueByNotebookId.get(normalizedNotebookId) === refreshState) {
+        graphRefreshQueueByNotebookId.delete(normalizedNotebookId);
+      }
+    });
+    graphRefreshQueueByNotebookId.set(normalizedNotebookId, refreshState);
+    return refreshState.promise;
   }
 
   async function initializeCurrentWorkspace() {
@@ -1956,7 +1991,7 @@ export function createNotebookStagePipelineController(helpers) {
       runButton.hidden = Boolean(running);
       runButton.disabled = false;
       runButton.classList.toggle("is-running", Boolean(running));
-      const label = runButton.querySelector("span");
+      const label = runButton.querySelector("[data-notebook-pipeline-run-label]");
       if (label) {
         label.textContent = "Run pipeline";
       }
@@ -1966,7 +2001,7 @@ export function createNotebookStagePipelineController(helpers) {
       cancelButton.disabled = Boolean(cancelling);
       cancelButton.classList.toggle("is-running", Boolean(running));
       cancelButton.classList.toggle("is-cancelling", Boolean(cancelling));
-      const label = cancelButton.querySelector("span");
+      const label = cancelButton.querySelector("[data-notebook-pipeline-cancel-label]");
       if (label) {
         label.textContent = cancelling ? "Aborting" : "Abort pipeline";
       }
@@ -2110,7 +2145,13 @@ export function createNotebookStagePipelineController(helpers) {
     } catch (error) {
       await reportPipelineError(notebookId, "Pipeline run failed", error);
     } finally {
-      setPipelineRunControls(notebookId, { running: keepRunningControls, cancelling: false });
+      setPipelineRunControls(notebookId, {
+        running: keepRunningControls,
+        cancelling: false,
+        wholePipelineRunning:
+          keepRunningControls &&
+          (graphHasActiveWholePipelineRun(graphByNotebookId.get(notebookId)) || !normalizedStartStageId),
+      });
     }
   }
 
@@ -2122,7 +2163,11 @@ export function createNotebookStagePipelineController(helpers) {
     if (!notebookId) {
       return;
     }
-    setPipelineRunControls(notebookId, { running: true, cancelling: true });
+    setPipelineRunControls(notebookId, {
+      running: true,
+      cancelling: true,
+      wholePipelineRunning: graphHasActiveWholePipelineRun(graphByNotebookId.get(notebookId)),
+    });
     try {
       const snapshot = await fetchJsonOrThrow("/api/materialized-stages/pipeline/cancel", {
         method: "POST",
@@ -2143,6 +2188,7 @@ export function createNotebookStagePipelineController(helpers) {
       setPipelineRunControls(notebookId, {
         running: graphHasActiveRun(graph),
         cancelling: false,
+        wholePipelineRunning: graphHasActiveWholePipelineRun(graph),
       });
     }
   }
@@ -2651,7 +2697,27 @@ export function createNotebookStagePipelineController(helpers) {
     return true;
   }
 
+  function materializedStagesSnapshotSignature(snapshot) {
+    const activeRuns = (Array.isArray(snapshot?.activeRuns) ? snapshot.activeRuns : [])
+      .map((run) => [
+        String(run?.runId || ""),
+        String(run?.notebookId || ""),
+        String(run?.status || ""),
+        String(run?.currentStageId || ""),
+        Boolean(run?.cancelRequested),
+        String(run?.completedAt || ""),
+        (Array.isArray(run?.stageIds) ? run.stageIds : []).map((stageId) => String(stageId || "")),
+      ])
+      .sort((left, right) => left[0].localeCompare(right[0]));
+    return JSON.stringify([Number(snapshot?.version ?? 0), activeRuns]);
+  }
+
   function applyRealtimeState(snapshot) {
+    const nextStateSignature = materializedStagesSnapshotSignature(snapshot);
+    if (nextStateSignature === materializedStagesStateSignature) {
+      return false;
+    }
+    materializedStagesStateSignature = nextStateSignature;
     materializedStagesVersion = Number(snapshot?.version ?? 0);
     materializedStagesState = {
       version: materializedStagesVersion,
@@ -2682,6 +2748,7 @@ export function createNotebookStagePipelineController(helpers) {
     if (typeof onPipelineNotificationStateChanged === "function") {
       onPipelineNotificationStateChanged(materializedStagesState);
     }
+    return true;
   }
 
   async function loadState() {

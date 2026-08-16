@@ -414,7 +414,9 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.body.decode("utf-8")
         self.assertIn("Sample Notebooks", body)
+        self.assertIn("A Data Analyst's Journey – Kantonale Gewerbesteuer", body)
         for notebook_id in (
+            "data-analysts-journey-cantonal-business-tax",
             "kostenbelege-fact-builder-s3-pipeline-demo",
             "python-chart-vat-demo",
             "postgres-oltp-s3-union-test",

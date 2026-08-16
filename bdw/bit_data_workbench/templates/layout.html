@@ -6,7 +6,7 @@
     <title>{{ document_title | default(title) }}</title>
     <link rel="icon" type="image/png" href="/static/img/favicon.png">
     <link rel="shortcut icon" href="/static/img/favicon.ico">
-    <link rel="stylesheet" href="/static/css/app.css?v={{ runtime.image_version | urlencode }}">
+    <link rel="stylesheet" href="/static/css/app.css?v={{ runtime.image_version | urlencode }}-2026-08-16-pipeline-ui-1">
   </head>
   <body>
     {% block body %}{% endblock %}
@@ -74,7 +74,7 @@
     <script src="/static/vendor/htmx.min.js"></script>
     <script
       type="module"
-      src="/static/js/app.js?v={{ runtime.image_version | urlencode }}"
+      src="/static/js/app.js?v={{ runtime.image_version | urlencode }}-2026-08-16-pipeline-ui-1"
     ></script>
   </body>
 </html>

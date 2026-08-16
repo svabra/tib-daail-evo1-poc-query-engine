@@ -1,9 +1,55 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.40. Keep entries concise and
+# Derived from git history through version 0.10.41. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.41",
+        "releasedAt": "2026-08-17T00:22:22+02:00",
+        "features": [
+            (
+                "DAAIF now delivers the DaCa-aligned federal header, shared "
+                "PoC identities, rotating Swiss landing-page imagery, notebook "
+                "search, and the governed end-to-end Data Analyst's Journey."
+            ),
+            (
+                "CSV ingestion now accepts a complete s3:// destination, "
+                "splits it into bucket, prefix, and object name, previews and "
+                "copies the final URI, and reports failed imports accurately."
+            ),
+            (
+                "PoC Tests now separates Jupyter/Python and Data Pipelines, "
+                "adds refined Kostenbelege and VAT analysis examples, and "
+                "exposes curated Sample Notebooks on the landing page."
+            ),
+            (
+                "Saved notebook results now reopen their canonical materialized "
+                "S3 destination and format, preventing the Journey Parquet "
+                "result from defaulting to an unrelated generated file name."
+            ),
+            (
+                "Expert search now lists all selected content when empty, "
+                "filters from the first character, and separates five Data "
+                "Source connectors from their S3 and PostgreSQL data objects."
+            ),
+            (
+                "Data-product publishing now supports confirmed in-place "
+                "replacement while preserving product identity, endpoint, "
+                "and DaCa governance linkage with optimistic conflict checks."
+            ),
+            (
+                "Pipeline realtime rendering now coalesces graph refreshes, "
+                "ignores unchanged snapshots, prevents duplicate result panels, "
+                "and keeps accessible Run and Abort controls visually stable."
+            ),
+            (
+                "Local development can disable static asset caching while "
+                "versioned production caching remains intact; expanded tests "
+                "cover discovery, export, ingestion, notebooks, and pipelines."
+            ),
+        ],
+    },
     {
         "version": "0.10.40",
         "releasedAt": "2026-07-08T10:23:01+02:00",

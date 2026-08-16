@@ -4,7 +4,8 @@ export const WORKBENCH_LIVE_RESULT_LIMIT = 3;
 
 export const WORKBENCH_SEARCH_KINDS = Object.freeze({
   notebook: "Notebook",
-  source: "Datenquelle",
+  source: "Data Source",
+  object: "Datenobjekt",
   product: "Datenprodukt",
 });
 
@@ -78,7 +79,7 @@ export function normalizedDataSource(item) {
       .filter(Boolean),
     path: sourceId,
     type: String(item?.computation_mode || "source").trim() || "source",
-    targetUrl: `/query-workbench/data-sources?source_id=${encodeURIComponent(sourceId)}`,
+    targetUrl: `/data-sources?source_id=${encodeURIComponent(sourceId)}`,
   };
 }
 
@@ -302,12 +303,12 @@ export async function loadWorkbenchSearchIndex({
   fetchImpl = window.fetch.bind(window),
   storage = window.localStorage,
 } = {}) {
-  const [notebookResponse, sourceResponse, productResponse] = await Promise.all([
+  const [notebookResponse, catalogResponse, productResponse] = await Promise.all([
     fetchImpl("/api/notebooks/search-index", {
       headers: { Accept: "application/json" },
       cache: "no-cache",
     }),
-    fetchImpl("/api/workbench/source-options", {
+    fetchImpl("/api/workbench/catalog-search-index", {
       headers: { Accept: "application/json" },
       cache: "no-cache",
     }),
@@ -316,27 +317,25 @@ export async function loadWorkbenchSearchIndex({
       cache: "no-cache",
     }),
   ]);
-  for (const response of [notebookResponse, sourceResponse, productResponse]) {
+  for (const response of [notebookResponse, catalogResponse, productResponse]) {
     if (!response.ok) {
       throw new Error(`Workbench search index request failed: ${response.status}`);
     }
   }
-  const [notebookPayload, sourcePayload, productPayload] = await Promise.all([
+  const [notebookPayload, catalogPayload, productPayload] = await Promise.all([
     notebookResponse.json(),
-    sourceResponse.json(),
+    catalogResponse.json(),
     productResponse.json(),
   ]);
   const notebooks = mergeNotebookSearchIndexes(
     notebookPayload?.items,
     browserLocalNotebookIndex(storage)
   );
-  const sources = (Array.isArray(sourcePayload) ? sourcePayload : [])
-    .map(normalizedDataSource)
-    .filter(Boolean);
+  const catalogItems = Array.isArray(catalogPayload?.items) ? catalogPayload.items : [];
   const products = (Array.isArray(productPayload?.products) ? productPayload.products : [])
     .map(normalizedDataProduct)
     .filter(Boolean);
-  return primeWorkbenchSearchIndex([...notebooks, ...sources, ...products]);
+  return primeWorkbenchSearchIndex([...notebooks, ...catalogItems, ...products]);
 }
 
 function escapeHtml(value) {
@@ -443,7 +442,7 @@ export function initializeHomeNotebookSearch(root = document) {
       activeIndex = -1;
       resultsRoot.replaceChildren();
       feedback.textContent = loaded
-        ? "Tipp: Suchen Sie nach Notebook, Datenquelle oder DAAIF-Datenprodukt."
+        ? "Tipp: Suchen Sie nach Notebook, Data Source, Datenobjekt oder DAAIF-Datenprodukt."
         : "Suchindex wird geladen …";
       input.removeAttribute("aria-activedescendant");
       return;

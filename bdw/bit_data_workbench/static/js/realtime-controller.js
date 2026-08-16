@@ -428,7 +428,7 @@ export function createRealtimeController(helpers) {
       if (nextResultRoot) {
         nextResultRoot.dataset.resultSignature = resultSignature;
       }
-    } else if (cellId) {
+    } else if (!resultRoot && cellId) {
       cellRoot
         .querySelector("[data-query-form]")
         ?.insertAdjacentHTML("afterend", queryResultPanelMarkup(cellId, job));
