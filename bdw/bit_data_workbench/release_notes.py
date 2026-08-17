@@ -61,9 +61,20 @@ CURRENT_FEATURE_LIST: dict[str, object] = {
 }
 
 
-# Derived from git history through version 0.10.43. Keep entries concise and
+# Derived from git history through version 0.10.44. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.44",
+        "releasedAt": "2026-08-17T13:47:40+02:00",
+        "features": [
+            (
+                "The Data Analyst's Journey loader now states prominently that "
+                "the supplied Aargau file must remain Plain CSV in S3; Parquet "
+                "and JSON would not match the immutable UNION notebook contract."
+            ),
+        ],
+    },
     {
         "version": "0.10.43",
         "releasedAt": "2026-08-17T13:11:43+02:00",
