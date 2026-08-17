@@ -2477,6 +2477,9 @@ function normalizeDataGenerator(generator) {
             label: String(file.label ?? file.fileName ?? "CSV-Datei").trim(),
             downloadUrl,
             targetPath,
+            storageFormat: String(file.storageFormat ?? "").trim().toLowerCase(),
+            storageFormatLabel: String(file.storageFormatLabel ?? "").trim(),
+            storageFormatInstruction: String(file.storageFormatInstruction ?? "").trim(),
             replaceExisting: file.replaceExisting === true,
           };
         })

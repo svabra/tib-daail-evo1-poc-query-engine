@@ -30,6 +30,13 @@ data:
   PG_PORT: "5432"
   PG_OLTP_DATABASE: evo1_oltp
   PG_OLAP_DATABASE: evo1_olap
+  # DaCa integration for the Data Analyst's Journey. The API and OPA values
+  # use namespace-local Services. Replace both route-host placeholders with
+  # the generated OpenShift Route hosts before applying this reference file.
+  DACA_BASE_URL: http://daca-catalog-api:8001
+  DACA_OPA_URL: http://daca-opa:8181/v1/data/daca/authz/decision
+  DACA_UI_URL: https://replace-me-daca-catalog-route-host
+  DAAIF_PUBLIC_BASE_URL: https://replace-me-evo1-bdw-route-host
   BDW_SERVICE_CONSUMPTION_COST_NODE_CHF_PER_HOUR: ""
   BDW_SERVICE_CONSUMPTION_COST_APP_CHF_PER_MONTH: ""
   BDW_SERVICE_CONSUMPTION_COST_S3_CHF_PER_GB_MONTH: "0.03954"

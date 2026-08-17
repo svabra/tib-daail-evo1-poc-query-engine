@@ -364,6 +364,10 @@ class CustomerJourneyUiTests(unittest.TestCase):
 
     def test_loader_manual_csv_instruction_contract(self) -> None:
         app = (STATIC_ROOT / "js/app.js").read_text(encoding="utf-8")
+        journey_generator = (
+            BDW_ROOT
+            / "bit_data_workbench/data_generator/data_analysts_journey.py"
+        ).read_text(encoding="utf-8")
         controller = (STATIC_ROOT / "js/ingestion-controller.js").read_text(
             encoding="utf-8"
         )
@@ -374,6 +378,11 @@ class CustomerJourneyUiTests(unittest.TestCase):
         self.assertIn("CSV manuell einlesen", loader_ui)
         self.assertIn("data-open-ingestion-workbench", loader_ui)
         self.assertIn("Ein erneuter Upload ersetzt nur diese manuelle Datei.", loader_ui)
+        self.assertIn("data-loader-required-storage-format", loader_ui)
+        self.assertIn("Erforderliches Speicherformat:", loader_ui)
+        self.assertIn("Nicht in Parquet", journey_generator)
+        self.assertIn('"storageFormat": "csv"', journey_generator)
+        self.assertIn("storageFormatInstruction", app)
         self.assertIn("data-copy-loader-target-path", loader_ui)
         self.assertIn("Copied to Clipbard", loader_ui)
         self.assertIn('role="status"', loader_ui)

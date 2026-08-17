@@ -61,9 +61,35 @@ CURRENT_FEATURE_LIST: dict[str, object] = {
 }
 
 
-# Derived from git history through version 0.10.42. Keep entries concise and
+# Derived from git history through version 0.10.43. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.43",
+        "releasedAt": "2026-08-17T13:11:43+02:00",
+        "features": [
+            (
+                "Export / Save now writes complete truncated virtual-S3 and "
+                "materialized pipeline results by replaying the prepared result "
+                "snapshot instead of display aliases or stage COPY statements."
+            ),
+            (
+                "Stored-result exports preserve the exact S3 snapshot, including "
+                "non-deterministic query values, and failed exports now remove "
+                "partial temporary artifacts."
+            ),
+            (
+                "The RHOS deployment reference now documents the DaCa Catalog API "
+                "and OPA service endpoints plus the external Catalog UI and DAAIF "
+                "route settings required by the Data Analyst's Journey."
+            ),
+            (
+                "The Data Analyst's Journey loader now marks the manual Aargau "
+                "artifact as Plain CSV and warns against Parquet or JSON conversion, "
+                "keeping the ingestion handoff compatible with notebook cell 1."
+            ),
+        ],
+    },
     {
         "version": "0.10.42",
         "releasedAt": "2026-08-17T00:22:22+02:00",

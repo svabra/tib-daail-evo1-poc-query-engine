@@ -14927,6 +14927,30 @@ body.data-platform-document {
   overflow-wrap: anywhere;
 }
 
+.ingestion-manual-format {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.55rem;
+  margin-top: 0.7rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid #b8cce0;
+  border-left: 4px solid var(--federal-blue, #0b4479);
+  background: #fff;
+  color: #243746;
+  line-height: 1.45;
+}
+
+.ingestion-manual-format-badge {
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  background: #dce9f4;
+  color: #0b4479;
+  font-size: 0.78rem;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .ingestion-manual-target {
   position: relative;
   display: inline-flex;

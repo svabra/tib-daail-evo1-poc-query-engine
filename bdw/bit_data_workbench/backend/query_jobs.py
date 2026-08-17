@@ -1756,6 +1756,12 @@ class QueryJobManager:
             else None
         )
         validate_result_storage_request(query_options, execution_mode=execution_mode)
+        result_storage_target = normalize_result_storage_target(query_options)
+        normalized_result_preview_sql = (
+            result_storage_preview_sql(result_storage_target)
+            if result_storage_target is not None
+            else ""
+        )
         result_storage = planned_result_storage_payload(query_options)
         with self._condition:
             record = self._jobs.get(str(job_id or "").strip())
@@ -1765,6 +1771,7 @@ class QueryJobManager:
                 return record.snapshot
             record.execution_mode = execution_mode
             record.execution_sql = normalized_execution_sql
+            record.result_preview_sql = normalized_result_preview_sql
             record.duckdb_execution_path = duckdb_execution_path
             record.worker_database_path = worker_database_path
             record.source_summaries = normalized_source_summaries
@@ -1773,6 +1780,7 @@ class QueryJobManager:
             record.snapshot.cell_id = cell_id.strip()
             record.snapshot.sql = normalized_sql
             record.snapshot.execution_sql = normalized_execution_sql
+            record.snapshot.result_preview_sql = normalized_result_preview_sql
             record.snapshot.status = "queued"
             record.snapshot.progress = 0.0
             record.snapshot.progress_label = "Queued..."
@@ -1913,6 +1921,9 @@ class QueryJobManager:
                 timings[key] = timing
         requested_id = _requested_query_job_id(requested_job_id)
         validate_result_storage_request(query_options, execution_mode=execution_mode)
+        result_storage_target = normalize_result_storage_target(query_options)
+        if result_storage_target is not None:
+            normalized_result_preview_sql = result_storage_preview_sql(result_storage_target)
         result_storage = planned_result_storage_payload(query_options)
 
         with self._condition:
@@ -1924,6 +1935,7 @@ class QueryJobManager:
                 cell_id=cell_id.strip(),
                 sql=sql,
                 execution_sql=normalized_execution_sql,
+                result_preview_sql=normalized_result_preview_sql,
                 status="queued",
                 started_at=now,
                 updated_at=now,

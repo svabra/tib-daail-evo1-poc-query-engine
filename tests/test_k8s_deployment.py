@@ -14,10 +14,15 @@ from bit_data_workbench.backend.runtime_storage import parse_storage_size_bytes
 
 
 DEPLOYMENT = REPO_ROOT / "k8s" / "bdw-deployment.yaml"
+CONFIGMAP = REPO_ROOT / "k8s" / "bdw-configmap.yaml"
 
 
 def _deployment_source() -> str:
     return DEPLOYMENT.read_text(encoding="utf-8")
+
+
+def _configmap_source() -> str:
+    return CONFIGMAP.read_text(encoding="utf-8")
 
 
 def _env_value(source: str, name: str) -> str:
@@ -35,6 +40,15 @@ def _empty_dir_size_limit(source: str, name: str) -> str:
         source,
     )
     assert match is not None, f"Missing emptyDir sizeLimit for volume {name}"
+    return match.group(1).strip()
+
+
+def _configmap_value(source: str, name: str) -> str:
+    match = re.search(
+        rf"(?m)^\s+{re.escape(name)}:\s*\"?([^\"\n]+)\"?\s*$",
+        source,
+    )
+    assert match is not None, f"Missing ConfigMap key {name}"
     return match.group(1).strip()
 
 
@@ -62,3 +76,22 @@ def test_duckdb_spill_volume_exceeds_configured_duckdb_spill_quota() -> None:
     assert duckdb_spill_quota is not None
     assert spill_volume_limit is not None
     assert spill_volume_limit > duckdb_spill_quota
+
+
+def test_daca_configmap_matches_rhos_service_contract() -> None:
+    source = _configmap_source()
+
+    assert _configmap_value(source, "DACA_BASE_URL") == "http://daca-catalog-api:8001"
+    assert (
+        _configmap_value(source, "DACA_OPA_URL")
+        == "http://daca-opa:8181/v1/data/daca/authz/decision"
+    )
+    assert _configmap_value(source, "DACA_UI_URL").startswith("https://")
+    assert _configmap_value(source, "DAAIF_PUBLIC_BASE_URL").startswith("https://")
+
+    deployment = _deployment_source()
+    assert re.search(
+        r"(?ms)^\s+envFrom:\s*\n\s+- configMapRef:\s*\n"
+        r"\s+name: tib-daail-evo1-poc-query-engine-config\s*$",
+        deployment,
+    )
