@@ -95,6 +95,25 @@ export function createIngestionUi(helpers) {
                         ? "Ein erneuter Upload ersetzt nur diese manuelle Datei."
                         : ""
                     }
+                    ${
+                      file.storageFormat
+                        ? `
+                          <div
+                            class="ingestion-manual-format"
+                            data-loader-required-storage-format="${escapeHtml(file.storageFormat)}"
+                          >
+                            <strong>Erforderliches Speicherformat:</strong>
+                            <span class="ingestion-manual-format-badge">${escapeHtml(
+                              file.storageFormatLabel || file.storageFormat.toUpperCase()
+                            )}</span>
+                            <span>${escapeHtml(
+                              file.storageFormatInstruction ||
+                                "Die Datei in diesem Format speichern, damit das verknüpfte Notebook sie lesen kann."
+                            )}</span>
+                          </div>
+                        `
+                        : ""
+                    }
                   </li>
                 `
               )

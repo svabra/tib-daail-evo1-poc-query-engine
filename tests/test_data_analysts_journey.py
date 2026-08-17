@@ -131,6 +131,12 @@ class DataAnalystsJourneyDataTests(unittest.TestCase):
                     "label": "Aargau CSV (60 synthetic monthly rows)",
                     "downloadUrl": f"/static/data/{JOURNEY_MANUAL_FILE_NAME}",
                     "targetPath": JOURNEY_MANUAL_PATH,
+                    "storageFormat": "csv",
+                    "storageFormatLabel": "Plain CSV (.csv)",
+                    "storageFormatInstruction": (
+                        "Im Ingestion Workbench «Plain CSV» auswählen. Nicht in Parquet "
+                        "oder JSON umwandeln; Notebook-Zelle 1 liest exakt diese CSV-Datei."
+                    ),
                     "replaceExisting": True,
                 }
             ],

@@ -375,6 +375,7 @@ class QueryJobPayloadTests(TestCase):
             notebook_title="Notebook",
             cell_id="cell",
             sql="select 1",
+            result_preview_sql="select * from read_parquet('s3://workspace/result.parquet')",
             status="running",
             started_at="2026-05-13T00:00:00+00:00",
             updated_at="2026-05-13T00:00:01+00:00",
@@ -452,6 +453,10 @@ class QueryJobPayloadTests(TestCase):
         payload = job.payload
 
         self.assertEqual(payload["executionMode"], QUERY_EXECUTION_DUCKDB_READ)
+        self.assertEqual(
+            payload["resultPreviewSql"],
+            "select * from read_parquet('s3://workspace/result.parquet')",
+        )
         self.assertEqual(payload["processId"], 1234)
         self.assertEqual(payload["cpuPercent"], 12.5)
         self.assertEqual(payload["averageCpuPercent"], 8.5)
@@ -669,6 +674,7 @@ class ProcessQueryJobManagerTests(TestCase):
         with patch.object(self.manager, "_run_job", side_effect=complete_job):
             job = self.manager.start_job(
                 sql="select 1 as value",
+                result_preview_sql="select * from read_parquet('result.parquet')",
                 notebook_id="nb",
                 notebook_title="Notebook",
                 cell_id="cell-1",
@@ -677,11 +683,74 @@ class ProcessQueryJobManagerTests(TestCase):
             completed = self.manager.wait_for_terminal(job.job_id, timeout=2)
 
         self.assertEqual(job.job_id, "query-pipeline-test-wait")
+        self.assertEqual(
+            job.result_preview_sql,
+            "select * from read_parquet('result.parquet')",
+        )
         self.assertEqual(completed.status, "completed")
         self.assertEqual(completed.rows, [(1,)])
         self.assertTrue(
             any(event.get("event") == "completed" for event in completed.progress_events)
         )
+
+    def test_result_storage_preview_sql_is_retained_for_direct_and_prepared_jobs(self) -> None:
+        options = {
+            "duckdb": {
+                "resultStorage": {
+                    "mode": "on",
+                    "path": "s3://workspace/results/stored.parquet",
+                }
+            }
+        }
+        expected_preview = (
+            "SELECT * FROM "
+            "read_parquet('s3://workspace/results/stored.parquet')"
+        )
+
+        def complete_job(job_id: str) -> None:
+            self.manager._finalize_job(
+                job_id,
+                status="completed",
+                duration_ms=1.0,
+                progress=1.0,
+                progress_label="Completed",
+                message="Query completed.",
+                columns=["value"],
+                rows=[(1,)],
+                row_count=1,
+                rows_shown=1,
+            )
+
+        with patch.object(self.manager, "_run_job", side_effect=complete_job):
+            direct = self.manager.start_job(
+                sql="select 1 as value",
+                notebook_id="nb",
+                notebook_title="Notebook",
+                cell_id="cell-direct",
+                query_options=options,
+                result_preview_sql="select 'must not override resultStorage'",
+            )
+            preflight = self.manager.start_preflight_job(
+                sql="select 1 as value",
+                notebook_id="nb",
+                notebook_title="Notebook",
+                cell_id="cell-prepared",
+                query_options=options,
+            )
+            prepared = self.manager.start_prepared_job(
+                preflight.job_id,
+                sql="select 1 as value",
+                execution_sql="select 1 as value",
+                notebook_id="nb",
+                notebook_title="Notebook",
+                cell_id="cell-prepared",
+                query_options=options,
+            )
+
+        self.assertEqual(direct.result_preview_sql, expected_preview)
+        self.assertEqual(prepared.result_preview_sql, expected_preview)
+        self.assertEqual(direct.payload["resultPreviewSql"], expected_preview)
+        self.assertEqual(prepared.payload["resultPreviewSql"], expected_preview)
 
     def test_unexpected_worker_exit_reports_last_phase_progress_and_code(self) -> None:
         snapshot = QueryJobDefinition(

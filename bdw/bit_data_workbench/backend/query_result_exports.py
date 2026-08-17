@@ -105,12 +105,16 @@ class QueryResultExportManager:
         filename = build_default_filename(job, normalized_format)
         temp_dir = Path(tempfile.mkdtemp(prefix="bdw-query-export-"))
         local_path = temp_dir / filename
-        self._write_export(
-            job=job,
-            export_format=normalized_format,
-            local_path=local_path,
-            export_settings=export_options,
-        )
+        try:
+            self._write_export(
+                job=job,
+                export_format=normalized_format,
+                local_path=local_path,
+                export_settings=export_options,
+            )
+        except Exception:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
         export = QueryResultExportDefinition(
             job_id=job.job_id,
             export_format=normalized_format,
@@ -226,9 +230,14 @@ class QueryResultExportManager:
             self._stream_cached_rows(job, consume)
             return
 
-        native_export = self._native_postgres_export(job)
+        result_preview_sql = str(job.result_preview_sql or "").strip()
+        native_export = None if result_preview_sql else self._native_postgres_export(job)
         use_postgres_native = native_export is not None
-        execution_sql = native_export[1] if native_export is not None else job.sql
+        execution_sql = (
+            native_export[1]
+            if native_export is not None
+            else result_preview_sql or job.execution_sql or job.sql
+        )
         connection = (
             self._postgres_connection_factory(native_export[0])
             if native_export is not None

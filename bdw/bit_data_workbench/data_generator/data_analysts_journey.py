@@ -367,7 +367,8 @@ class DataAnalystsJourneyGenerator(DataGenerator):
     description = (
         "Creates a fully synthetic 2022–2026 cantonal business-tax journey: "
         "25 electronic canton Parquet files in S3 and a curated PostgreSQL table. "
-        "Upload the supplied Aargau CSV manually to complete the cross-source UNION."
+        "Upload the supplied Aargau file manually as Plain CSV (not Parquet or JSON) "
+        "to complete the cross-source UNION."
     )
     target_kind = "journey"
     tree_path = JOURNEY_TREE_PATH
@@ -391,6 +392,12 @@ class DataAnalystsJourneyGenerator(DataGenerator):
             "label": "Aargau CSV (60 synthetic monthly rows)",
             "downloadUrl": JOURNEY_MANUAL_DOWNLOAD_URL,
             "targetPath": JOURNEY_MANUAL_PATH,
+            "storageFormat": "csv",
+            "storageFormatLabel": "Plain CSV (.csv)",
+            "storageFormatInstruction": (
+                "Im Ingestion Workbench «Plain CSV» auswählen. Nicht in Parquet "
+                "oder JSON umwandeln; Notebook-Zelle 1 liest exakt diese CSV-Datei."
+            ),
             "replaceExisting": True,
         },
     )
@@ -546,8 +553,8 @@ class DataAnalystsJourneyGenerator(DataGenerator):
                 ),
                 message=(
                     "Created 25 canton Parquet files and loaded 1,500 synthetic "
-                    "monthly rows into PostgreSQL. Upload the supplied Aargau CSV "
-                    f"to {JOURNEY_MANUAL_PATH}."
+                    "monthly rows into PostgreSQL. Upload the supplied Aargau file "
+                    f"as Plain CSV (not Parquet or JSON) to {JOURNEY_MANUAL_PATH}."
                 ),
             )
         except DataGenerationCancelled:

@@ -49,6 +49,41 @@ Keep these settings aligned with `Settings.from_env()`:
 - `S3_ACCESS_KEY_ID` and `S3_SECRET_ACCESS_KEY`
 - the `bit-ros-trusted-certs` ConfigMap mount
 
+## DaCa Integration
+
+For the Data Analyst's Journey, keep these DAAIF ConfigMap values aligned with
+the DaCa RHOS presentation stack:
+
+```yaml
+DACA_BASE_URL: http://daca-catalog-api:8001
+DACA_OPA_URL: http://daca-opa:8181/v1/data/daca/authz/decision
+DACA_UI_URL: https://<host of the daca-catalog Route>
+DAAIF_PUBLIC_BASE_URL: https://<host of the evo1-bdw Route>
+```
+
+The checked-in ConfigMap is a reference and still contains placeholders for
+other environment-specific values. Do not apply it unchanged over the
+production object. Update the four keys on the existing RHOS ConfigMap while
+preserving its remaining data.
+
+Resolve the two generated hosts from RHOS before applying the ConfigMap:
+
+```bash
+oc get route daca-catalog -n daai-brs-d -o jsonpath='https://{.spec.host}'
+oc get route evo1-bdw -n daai-brs-d -o jsonpath='https://{.spec.host}'
+```
+
+`DACA_BASE_URL` intentionally contains no `/api/v1` suffix; DAAIF appends the
+metadata-publication and product-status paths itself. All four values are
+non-secret. DaCa's internal tokens stay exclusively in `tib-daca-poc-secret`.
+
+After changing the ConfigMap, restart DAAIF so `envFrom` reloads the values:
+
+```bash
+oc rollout restart deployment/evo1-bdw -n daai-brs-d
+oc rollout status deployment/evo1-bdw -n daai-brs-d
+```
+
 ## Recommended Apply Order
 
 ```bash

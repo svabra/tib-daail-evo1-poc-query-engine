@@ -651,6 +651,7 @@ class QueryJobDefinition:
     started_at: str
     updated_at: str
     execution_sql: str = ""
+    result_preview_sql: str = ""
     completed_at: str | None = None
     duration_ms: float = 0.0
     progress: float | None = None
@@ -716,6 +717,7 @@ class QueryJobDefinition:
             "cellId": self.cell_id,
             "sql": self.sql,
             "executionSql": self.execution_sql,
+            "resultPreviewSql": self.result_preview_sql,
             "status": self.status,
             "startedAt": self.started_at,
             "updatedAt": self.updated_at,

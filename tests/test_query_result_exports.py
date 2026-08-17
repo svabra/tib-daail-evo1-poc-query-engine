@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 from pathlib import Path
 import sys
+import tempfile
 from types import SimpleNamespace
 from unittest import TestCase
 from unittest.mock import patch
@@ -233,6 +234,31 @@ class QueryResultExportTests(TestCase):
 
         self.assertEqual(artifact.local_path.read_text(encoding="utf-8").splitlines(), ["1;alpha", "2;beta"])
 
+    def test_failed_download_removes_partial_export_directory(self) -> None:
+        job = make_truncated_job()
+
+        def fail_connection_factory():
+            raise RuntimeError("simulated export replay failure")
+
+        manager = QueryResultExportManager(
+            settings=make_settings(),
+            connection_factory=fail_connection_factory,
+            postgres_connection_factory=lambda alias: None,
+            query_job_resolver=lambda job_id: job,
+        )
+
+        with tempfile.TemporaryDirectory() as root:
+            export_dir = Path(root) / "bdw-query-export-test"
+            export_dir.mkdir()
+            with patch(
+                "bit_data_workbench.backend.query_result_exports.tempfile.mkdtemp",
+                return_value=str(export_dir),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "simulated export replay failure"):
+                    manager.download(job_id="job-1", export_format="csv")
+
+            self.assertFalse(export_dir.exists())
+
     def test_download_writes_xml_with_custom_root_and_row_names(self) -> None:
         artifact = make_manager().download(
             job_id="job-1",
@@ -334,6 +360,60 @@ class QueryResultExportTests(TestCase):
         self.assertEqual(lines[0], "id")
         self.assertEqual(lines[200], "199")
         self.assertEqual(lines[250], "249")
+
+    def test_truncated_duckdb_export_uses_prepared_execution_sql(self) -> None:
+        connection = FakeDuckConnection([(value,) for value in range(250)])
+        job = make_truncated_job()
+        job.sql = 'select id from s3."source-bucket"."source/result.parquet"'
+        job.execution_sql = (
+            "select id from read_parquet('s3://source-bucket/source/result.parquet')"
+        )
+        manager = QueryResultExportManager(
+            settings=make_settings(),
+            connection_factory=lambda: connection,
+            postgres_connection_factory=lambda alias: None,
+            query_job_resolver=lambda job_id: job,
+        )
+
+        artifact = manager.download(job_id="job-1", export_format="csv")
+
+        self.assertEqual(connection.executed_sql, [job.execution_sql])
+        self.assertEqual(
+            len(artifact.local_path.read_text(encoding="utf-8").splitlines()),
+            251,
+        )
+
+    def test_truncated_materialized_stage_export_uses_result_preview_sql(self) -> None:
+        connection = FakeDuckConnection([(value,) for value in range(250)])
+        job = make_truncated_job()
+        job.data_sources = ["pg_oltp"]
+        job.sql = 'select id from s3."source-bucket"."source/result.parquet"'
+        job.execution_sql = (
+            "COPY (select id from read_parquet('s3://source-bucket/source/result.parquet')) "
+            "TO 's3://stage-bucket/results/stage.parquet' (FORMAT PARQUET)"
+        )
+        job.result_preview_sql = (
+            "select * from read_parquet('s3://stage-bucket/results/stage.parquet')"
+        )
+
+        def fail_postgres_connection(_alias: str):
+            raise AssertionError("A stage preview must not replay through PostgreSQL.")
+
+        manager = QueryResultExportManager(
+            settings=make_settings(),
+            connection_factory=lambda: connection,
+            postgres_connection_factory=fail_postgres_connection,
+            query_job_resolver=lambda job_id: job,
+        )
+
+        artifact = manager.download(job_id="job-1", export_format="csv")
+
+        self.assertEqual(connection.executed_sql, [job.result_preview_sql])
+        self.assertNotIn("COPY", connection.executed_sql[0])
+        self.assertEqual(
+            len(artifact.local_path.read_text(encoding="utf-8").splitlines()),
+            251,
+        )
 
     def test_non_truncated_export_uses_cached_rows_without_rerunning_sql(self) -> None:
         def fail_connection_factory():
