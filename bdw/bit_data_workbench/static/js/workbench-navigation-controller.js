@@ -211,7 +211,7 @@ export function createWorkbenchNavigationController(helpers) {
       event.preventDefault();
       event.stopPropagation();
       closeSettingsMenus();
-      await showFeatureListDialog();
+      await showFeatureListDialog(openFeatureListButton);
       return true;
     }
 

@@ -411,11 +411,13 @@ export function initializeHomeNotebookSearch(root = document) {
   const input = page.querySelector("[data-home-notebook-search-input]");
   const feedback = page.querySelector("[data-home-notebook-search-feedback]");
   const resultsRoot = page.querySelector("[data-home-notebook-search-results]");
+  const allResultsLink = page.querySelector("[data-home-notebook-search-all]");
   if (
     !(form instanceof HTMLFormElement) ||
     !(input instanceof HTMLInputElement) ||
     !(feedback instanceof HTMLElement) ||
     !(resultsRoot instanceof HTMLElement) ||
+    !(allResultsLink instanceof HTMLAnchorElement) ||
     form.dataset.bound === "true"
   ) {
     return;
@@ -433,14 +435,39 @@ export function initializeHomeNotebookSearch(root = document) {
     input.setAttribute("aria-expanded", String(expanded));
   }
 
+  function syncActiveResultState() {
+    resultsRoot.querySelectorAll("[data-home-notebook-result-index]").forEach((link) => {
+      const selected = Number(link.dataset.homeNotebookResultIndex) === activeIndex;
+      link.classList.toggle("is-active", selected);
+      link.setAttribute("aria-selected", String(selected));
+    });
+    if (activeIndex >= 0) {
+      input.setAttribute("aria-activedescendant", `home-notebook-result-${activeIndex}`);
+    } else {
+      input.removeAttribute("aria-activedescendant");
+    }
+  }
+
+  function syncAllResultsLink(query, totalCount, visibleCount) {
+    const showLink = totalCount > visibleCount;
+    allResultsLink.hidden = !showLink;
+    if (!showLink) {
+      allResultsLink.href = "/search";
+      allResultsLink.textContent = "Alle Ergebnisse in der Expertensuche anzeigen";
+      return;
+    }
+    allResultsLink.href = `/search?q=${encodeURIComponent(query)}`;
+    allResultsLink.textContent = `Alle ${totalCount} Ergebnisse in der Expertensuche anzeigen`;
+  }
+
   function render() {
     const query = input.value.trim();
-    form.querySelector("[data-home-notebook-search-all]")?.remove();
     const preview = searchWorkbenchPreview(items, query, WORKBENCH_LIVE_RESULT_LIMIT);
     results = preview.items;
     if (!query) {
       activeIndex = -1;
       resultsRoot.replaceChildren();
+      syncAllResultsLink("", 0, 0);
       feedback.textContent = loaded
         ? "Tipp: Suchen Sie nach Notebook, Data Source, Datenobjekt oder DAAIF-Datenprodukt."
         : "Suchindex wird geladen …";
@@ -450,6 +477,7 @@ export function initializeHomeNotebookSearch(root = document) {
     if (!workbenchSearchIsReady(query)) {
       activeIndex = -1;
       resultsRoot.replaceChildren();
+      syncAllResultsLink("", 0, 0);
       feedback.textContent = `Geben Sie mindestens ${WORKBENCH_SEARCH_MIN_LENGTH} Zeichen ein.`;
       input.removeAttribute("aria-activedescendant");
       return;
@@ -459,19 +487,8 @@ export function initializeHomeNotebookSearch(root = document) {
       ? `${preview.totalCount} Treffer gefunden.`
       : "Keine passenden Inhalte gefunden.";
     resultsRoot.innerHTML = results.map((item, index) => resultMarkup(item, index, activeIndex)).join("");
-    if (preview.totalCount > results.length) {
-      resultsRoot.insertAdjacentHTML(
-        "afterend",
-        `<a class="home-notebook-search-all" data-home-notebook-search-all href="/search?q=${encodeURIComponent(
-          query
-        )}">Alle ${preview.totalCount} Ergebnisse in der Expertensuche anzeigen</a>`
-      );
-    }
-    if (activeIndex >= 0) {
-      input.setAttribute("aria-activedescendant", `home-notebook-result-${activeIndex}`);
-    } else {
-      input.removeAttribute("aria-activedescendant");
-    }
+    syncAllResultsLink(query, preview.totalCount, results.length);
+    syncActiveResultState();
   }
 
   loadWorkbenchSearchIndex()
@@ -545,7 +562,7 @@ export function initializeHomeNotebookSearch(root = document) {
     const index = Number(link.dataset.homeNotebookResultIndex);
     if (Number.isInteger(index) && index !== activeIndex) {
       activeIndex = index;
-      render();
+      syncActiveResultState();
     }
   });
   render();

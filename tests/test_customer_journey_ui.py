@@ -18,12 +18,16 @@ STATIC_ROOT = BDW_ROOT / "bit_data_workbench" / "static"
 if str(BDW_ROOT) not in sys.path:
     sys.path.insert(0, str(BDW_ROOT))
 
-from bit_data_workbench.api.workbench_metadata import notebook_search_index
+from bit_data_workbench.api.workbench_metadata import (
+    feature_release_notes,
+    notebook_search_index,
+)
 from bit_data_workbench.backend.notebook_search import notebook_search_items
 from bit_data_workbench.backend.runbooks import build_runbook_tree
 from bit_data_workbench.data_generator.registry import DataGeneratorRegistry
 from bit_data_workbench.backend.static_assets import VersionedStaticFiles
 from bit_data_workbench.models import NotebookDefinition
+from bit_data_workbench.release_notes import release_notes
 from bit_data_workbench.web.router import ingestion_workbench_partial, sidebar_partial
 
 
@@ -119,6 +123,56 @@ class CustomerJourneyUiTests(unittest.TestCase):
         )
         self.assertEqual(replay.status_code, 304)
 
+    def test_version_overlay_opens_the_current_daca_aligned_feature_list(self) -> None:
+        template = (
+            BDW_ROOT / "bit_data_workbench/templates/index.html"
+        ).read_text(encoding="utf-8")
+        settings = (
+            BDW_ROOT / "bit_data_workbench/templates/partials/federal_header.html"
+        ).read_text(encoding="utf-8")
+        dialogs = (STATIC_ROOT / "js/dialogs.js").read_text(encoding="utf-8")
+        controller = (STATIC_ROOT / "js/feature-list-controller.js").read_text(
+            encoding="utf-8"
+        )
+        styles = (STATIC_ROOT / "css/app.css").read_text(encoding="utf-8")
+
+        self.assertIn('class="app-version-feature-trigger"', template)
+        self.assertIn('aria-controls="daaif-feature-list-dialog"', template)
+        self.assertIn('aria-haspopup="dialog"', template)
+        self.assertIn("Featureliste anzeigen", template)
+        self.assertIn('aria-controls="daaif-feature-list-dialog"', settings)
+        self.assertIn('id="daaif-feature-list-dialog"', dialogs)
+        self.assertIn('aria-labelledby="daaif-feature-list-title"', dialogs)
+        self.assertIn('aria-describedby="daaif-feature-list-introduction"', dialogs)
+        self.assertIn("data-feature-list-close", dialogs)
+        self.assertIn("feature-list-dialog-note", dialogs)
+        self.assertIn("syncTriggerExpanded(true)", controller)
+        self.assertIn('dialog.addEventListener("cancel", onCancel)', controller)
+        self.assertIn('event.target === dialog', controller)
+        self.assertIn("focusableReturnTarget(returnTarget)?.focus()", controller)
+        self.assertIn("pointer-events: auto", styles)
+        self.assertIn("width: min(680px, calc(100vw - 32px))", styles)
+        self.assertIn("max-height: calc(100dvh - 16px)", styles)
+
+        notes = release_notes()
+        current = notes[0]
+        feature_list = current["featureList"]
+        self.assertEqual(feature_list["title"], "Was kann DAAIF Factory?")
+        self.assertGreaterEqual(len(feature_list["features"]), 5)
+        self.assertTrue(
+            all(
+                item["title"] and item["description"]
+                for item in feature_list["features"]
+            )
+        )
+
+        response = feature_release_notes(if_none_match=None)
+        payload = loads(response.body)
+        self.assertEqual(payload[0]["version"], current["version"])
+        self.assertEqual(payload[0]["featureList"], feature_list)
+        replay = feature_release_notes(if_none_match=response.headers["etag"])
+        self.assertEqual(replay.status_code, 304)
+
     def test_browser_search_is_diacritic_insensitive_and_and_tokenized(self) -> None:
         module_uri = (STATIC_ROOT / "js/home-notebook-search.js").resolve().as_uri()
         script = f"""
@@ -141,6 +195,14 @@ class CustomerJourneyUiTests(unittest.TestCase):
           if (WORKBENCH_LIVE_RESULT_LIMIT !== 3 || workbenchSearchIsReady('a') || !workbenchSearchIsReady('ab')) process.exit(4);
           const source = normalizedDataSource({{source_id:'pg_olap', label:'PostgreSQL OLAP', classification:'Internal'}});
           const product = normalizedDataProduct({{productId:'p1', slug:'steuerzahlen', title:'Steuerzahlen', description:'DAAIF product'}});
+          const documentedProduct = normalizedDataProduct({{
+            productId:'p2',
+            slug:'kantonale-steuern',
+            title:'Kantonale Steuern',
+            documentationPath:'/dataproducts/custom-kantonale-steuern',
+          }});
+          if (product.targetUrl !== '/dataproducts/steuerzahlen') process.exit(7);
+          if (documentedProduct.targetUrl !== '/dataproducts/custom-kantonale-steuern') process.exit(8);
           const mixed = searchWorkbenchIndex([source, product], 'st', 3);
           if (mixed.length !== 2 || mixed.some((item) => !['source', 'product'].includes(item.kind))) process.exit(5);
           const preview = searchWorkbenchPreview([...items, ...items, ...items], 'journey', 3);
@@ -169,10 +231,17 @@ class CustomerJourneyUiTests(unittest.TestCase):
         self.assertIn('href="/ingestion-workbench"', template)
         self.assertIn('aria-expanded="false"', template)
         self.assertIn('role="combobox"', template)
+        self.assertIn("data-home-notebook-search-all", template)
+        self.assertIn('href="/search"', template)
         self.assertIn('form.addEventListener("focusin"', search)
         self.assertIn('form.addEventListener("focusout"', search)
         self.assertIn('form.classList.toggle("is-expanded", expanded)', search)
+        self.assertIn("syncActiveResultState", search)
+        self.assertIn("syncAllResultsLink", search)
+        self.assertNotIn('form.querySelector("[data-home-notebook-search-all]")?.remove()', search)
+        self.assertNotIn("activeIndex = index;\n      render();", search)
         self.assertIn(".home-notebook-search.is-expanded", styles)
+        self.assertIn(".home-notebook-search-all[hidden]", styles)
         self.assertIn("height: 540px", styles)
         self.assertIn("height: 218px", styles)
         self.assertIn("WORKBENCH_LIVE_RESULT_LIMIT = 3", search)

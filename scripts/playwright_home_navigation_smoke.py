@@ -49,7 +49,10 @@ async def open_home(page, args: argparse.Namespace) -> None:
         state="visible",
         timeout=args.timeout_ms,
     )
-    await page.wait_for_timeout(1000)
+    await page.wait_for_function(
+        "() => document.documentElement.dataset.workbenchInteractive === 'true'",
+        timeout=args.timeout_ms,
+    )
 
 
 async def click_control(locator, timeout_ms: int) -> None:

@@ -284,22 +284,47 @@ export function ensureFeatureListDialog() {
   }
 
   appendModalDialog(`
-    <dialog class="modal-dialog modal-dialog-wide" data-feature-list-dialog>
-      <form method="dialog" class="modal-card modal-card-wide" data-feature-list-form>
-        <div class="about-dialog-header">
-          <div class="about-dialog-copy">
-            <h2 class="modal-title">Feature list</h2>
-            <p class="modal-copy">
-              Recent user-facing changes and important fixes by release.
-            </p>
+    <dialog
+      id="daaif-feature-list-dialog"
+      class="modal-dialog feature-list-dialog"
+      aria-labelledby="daaif-feature-list-title"
+      aria-describedby="daaif-feature-list-introduction"
+      data-feature-list-dialog
+    >
+      <form method="dialog" class="feature-list-dialog-card" data-feature-list-form>
+        <header class="feature-list-dialog-header">
+          <div class="feature-list-dialog-heading">
+            <p class="feature-list-dialog-release" data-feature-list-release>Featureliste</p>
+            <h2 id="daaif-feature-list-title" data-feature-list-title>Was kann DAAIF Factory?</h2>
           </div>
-        </div>
-        <div class="feature-list-dialog-body" data-feature-list-body>
-        </div>
-        <menu class="modal-actions">
-          <button class="modal-button" type="submit" value="confirm" data-feature-list-submit>
-            Close
+          <button
+            class="feature-list-dialog-close"
+            type="submit"
+            value="close"
+            aria-label="Featureliste schliessen"
+            data-feature-list-close
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 5l14 14M19 5 5 19"></path>
+            </svg>
           </button>
+        </header>
+        <p
+          id="daaif-feature-list-introduction"
+          class="feature-list-dialog-introduction"
+          data-feature-list-introduction
+        ></p>
+        <div class="feature-list-dialog-body">
+          <ul class="feature-list-items" data-feature-list-body></ul>
+        </div>
+        <p class="feature-list-dialog-note" data-feature-list-note></p>
+        <menu class="feature-list-dialog-actions">
+          <button
+            class="modal-button modal-button-secondary"
+            type="submit"
+            value="close"
+            data-feature-list-submit
+          >Schliessen</button>
         </menu>
       </form>
     </dialog>

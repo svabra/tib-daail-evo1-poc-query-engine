@@ -12,7 +12,7 @@ import {
   queryExplainDialog,
   resultDownloadDialog,
   resultExportDialog,
-} from "./dialogs.js";
+} from "./dialogs.js?v=2026-08-17-feature-list-1";
 import {
   closeDialog,
   showConfirmDialog,
@@ -22,6 +22,7 @@ import {
 import { createIngestionController } from "./ingestion-controller.js";
 import { createIngestionUi } from "./ingestion-ui.js";
 import { createHomeUi } from "./home-ui.js";
+import { createFeatureListController } from "./feature-list-controller.js?v=2026-08-17-feature-list-1";
 import { initializeWorkbenchExpertSearch } from "./expert-search.js";
 import {
   initializeDaaifDemoIdentity,
@@ -190,7 +191,7 @@ import { createSourceQueryActions } from "./source-query-actions.js";
 import { createSourceSidebarClickController } from "./source-sidebar-click-controller.js";
 import { createSourceTreeController } from "./source-tree-controller.js";
 import { formatSqlText } from "./sql-formatter.js";
-import { createWorkbenchNavigationController } from "./workbench-navigation-controller.js";
+import { createWorkbenchNavigationController } from "./workbench-navigation-controller.js?v=2026-08-17-feature-list-1";
 import { createWorkbenchStorage } from "./workbench-storage.js";
 
 createAppTooltipController().install();
@@ -890,6 +891,13 @@ const dataSourceExplorerController = createDataSourceExplorerController({
   renderLocalWorkspaceSidebarEntries: () => renderLocalWorkspaceSidebarEntries(),
   showMessageDialog,
   viewSourceData,
+});
+
+const featureListController = createFeatureListController({
+  applicationVersion,
+  ensureDialog: ensureFeatureListDialog,
+  ensureReleaseNotes: ensureFeatureReleaseNotes,
+  escapeHtml,
 });
 
 const {
@@ -1734,47 +1742,6 @@ const {
   workspaceNotebookId,
 });
 
-function readFeatureReleaseNotes() {
-  const element = document.getElementById("feature-release-notes");
-  if (!element?.textContent) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(element.textContent);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch (_error) {
-    return [];
-  }
-}
-
-function featureReleaseMarkup(release, currentVersion) {
-  const version = String(release?.version || "").trim();
-  const releasedAt = String(release?.releasedAt || "").trim();
-  const features = Array.isArray(release?.features)
-    ? release.features.map((feature) => String(feature).trim()).filter(Boolean)
-    : [];
-  const isCurrent = version && version === currentVersion;
-  const featureItems = features.length
-    ? features.map((feature) => `<li>${escapeHtml(feature)}</li>`).join("")
-    : "<li>No release notes captured for this version.</li>";
-
-  return `
-    <section class="feature-release-entry">
-      <header class="feature-release-header">
-        <div class="feature-release-title-row">
-          <h3 class="feature-release-version">Version ${escapeHtml(version || "unknown")}</h3>
-          ${isCurrent ? '<span class="feature-release-current">Current</span>' : ""}
-        </div>
-        <p class="feature-release-time">${escapeHtml(formatVersionTimestamp(releasedAt))}</p>
-      </header>
-      <ul class="feature-release-items">
-        ${featureItems}
-      </ul>
-    </section>
-  `;
-}
-
 function showAboutDialog() {
   const dialog = ensureAboutDialog();
   const versionNode = dialog.querySelector("[data-about-version]");
@@ -1789,28 +1756,8 @@ function showAboutDialog() {
   });
 }
 
-async function showFeatureListDialog() {
-  try {
-    await ensureFeatureReleaseNotes();
-  } catch (error) {
-    console.error("Failed to load feature history.", error);
-  }
-  const dialog = ensureFeatureListDialog();
-  const body = dialog.querySelector("[data-feature-list-body]");
-  const currentVersion = applicationVersion();
-  const releases = readFeatureReleaseNotes();
-
-  if (body) {
-    body.innerHTML = releases.length
-      ? releases.map((release) => featureReleaseMarkup(release, currentVersion)).join("")
-      : '<p class="modal-copy">No feature history is available yet.</p>';
-  }
-
-  return new Promise((resolve) => {
-    const onClose = () => resolve();
-    dialog.addEventListener("close", onClose, { once: true });
-    dialog.showModal();
-  });
+function showFeatureListDialog(trigger) {
+  return featureListController.show(trigger);
 }
 
 async function promptClearLocalWorkspace() {
@@ -12682,6 +12629,7 @@ window.addEventListener("focus", () => {
   refreshVisibleCacheHydrationStatuses(document.getElementById("workspace-panel") || document);
 });
 
+document.documentElement.dataset.workbenchInteractive = "true";
 initializeEditors();
 initializeSidebarSearch();
 initializeNotebookTree();

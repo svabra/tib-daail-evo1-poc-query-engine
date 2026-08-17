@@ -23,7 +23,7 @@
       </section>
     </main>
   </div>
-  <aside class="app-version-overlay" aria-label="Laufzeitstatus">
+  <aside class="app-version-overlay" aria-label="DAAIF-Anwendungsversion und Laufzeitstatus">
     <div class="app-version-overlay-row">
       <span class="app-version-overlay-label">DAAIF Factory</span>
       <span class="app-version-overlay-value">V{{ runtime.image_version }}</span>
@@ -35,6 +35,14 @@
       <span class="app-version-overlay-label">Verbindungen</span>
       <span class="app-version-overlay-value" data-client-connections-count>0</span>
     </div>
+    <button
+      type="button"
+      class="app-version-feature-trigger"
+      data-open-feature-list
+      aria-haspopup="dialog"
+      aria-controls="daaif-feature-list-dialog"
+      aria-expanded="false"
+    >Featureliste anzeigen</button>
   </aside>
   <script
     id="source-options"

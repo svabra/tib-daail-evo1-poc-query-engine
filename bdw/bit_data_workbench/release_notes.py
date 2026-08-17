@@ -1,17 +1,82 @@
 from __future__ import annotations
 
 
-# Derived from git history through version 0.10.41. Keep entries concise and
+# Plain-language capabilities for the current build. The feature-list response
+# attaches these to the first release entry so the displayed version and the
+# runtime release notes cannot drift apart.
+CURRENT_FEATURE_LIST: dict[str, object] = {
+    "title": "Was kann DAAIF Factory?",
+    "introduction": (
+        "DAAIF Factory bündelt Datenzugriff, Analyse, Pipelines und die "
+        "Veröffentlichung von Datenprodukten in einer gemeinsamen Arbeitsumgebung."
+    ),
+    "pocNote": (
+        "Hinweis: Diese Liste beschreibt den aktuellen PoC-Stand. Einzelne "
+        "Abläufe sind simuliert und noch keine produktive Leistung."
+    ),
+    "features": [
+        {
+            "title": "Datenquellen finden und verstehen",
+            "description": (
+                "Durchsuchen Sie S3-, PostgreSQL- und lokale Quellen, prüfen Sie "
+                "Schemas und übernehmen Sie die passende Referenz direkt in Ihre Analyse."
+            ),
+        },
+        {
+            "title": "SQL und Python gemeinsam analysieren",
+            "description": (
+                "Erstellen Sie versionierte Notebooks, führen Sie SQL- und Python-Zellen "
+                "aus und vergleichen, speichern oder exportieren Sie Ergebnisse."
+            ),
+        },
+        {
+            "title": "Datenpipelines aufbauen und überwachen",
+            "description": (
+                "Verknüpfen Sie Notebook-Stufen über Abhängigkeiten, materialisieren Sie "
+                "Zwischenergebnisse in S3 und verfolgen Sie Status, Laufzeit und Zeilen."
+            ),
+        },
+        {
+            "title": "Daten kontrolliert einlesen und bereitstellen",
+            "description": (
+                "Importieren Sie Dateien, verwalten Sie Ziele im Shared Workspace und "
+                "publizieren Sie kuratierte Datenprodukte mit nachvollziehbaren Metadaten."
+            ),
+        },
+        {
+            "title": "Ressourcen und Qualität nachvollziehen",
+            "description": (
+                "Prüfen Sie Laufzeiten, CPU- und RAM-Verbrauch, Validierungshinweise und "
+                "frühere Ausführungen direkt am Ergebnis."
+            ),
+        },
+        {
+            "title": "Mit DaCa zusammenarbeiten",
+            "description": (
+                "Übergeben Sie veröffentlichte Datenprodukte an die DaCa-Governance und "
+                "behalten Sie Identität, Freigaben und Endpunkte konsistent im Blick."
+            ),
+        },
+    ],
+}
+
+
+# Derived from git history through version 0.10.42. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
     {
-        "version": "0.10.41",
+        "version": "0.10.42",
         "releasedAt": "2026-08-17T00:22:22+02:00",
         "features": [
             (
                 "DAAIF now delivers the DaCa-aligned federal header, shared "
                 "PoC identities, rotating Swiss landing-page imagery, notebook "
                 "search, and the governed end-to-end Data Analyst's Journey."
+            ),
+            (
+                "The fixed runtime version overlay now opens a DaCa-aligned "
+                "current-feature dialog with keyboard focus management, backdrop "
+                "closing, and responsive scrolling."
             ),
             (
                 "CSV ingestion now accepts a complete s3:// destination, "
@@ -2213,7 +2278,7 @@ RELEASE_NOTES: list[dict[str, object]] = [
 
 
 def release_notes() -> list[dict[str, object]]:
-    return [
+    notes = [
         {
             "version": str(entry["version"]),
             "releasedAt": str(entry["releasedAt"]),
@@ -2221,3 +2286,17 @@ def release_notes() -> list[dict[str, object]]:
         }
         for entry in RELEASE_NOTES
     ]
+    if notes:
+        notes[0]["featureList"] = {
+            "title": str(CURRENT_FEATURE_LIST["title"]),
+            "introduction": str(CURRENT_FEATURE_LIST["introduction"]),
+            "pocNote": str(CURRENT_FEATURE_LIST["pocNote"]),
+            "features": [
+                {
+                    "title": str(feature["title"]),
+                    "description": str(feature["description"]),
+                }
+                for feature in CURRENT_FEATURE_LIST["features"]
+            ],
+        }
+    return notes

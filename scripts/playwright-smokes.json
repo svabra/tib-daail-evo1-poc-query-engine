@@ -51,6 +51,16 @@
       "enabledByDefault": true
     },
     {
+      "id": "feature-list",
+      "script": "playwright_feature_list_smoke.py",
+      "enabledByDefault": true
+    },
+    {
+      "id": "expert-search-navigation",
+      "script": "playwright_expert_search_navigation_smoke.py",
+      "enabledByDefault": true
+    },
+    {
       "id": "home-workbench-tiles",
       "script": "playwright_home_tiles_smoke.py",
       "enabledByDefault": true
