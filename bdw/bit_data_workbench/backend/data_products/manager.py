@@ -96,6 +96,10 @@ class DataProductManager:
         relation_fields_provider: Callable[[str], list],
         catalog_provider: Callable[[], list[SourceCatalog]],
         s3_bucket_snapshot_provider: Callable[..., dict[str, object]],
+        s3_relation_source_resolver: Callable[
+            [dict[str, object]], dict[str, object]
+        ]
+        | None = None,
     ) -> None:
         self._settings = settings
         self._store = store
@@ -103,6 +107,7 @@ class DataProductManager:
         self._relation_fields_provider = relation_fields_provider
         self._catalog_provider = catalog_provider
         self._s3_bucket_snapshot_provider = s3_bucket_snapshot_provider
+        self._s3_relation_source_resolver = s3_relation_source_resolver
         self._publication_lock = RLock()
         self._publication_reservations: dict[
             str, _DataProductPublicationReservation
@@ -970,6 +975,9 @@ class DataProductManager:
         if not isinstance(source, dict):
             raise ValueError("A source descriptor is required.")
 
+        if self._s3_relation_source_resolver is not None:
+            source = self._s3_relation_source_resolver(source)
+
         raw_source_kind = str(
             source.get("sourceKind") or source.get("source_kind") or ""
         ).strip()
@@ -1052,6 +1060,8 @@ class DataProductManager:
                 source_kind="relation",
                 source_id=raw_source_id or self._source_id_for_relation(raw_relation),
                 relation=raw_relation,
+                bucket=raw_bucket,
+                key=raw_key,
                 source_display_name=raw_display_name or raw_relation.split(".")[-1],
                 source_platform=raw_platform or self._platform_for_source_id(raw_source_id, raw_relation),
             )

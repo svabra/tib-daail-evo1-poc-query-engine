@@ -276,6 +276,11 @@
       "enabledByDefault": false
     },
     {
+      "id": "data-analysts-journey-publication",
+      "script": "playwright_data_analysts_journey_publication.py",
+      "enabledByDefault": false
+    },
+    {
       "id": "data-exchange",
       "script": "playwright_data_exchange_smoke.py",
       "enabledByDefault": false

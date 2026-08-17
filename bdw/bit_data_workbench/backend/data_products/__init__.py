@@ -17,6 +17,7 @@ from .manager import (
 )
 from .registry import DataProductOverwriteConflict, DataProductStore
 from .publication import DacaPublicationCoordinator
+from .source_resolution import S3RelationSourceResolver
 
 __all__ = [
     "DEFAULT_PUBLIC_DATA_PRODUCT_LIMIT",
@@ -33,4 +34,5 @@ __all__ = [
     "DataProductOverwriteConflict",
     "DataProductPublicStreamArtifact",
     "DataProductStore",
+    "S3RelationSourceResolver",
 ]
