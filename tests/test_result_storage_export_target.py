@@ -31,6 +31,7 @@ class ResultStorageExportTargetTests(TestCase):
           const job = {json.dumps(job)};
           assert.deepEqual(resultStorageExportTarget(job), {{
             bucket: 'data-analysts-journey',
+            key: 'products/kantonale-gewerbesteuer-soll-ist-2022-2026.parquet',
             prefix: 'products/',
             fileName: 'kantonale-gewerbesteuer-soll-ist-2022-2026.parquet',
             exportFormat: 'parquet',
@@ -59,3 +60,19 @@ class ResultStorageExportTargetTests(TestCase):
         self.assertIn("resultExportDialogState.selectedBucket = configuredTarget.bucket", app_source)
         self.assertIn("resultExportDialogState.selectedPrefix = configuredTarget.prefix", app_source)
         self.assertIn("already materialized at", app_source)
+
+    def test_journey_publication_uses_the_completed_storage_target(self) -> None:
+        app_source = (
+            REPO_ROOT / "bdw/bit_data_workbench/static/js/app.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "const job = queryJobForResultActionTarget(publishJourneyDataProductTrigger);",
+            app_source,
+        )
+        self.assertIn("bucket: configuredTarget.bucket", app_source)
+        self.assertIn("key: configuredTarget.key", app_source)
+        self.assertNotIn(
+            "data_analysts_journey_6f15a669.kantonale_gewerbesteuer_soll_ist_2022_2026",
+            app_source,
+        )

@@ -59,6 +59,7 @@ from .data_products import (
     DacaPublicationCoordinator,
     DataProductManager,
     DataProductStore,
+    S3RelationSourceResolver,
 )
 from .data_exchange import (
     DataExchangeManager,
@@ -474,6 +475,15 @@ class WorkbenchService:
                 S3DataSourceDiscoverer(settings),
             ],
         )
+        s3_relation_source_resolver = S3RelationSourceResolver(
+            sync_s3_buckets=self._data_source_discovery.sync_s3_buckets,
+            relation_specs_provider=self._data_source_discovery.s3_relation_specs,
+            relation_fields_provider=self.source_object_fields,
+            object_head_provider=lambda bucket, key: s3_client(settings).head_object(
+                Bucket=bucket,
+                Key=key,
+            ),
+        )
         self._data_products = DataProductManager(
             settings=settings,
             store=self._data_product_store,
@@ -481,6 +491,7 @@ class WorkbenchService:
             relation_fields_provider=self.source_object_fields,
             catalog_provider=self.catalogs,
             s3_bucket_snapshot_provider=self.s3_explorer_snapshot,
+            s3_relation_source_resolver=s3_relation_source_resolver.resolve,
         )
         self._daca_publications = DacaPublicationCoordinator(
             manager=self._data_products,

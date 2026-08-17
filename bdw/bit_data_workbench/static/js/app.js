@@ -11869,12 +11869,22 @@ document.body.addEventListener("click", async (event) => {
   if (publishJourneyDataProductTrigger) {
     event.preventDefault();
     event.stopPropagation();
+    const job = queryJobForResultActionTarget(publishJourneyDataProductTrigger);
+    const configuredTarget = resultStorageExportTarget(job);
+    if (!configuredTarget) {
+      await showMessageDialog({
+        title: "Data product publish failed",
+        copy: "The completed Shared Workspace result could not be resolved.",
+      });
+      return;
+    }
     await dataProductsController.openPublishDialog({
       source: {
         sourceKind: "relation",
         sourceId: "s3",
-        relation:
-          "data_analysts_journey_6f15a669.kantonale_gewerbesteuer_soll_ist_2022_2026",
+        relation: "",
+        bucket: configuredTarget.bucket,
+        key: configuredTarget.key,
         sourceDisplayName: "Kantonale Gewerbesteuer Soll/Ist 2022–2026",
         sourcePlatform: "s3",
       },

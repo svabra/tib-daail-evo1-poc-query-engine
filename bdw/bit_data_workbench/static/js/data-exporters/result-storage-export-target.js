@@ -50,6 +50,7 @@ export function resultStorageExportTarget(job) {
   const prefix = segments.length ? `${segments.join("/")}/` : "";
   return {
     bucket,
+    key,
     prefix,
     fileName,
     exportFormat,
