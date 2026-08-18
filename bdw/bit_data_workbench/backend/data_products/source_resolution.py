@@ -3,6 +3,29 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 
 
+def relation_backed_daca_source(source: dict[str, object]) -> dict[str, object]:
+    """Treat a tabular S3 object as a relation when DaCa metadata is requested.
+
+    Local-only object publications keep their raw byte-stream behavior. DaCa,
+    however, requires a typed schema and catalogs the DAAIF endpoint as JSON, so
+    managed S3 objects must go through discovery and relation resolution first.
+    """
+
+    resolved = dict(source)
+    source_kind = str(
+        resolved.get("sourceKind") or resolved.get("source_kind") or ""
+    ).strip()
+    source_id = str(
+        resolved.get("sourceId") or resolved.get("source_id") or ""
+    ).strip()
+    if source_kind != "object" or source_id != "s3":
+        return resolved
+
+    resolved["sourceKind"] = "relation"
+    resolved["relation"] = ""
+    return resolved
+
+
 class S3RelationSourceResolver:
     """Resolve a stored S3 result to the relation created by source discovery."""
 

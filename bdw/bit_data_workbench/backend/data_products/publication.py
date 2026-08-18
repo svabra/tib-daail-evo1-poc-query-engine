@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 from ...models import DacaPublicationReference, DataProductDefinition
 from .daca_client import DacaMetadataPublicationClient, DacaPublicationError
 from .manager import DataProductManager
+from .source_resolution import relation_backed_daca_source
 
 
 JOURNEY_SLUG = "kantonale-gewerbesteuer-soll-ist-2022-2026"
@@ -138,7 +139,7 @@ class DacaPublicationCoordinator:
             except KeyError:
                 existing_product = None
         candidate = self._manager.reserve_product(
-            source=source,
+            source=relation_backed_daca_source(source),
             title=title,
             slug=slug,
             description=description,

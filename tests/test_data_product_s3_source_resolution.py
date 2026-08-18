@@ -26,6 +26,7 @@ from bit_data_workbench.backend.data_products.publication import (  # noqa: E402
 from bit_data_workbench.backend.data_products.registry import DataProductStore  # noqa: E402
 from bit_data_workbench.backend.data_products.source_resolution import (  # noqa: E402
     S3RelationSourceResolver,
+    relation_backed_daca_source,
 )
 from bit_data_workbench.models import SourceField  # noqa: E402
 
@@ -34,6 +35,28 @@ OBJECT_PATH = "s3://data-analysts-journey/products/tax-product.parquet"
 
 
 class S3RelationSourceResolverTests(unittest.TestCase):
+    def test_daca_converts_s3_object_to_relation_candidate_only(self) -> None:
+        source = {
+            "sourceKind": "object",
+            "sourceId": "s3",
+            "bucket": "bfs",
+            "key": "pipeline-demo.parquet",
+        }
+
+        resolved = relation_backed_daca_source(source)
+
+        self.assertEqual(resolved["sourceKind"], "relation")
+        self.assertEqual(resolved["relation"], "")
+        self.assertEqual(resolved["bucket"], "bfs")
+        self.assertEqual(resolved["key"], "pipeline-demo.parquet")
+        self.assertEqual(source["sourceKind"], "object")
+        self.assertEqual(
+            relation_backed_daca_source(
+                {"sourceKind": "object", "sourceId": "workspace.local"}
+            )["sourceKind"],
+            "object",
+        )
+
     def test_uses_exact_object_path_and_actual_collision_safe_relation(self) -> None:
         sync_calls: list[tuple[tuple[str, ...], bool]] = []
         actual_relation = "data_analysts_journey.tax_product_a19f27c1"
@@ -270,7 +293,7 @@ class DataProductManagerS3ResolutionTests(unittest.TestCase):
 
             created = coordinator.create_managed_product(
                 source={
-                    "sourceKind": "relation",
+                    "sourceKind": "object",
                     "sourceId": "s3",
                     "bucket": "data-analysts-journey",
                     "key": "products/tax-product.parquet",
@@ -339,7 +362,7 @@ class DataProductManagerS3ResolutionTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "not queryable"):
                 coordinator.create_managed_product(
                     source={
-                        "sourceKind": "relation",
+                        "sourceKind": "object",
                         "sourceId": "s3",
                         "bucket": "data-analysts-journey",
                         "key": "products/missing.parquet",
