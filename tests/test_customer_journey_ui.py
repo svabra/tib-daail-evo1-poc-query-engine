@@ -480,6 +480,9 @@ class CustomerJourneyUiTests(unittest.TestCase):
         controller = (STATIC_ROOT / "js/data-products-controller.js").read_text(
             encoding="utf-8"
         )
+        source_helper = (STATIC_ROOT / "js/data-products-source.js").read_text(
+            encoding="utf-8"
+        )
         ui = (STATIC_ROOT / "js/data-products-ui.js").read_text(encoding="utf-8")
         styles = (STATIC_ROOT / "css/app.css").read_text(encoding="utf-8")
 
@@ -497,7 +500,32 @@ class CustomerJourneyUiTests(unittest.TestCase):
         self.assertIn("publicationState.overwriteConfirmed = false", controller)
         self.assertIn("invalidatePublicationPreview()", controller)
         self.assertIn("publishToDacaInput.disabled = dacaManagedExisting", controller)
+        self.assertIn("function publicationSourceDescriptor()", controller)
+        self.assertIn("dataProductSourceForPublication", controller)
+        self.assertIn('source.sourceKind === "object"', source_helper)
+        self.assertIn('sourceKind: "relation"', source_helper)
+        self.assertIn("typed relation", controller)
         self.assertIn("Data product replaced", controller)
+        module_uri = (STATIC_ROOT / "js/data-products-source.js").resolve().as_uri()
+        script = f"""
+          import {{ dataProductSourceForPublication }} from {module_uri!r};
+          const source = {{
+            sourceKind: 'object', sourceId: 's3', bucket: 'bfs',
+            key: 'pipeline-demo.parquet'
+          }};
+          const managed = dataProductSourceForPublication(source, {{ publishToDaca: true }});
+          if (managed.sourceKind !== 'relation' || managed.relation !== '') process.exit(2);
+          if (managed.bucket !== 'bfs' || managed.key !== 'pipeline-demo.parquet') process.exit(3);
+          if (source.sourceKind !== 'object' || 'relation' in source) process.exit(4);
+          if (dataProductSourceForPublication(source).sourceKind !== 'object') process.exit(5);
+          const local = {{ sourceKind: 'local-object', sourceId: 'workspace.local' }};
+          if (dataProductSourceForPublication(local, {{ publishToDaca: true }}) !== local) process.exit(6);
+        """
+        subprocess.run(
+            ["node", "--input-type=module", "--eval", script],
+            check=True,
+            cwd=REPO_ROOT,
+        )
         slug_handler = controller.split(
             'if (event.target.matches("[data-data-product-slug-input]")) {', 1
         )[1].split(

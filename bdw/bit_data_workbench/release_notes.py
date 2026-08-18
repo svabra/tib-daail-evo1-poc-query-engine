@@ -61,9 +61,26 @@ CURRENT_FEATURE_LIST: dict[str, object] = {
 }
 
 
-# Derived from git history through version 0.10.45. Keep entries concise and
+# Derived from git history through version 0.10.46. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.46",
+        "releasedAt": "2026-08-18T08:09:33+02:00",
+        "features": [
+            (
+                "Publishing a tabular S3 object to DaCa now automatically resolves "
+                "the Parquet, CSV, or JSON object as a typed relation. DaCa receives "
+                "real schema fields and the DAAIF endpoint serves paginated JSON, "
+                "while local-only object publications retain their raw download behavior."
+            ),
+            (
+                "The publish preview now explains the relation conversion and is "
+                "regenerated when Publish to DaCa is changed, preventing the preview "
+                "and final endpoint contracts from diverging."
+            ),
+        ],
+    },
     {
         "version": "0.10.45",
         "releasedAt": "2026-08-17T14:39:43+02:00",

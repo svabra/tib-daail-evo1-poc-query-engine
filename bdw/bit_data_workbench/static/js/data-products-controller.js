@@ -1,5 +1,7 @@
 import { closeDialog } from "./dialog-manager.js";
 
+import { dataProductSourceForPublication } from "./data-products-source.js";
+
 export function createDataProductsController(helpers) {
   const {
     fetchJsonOrThrow,
@@ -163,6 +165,12 @@ export function createDataProductsController(helpers) {
       (option) => option.optionId === publicationState.selectedSourceOptionId
     );
     return selectedOption?.source ?? null;
+  }
+
+  function publicationSourceDescriptor() {
+    return dataProductSourceForPublication(currentSourceDescriptor(), {
+      publishToDaca: publicationState.publishToDaca,
+    });
   }
 
   function sourceLabel(source) {
@@ -399,7 +407,9 @@ export function createDataProductsController(helpers) {
     if (source.sourceKind === "bucket") {
       responseCopy += " Consumers receive a JSON bucket listing with optional prefix filtering.";
     } else if (source.sourceKind === "object") {
-      responseCopy += " Consumers receive the raw object content with the original or inferred media type.";
+      responseCopy += publicationState.publishToDaca
+        ? " DAAIF registers this tabular object as a typed relation and consumers receive paginated JSON rows."
+        : " Consumers receive the raw object content with the original or inferred media type.";
     } else {
       responseCopy += " Consumers receive paginated JSON rows with columns, items, limit, offset, and hasMore.";
     }
@@ -414,7 +424,7 @@ export function createDataProductsController(helpers) {
 
   function publicationPayload({ includeOverwrite = false } = {}) {
     const payload = {
-      source: currentSourceDescriptor(),
+      source: publicationSourceDescriptor(),
       title: publicationState.title,
       slug: publicationState.slug,
       description: publicationState.description,
@@ -1128,7 +1138,13 @@ export function createDataProductsController(helpers) {
         return true;
       }
       if (event.target.matches("[data-data-product-publish-to-daca]")) {
+        const changed = publicationState.publishToDaca !== event.target.checked;
         publicationState.publishToDaca = event.target.checked;
+        if (changed && publicationState.preview) {
+          invalidatePublicationPreview();
+          publicationState.step = 3;
+          renderPublicationDialog();
+        }
         return true;
       }
       if (event.target.matches("[data-data-product-overwrite-confirm]")) {
