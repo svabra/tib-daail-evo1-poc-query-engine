@@ -315,7 +315,7 @@ export function ensureFeatureListDialog() {
           data-feature-list-introduction
         ></p>
         <div class="feature-list-dialog-body">
-          <ul class="feature-list-items" data-feature-list-body></ul>
+          <div class="feature-list-releases" data-feature-list-body></div>
         </div>
         <p class="feature-list-dialog-note" data-feature-list-note></p>
         <menu class="feature-list-dialog-actions">

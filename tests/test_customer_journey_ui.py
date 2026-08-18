@@ -79,9 +79,21 @@ class CustomerJourneyUiTests(unittest.TestCase):
         header = (BDW_ROOT / "bit_data_workbench/templates/partials/federal_header.html").read_text(
             encoding="utf-8"
         )
+        styles = (STATIC_ROOT / "css/app.css").read_text(encoding="utf-8")
         identity = (STATIC_ROOT / "js/demo-identity.js").read_text(encoding="utf-8")
         self.assertIn("federal-authority-strip", header)
         self.assertIn("data-demo-user-select", header)
+        self.assertIn(
+            ".federal-workbench-nav .topbar-actions-primary {\n"
+            "  display: flex;\n"
+            "  align-items: stretch;\n"
+            "  justify-content: flex-start;\n"
+            "  gap: 0;\n"
+            "  min-height: 64px;\n"
+            "  overflow: visible;\n"
+            "}",
+            styles,
+        )
         for name in (
             "Kassandra Valdata",
             "Noémie Rochat",
@@ -147,6 +159,15 @@ class CustomerJourneyUiTests(unittest.TestCase):
         self.assertIn("data-feature-list-close", dialogs)
         self.assertIn("feature-list-dialog-note", dialogs)
         self.assertIn("syncTriggerExpanded(true)", controller)
+        self.assertIn("renderLoading(dialog)", controller)
+        self.assertLess(
+            controller.index("renderLoading(dialog)"),
+            controller.index("ensureReleaseNotes()"),
+        )
+        self.assertIn("data-feature-list-loading", controller)
+        self.assertIn("Die Featureliste konnte nicht geladen werden", controller)
+        self.assertIn("data-feature-list-version", controller)
+        self.assertIn("feature-list-current-badge", controller)
         self.assertIn('dialog.addEventListener("cancel", onCancel)', controller)
         self.assertIn('event.target === dialog', controller)
         self.assertIn("focusableReturnTarget(returnTarget)?.focus()", controller)
@@ -165,6 +186,52 @@ class CustomerJourneyUiTests(unittest.TestCase):
                 for item in feature_list["features"]
             )
         )
+        history = feature_list["releases"]
+        self.assertGreaterEqual(len(history), 50)
+        versions = [release["version"] for release in history]
+        self.assertEqual(versions[0], current["version"])
+        self.assertEqual(len(versions), len(set(versions)))
+        semantic_versions = [
+            tuple(int(part) for part in version.split(".")) for version in versions
+        ]
+        self.assertEqual(semantic_versions, sorted(semantic_versions, reverse=True))
+        self.assertTrue(all(release["releasedAt"] for release in history))
+        self.assertGreaterEqual(
+            sum(len(release["features"]) for release in history),
+            80,
+        )
+        self.assertTrue(
+            all(
+                feature["title"] and feature["description"]
+                for release in history
+                for feature in release["features"]
+            )
+        )
+        self.assertTrue(
+            {
+                current["version"],
+                "0.10.42",
+                "0.10.40",
+                "0.9.0",
+                "0.7.0",
+                "0.6.0",
+                "0.5.2",
+                "0.3.24",
+            }.issubset(versions)
+        )
+        visible_copy = " ".join(
+            feature["title"] + " " + feature["description"]
+            for release in history
+            for feature in release["features"]
+        )
+        for internal_fragment in (
+            "Regression coverage",
+            "RHOS deployment",
+            "worker PID",
+            "WAL lock",
+            "ASGI",
+        ):
+            self.assertNotIn(internal_fragment, visible_copy)
 
         response = feature_release_notes(if_none_match=None)
         payload = loads(response.body)
@@ -172,6 +239,23 @@ class CustomerJourneyUiTests(unittest.TestCase):
         self.assertEqual(payload[0]["featureList"], feature_list)
         replay = feature_release_notes(if_none_match=response.headers["etag"])
         self.assertEqual(replay.status_code, 304)
+
+        module_uri = (STATIC_ROOT / "js/feature-list-controller.js").resolve().as_uri()
+        script = f"""
+          import {{ featureReleaseHistory }} from {module_uri!r};
+          const history = featureReleaseHistory([
+            {{version:'2.0.0', releasedAt:'2026-08-18', features:[{{title:'Neu', description:'Sichtbar'}}]}},
+            {{version:'1.0.0', releasedAt:'2026-01-01', features:['Regression coverage now verifies internals.', 'Wichtig']}}
+          ]);
+          if (history.length !== 2) process.exit(2);
+          if (history[0].features[0].title !== 'Neu') process.exit(3);
+          if (history[1].features.length !== 1 || history[1].features[0].description !== 'Wichtig') process.exit(4);
+        """
+        subprocess.run(
+            ["node", "--input-type=module", "--eval", script],
+            check=True,
+            cwd=REPO_ROOT,
+        )
 
     def test_browser_search_is_diacritic_insensitive_and_and_tokenized(self) -> None:
         module_uri = (STATIC_ROOT / "js/home-notebook-search.js").resolve().as_uri()
