@@ -61,9 +61,670 @@ CURRENT_FEATURE_LIST: dict[str, object] = {
 }
 
 
-# Derived from git history through version 0.10.46. Keep entries concise and
+# Curated, plain-language history for the in-product feature dialog. The full
+# RELEASE_NOTES below remain the technical source of truth; this list omits
+# test-only, deployment, worker, lock, and rollback details.
+USER_FACING_FEATURE_HISTORY: list[dict[str, object]] = [
+    {
+        "version": "0.10.47",
+        "features": [
+            (
+                "Feature-Historie nach Version",
+                "Die Featureliste zeigt die wichtigsten nutzbaren Verbesserungen gruppiert nach Release, kennzeichnet die aktuelle Version und blendet interne Implementierungsdetails aus.",
+            ),
+            (
+                "Sofort sichtbarer Feature-Dialog",
+                "Der Dialog öffnet unmittelbar mit einem Ladezustand und erklärt verständlich, wenn die Feature-Historie vorübergehend nicht geladen werden kann.",
+            ),
+            (
+                "Stabile Hauptnavigation",
+                "Die Workbench-Navigation bleibt vollständig sichtbar und die Startseite weist auf das Co-Design von ESTV und BIT hin.",
+            ),
+        ],
+    },
+    {
+        "version": "0.10.46",
+        "features": [
+            (
+                "Tabellarische S3-Produkte an DaCa übergeben",
+                "Parquet-, CSV- und JSON-Objekte werden als typisierte Relationen erkannt. DaCa erhält echte Schemafelder und der DAAIF-Endpunkt liefert paginiertes JSON.",
+            ),
+            (
+                "Verlässliche Publikationsvorschau",
+                "Die Vorschau erklärt die Umwandlung und wird neu berechnet, sobald sich die DaCa-Publikationseinstellung ändert.",
+            ),
+        ],
+    },
+    {
+        "version": "0.10.44",
+        "features": [
+            (
+                "Klares Dateiformat für die Analyst Journey",
+                "Der Loader weist deutlich darauf hin, dass die Aargau-Datei als Plain CSV gespeichert werden muss, damit das unveränderbare UNION-Notebook funktioniert.",
+            ),
+        ],
+    },
+    {
+        "version": "0.10.43",
+        "features": [
+            (
+                "Vollständige Ergebnisexporte",
+                "Auch gekürzte Vorschauen und materialisierte Pipeline-Ergebnisse werden vollständig exportiert; fehlgeschlagene Exporte hinterlassen keine Teilartefakte.",
+            ),
+            (
+                "Stabile S3-Snapshots",
+                "Gespeicherte Resultate entsprechen exakt dem ausgeführten Abbild, auch wenn eine Abfrage nicht deterministische Werte enthält.",
+            ),
+        ],
+    },
+    {
+        "version": "0.10.42",
+        "features": [
+            (
+                "Föderale Oberfläche und Demo-Identitäten",
+                "DAAIF verwendet den DaCa-nahen Bundesheader, gemeinsame PoC-Personas und eine bildgestützte Startseite.",
+            ),
+            (
+                "A Data Analyst's Journey",
+                "Der durchgängige Ablauf verbindet Loader, manuellen CSV-Import, SQL und Python, S3-Parquet sowie die kontrollierte Meldung an DaCa.",
+            ),
+            (
+                "Komplette S3-Ziele einfügen",
+                "Ein s3://-Pfad wird automatisch in Bucket, Präfix und Objektname zerlegt, geprüft, angezeigt und kopierbar gemacht.",
+            ),
+            (
+                "Expertensuche über alle Inhalte",
+                "Notebooks, Data Sources, Datenobjekte und DAAIF-Datenprodukte lassen sich ab dem ersten Zeichen getrennt durchsuchen.",
+            ),
+            (
+                "Bestehende Datenprodukte ersetzen",
+                "Eine bestätigte Aktualisierung behält Produktidentität, REST-Endpunkt und DaCa-Governance-Verknüpfung bei.",
+            ),
+            (
+                "Ruhigere Pipeline-Aktualisierung",
+                "Statusänderungen werden zusammengeführt, unveränderte Ansichten nicht neu aufgebaut und doppelte Resultatbereiche vermieden.",
+            ),
+        ],
+    },
+    {
+        "version": "0.10.40",
+        "features": [
+            (
+                "Editierbare Pipeline-Zielpfade",
+                "Jede Pipeline-Stufe verwendet einen sichtbaren S3-Parquet-Pfad für Materialisierung, Kopieraktionen und nachfolgende Stufen.",
+            ),
+            (
+                "Kostenbelege Fact Builder",
+                "Neue Exploration- und Pipeline-Beispiele zeigen, wie Zwischenresultate in S3 gespeichert und wiederverwendet werden.",
+            ),
+        ],
+    },
+    {
+        "version": "0.10.39",
+        "features": [
+            (
+                "Vollständige SQL-Resultate in S3 speichern",
+                "Notebook-Zellen können das gesamte Ergebnis als Parquet materialisieren, während die HTML-Vorschau klein bleibt.",
+            ),
+            (
+                "Virtuelles und ausführbares SQL synchron bearbeiten",
+                "Einfache S3-Referenzen bleiben zwischen der verständlichen SQL-Sicht und der DuckDB-Sicht konsistent.",
+            ),
+        ],
+    },
+    {
+        "version": "0.10.38",
+        "features": [
+            (
+                "Schlanke Pure-DuckDB-Vorschau",
+                "Grosse Resultate zeigen höchstens 20 Vorschauzeilen; der vollständige Datensatz kann als komprimierte CSV-Datei geladen werden.",
+            ),
+            (
+                "Optimierte Kostenbelege-Abfrage",
+                "Eine zusätzliche Query-Variante demonstriert dieselben Kennzahlen mit einer kompakteren FACT-Builder-Strategie.",
+            ),
+        ],
+    },
+    {
+        "version": "0.10.28",
+        "features": [
+            (
+                "Mehr analytische SQL-Beispiele",
+                "Pure DuckDB enthält Beispiele für Gruppierungen, Zeitreihen, Top-N, Fensterfunktionen, Distinct-Zählungen und monatliche Auswertungen.",
+            ),
+        ],
+    },
+    {
+        "version": "0.10.26",
+        "features": [
+            (
+                "Eigenständige Pure-DuckDB-Seite",
+                "Vordefinierte Abfragen können ohne Notebook-Navigation direkt ausgeführt und als S3-Artefakte gespeichert werden.",
+            ),
+        ],
+    },
+    {
+        "version": "0.10.25",
+        "features": [
+            (
+                "Optimierter Kostenbelege-Datensatz",
+                "Ein Notebook materialisiert die FACT_Buchungsbelegposition als S3-Parquet-Datensatz und fragt diesen optimierten Output erneut ab.",
+            ),
+            (
+                "Einfachere Multi-Datei-Abfragen",
+                "Mehrere S3-Parquet-Dateien mit gemischten Schemas werden automatisch als gemeinsamer DuckDB-Scan ausgeführt.",
+            ),
+        ],
+    },
+    {
+        "version": "0.10.8",
+        "features": [
+            (
+                "SQL-Zellen vergleichen",
+                "Eine Side-by-Side-Ansicht zeigt geänderte, hinzugefügte, entfernte und unveränderte SQL-Zeilen zwischen zwei Zellen.",
+            ),
+        ],
+    },
+    {
+        "version": "0.10.7",
+        "features": [
+            (
+                "Tiefe S3-Ordnernavigation",
+                "Buckets werden als Ordnerbaum dargestellt; einzelne Objekte und erzeugte Parquet-Datensätze erhalten passende kopierbare Referenzen.",
+            ),
+            (
+                "Aussagekräftiges Query Monitoring",
+                "Starts, Fortschritt, Warnungen, Abbrüche und Fehler erscheinen sofort und farblich klar im Monitoring.",
+            ),
+        ],
+    },
+    {
+        "version": "0.10.3",
+        "features": [
+            (
+                "Geführtes Kostenbelege-Problemlösungsnotebook",
+                "Jede Zelle beschreibt Verarbeitungshinweise und erwartete Resultate und ist direkt mit dem Loader verknüpft.",
+            ),
+            (
+                "Notebooks teilen",
+                "Notebook-Referenzen können kopiert, per E-Mail vorbereitet oder als lokales Notebook gemeinsam freigegeben werden.",
+            ),
+        ],
+    },
+    {
+        "version": "0.10.2",
+        "features": [
+            (
+                "Von der SQL-Zelle zur Quelle springen",
+                "Die Data-Source-Navigation öffnet automatisch die referenzierte Tabelle, Datei oder das materialisierte Pipeline-Ergebnis.",
+            ),
+        ],
+    },
+    {
+        "version": "0.10.1",
+        "features": [
+            (
+                "Detaillierte Laufzeit aufklappen",
+                "Total elapsed lässt sich in aufgezeichnete Phasen und Zeitpunkte zerlegen.",
+            ),
+            (
+                "Quellenprüfung gezielt steuern",
+                "Bewährte Abfragen können die vorgängige Existenzprüfung ausschalten und dadurch schneller starten.",
+            ),
+        ],
+    },
+    {
+        "version": "0.10.0",
+        "features": [
+            (
+                "Virtuelles und DuckDB-SQL anzeigen",
+                "Eine Zelle zeigt wahlweise das benutzerfreundliche SQL oder das tatsächlich an DuckDB übermittelte SQL.",
+            ),
+            (
+                "S3-Leseabfragen ohne Workspace-Wartezeit",
+                "Direkte Parquet- und abgeschlossene Pipeline-Resultate laufen isoliert und blockieren sich nicht mit gemeinsamem Workspace-Zugriff.",
+            ),
+        ],
+    },
+    {
+        "version": "0.9.28",
+        "features": [
+            (
+                "Runtime Storage verstehen",
+                "Einstellungen zeigen DuckDB-Spill, temporäre Cache-Datensätze, Grössen, Quellenrevisionen und verknüpfte Notebook-Zellen.",
+            ),
+            (
+                "Hydrierten Cache verwalten",
+                "Cache-Tabellen lassen sich pro Zelle aufbauen, prüfen und löschen; Treffer werden direkt am Query-Resultat angezeigt.",
+            ),
+            (
+                "Spill-, CPU- und RAM-Nutzung vergleichen",
+                "Query Monitoring und Service Consumption visualisieren temporären Speicher sowie die wichtigsten Laufzeitressourcen.",
+            ),
+        ],
+    },
+    {
+        "version": "0.9.19",
+        "features": [
+            (
+                "Parquet-Optimierung beim Import",
+                "Off, Recommended und Manual erklären Partitionierung, Sortierung und Spaltenwahl für wiederholte Analysen.",
+            ),
+            (
+                "DuckDB-Cache pro SQL-Zelle",
+                "S3-Parquet-Quellen können lokal hydriert werden; Status, Plan, Ablaufzeit und Indexinformationen bleiben sichtbar.",
+            ),
+        ],
+    },
+    {
+        "version": "0.9.12",
+        "features": [
+            (
+                "Lange SQL-Zellen vergrössern",
+                "Editoren lassen sich auf die vollständige Inhaltshöhe erweitern und wieder einklappen.",
+            ),
+            (
+                "Schneller in einem neuen Notebook starten",
+                "Query in new notebook öffnet sofort eine ausführbare Abfrage und ergänzt Spalten später, solange nichts editiert wurde.",
+            ),
+        ],
+    },
+    {
+        "version": "0.9.10",
+        "features": [
+            (
+                "Kostenbelege über mehrere Engines vergleichen",
+                "Verknüpfte Notebooks führen denselben Ablauf mit DuckDB über S3, DuckDB über PostgreSQL und nativem PostgreSQL aus.",
+            ),
+        ],
+    },
+    {
+        "version": "0.9.9",
+        "features": [
+            (
+                "Zentrales Query Monitoring",
+                "Abfragen zeigen Status, Ressourcen, Ereignisse und einen direkten Rücksprung ins ausführende Notebook.",
+            ),
+            (
+                "Bereitstehende Kostenbelege-Demos",
+                "Ein Loader und Notebooks vergleichen OLTP, OLAP und S3-Parquet mit demselben fachlichen Beispiel.",
+            ),
+        ],
+    },
+    {
+        "version": "0.9.6",
+        "features": [
+            (
+                "Direkteinstiege im Query Workbench",
+                "Kacheln erstellen ein Notebook, öffnen das zuletzt verwendete Notebook oder wechseln ins Query Monitoring.",
+            ),
+            (
+                "Nachvollziehbare Query-Phasen",
+                "Zeitmessungen unterscheiden Browser, Vorbereitung, Worker-Start, Ausführung, Resultatabruf und Auslieferung.",
+            ),
+        ],
+    },
+    {
+        "version": "0.9.3",
+        "features": [
+            (
+                "S3-Pfade automatisch vervollständigen",
+                "SQL Completion schlägt lesbare Referenzen für entdeckte CSV- und Parquet-Objekte vor.",
+            ),
+            (
+                "Query-Pfade direkt kopieren",
+                "S3-, PostgreSQL- und Local-Workspace-Objekte zeigen ihre genaue Abfragereferenz im Explorer und Objektmenü.",
+            ),
+        ],
+    },
+    {
+        "version": "0.9.0",
+        "features": [
+            (
+                "DuckDB-Abfrageplan erklären",
+                "Explain zeigt logische, optimierte und physische Pläne, berührte Quellen, Operatoren, Warnungen und Hinweise, ohne die Abfrage auszuführen.",
+            ),
+        ],
+    },
+    {
+        "version": "0.8.16",
+        "features": [
+            (
+                "Grosse Dateien als ZIP vorbereiten",
+                "S3 und DataExchange erstellen Downloads im Hintergrund mit Fortschritt, Abbruch, Wiederaufnahme und später erneut nutzbarem Download-Link.",
+            ),
+        ],
+    },
+    {
+        "version": "0.8.15",
+        "features": [
+            (
+                "Query-Historie direkt pro Zelle",
+                "Eine kompakte Tabelle zeigt Start, Ende, Dauer, CPU, RAM, Zeilen, Status und aufklappbares SQL.",
+            ),
+        ],
+    },
+    {
+        "version": "0.8.14",
+        "features": [
+            (
+                "Gemeinsame PoC-Notebooks klar kennzeichnen",
+                "Unveränderbare Beispiele und Ordner bleiben Public / Shared und zeigen keine irreführenden lokalen Sichtbarkeitsoptionen.",
+            ),
+            (
+                "Live aktualisierte Ausführungen",
+                "Query-Historie, Resultate und Monitoring verwenden denselben Echtzeitkanal und dieselben lesbaren Ressourcendiagramme.",
+            ),
+        ],
+    },
+    {
+        "version": "0.8.13",
+        "features": [
+            (
+                "Lesbare Datenreferenzen im SQL",
+                "Local-Workspace- und S3-Objekte erscheinen als verständliche Aliase; interne DuckDB-Namen bleiben verborgen.",
+            ),
+            (
+                "Fehlende Quellen vor dem Lauf erkennen",
+                "Run Cell prüft Referenzen und zeigt verständliche Hinweise, bevor eine ungültige Abfrage gestartet wird.",
+            ),
+        ],
+    },
+    {
+        "version": "0.8.12",
+        "features": [
+            (
+                "Mehrere Abfragen parallel ausführen",
+                "Unabhängige Query-Prozesse zeigen Status und Ressourcen getrennt und lassen sich zuverlässig abbrechen.",
+            ),
+            (
+                "Loader bei konkurrierenden Abfragen steuern",
+                "Wartezustände und Abbrüche werden sichtbar, ohne dass der Loader im Zustand Preparing hängen bleibt.",
+            ),
+        ],
+    },
+    {
+        "version": "0.8.9",
+        "features": [
+            (
+                "Sichtbarkeit gemeinsamer Notebook-Ordner",
+                "Public-/Private-Einstellungen werden zwischen Nutzenden synchronisiert und von neuen Notebooks geerbt.",
+            ),
+        ],
+    },
+    {
+        "version": "0.8.4",
+        "features": [
+            (
+                "MWA-Abrechnung in mehreren Formaten",
+                "Ein Loader stellt zusammengehörige Daten in PostgreSQL sowie als S3 Parquet, CSV und JSONL für Vergleiche bereit.",
+            ),
+        ],
+    },
+    {
+        "version": "0.8.3",
+        "features": [
+            (
+                "Grosse CSV-Dateien direkt laden",
+                "Shared-Workspace-Downloads streamen aus S3, statt die gesamte Datei zuerst lokal zwischenzuspeichern.",
+            ),
+            (
+                "Robustere CSV-zu-Parquet-Konvertierung",
+                "Späte Typabweichungen werden über vollständige Erkennung und einen sicheren Text-Fallback verarbeitet.",
+            ),
+        ],
+    },
+    {
+        "version": "0.7.14",
+        "features": [
+            (
+                "Weitere Dateiformate einlesen",
+                "Parquet, JSON/JSONL/NDJSON, Excel XLSX und einfaches XML stehen neben CSV als eigene Ingestoren bereit.",
+            ),
+            (
+                "Direktdateien und ZIP-Archive",
+                "Jedes unterstützte Format kann als einzelne Datei oder Archiv nach S3 beziehungsweise PostgreSQL importiert werden.",
+            ),
+        ],
+    },
+    {
+        "version": "0.7.13",
+        "features": [
+            (
+                "Grosse CSV- und ZIP-Uploads",
+                "CSV-Dateien und extrahierte Archivdateien bis 30 GiB können in Shared Workspace oder PostgreSQL verarbeitet werden.",
+            ),
+        ],
+    },
+    {
+        "version": "0.7.12",
+        "features": [
+            (
+                "Eigene Data-Source-Adresse",
+                "Der Data Source Workbench besitzt eine klare URL und verwendet beim Browsen denselben Quellenbaum wie das Query Workbench.",
+            ),
+        ],
+    },
+    {
+        "version": "0.7.7",
+        "features": [
+            (
+                "Upload und Verarbeitung getrennt anzeigen",
+                "Der Fortschritt unterscheidet Dateiübertragung und serverseitige Verarbeitung einschliesslich Formatkonvertierung.",
+            ),
+        ],
+    },
+    {
+        "version": "0.7.3",
+        "features": [
+            (
+                "DDL für Datenobjekte herunterladen",
+                "PostgreSQL-, S3- und Local-Workspace-Objekte liefern bestehende oder vorgeschlagene CREATE-TABLE-Anweisungen.",
+            ),
+        ],
+    },
+    {
+        "version": "0.7.0",
+        "features": [
+            (
+                "SQL und Python im selben Notebook",
+                "Jede Zelle kann SQL oder Python verwenden; ein Headless-Jupyter-Kernel hält Variablen und Imports pro Notebook verfügbar.",
+            ),
+            (
+                "Rich Python Outputs",
+                "Pandas-Tabellen, HTML, JSON, Exceptions und Matplotlib-Grafiken werden direkt im Notebook dargestellt.",
+            ),
+        ],
+    },
+    {
+        "version": "0.6.1",
+        "features": [
+            (
+                "Datenquellen direkt öffnen",
+                "Startseite und Explorer springen unmittelbar zu PostgreSQL, Shared Workspace oder Local Workspace.",
+            ),
+            (
+                "Lokale Daten nach S3 übernehmen",
+                "Browserlokale Dateien können kopiert oder verschoben werden; bereits publizierte Quellen sind im Explorer markiert.",
+            ),
+        ],
+    },
+    {
+        "version": "0.6.0",
+        "features": [
+            (
+                "Datenprodukte publizieren",
+                "PostgreSQL-Relationen und Shared-Workspace-Objekte erhalten stabile, schreibgeschützte REST-Endpunkte und verwaltbare Metadaten.",
+            ),
+            (
+                "Katalog- und Produktseiten",
+                "Publizierte Produkte zeigen Parameter, Schema, OpenAPI-Ausschnitt, Beispielantworten und den direkten Live-Endpunkt.",
+            ),
+        ],
+    },
+    {
+        "version": "0.5.7",
+        "features": [
+            (
+                "Kosten und Budget verständlich verfolgen",
+                "Service Consumption verbindet Jahresbudget, bisherige Ausgaben, Prognose und Kostenarten in einer finanzorientierten Ansicht.",
+            ),
+        ],
+    },
+    {
+        "version": "0.5.3",
+        "features": [
+            (
+                "Resultate in vielen Formaten exportieren",
+                "CSV, JSON Array, JSONL, Parquet, XML und Excel stehen mit passenden Formatoptionen zum Speichern oder Herunterladen bereit.",
+            ),
+        ],
+    },
+    {
+        "version": "0.5.2",
+        "features": [
+            (
+                "Geführter Ingestion Workbench",
+                "CSV-Importe führen mit Vorschau und Zieleinstellungen zu Local Workspace, S3, PostgreSQL OLTP oder OLAP.",
+            ),
+            (
+                "Direkte Übergabe ans Query Workbench",
+                "Importierte Dateien können sofort analysiert und in S3 wahlweise als CSV, Parquet oder JSON gespeichert werden.",
+            ),
+        ],
+    },
+    {
+        "version": "0.4.7",
+        "features": [
+            (
+                "S3-Ausführungsmodus pro Zelle",
+                "Notebooks merken, ob S3 direkt oder über einen beschleunigten lokalen Cache gelesen werden soll.",
+            ),
+            (
+                "Version und Verbindungen sichtbar",
+                "Die feste Statusbox zeigt Build-Version und Anzahl verbundener Echtzeit-Clients.",
+            ),
+        ],
+    },
+    {
+        "version": "0.4.3",
+        "features": [
+            (
+                "Ordner im Local Workspace",
+                "Browserlokale Resultate lassen sich in verschachtelten Ordnern speichern, verschieben, umbenennen und löschen.",
+            ),
+        ],
+    },
+    {
+        "version": "0.4.2",
+        "features": [
+            (
+                "Ein gemeinsamer Echtzeitkanal",
+                "Query-, Ingestion-, Quellen- und Notebook-Ereignisse verwenden dieselbe SSE-Verbindung und reduzieren unnötige Browserlast.",
+            ),
+        ],
+    },
+    {
+        "version": "0.4.0",
+        "features": [
+            (
+                "Verlässlichere Workbench-Navigation",
+                "Notebook-Sidebar und Aktionsmenüs bleiben beim Wechsel und bei Pointer-Bewegungen stabil geöffnet.",
+            ),
+            (
+                "Verständliche S3-Löschfehler",
+                "Versteckte Objektversionen und Delete Marker werden als mögliche Ursache erklärt.",
+            ),
+        ],
+    },
+    {
+        "version": "0.3.34",
+        "features": [
+            (
+                "Dedizierter Data Source Workbench",
+                "Shared Workspace, Local Workspace und PostgreSQL erhalten eine gemeinsame Verwaltungs- und Browseroberfläche.",
+            ),
+            (
+                "Resultate lokal im Browser speichern",
+                "JSON- und Parquet-Exporte können mit Dateiname und Ordner direkt in IndexedDB abgelegt werden.",
+            ),
+        ],
+    },
+    {
+        "version": "0.3.33",
+        "features": [
+            (
+                "S3-Buckets verwalten",
+                "Buckets können direkt in der Sidebar erstellt und einschliesslich versionierter Inhalte gelöscht werden.",
+            ),
+        ],
+    },
+    {
+        "version": "0.3.32",
+        "features": [
+            (
+                "Sidebar in der Breite anpassen",
+                "Lange Notebook-, Tabellen- und Objektnamen lassen sich durch Ziehen besser sichtbar machen.",
+            ),
+            (
+                "S3-Objekte direkt herunterladen",
+                "Gespeicherte Resultate und andere Dateien sind ohne Umweg über ein Notebook verfügbar.",
+            ),
+        ],
+    },
+    {
+        "version": "0.3.31",
+        "features": [
+            (
+                "Vergleichbare Performance-Beispiele",
+                "Single- und Multi-Table-Benchmarks vergleichen DuckDB auf S3, DuckDB auf PostgreSQL und native PostgreSQL-Ausführung.",
+            ),
+            (
+                "Einheitliches Export-/Speichern-Menü",
+                "Query-Resultate lassen sich als JSON, CSV oder Parquet herunterladen oder direkt nach S3 speichern.",
+            ),
+        ],
+    },
+    {
+        "version": "0.3.30",
+        "features": [
+            (
+                "Klarerer Abfragefortschritt",
+                "Laufende Abfragen zeigen Prozentwerte, sofern verfügbar, oder erklären den aktuellen Wartestatus.",
+            ),
+        ],
+    },
+    {
+        "version": "0.3.24",
+        "features": [
+            (
+                "Notebooks gemeinsam nutzen",
+                "Freigegebene Notebooks werden über Serverereignisse synchronisiert, in der Sidebar markiert und können wieder lokal geschaltet werden.",
+            ),
+        ],
+    },
+]
+
+
+# Derived from git history through version 0.10.47. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.47",
+        "releasedAt": "2026-08-18T13:49:25+02:00",
+        "features": [
+            (
+                "The in-product feature dialog now presents a curated, user-facing "
+                "history grouped by release, marks the current version, and omits "
+                "internal test, deployment, and worker details."
+            ),
+            (
+                "The feature dialog opens immediately with explicit loading and "
+                "failure states, while the main navigation remains fully visible "
+                "and the home page identifies the ESTV and BIT co-design."
+            ),
+        ],
+    },
     {
         "version": "0.10.46",
         "releasedAt": "2026-08-18T08:09:33+02:00",
@@ -2359,6 +3020,10 @@ def release_notes() -> list[dict[str, object]]:
         for entry in RELEASE_NOTES
     ]
     if notes:
+        release_dates = {
+            str(entry["version"]): str(entry["releasedAt"])
+            for entry in RELEASE_NOTES
+        }
         notes[0]["featureList"] = {
             "title": str(CURRENT_FEATURE_LIST["title"]),
             "introduction": str(CURRENT_FEATURE_LIST["introduction"]),
@@ -2369,6 +3034,20 @@ def release_notes() -> list[dict[str, object]]:
                     "description": str(feature["description"]),
                 }
                 for feature in CURRENT_FEATURE_LIST["features"]
+            ],
+            "releases": [
+                {
+                    "version": str(release["version"]),
+                    "releasedAt": release_dates.get(str(release["version"]), ""),
+                    "features": [
+                        {
+                            "title": str(title),
+                            "description": str(description),
+                        }
+                        for title, description in release["features"]
+                    ],
+                }
+                for release in USER_FACING_FEATURE_HISTORY
             ],
         }
     return notes

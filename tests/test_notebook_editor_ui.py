@@ -981,7 +981,10 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
         self.assertIn("notebook-pipeline-button-spinner", workspace_template)
         self.assertIn("data-notebook-pipeline-run-label", workspace_template)
         self.assertIn("data-notebook-pipeline-cancel-label", workspace_template)
-        self.assertEqual(layout_template.count("-2026-08-17-feature-list-1"), 2)
+        self.assertEqual(
+            layout_template.count("-2026-08-18-menu-feature-list-3"),
+            2,
+        )
         self.assertIn(
             'notebook-stage-pipeline-controller.js?v=2026-08-16-pipeline-ui-1',
             app_source,

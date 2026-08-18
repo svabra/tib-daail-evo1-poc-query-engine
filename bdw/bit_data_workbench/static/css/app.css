@@ -8152,6 +8152,54 @@ details:not([open]) > .tree-children {
   scrollbar-gutter: stable;
 }
 
+.feature-list-releases {
+  display: grid;
+  gap: 26px;
+}
+
+.feature-list-release-group {
+  display: grid;
+  gap: 11px;
+}
+
+.feature-list-release-group + .feature-list-release-group {
+  border-top: 1px solid var(--border);
+  padding-top: 22px;
+}
+
+.feature-list-release-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.feature-list-release-header h3 {
+  margin: 0;
+  font-size: 1.02rem;
+  line-height: 1.3;
+}
+
+.feature-list-release-meta {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.feature-list-current-badge {
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: var(--status-green-bg);
+  color: var(--status-green);
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
+}
+
 .feature-list-items {
   display: grid;
   gap: 12px;
@@ -8181,7 +8229,7 @@ details:not([open]) > .tree-children {
   stroke-width: 2.2;
 }
 
-.feature-list-item h3 {
+.feature-list-item h4 {
   margin: 0;
   font-size: 0.95rem;
   line-height: 1.3;
@@ -8242,6 +8290,12 @@ details:not([open]) > .tree-children {
   .feature-list-item {
     gap: 9px;
     padding: 12px;
+  }
+
+  .feature-list-release-header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 5px;
   }
 
   .feature-list-dialog-actions .modal-button {
@@ -14018,7 +14072,7 @@ body.data-platform-document {
   justify-content: flex-start;
   gap: 0;
   min-height: 64px;
-  overflow-x: auto;
+  overflow: visible;
 }
 
 .federal-workbench-link {

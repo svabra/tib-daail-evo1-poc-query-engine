@@ -66,7 +66,16 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     f"Feature-list metadata returned HTTP {response.status}."
                 )
             releases = await response.json()
-            expected_features = releases[0]["featureList"]["features"]
+            expected_releases = releases[0]["featureList"]["releases"]
+            expected_feature_count = sum(
+                len(release["features"]) for release in expected_releases
+            )
+
+            async def delay_release_notes(route) -> None:
+                await asyncio.sleep(1)
+                await route.continue_()
+
+            await page.route("**/api/workbench/release-notes", delay_release_notes)
 
             trigger = page.locator(".app-version-feature-trigger")
             await trigger.wait_for(state="visible", timeout=args.timeout_ms)
@@ -84,9 +93,14 @@ async def run_smoke(args: argparse.Namespace) -> int:
 
             await trigger.click()
             dialog = page.locator("[data-feature-list-dialog]")
-            await dialog.wait_for(state="visible", timeout=args.timeout_ms)
+            await dialog.wait_for(state="visible", timeout=500)
+            loading = dialog.locator("[data-feature-list-loading]")
+            await loading.wait_for(state="visible", timeout=500)
             await page.wait_for_function(
-                "() => document.activeElement?.matches('[data-feature-list-close]')",
+                """() => (
+                    document.activeElement?.matches('[data-feature-list-close]')
+                    && !document.querySelector('[data-feature-list-loading]')
+                )""",
                 timeout=args.timeout_ms,
             )
             desktop = await page.evaluate(
@@ -109,6 +123,10 @@ async def run_smoke(args: argparse.Namespace) -> int:
                     release: dialog.querySelector('[data-feature-list-release]').textContent.trim(),
                     title: dialog.querySelector('[data-feature-list-title]').textContent.trim(),
                     itemCount: dialog.querySelectorAll('.feature-list-item').length,
+                    versionCount: dialog.querySelectorAll('[data-feature-list-version]').length,
+                    versions: Array.from(dialog.querySelectorAll('[data-feature-list-version]'))
+                      .map((node) => node.dataset.featureListVersion),
+                    currentBadges: dialog.querySelectorAll('.feature-list-current-badge').length,
                     note: dialog.querySelector('[data-feature-list-note]').textContent.trim(),
                     labelled: Boolean(labelledBy && document.getElementById(labelledBy)),
                     described: Boolean(describedBy && document.getElementById(describedBy)),
@@ -133,8 +151,16 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 raise AssertionError("Dialog and version overlay show different versions.")
             if desktop["title"] != "Was kann DAAIF Factory?":
                 raise AssertionError("Feature dialog title is incorrect.")
-            if desktop["itemCount"] != len(expected_features):
-                raise AssertionError("Feature cards do not match the current metadata.")
+            if desktop["itemCount"] != expected_feature_count:
+                raise AssertionError("Feature cards do not match the curated history.")
+            if desktop["versionCount"] != len(expected_releases):
+                raise AssertionError("Feature-list version groups are incomplete.")
+            if desktop["versions"] != [
+                release["version"] for release in expected_releases
+            ]:
+                raise AssertionError("Feature-list version order differs from metadata.")
+            if desktop["currentBadges"] != 1:
+                raise AssertionError("The current release is not marked exactly once.")
             if not desktop["note"].startswith(
                 "Hinweis: Diese Liste beschreibt den aktuellen PoC-Stand."
             ):

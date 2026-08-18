@@ -12,7 +12,7 @@ import {
   queryExplainDialog,
   resultDownloadDialog,
   resultExportDialog,
-} from "./dialogs.js?v=2026-08-17-feature-list-1";
+} from "./dialogs.js?v=2026-08-18-feature-list-3";
 import {
   closeDialog,
   showConfirmDialog,
@@ -22,7 +22,7 @@ import {
 import { createIngestionController } from "./ingestion-controller.js";
 import { createIngestionUi } from "./ingestion-ui.js";
 import { createHomeUi } from "./home-ui.js";
-import { createFeatureListController } from "./feature-list-controller.js?v=2026-08-17-feature-list-1";
+import { createFeatureListController } from "./feature-list-controller.js?v=2026-08-18-feature-list-3";
 import { initializeWorkbenchExpertSearch } from "./expert-search.js";
 import {
   initializeDaaifDemoIdentity,
