@@ -10,7 +10,6 @@ from zoneinfo import ZoneInfo
 from ..backend.s3_storage import (
     delete_s3_prefix,
     ensure_s3_bucket,
-    s3_bucket_schema_name,
     s3_client,
     upload_s3_file,
 )
@@ -40,17 +39,6 @@ JOURNEY_PRODUCT_KEY = (
     "products/kantonale-gewerbesteuer-soll-ist-2022-2026.parquet"
 )
 JOURNEY_PRODUCT_PATH = f"s3://{JOURNEY_BUCKET}/{JOURNEY_PRODUCT_KEY}"
-JOURNEY_PRODUCT_RELATION = (
-    f"{s3_bucket_schema_name(JOURNEY_BUCKET)}."
-    "kantonale_gewerbesteuer_soll_ist_2022_2026"
-)
-JOURNEY_PRODUCT_SOURCE_DESCRIPTOR: dict[str, str] = {
-    "sourceKind": "relation",
-    "sourceId": "s3",
-    "relation": JOURNEY_PRODUCT_RELATION,
-    "sourceDisplayName": "Kantonale Gewerbesteuer Soll/Ist 2022–2026",
-    "sourcePlatform": "s3",
-}
 JOURNEY_POSTGRES_TABLE = "kantonale_gewerbesteuer_electronic"
 JOURNEY_POSTGRES_RELATION = f"pg_oltp.public.{JOURNEY_POSTGRES_TABLE}"
 JOURNEY_POSTGRES_QUERY_REFERENCE = pg_source_reference(

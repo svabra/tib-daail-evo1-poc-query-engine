@@ -137,7 +137,12 @@ class FakeManager:
         return [self.activated] if self.activated is not None else []
 
     def reconcile_daca_publication(
-        self, *, product_id: str, state: str, missing_fields: list[str]
+        self,
+        *,
+        product_id: str,
+        state: str,
+        missing_fields: list[str],
+        catalog_url: str = "",
     ) -> DataProductDefinition:
         self.reconciled.append((product_id, state, missing_fields))
         assert self.activated is not None
@@ -339,6 +344,69 @@ class DacaMetadataPublicationClientTests(unittest.TestCase):
         self.assertEqual(status.state, "published")
         self.assertEqual(status.missing_fields, ())
 
+    def test_source_refresh_merges_metadata_and_uses_product_revision(self) -> None:
+        requests: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            requests.append(request)
+            if request.method == "GET":
+                return httpx.Response(
+                    200,
+                    headers={"ETag": '"3"'},
+                    json={
+                        "id": PRODUCT_ID,
+                        "metadata": {"origin": "DAAIF"},
+                    },
+                )
+            return httpx.Response(200, json={"id": PRODUCT_ID, "revision": 4})
+
+        self.client_for(handler).record_source_refresh(
+            product_id=PRODUCT_ID,
+            owner_user_id="joel.ruod",
+            source_updated_at="2026-08-19T09:07:00+00:00",
+        )
+
+        self.assertEqual([request.method for request in requests], ["GET", "PATCH"])
+        self.assertEqual(requests[1].headers["If-Match"], '"3"')
+        self.assertEqual(requests[1].headers["X-DaCa-User"], "joel.ruod")
+        self.assertEqual(
+            json.loads(requests[1].content),
+            {
+                "metadata": {
+                    "origin": "DAAIF",
+                    "sourceUpdatedAt": "2026-08-19T09:07:00+00:00",
+                }
+            },
+        )
+
+    def test_source_refresh_reloads_revision_once_after_concurrent_change(self) -> None:
+        methods: list[str] = []
+        patch_attempts = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal patch_attempts
+            methods.append(request.method)
+            if request.method == "GET":
+                revision = 3 if patch_attempts == 0 else 4
+                return httpx.Response(
+                    200,
+                    headers={"ETag": f'"{revision}"'},
+                    json={"id": PRODUCT_ID, "metadata": {}},
+                )
+            patch_attempts += 1
+            if patch_attempts == 1:
+                return httpx.Response(412, json={"detail": "reload and retry"})
+            self.assertEqual(request.headers["If-Match"], '"4"')
+            return httpx.Response(200, json={"id": PRODUCT_ID, "revision": 5})
+
+        self.client_for(handler).record_source_refresh(
+            product_id=PRODUCT_ID,
+            owner_user_id="joel.ruod",
+            source_updated_at="2026-08-19T09:07:00+00:00",
+        )
+
+        self.assertEqual(methods, ["GET", "PATCH", "GET", "PATCH"])
+
 
 class DacaPublicationCoordinatorTests(unittest.TestCase):
     def coordinator(self, manager: FakeManager, handler) -> DacaPublicationCoordinator:
@@ -371,7 +439,7 @@ class DacaPublicationCoordinatorTests(unittest.TestCase):
         self.assertTrue(captured["discoverable"])
         self.assertEqual(
             result["dacaPublication"]["catalogUrl"],
-            f"http://localhost:8080/products/{PRODUCT_ID}/quality?demoUser=joel.ruod",
+            f"http://localhost:8080/products/{PRODUCT_ID}/overview?demoUser=joel.ruod",
         )
         self.assertEqual(manager.cancelled, [])
 
@@ -435,6 +503,34 @@ class DacaPublicationCoordinatorTests(unittest.TestCase):
             [("data-product-reserved", "published", [])],
         )
 
+    def test_reconcile_migrates_legacy_link_to_product_overview(self) -> None:
+        class NoCatalogRequestClient:
+            def product_status(self, **_kwargs) -> None:
+                raise AssertionError("Published products need no status request")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            manager, store, existing = real_managed_manager(
+                Path(temp_dir) / "data-products.json"
+            )
+            manager.reconcile_daca_publication(
+                product_id=existing.product_id,
+                state="published",
+                missing_fields=[],
+            )
+            coordinator = DacaPublicationCoordinator(
+                manager=manager,
+                client=NoCatalogRequestClient(),  # type: ignore[arg-type]
+                daca_ui_url="http://localhost:8080",
+            )
+
+            coordinator.reconcile_products(minimum_interval_seconds=0)
+            persisted = store.list_products()[0]
+
+        self.assertEqual(
+            persisted.daca_publication.catalog_url,
+            f"http://localhost:8080/products/{PRODUCT_ID}/overview?demoUser=joel.ruod",
+        )
+
     def test_identical_managed_replace_reconciles_status_without_republishing_schema(
         self,
     ) -> None:
@@ -442,12 +538,17 @@ class DacaPublicationCoordinatorTests(unittest.TestCase):
 
         def handler(request: httpx.Request) -> httpx.Response:
             methods.append(request.method)
-            if request.method != "GET":
-                return httpx.Response(500, json={"detail": "unexpected metadata replay"})
+            if request.method == "PATCH":
+                payload = json.loads(request.content)
+                self.assertIn("sourceUpdatedAt", payload["metadata"])
+                self.assertEqual(request.headers["If-Match"], '"3"')
+                return httpx.Response(200, json={"id": PRODUCT_ID, "revision": 4})
             return httpx.Response(
                 200,
+                headers={"ETag": '"3"'},
                 json={
                     "id": PRODUCT_ID,
+                    "metadata": {"sourceSystem": "DAAIF"},
                     "lifecycle": "active",
                     "discoverable": True,
                     "activePolicyRevision": 1,
@@ -487,13 +588,17 @@ class DacaPublicationCoordinatorTests(unittest.TestCase):
             )
             persisted = store.list_products()[0]
 
-        self.assertEqual(methods, ["GET"])
+        self.assertEqual(methods, ["GET", "PATCH", "GET"])
         self.assertEqual(result["action"], "replaced")
         self.assertEqual(persisted.product_id, existing.product_id)
         self.assertEqual(persisted.created_at, existing.created_at)
         self.assertEqual(persisted.daca_publication.publication_id, PUBLICATION_ID)
         self.assertEqual(persisted.daca_publication.product_id, PRODUCT_ID)
         self.assertEqual(persisted.daca_publication.state, "published")
+        self.assertEqual(
+            persisted.daca_publication.catalog_url,
+            f"http://localhost:8080/products/{PRODUCT_ID}/overview?demoUser=joel.ruod",
+        )
 
     def test_managed_overwrite_exact_replay_preserves_local_and_daca_identifiers(
         self,

@@ -745,7 +745,7 @@ export function createDataProductsController(helpers) {
             ? [
                 {
                   href: dacaPublication.catalogUrl,
-                  label: "Open DaCa quality wizard as Joel Ruod",
+                  label: "Open data product in DaCa as Joel Ruod",
                   external: true,
                 },
               ]

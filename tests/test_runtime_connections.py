@@ -68,6 +68,46 @@ class DuckDBWorkerConnectionRetryTests(TestCase):
         self.assertFalse(settings.duckdb_preserve_insertion_order)
         self.assertEqual(settings.query_cache_dir, Path("/workspace/query-cache"))
 
+    def test_worker_connection_can_bootstrap_s3_without_postgres(self) -> None:
+        class FakeConnection:
+            def __init__(self) -> None:
+                self.commands: list[str] = []
+
+            def execute(self, command: str):
+                self.commands.append(command)
+                return self
+
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            temp_dir = Path(raw_tmp)
+            settings = SimpleNamespace(
+                duckdb_database=temp_dir / "workspace.duckdb",
+                duckdb_extension_directory=temp_dir / "extensions",
+            )
+            connection = FakeConnection()
+            with (
+                patch.object(
+                    runtime_connections,
+                    "_connect_duckdb_with_lock_retry",
+                    return_value=connection,
+                ),
+                patch.object(runtime_connections, "apply_duckdb_runtime_settings"),
+                patch.object(runtime_connections, "_configure_s3_tls") as configure_s3,
+                patch.object(runtime_connections, "_ensure_extension") as ensure_extension,
+                patch.object(runtime_connections, "_bootstrap_s3") as bootstrap_s3,
+                patch.object(runtime_connections, "_bootstrap_postgres") as bootstrap_postgres,
+            ):
+                created = runtime_connections.create_duckdb_worker_connection(
+                    settings,  # type: ignore[arg-type]
+                    database_path=":memory:",
+                    bootstrap_postgres=False,
+                )
+
+        self.assertIs(created, connection)
+        configure_s3.assert_called_once_with(connection, settings)
+        ensure_extension.assert_called_once_with(connection, "httpfs")
+        bootstrap_s3.assert_called_once_with(connection, settings)
+        bootstrap_postgres.assert_not_called()
+
     def test_apply_duckdb_runtime_settings_executes_expected_set_statements(self) -> None:
         class FakeConnection:
             def __init__(self) -> None:

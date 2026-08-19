@@ -134,6 +134,8 @@ def create_duckdb_worker_connection(
     database_path: Path | str | None = None,
     read_only: bool = False,
     temp_directory_override: Path | str | None = None,
+    bootstrap_s3: bool = True,
+    bootstrap_postgres: bool = True,
 ) -> duckdb.DuckDBPyConnection:
     target_database = database_path or settings.duckdb_database
     if isinstance(target_database, Path):
@@ -161,11 +163,13 @@ def create_duckdb_worker_connection(
     connection.execute(
         f"SET extension_directory = {sql_literal(settings.duckdb_extension_directory.as_posix())}"
     )
-    _configure_s3_tls(connection, settings)
-    _ensure_extension(connection, "httpfs")
-    _ensure_extension(connection, "postgres")
-    _bootstrap_s3(connection, settings)
-    _bootstrap_postgres(connection, settings, read_only=read_only)
+    if bootstrap_s3:
+        _configure_s3_tls(connection, settings)
+        _ensure_extension(connection, "httpfs")
+        _bootstrap_s3(connection, settings)
+    if bootstrap_postgres:
+        _ensure_extension(connection, "postgres")
+        _bootstrap_postgres(connection, settings, read_only=read_only)
     return connection
 
 

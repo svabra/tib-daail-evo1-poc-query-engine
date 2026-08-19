@@ -12,7 +12,12 @@ import uuid
 import duckdb
 
 from ...config import Settings
-from ...models import DataProductDefinition, DataProductSourceDescriptor, SourceCatalog
+from ...models import (
+    DataProductDefinition,
+    DataProductSourceDescriptor,
+    SourceCatalog,
+    SourceField,
+)
 from ..data_sources.s3.explorer import normalize_s3_prefix
 from ..s3_storage import list_s3_buckets, s3_client
 from ..sql_utils import qualified_name
@@ -96,8 +101,11 @@ class DataProductManager:
         relation_fields_provider: Callable[[str], list],
         catalog_provider: Callable[[], list[SourceCatalog]],
         s3_bucket_snapshot_provider: Callable[..., dict[str, object]],
-        s3_relation_source_resolver: Callable[
-            [dict[str, object]], dict[str, object]
+        s3_parquet_fields_provider: Callable[[str, str], list[SourceField]]
+        | None = None,
+        s3_parquet_page_provider: Callable[
+            [str, str, int, int],
+            tuple[list[SourceField], list[tuple[object, ...]], bool],
         ]
         | None = None,
     ) -> None:
@@ -107,7 +115,8 @@ class DataProductManager:
         self._relation_fields_provider = relation_fields_provider
         self._catalog_provider = catalog_provider
         self._s3_bucket_snapshot_provider = s3_bucket_snapshot_provider
-        self._s3_relation_source_resolver = s3_relation_source_resolver
+        self._s3_parquet_fields_provider = s3_parquet_fields_provider
+        self._s3_parquet_page_provider = s3_parquet_page_provider
         self._publication_lock = RLock()
         self._publication_reservations: dict[
             str, _DataProductPublicationReservation
@@ -138,6 +147,7 @@ class DataProductManager:
         product_id: str,
         state: str,
         missing_fields: list[str],
+        catalog_url: str = "",
     ) -> DataProductDefinition:
         with self._publication_lock:
             existing = self.product_by_id(product_id)
@@ -146,7 +156,13 @@ class DataProductManager:
             reference = existing.daca_publication
             if reference is None:
                 return existing
-            if reference.state == state and reference.missing_fields == missing_fields:
+            normalized_catalog_url = str(catalog_url or "").strip()
+            next_catalog_url = normalized_catalog_url or reference.catalog_url
+            if (
+                reference.state == state
+                and reference.missing_fields == missing_fields
+                and reference.catalog_url == next_catalog_url
+            ):
                 return existing
             updated = replace(
                 existing,
@@ -154,6 +170,7 @@ class DataProductManager:
                     reference,
                     state=state,
                     missing_fields=list(missing_fields),
+                    catalog_url=next_catalog_url,
                     synced_at=utc_now_iso(),
                 ),
                 updated_at=utc_now_iso(),
@@ -354,7 +371,10 @@ class DataProductManager:
             **self._documentation_contract(
                 product,
                 base_url=base_url,
-                resolve_relation_fields=existing_product is None,
+                resolve_relation_fields=(
+                    existing_product is None
+                    or self._is_s3_parquet_source(descriptor)
+                ),
             ),
             "openApiNamespace": PUBLIC_DATA_PRODUCTS_PATH_PREFIX + "/{slug}",
         }
@@ -675,24 +695,35 @@ class DataProductManager:
         base_url: str | None = None,
     ) -> dict[str, object]:
         product = self.product_by_slug(slug)
-        if product.source.source_kind != "relation" or not product.source.relation:
+        if product.source.source_kind != "relation" or not (
+            product.source.relation or self._is_s3_parquet_source(product.source)
+        ):
             raise KeyError(f"Data product '{slug}' does not publish relation rows.")
 
         normalized_limit = self._normalized_limit(limit)
         normalized_offset = self._normalized_offset(offset)
-        fields = self._relation_fields_provider(product.source.relation)
-        sql = (
-            f"SELECT * FROM {relation_identifier(product.source.relation)} "
-            f"LIMIT {normalized_limit + 1} OFFSET {normalized_offset}"
-        )
-        connection = self._create_worker_connection()
-        try:
-            rows = connection.execute(sql).fetchall()
-        finally:
-            connection.close()
-
-        has_more = len(rows) > normalized_limit
-        visible_rows = rows[:normalized_limit]
+        if self._is_s3_parquet_source(product.source):
+            if self._s3_parquet_page_provider is None:
+                raise ValueError("Direct Parquet data-product reads are not configured.")
+            fields, visible_rows, has_more = self._s3_parquet_page_provider(
+                product.source.bucket,
+                product.source.key,
+                normalized_limit,
+                normalized_offset,
+            )
+        else:
+            fields = self._relation_fields_provider(product.source.relation)
+            sql = (
+                f"SELECT * FROM {relation_identifier(product.source.relation)} "
+                f"LIMIT {normalized_limit + 1} OFFSET {normalized_offset}"
+            )
+            connection = self._create_worker_connection()
+            try:
+                rows = connection.execute(sql).fetchall()
+            finally:
+                connection.close()
+            has_more = len(rows) > normalized_limit
+            visible_rows = rows[:normalized_limit]
         column_names = [field.name for field in fields]
         items = [
             {
@@ -866,6 +897,14 @@ class DataProductManager:
 
         if source_kind == "local-object" or source_id == "workspace.local":
             return None
+        if source_kind == "relation" and source_id == "s3" and bucket and key:
+            return {
+                "sourceKind": "relation",
+                "sourceId": "s3",
+                "relation": relation,
+                "bucket": bucket,
+                "key": key.lstrip("/"),
+            }
         if source_kind == "relation" and relation:
             return {
                 "sourceKind": "relation",
@@ -921,6 +960,16 @@ class DataProductManager:
         ):
             return None
 
+        if self._is_s3_parquet_source(existing_product.source):
+            fields = self._s3_parquet_fields(
+                existing_product.source.bucket,
+                existing_product.source.key,
+            )
+            if not fields:
+                raise ValueError(
+                    "Publishing to DaCa requires a Parquet object with at least one schema field."
+                )
+
         display_name = str(
             source.get("sourceDisplayName")
             or source.get("source_display_name")
@@ -933,6 +982,11 @@ class DataProductManager:
         ).strip()
         return replace(
             existing_product.source,
+            relation=(
+                ""
+                if self._is_s3_parquet_source(existing_product.source)
+                else existing_product.source.relation
+            ),
             source_display_name=display_name,
             source_platform=platform,
             unsupported_reason="",
@@ -945,6 +999,18 @@ class DataProductManager:
     ) -> bool:
         source_kind = str(source.get("sourceKind") or "").strip()
         if source_kind == "relation":
+            if (
+                str(source.get("sourceId") or "").strip() == "s3"
+                and str(source.get("bucket") or "").strip()
+                and str(source.get("key") or "").strip()
+            ):
+                return (
+                    product.source.source_kind == "relation"
+                    and product.source.source_id == "s3"
+                    and product.source.bucket == str(source.get("bucket") or "").strip()
+                    and product.source.key
+                    == str(source.get("key") or "").strip().lstrip("/")
+                )
             return (
                 product.source.source_kind == "relation"
                 and str(product.source.relation).strip()
@@ -958,7 +1024,11 @@ class DataProductManager:
             )
         if source_kind == "object":
             return (
-                product.source.source_kind == "object"
+                product.source.source_kind in {"object", "relation"}
+                and (
+                    product.source.source_kind == "object"
+                    or product.source.source_id == "s3"
+                )
                 and str(product.source.bucket).strip()
                 == str(source.get("bucket") or "").strip()
                 and str(product.source.key).strip()
@@ -974,9 +1044,6 @@ class DataProductManager:
     ) -> DataProductSourceDescriptor:
         if not isinstance(source, dict):
             raise ValueError("A source descriptor is required.")
-
-        if self._s3_relation_source_resolver is not None:
-            source = self._s3_relation_source_resolver(source)
 
         raw_source_kind = str(
             source.get("sourceKind") or source.get("source_kind") or ""
@@ -1048,6 +1115,24 @@ class DataProductManager:
             )
 
         if raw_source_kind == "relation":
+            if raw_source_id == "s3" and (raw_bucket or raw_key):
+                normalized_key = raw_key.lstrip("/")
+                fields = self._s3_parquet_fields(raw_bucket, normalized_key)
+                if not fields:
+                    raise ValueError(
+                        "Publishing to DaCa requires a Parquet object with at least one schema field."
+                    )
+                return DataProductSourceDescriptor(
+                    source_kind="relation",
+                    source_id="s3",
+                    relation="",
+                    bucket=raw_bucket,
+                    key=normalized_key,
+                    source_display_name=(
+                        raw_display_name or PurePosixPath(normalized_key).name
+                    ),
+                    source_platform=raw_platform or "s3",
+                )
             if not raw_relation:
                 raise ValueError("Choose a relation before publishing it.")
             try:
@@ -1097,6 +1182,8 @@ class DataProductManager:
 
     def _source_summary(self, source: DataProductSourceDescriptor) -> str:
         if source.source_kind == "relation":
+            if self._is_s3_parquet_source(source):
+                return f"Live Parquet rows from s3://{source.bucket}/{source.key}."
             return f"Live relation rows from {source.relation}."
         if source.source_kind == "bucket":
             return f"Live Shared Workspace bucket listing for s3://{source.bucket}/."
@@ -1269,10 +1356,15 @@ class DataProductManager:
         self,
         source: DataProductSourceDescriptor,
     ) -> list[object]:
-        if source.source_kind != "relation" or not source.relation:
+        if source.source_kind != "relation":
             return []
         try:
-            fields = self._relation_fields_provider(source.relation)
+            if self._is_s3_parquet_source(source):
+                fields = self._s3_parquet_fields(source.bucket, source.key)
+            elif source.relation:
+                fields = self._relation_fields_provider(source.relation)
+            else:
+                return []
         except Exception:
             return []
         return [
@@ -1280,6 +1372,21 @@ class DataProductManager:
             for field in list(fields or [])
             if str(getattr(field, "name", "")).strip()
         ]
+
+    def _s3_parquet_fields(self, bucket: str, key: str) -> list[SourceField]:
+        if self._s3_parquet_fields_provider is None:
+            raise ValueError("Direct Parquet schema inspection is not configured.")
+        return list(self._s3_parquet_fields_provider(bucket, key) or [])
+
+    @staticmethod
+    def _is_s3_parquet_source(source: DataProductSourceDescriptor) -> bool:
+        return bool(
+            source.source_kind == "relation"
+            and source.source_id == "s3"
+            and source.bucket
+            and source.key
+            and source.key.lower().endswith(".parquet")
+        )
 
     def _product_metadata_schema(self) -> dict[str, object]:
         return {
