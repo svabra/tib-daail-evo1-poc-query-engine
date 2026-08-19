@@ -304,6 +304,10 @@ class CustomerJourneyUiTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         search = (STATIC_ROOT / "js/home-notebook-search.js").read_text(encoding="utf-8")
         styles = (STATIC_ROOT / "css/app.css").read_text(encoding="utf-8")
+        result_styles = styles.split(".home-notebook-search-results {", 1)[1].split("}", 1)[0]
+        expanded_feedback_styles = styles.split(
+            ".home-notebook-search.is-expanded .home-notebook-search-feedback {", 1
+        )[1].split("}", 1)[0]
 
         self.assertIn('class="home-journey-hero"', template)
         self.assertIn('id="home-journey-title"', template)
@@ -316,18 +320,36 @@ class CustomerJourneyUiTests(unittest.TestCase):
         self.assertIn('aria-expanded="false"', template)
         self.assertIn('role="combobox"', template)
         self.assertIn("data-home-notebook-search-all", template)
+        self.assertIn("data-home-notebook-search-expert", template)
         self.assertIn('href="/search"', template)
         self.assertIn('form.addEventListener("focusin"', search)
         self.assertIn('form.addEventListener("focusout"', search)
         self.assertIn('form.classList.toggle("is-expanded", expanded)', search)
         self.assertIn("syncActiveResultState", search)
         self.assertIn("syncAllResultsLink", search)
+        self.assertIn("syncExpertSearchLink", search)
+        self.assertIn('event.target.closest("[data-home-notebook-search-expert]")', search)
+        self.assertIn("Alle Inhalte · Erweiterte Filter", template)
+        self.assertIn("Expertensuche öffnen", template)
         self.assertNotIn('form.querySelector("[data-home-notebook-search-all]")?.remove()', search)
         self.assertNotIn("activeIndex = index;\n      render();", search)
         self.assertIn(".home-notebook-search.is-expanded", styles)
         self.assertIn(".home-notebook-search-all[hidden]", styles)
-        self.assertIn("height: 540px", styles)
-        self.assertIn("height: 218px", styles)
+        self.assertIn(".home-notebook-search:hover .home-notebook-search-expert", styles)
+        self.assertIn(".home-notebook-search:focus-within .home-notebook-search-expert", styles)
+        self.assertIn(
+            "radial-gradient(circle at 86% 16%, rgba(11, 68, 121, 0.07), transparent 32%)",
+            styles,
+        )
+        self.assertNotIn(
+            "radial-gradient(circle at top right, rgba(213, 43, 30, 0.08), transparent 32%)",
+            styles,
+        )
+        self.assertIn("height: 552px", styles)
+        self.assertIn("height: 318px", expanded_feedback_styles)
+        self.assertIn("padding-right: 0", expanded_feedback_styles)
+        self.assertNotIn("max-height", result_styles)
+        self.assertNotIn("overflow-y", result_styles)
         self.assertIn("WORKBENCH_LIVE_RESULT_LIMIT = 3", search)
         self.assertIn('"swiss-aarau-old-town-summer"', search)
         self.assertIn('"swiss-neuchatel-castle-lake"', search)
