@@ -5,6 +5,7 @@ import asyncio
 import json
 import sys
 import time
+from urllib.parse import urlsplit
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
@@ -147,13 +148,24 @@ async def publish_journey_product(page, timeout_ms: int) -> dict[str, object]:
                 f"expected {expected!r}: {requested_source}"
             )
     resolved_product = preview.get("product") or {}
+    schema_properties = (
+        preview.get("responseSchema", {})
+        .get("properties", {})
+        .get("items", {})
+        .get("items", {})
+        .get("properties", {})
+    )
     if (
         resolved_product.get("bucket") != PRODUCT_BUCKET
         or resolved_product.get("key") != PRODUCT_KEY
-        or not resolved_product.get("relation")
+        or resolved_product.get("relation")
         or preview.get("responseKind") != "relation"
+        or not schema_properties
     ):
-        raise RuntimeError(f"Journey preview did not resolve the S3 relation: {preview}")
+        raise RuntimeError(
+            "Journey preview did not inspect the exact path-backed Parquet object: "
+            f"{preview}"
+        )
 
     overwrite = dialog.locator("[data-data-product-overwrite-confirm]")
     if await overwrite.count():
@@ -180,7 +192,7 @@ async def publish_journey_product(page, timeout_ms: int) -> dict[str, object]:
         product.get("slug") != PRODUCT_SLUG
         or product.get("bucket") != PRODUCT_BUCKET
         or product.get("key") != PRODUCT_KEY
-        or not product.get("relation")
+        or product.get("relation")
         or not published.get("dacaPublication")
     ):
         raise RuntimeError(f"Journey publication response is incomplete: {published}")
@@ -192,6 +204,42 @@ async def publish_journey_product(page, timeout_ms: int) -> dict[str, object]:
         raise RuntimeError(f"Journey publication success dialog did not mention DaCa: {title}")
     await message.locator("[data-message-submit]").click()
     return published
+
+
+async def verify_daca_handoff(browser, published: dict[str, object], timeout_ms: int) -> None:
+    product = published.get("product") or {}
+    publication = published.get("dacaPublication") or {}
+    catalog_url = str(publication.get("catalogUrl") or "").strip()
+    product_id = str(publication.get("productId") or "").strip()
+    expected_path = f"/products/{product_id}/overview"
+    if urlsplit(catalog_url).path != expected_path:
+        raise RuntimeError(
+            "Journey publication did not return the canonical DaCa product workspace: "
+            f"{catalog_url}"
+        )
+
+    daca_page = await browser.new_page(viewport={"width": 1600, "height": 1200})
+    try:
+        response = await daca_page.goto(
+            catalog_url,
+            wait_until="domcontentloaded",
+            timeout=timeout_ms,
+        )
+        if response is None or not response.ok:
+            status = response.status if response is not None else "no response"
+            raise RuntimeError(f"DaCa product workspace returned {status}.")
+        await daca_page.get_by_role(
+            "heading", name=str(product.get("title") or ""), exact=True
+        ).wait_for(
+            state="visible",
+            timeout=timeout_ms,
+        )
+        await daca_page.get_by_role("heading", name="Produktübersicht").wait_for(
+            state="visible",
+            timeout=timeout_ms,
+        )
+    finally:
+        await daca_page.close()
 
 
 async def run_smoke(args: argparse.Namespace) -> int:
@@ -223,6 +271,8 @@ async def run_smoke(args: argparse.Namespace) -> int:
             print(f"Journey query completed: {job.get('jobId')}", flush=True)
             published = await publish_journey_product(page, args.timeout_ms)
             print("Journey data product published to DaCa.", flush=True)
+            await verify_daca_handoff(browser, published, args.timeout_ms)
+            print("DaCa product overview opened with the published product.", flush=True)
         except (PlaywrightTimeoutError, RuntimeError, ValueError) as exc:
             print(str(exc), file=sys.stderr)
             for message in diagnostics:
@@ -234,7 +284,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
 
     print(
         "Playwright Data Analyst's Journey publication smoke passed: "
-        f"job={job.get('jobId')} relation={published['product']['relation']} "
+        f"job={job.get('jobId')} path={PRODUCT_PATH} "
         f"DaCa={published['dacaPublication']['productId']}"
     )
     return 0

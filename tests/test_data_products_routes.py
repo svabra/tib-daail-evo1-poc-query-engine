@@ -326,7 +326,7 @@ class FakeWorkbenchService:
             "productId": "8431e889-8d70-49e4-b790-7ef9fe8bb1df",
             "state": "pending_review",
             "taskIds": [],
-            "catalogUrl": "http://localhost:8080/products/8431e889-8d70-49e4-b790-7ef9fe8bb1df/quality?demoUser=joel.ruod",
+            "catalogUrl": "http://localhost:8080/products/8431e889-8d70-49e4-b790-7ef9fe8bb1df/overview?demoUser=joel.ruod",
         }
         return created
 

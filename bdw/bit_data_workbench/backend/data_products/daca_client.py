@@ -282,3 +282,111 @@ class DacaMetadataPublicationClient:
             state=state,
             missing_fields=missing_fields,
         )
+
+    def record_source_refresh(
+        self,
+        *,
+        product_id: str,
+        owner_user_id: str,
+        source_updated_at: str,
+    ) -> None:
+        """Record a DAAIF source refresh on an existing DaCa product.
+
+        DaCa's open metadata-publication endpoint is intentionally idempotent:
+        replaying an unchanged definition does not create a new product revision.
+        Updating the source timestamp through DaCa's versioned product endpoint
+        makes a successful DAAIF refresh visible in the catalog without sending
+        the Parquet data itself to DaCa.
+        """
+
+        normalized_product_id = str(product_id or "").strip()
+        try:
+            uuid.UUID(normalized_product_id)
+        except (ValueError, AttributeError) as exc:
+            raise DacaPublicationError(
+                "The stored DaCa product identifier is invalid.",
+                kind="invalid_response",
+            ) from exc
+        normalized_owner = str(owner_user_id or "").strip()
+        normalized_updated_at = str(source_updated_at or "").strip()
+        if not normalized_owner or not normalized_updated_at:
+            raise DacaPublicationError(
+                "DaCa source refresh requires an owner and source timestamp.",
+                kind="invalid_response",
+            )
+
+        url = f"{self._base_url}/api/v1/data-products/{normalized_product_id}"
+        base_headers = {
+            "Accept": "application/json",
+            "X-DaCa-User": normalized_owner,
+        }
+        try:
+            with httpx.Client(
+                timeout=self._timeout_seconds,
+                transport=self._transport,
+            ) as client:
+                for attempt in range(2):
+                    current = client.get(url, headers=base_headers)
+                    if current.status_code != 200:
+                        raise DacaPublicationError(
+                            "DaCa source refresh could not read the product: "
+                            f"{response_error_detail(current)}",
+                            kind=(
+                                "unavailable"
+                                if current.status_code >= 500
+                                else "upstream"
+                            ),
+                            upstream_status=current.status_code,
+                        )
+                    etag = str(current.headers.get("ETag") or "").strip()
+                    if not etag:
+                        raise DacaPublicationError(
+                            "DaCa did not return the product revision required for refresh.",
+                            kind="invalid_response",
+                        )
+                    try:
+                        current_payload = current.json()
+                    except ValueError as exc:
+                        raise DacaPublicationError(
+                            "DaCa returned a non-JSON product during source refresh.",
+                            kind="invalid_response",
+                        ) from exc
+                    if not isinstance(current_payload, dict):
+                        raise DacaPublicationError(
+                            "DaCa returned an invalid product during source refresh.",
+                            kind="invalid_response",
+                        )
+                    metadata = current_payload.get("metadata")
+                    merged_metadata = dict(metadata) if isinstance(metadata, dict) else {}
+                    merged_metadata["sourceUpdatedAt"] = normalized_updated_at
+                    refreshed = client.patch(
+                        url,
+                        json={"metadata": merged_metadata},
+                        headers={**base_headers, "If-Match": etag},
+                    )
+                    if refreshed.status_code == 412 and attempt == 0:
+                        continue
+                    if refreshed.status_code != 200:
+                        raise DacaPublicationError(
+                            "DaCa source refresh failed: "
+                            f"{response_error_detail(refreshed)}",
+                            kind=(
+                                "conflict"
+                                if refreshed.status_code in {409, 412}
+                                else "unavailable"
+                                if refreshed.status_code >= 500
+                                else "upstream"
+                            ),
+                            upstream_status=refreshed.status_code,
+                        )
+                    return
+        except DacaPublicationError:
+            raise
+        except httpx.TimeoutException as exc:
+            raise DacaPublicationError(
+                "DaCa source refresh timed out.", kind="timeout"
+            ) from exc
+        except httpx.RequestError as exc:
+            raise DacaPublicationError(
+                "DaCa source refresh is unavailable.", kind="unavailable"
+            ) from exc

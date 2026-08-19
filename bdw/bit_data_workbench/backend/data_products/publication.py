@@ -77,12 +77,29 @@ def same_publishable_definition(
     candidate: DataProductDefinition,
 ) -> bool:
     """Compare user-controlled publication fields, excluding durable identity/state."""
+    same_source = existing.source == candidate.source
+    if (
+        existing.source.source_kind == "relation"
+        and candidate.source.source_kind == "relation"
+        and existing.source.source_id == "s3"
+        and candidate.source.source_id == "s3"
+        and existing.source.bucket
+        and existing.source.key
+        and candidate.source.bucket
+        and candidate.source.key
+    ):
+        # A discovered DuckDB view name is an implementation detail. For a
+        # concrete S3 product, bucket/key are the durable source identity.
+        same_source = (
+            existing.source.bucket == candidate.source.bucket
+            and existing.source.key == candidate.source.key
+        )
     return all(
         (
             existing.slug == candidate.slug,
             existing.title == candidate.title,
             existing.description == candidate.description,
-            existing.source == candidate.source,
+            same_source,
             existing.public_path == candidate.public_path,
             existing.owner == candidate.owner,
             existing.domain == candidate.domain,
@@ -163,14 +180,24 @@ class DacaPublicationCoordinator:
                 and existing_reference is not None
                 and same_publishable_definition(existing_product, candidate)
             ):
+                resolved_owner = owner_user_id(candidate.owner, slug=candidate.slug)
+                self._client.record_source_refresh(
+                    product_id=existing_reference.product_id,
+                    owner_user_id=resolved_owner,
+                    source_updated_at=candidate.updated_at,
+                )
                 status = self._client.product_status(
                     product_id=existing_reference.product_id,
-                    owner_user_id=owner_user_id(candidate.owner, slug=candidate.slug),
+                    owner_user_id=resolved_owner,
                 )
                 reference = replace(
                     existing_reference,
                     state=status.state,
                     missing_fields=list(status.missing_fields),
+                    catalog_url=self.catalog_url(
+                        product_id=existing_reference.product_id,
+                        demo_user_id=resolved_owner,
+                    ),
                     synced_at=datetime.now(UTC).isoformat(),
                 )
                 activated = self._manager.activate_reserved_product(
@@ -231,7 +258,24 @@ class DacaPublicationCoordinator:
         now = monotonic()
         for product in self._manager.managed_product_definitions():
             reference = product.daca_publication
-            if reference is None or reference.state == "published":
+            if reference is None:
+                continue
+            resolved_owner = owner_user_id(product.owner, slug=product.slug)
+            canonical_catalog_url = self.catalog_url(
+                product_id=reference.product_id,
+                demo_user_id=resolved_owner,
+            )
+            if reference.catalog_url != canonical_catalog_url:
+                product = self._manager.reconcile_daca_publication(
+                    product_id=product.product_id,
+                    state=reference.state,
+                    missing_fields=list(reference.missing_fields),
+                    catalog_url=canonical_catalog_url,
+                )
+                reference = product.daca_publication
+                if reference is None:
+                    continue
+            if reference.state == "published":
                 continue
             last_attempt = self._last_reconciliation_attempt.get(reference.product_id, 0.0)
             if now - last_attempt < max(0.0, minimum_interval_seconds):
@@ -246,6 +290,7 @@ class DacaPublicationCoordinator:
                     product_id=product.product_id,
                     state=status.state,
                     missing_fields=list(status.missing_fields),
+                    catalog_url=canonical_catalog_url,
                 )
             except Exception:
                 # Catalog status is display metadata. A temporary DaCa failure
@@ -343,6 +388,4 @@ class DacaPublicationCoordinator:
 
     def catalog_url(self, *, product_id: str, demo_user_id: str) -> str:
         query = urlencode({"demoUser": demo_user_id})
-        return (
-            f"{self._daca_ui_url}/products/{product_id}/quality?{query}"
-        )
+        return f"{self._daca_ui_url}/products/{product_id}/overview?{query}"

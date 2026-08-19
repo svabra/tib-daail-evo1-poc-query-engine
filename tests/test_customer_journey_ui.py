@@ -590,6 +590,7 @@ class CustomerJourneyUiTests(unittest.TestCase):
         self.assertIn('sourceKind: "relation"', source_helper)
         self.assertIn("typed relation", controller)
         self.assertIn("Data product replaced", controller)
+        self.assertIn("Open data product in DaCa as Joel Ruod", controller)
         module_uri = (STATIC_ROOT / "js/data-products-source.js").resolve().as_uri()
         script = f"""
           import {{ dataProductSourceForPublication }} from {module_uri!r};

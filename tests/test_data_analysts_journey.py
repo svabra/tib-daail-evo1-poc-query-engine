@@ -48,8 +48,6 @@ from bit_data_workbench.data_generator.data_analysts_journey import (  # noqa: E
     JOURNEY_POSTGRES_QUERY_REFERENCE,
     JOURNEY_POSTGRES_RELATION,
     JOURNEY_PRODUCT_PATH,
-    JOURNEY_PRODUCT_RELATION,
-    JOURNEY_PRODUCT_SOURCE_DESCRIPTOR,
     JourneyRow,
     assert_postgres_table_schema,
     journey_rows,
@@ -439,16 +437,6 @@ class DataAnalystsJourneyNotebookTests(unittest.TestCase):
         self.assertIn("ax_hist.axvline(0", notebook.cells[1].sql)
         self.assertIn("Mrd. CHF", notebook.cells[1].sql)
         self.assertIn("Stichtag 12.08.2026", notebook.cells[1].sql)
-        self.assertEqual(
-            JOURNEY_PRODUCT_SOURCE_DESCRIPTOR,
-            {
-                "sourceKind": "relation",
-                "sourceId": "s3",
-                "relation": JOURNEY_PRODUCT_RELATION,
-                "sourceDisplayName": "Kantonale Gewerbesteuer Soll/Ist 2022–2026",
-                "sourcePlatform": "s3",
-            },
-        )
 
     def test_chart_cell_emits_real_png_from_materialized_result(self) -> None:
         electronic = rows_frame(journey_rows(include_aargau=False))

@@ -66,6 +66,19 @@ CURRENT_FEATURE_LIST: dict[str, object] = {
 # test-only, deployment, worker, lock, and rollback details.
 USER_FACING_FEATURE_HISTORY: list[dict[str, object]] = [
     {
+        "version": "0.10.48",
+        "features": [
+            (
+                "Parquet-Datenprodukte direkt publizieren",
+                "DAAIF liest Schema und Seiten direkt vom vollständigen S3-Pfad, sodass ein gespeichertes Journey-Ergebnis ohne Discovery-Wartezeit als typisierte JSON-API publiziert werden kann.",
+            ),
+            (
+                "Durchgängiger Wechsel zu DaCa",
+                "Erneute Publikationen aktualisieren die DaCa-Revision und öffnen das exakte Datenprodukt direkt in der Übersicht.",
+            ),
+        ],
+    },
+    {
         "version": "0.10.47",
         "features": [
             (
@@ -706,9 +719,25 @@ USER_FACING_FEATURE_HISTORY: list[dict[str, object]] = [
 ]
 
 
-# Derived from git history through version 0.10.47. Keep entries concise and
+# Derived from git history through version 0.10.48. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.48",
+        "releasedAt": "2026-08-19T14:12:36+02:00",
+        "features": [
+            (
+                "Path-backed S3 Parquet data products now read their typed schema "
+                "and paginated rows directly from the exact object, removing the "
+                "discovery race and collision-prone relation-name dependency."
+            ),
+            (
+                "Republishing an unchanged DaCa-managed product records the source "
+                "refresh with optimistic concurrency, updates the catalog revision "
+                "and timestamp, and links users directly to the matching product overview."
+            ),
+        ],
+    },
     {
         "version": "0.10.47",
         "releasedAt": "2026-08-18T13:49:25+02:00",
