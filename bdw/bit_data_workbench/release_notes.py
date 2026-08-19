@@ -66,6 +66,19 @@ CURRENT_FEATURE_LIST: dict[str, object] = {
 # test-only, deployment, worker, lock, and rollback details.
 USER_FACING_FEATURE_HISTORY: list[dict[str, object]] = [
     {
+        "version": "0.10.49",
+        "features": [
+            (
+                "Schnellsuche und Expertensuche verbinden",
+                "Ein neuer Expertensuche-Knopf erscheint bei Hover oder Tastaturfokus, übernimmt den aktuellen Suchbegriff und öffnet die erweiterten Filter mit einem Klick.",
+            ),
+            (
+                "Suchtreffer übersichtlich darstellen",
+                "Die Vorschau nutzt die verfügbare Breite, zeigt drei Treffer ohne innere Scrollbar und bleibt auf kleinen Bildschirmen sauber bedienbar.",
+            ),
+        ],
+    },
+    {
         "version": "0.10.48",
         "features": [
             (
@@ -719,9 +732,29 @@ USER_FACING_FEATURE_HISTORY: list[dict[str, object]] = [
 ]
 
 
-# Derived from git history through version 0.10.48. Keep entries concise and
+# Derived from git history through version 0.10.49. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.49",
+        "releasedAt": "2026-08-19T21:30:25+02:00",
+        "features": [
+            (
+                "The Home quick search now reveals a branded expert-search action "
+                "on hover and keyboard focus, preserves the current query, and "
+                "navigates to the advanced search on the first activation."
+            ),
+            (
+                "Expanded result previews now use the full available width, retain "
+                "three visible results without an inner scrollbar, and avoid overlap "
+                "with the expert-search action across desktop and mobile layouts."
+            ),
+            (
+                "The expert-search page now uses the same neutral and BIT-blue canvas "
+                "as DaCa instead of the former red page wash."
+            ),
+        ],
+    },
     {
         "version": "0.10.48",
         "releasedAt": "2026-08-19T14:12:36+02:00",

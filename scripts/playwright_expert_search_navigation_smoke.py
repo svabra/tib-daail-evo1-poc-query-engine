@@ -100,6 +100,12 @@ async def install_search_fixtures(page) -> None:
 async def open_home(page, base_url: str, timeout_ms: int) -> None:
     await page.goto(urljoin(base_url, "/"), wait_until="domcontentloaded", timeout=timeout_ms)
     await page.locator("[data-home-page]").wait_for(state="visible", timeout=timeout_ms)
+    await page.wait_for_function(
+        """() => (
+          document.querySelector('[data-home-notebook-search-form]')?.dataset.bound === 'true'
+        )""",
+        timeout=timeout_ms,
+    )
 
 
 async def assert_home_product_click(page, base_url: str, timeout_ms: int) -> None:
@@ -152,6 +158,56 @@ async def assert_all_results_and_expert_product_click(
     )
 
 
+async def assert_hover_expert_search_button(
+    page, base_url: str, timeout_ms: int
+) -> None:
+    await open_home(page, base_url, timeout_ms)
+    await page.mouse.move(1, 1)
+    form = page.locator("[data-home-notebook-search-form]")
+    expert_search = page.locator("[data-home-notebook-search-expert]")
+    await expert_search.wait_for(state="hidden", timeout=timeout_ms)
+    await form.hover()
+    await expert_search.wait_for(state="visible", timeout=timeout_ms)
+    await page.locator("[data-home-notebook-search-input]").evaluate(
+        """input => {
+          input.value = 'common';
+          input.dispatchEvent(new Event('input', { bubbles: true }));
+        }"""
+    )
+    results = page.locator("[data-home-notebook-search-results]")
+    await page.wait_for_function(
+        "document.querySelectorAll('[data-home-notebook-search-results] li').length === 3",
+        timeout=timeout_ms,
+    )
+    result_metrics = await results.evaluate(
+        """node => ({
+          clientHeight: node.clientHeight,
+          scrollHeight: node.scrollHeight,
+          overflowY: getComputedStyle(node).overflowY,
+        })"""
+    )
+    if result_metrics["scrollHeight"] > result_metrics["clientHeight"]:
+        raise AssertionError("Home search preview unexpectedly requires vertical scrolling.")
+    if result_metrics["overflowY"] in {"auto", "scroll"}:
+        raise AssertionError("Home search preview exposes an inner vertical scrollbar.")
+    if await expert_search.get_attribute("href") != "/search?q=common":
+        raise AssertionError("Expert-search button did not preserve the current query.")
+    if await form.evaluate("node => node.classList.contains('is-expanded')"):
+        raise AssertionError("Hovering the expert-search action unexpectedly expanded the quick search.")
+    box = await expert_search.bounding_box()
+    if box is None:
+        raise AssertionError("Expert-search action has no clickable bounding box.")
+    await page.mouse.move(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+    await page.mouse.down()
+    if await form.evaluate("node => node.classList.contains('is-expanded')"):
+        raise AssertionError("The first pointer press expanded the quick search instead of activating the link.")
+    await page.mouse.up()
+    await page.wait_for_url("**/search?q=common", timeout=timeout_ms)
+    await page.locator("[data-workbench-expert-search-page]").wait_for(
+        state="visible", timeout=timeout_ms
+    )
+
+
 async def main() -> None:
     args = parse_args()
     async with async_playwright() as playwright:
@@ -160,6 +216,7 @@ async def main() -> None:
         try:
             await install_search_fixtures(page)
             await assert_home_product_click(page, args.base_url, args.timeout_ms)
+            await assert_hover_expert_search_button(page, args.base_url, args.timeout_ms)
             await assert_all_results_and_expert_product_click(
                 page, args.base_url, args.timeout_ms
             )
@@ -167,7 +224,7 @@ async def main() -> None:
             await browser.close()
     print(
         "Playwright expert-search navigation passed: native product clicks "
-        "and the Home all-results link reached their intended pages."
+        "and both Home expert-search links reached their intended pages."
     )
 
 

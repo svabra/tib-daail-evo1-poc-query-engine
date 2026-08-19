@@ -412,12 +412,14 @@ export function initializeHomeNotebookSearch(root = document) {
   const feedback = page.querySelector("[data-home-notebook-search-feedback]");
   const resultsRoot = page.querySelector("[data-home-notebook-search-results]");
   const allResultsLink = page.querySelector("[data-home-notebook-search-all]");
+  const expertSearchLink = page.querySelector("[data-home-notebook-search-expert]");
   if (
     !(form instanceof HTMLFormElement) ||
     !(input instanceof HTMLInputElement) ||
     !(feedback instanceof HTMLElement) ||
     !(resultsRoot instanceof HTMLElement) ||
     !(allResultsLink instanceof HTMLAnchorElement) ||
+    !(expertSearchLink instanceof HTMLAnchorElement) ||
     form.dataset.bound === "true"
   ) {
     return;
@@ -460,8 +462,15 @@ export function initializeHomeNotebookSearch(root = document) {
     allResultsLink.textContent = `Alle ${totalCount} Ergebnisse in der Expertensuche anzeigen`;
   }
 
+  function syncExpertSearchLink(query) {
+    expertSearchLink.href = query
+      ? `/search?q=${encodeURIComponent(query)}`
+      : "/search";
+  }
+
   function render() {
     const query = input.value.trim();
+    syncExpertSearchLink(query);
     const preview = searchWorkbenchPreview(items, query, WORKBENCH_LIVE_RESULT_LIMIT);
     results = preview.items;
     if (!query) {
@@ -469,7 +478,7 @@ export function initializeHomeNotebookSearch(root = document) {
       resultsRoot.replaceChildren();
       syncAllResultsLink("", 0, 0);
       feedback.textContent = loaded
-        ? "Tipp: Suchen Sie nach Notebook, Data Source, Datenobjekt oder DAAIF-Datenprodukt."
+        ? "Tipp: Notebook, Datenquelle oder Datenprodukt suchen."
         : "Suchindex wird geladen …";
       input.removeAttribute("aria-activedescendant");
       return;
@@ -503,7 +512,10 @@ export function initializeHomeNotebookSearch(root = document) {
       render();
     });
 
-  form.addEventListener("focusin", () => {
+  form.addEventListener("focusin", (event) => {
+    if (event.target instanceof Element && event.target.closest("[data-home-notebook-search-expert]")) {
+      return;
+    }
     setExpanded(true);
   });
   form.addEventListener("focusout", (event) => {
