@@ -40,7 +40,8 @@ CURRENT_FEATURE_LIST: dict[str, object] = {
         {
             "title": "Daten kontrolliert einlesen und bereitstellen",
             "description": (
-                "Importieren Sie Dateien, verwalten Sie Ziele im Shared Workspace und "
+                "Importieren Sie Dateien, kopieren Sie freigegebene Oracle-Relationen "
+                "einmalig oder stündlich als vollständige Parquet-Stände nach S3 und "
                 "publizieren Sie kuratierte Datenprodukte mit nachvollziehbaren Metadaten."
             ),
         },
@@ -66,6 +67,23 @@ CURRENT_FEATURE_LIST: dict[str, object] = {
 # RELEASE_NOTES below remain the technical source of truth; this list omits
 # test-only, deployment, worker, lock, and rollback details.
 USER_FACING_FEATURE_HISTORY: list[dict[str, object]] = [
+    {
+        "version": "0.10.51",
+        "features": [
+            (
+                "Oracle-Daten einmalig oder stündlich nach S3 übernehmen",
+                "Der neue Sourcing Hub erstellt aus einer freigegebenen Oracle-Tabelle denselben vollständigen Parquet-Export wahlweise als One-Time-Lauf oder als Stundenplan zur vollen Stunde.",
+            ),
+            (
+                "S3-Ziele atomar und nachvollziehbar aktualisieren",
+                "Ein validiertes Staging-Objekt ersetzt den stabilen Zielpfad erst nach erfolgreichem Lauf; Detailseite und Historie zeigen Zeilen, Grösse, Laufstatus und nächsten Termin.",
+            ),
+            (
+                "Schedules sicher über Source Grants steuern",
+                "DAAIF prüft den aktuellen DaCa-Grant vor jeder Ausführung, pausiert endgültig unberechtigte Pläne und isoliert Definitionen und Läufe pro Benutzer.",
+            ),
+        ],
+    },
     {
         "version": "0.10.50",
         "features": [
@@ -750,9 +768,34 @@ USER_FACING_FEATURE_HISTORY: list[dict[str, object]] = [
 ]
 
 
-# Derived from git history through version 0.10.50. Keep entries concise and
+# Derived from git history through version 0.10.51. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.51",
+        "releasedAt": "2026-08-20T23:31:33+02:00",
+        "features": [
+            (
+                "The governed Sourcing Hub now lists approved Oracle sources and persisted "
+                "ingestion definitions, with one shared four-step flow for One-Time and "
+                "hourly full-refresh execution."
+            ),
+            (
+                "Oracle relations are written through the existing query-job path to a hidden, "
+                "run-specific Parquet staging object, validated for schema and row count, then "
+                "atomically promoted to the stable S3 target without exposing partial results."
+            ),
+            (
+                "Restart-safe S3 definitions and run history, deterministic scheduled-run IDs, "
+                "overlap and missed-slot handling, current DaCa-grant enforcement and the shared "
+                "SSE stream make hourly schedules observable and fail closed."
+            ),
+            (
+                "The responsive ingestion detail page supports Run now, Pause, Resume and direct "
+                "One-Time/Scheduled switching while preserving the source, destination and audit history."
+            ),
+        ],
+    },
     {
         "version": "0.10.50",
         "releasedAt": "2026-08-20T16:02:12+02:00",

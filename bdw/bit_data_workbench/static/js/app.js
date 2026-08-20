@@ -22,6 +22,10 @@ import {
 import { createIngestionController } from "./ingestion-controller.js";
 import { createIngestionUi } from "./ingestion-ui.js";
 import { initializeSourceSourcingWizard } from "./source-sourcing-wizard.js";
+import {
+  applySourceIngestionRealtimeSnapshot,
+  initializeSourceIngestionWorkbench,
+} from "./source-ingestion-workbench.js";
 import { initializeDataSourceWorkbenchControls } from "./data-source-workbench.js";
 import { createHomeUi } from "./home-ui.js";
 import { createFeatureListController } from "./feature-list-controller.js?v=2026-08-18-feature-list-3";
@@ -223,6 +227,7 @@ let pythonJobsSnapshot = [];
 let pythonJobsSummary = { runningCount: 0, totalCount: 0 };
 let realtimeEventsEventSource = null;
 let serviceConsumptionStateVersion = null;
+let sourceIngestionsStateVersion = null;
 let clientConnectionsStateVersion = 0;
 let clientConnectionsCount = 0;
 let dataGeneratorsCatalog = [];
@@ -8230,6 +8235,10 @@ function applyRealtimeTopicSnapshot(topic, snapshot) {
       serviceConsumptionStateVersion = Number(snapshot?.version || 0);
       serviceConsumptionUi.applyRealtimeSnapshot(snapshot);
       break;
+    case "source-ingestions":
+      sourceIngestionsStateVersion = Number(snapshot?.version || 0);
+      applySourceIngestionRealtimeSnapshot(snapshot);
+      break;
     case "materialized-stages":
       notebookStagePipelineController.applyRealtimeState(snapshot);
       break;
@@ -8797,6 +8806,9 @@ function ensureRealtimeEventsEventSource() {
   if (serviceConsumptionStateVersion !== null) {
     params.set("serviceConsumptionVersion", String(serviceConsumptionStateVersion));
   }
+  if (sourceIngestionsStateVersion !== null) {
+    params.set("sourceIngestionsVersion", String(sourceIngestionsStateVersion));
+  }
   const materializedStagesVersion = notebookStagePipelineController.getMaterializedStagesVersion();
   if (materializedStagesVersion !== null) {
     params.set("materializedStagesVersion", String(materializedStagesVersion));
@@ -8823,6 +8835,7 @@ function ensureRealtimeEventsEventSource() {
     "s3-delete-jobs",
     "data-source-events",
     "service-consumption",
+    "source-ingestions",
     "materialized-stages",
     "notebook-events",
     "client-connections",
@@ -8911,15 +8924,23 @@ function ensureRealtimeEventsEventSource() {
   realtimeEventsEventSource = eventSource;
 }
 
-async function openIngestionWorkbench({ pushHistory = true, navigationToken = null } = {}) {
+async function openIngestionWorkbench({
+  path = "/ingestion-workbench",
+  pushHistory = true,
+  navigationToken = null,
+} = {}) {
   const panel = document.getElementById("workspace-panel");
   if (!panel) {
     return;
   }
 
+  const requestPath = String(path || "/ingestion-workbench");
+  if (!requestPath.startsWith("/ingestion-workbench")) {
+    throw new Error(`Unsupported ingestion workbench path: ${requestPath}`);
+  }
   const previousState = captureIngestionWorkbenchNavigationState(panel.querySelector("[data-ingestion-workbench-page]"));
-  const token = navigationToken ?? workspaceNavigation.begin({ path: "/ingestion-workbench" });
-  const response = await window.fetch("/ingestion-workbench", {
+  const token = navigationToken ?? workspaceNavigation.begin({ path: requestPath });
+  const response = await window.fetch(requestPath, {
     headers: { "HX-Request": "true" },
     signal: token.signal,
   });
@@ -8939,12 +8960,19 @@ async function openIngestionWorkbench({ pushHistory = true, navigationToken = nu
   processHtmx(panel);
   setShellSidebarHidden(true);
   applyWorkbenchTitle("ingestion");
-  if (pushHistory && window.location.pathname !== "/ingestion-workbench") {
-    window.history.pushState({}, "", "/ingestion-workbench");
+  if (pushHistory && `${window.location.pathname}${window.location.search}` !== requestPath) {
+    window.history.pushState({}, "", requestPath);
   }
-  if (!restoreIngestionWorkbenchNavigationState(previousState, panel.querySelector("[data-ingestion-workbench-page]"))) {
+  if (
+    requestPath.startsWith("/ingestion-workbench/manual") &&
+    !restoreIngestionWorkbenchNavigationState(
+      previousState,
+      panel.querySelector("[data-ingestion-workbench-page]")
+    )
+  ) {
     showIngestionLanding();
   }
+  initializeSourceIngestionWorkbench();
   renderQueryNotificationMenu();
 }
 
@@ -12590,9 +12618,12 @@ window.addEventListener("popstate", async () => {
     return;
   }
 
-  if (window.location.pathname === "/ingestion-workbench") {
+  if (window.location.pathname.startsWith("/ingestion-workbench")) {
     try {
-      await openIngestionWorkbench({ pushHistory: false });
+      await openIngestionWorkbench({
+        path: `${window.location.pathname}${window.location.search}`,
+        pushHistory: false,
+      });
     } catch (error) {
       if (error?.name !== "AbortError") {
         console.error("Failed to restore the Ingestion Workbench from browser history.", error);
@@ -12736,6 +12767,7 @@ Promise.allSettled(initialLoadTasks)
       renderCsvIngestionWorkbench();
       renderFileIngestionWorkbench();
       initializeSourceSourcingWizard();
+      initializeSourceIngestionWorkbench();
       renderQueryNotificationMenu();
       return;
     }

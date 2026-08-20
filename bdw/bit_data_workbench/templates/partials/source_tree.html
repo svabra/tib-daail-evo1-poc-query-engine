@@ -197,6 +197,15 @@
           >
             Query in new notebook
           </button>
+          {% if source_option_id.startswith('ora_') %}
+            <a
+              class="workspace-action-menu-item"
+              href="/ingestion-workbench/sourcing/ingestions/new?sourceId={{ source_option_id | urlencode }}&relationReference={{ source_object.relation | urlencode }}"
+              title="Create a one-time or hourly Parquet snapshot in S3"
+            >
+              Ingest to S3 ...
+            </a>
+          {% endif %}
           <button
             type="button"
             class="workspace-action-menu-item"

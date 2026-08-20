@@ -1,0 +1,61 @@
+<section class="sourcing-page source-ingestion-wizard" data-ingestion-workbench-page data-source-ingestion-wizard aria-labelledby="source-ingestion-wizard-title">
+  <a class="sourcing-back-link" href="/ingestion-workbench/sourcing">Back to Sourcing Hub</a>
+  <header class="sourcing-hero">
+    <div>
+      <span class="home-eyebrow">Oracle to S3</span>
+      <h2 id="source-ingestion-wizard-title">Create a complete data snapshot</h2>
+      <p>Choose one approved Oracle relation and write it to a stable Parquet object. You can run the same definition once or every full hour.</p>
+    </div>
+    <span class="sourcing-poc-badge">Oracle PoC &middot; Full Replace</span>
+  </header>
+
+  <ol class="sourcing-stepper source-ingestion-stepper" aria-label="Ingestion setup progress">
+    <li class="is-active" data-source-ingestion-step-indicator="1"><span>1</span><strong>Source &amp; Relation</strong></li>
+    <li data-source-ingestion-step-indicator="2"><span>2</span><strong>S3 Destination</strong></li>
+    <li data-source-ingestion-step-indicator="3"><span>3</span><strong>Run Mode</strong></li>
+    <li data-source-ingestion-step-indicator="4"><span>4</span><strong>Review &amp; Start</strong></li>
+  </ol>
+  <div class="sourcing-alert" data-source-ingestion-alert hidden role="alert"></div>
+
+  <form data-source-ingestion-form novalidate>
+    <section class="sourcing-panel" data-source-ingestion-step="1" aria-labelledby="source-ingestion-source-title">
+      <div class="sourcing-panel-heading"><span>Step 1</span><h3 id="source-ingestion-source-title">Choose the governed source object</h3><p>Your DaCa grant is checked again for every execution.</p></div>
+      <div class="source-ingestion-form-grid">
+        <label class="sourcing-field"><span>Oracle source</span><select required data-source-ingestion-source><option value="">Loading approved Oracle sources...</option></select></label>
+        <label class="sourcing-field"><span>Table or view</span><select required data-source-ingestion-relation disabled><option value="">Choose a source first</option></select></label>
+      </div>
+      <div class="source-ingestion-grant-note" data-source-ingestion-grant-note hidden></div>
+      <div class="sourcing-actions"><button class="modal-button" type="button" data-source-ingestion-next>Continue to destination</button></div>
+    </section>
+
+    <section class="sourcing-panel" data-source-ingestion-step="2" aria-labelledby="source-ingestion-destination-title" hidden>
+      <div class="sourcing-panel-heading"><span>Step 2</span><h3 id="source-ingestion-destination-title">Choose the stable S3 target</h3><p>Parquet and Full Replace are fixed for this PoC. Existing data at the target is replaced only after the new snapshot is validated.</p></div>
+      <div class="source-ingestion-destination-summary"><span>Format <strong>Parquet</strong></span><span>Write mode <strong>Atomic Full Replace</strong></span></div>
+      <div class="source-ingestion-form-grid">
+        <label class="sourcing-field"><span>Visible S3 bucket</span><input required autocomplete="off" list="source-ingestion-visible-buckets" data-source-ingestion-bucket><datalist id="source-ingestion-visible-buckets" data-source-ingestion-buckets></datalist></label>
+        <label class="sourcing-field"><span>Object key</span><input required autocomplete="off" spellcheck="false" data-source-ingestion-key></label>
+      </div>
+      <p class="source-ingestion-path-preview" data-source-ingestion-path-preview></p>
+      <div class="sourcing-actions"><button class="modal-button modal-button-secondary" type="button" data-source-ingestion-back>Back</button><button class="modal-button" type="button" data-source-ingestion-next>Continue to run mode</button></div>
+    </section>
+
+    <section class="sourcing-panel" data-source-ingestion-step="3" aria-labelledby="source-ingestion-mode-title" hidden>
+      <div class="sourcing-panel-heading"><span>Step 3</span><h3 id="source-ingestion-mode-title">Run once or keep it current</h3><p>The definition and execution path are identical. Scheduling only controls whether another run remains active.</p></div>
+      <fieldset class="source-ingestion-mode-switch">
+        <legend>Run mode</legend>
+        <label><input type="radio" name="source-ingestion-mode" value="once" checked data-source-ingestion-mode><span><strong>Run once</strong><small>Create one complete snapshot now.</small></span></label>
+        <label><input type="radio" name="source-ingestion-mode" value="scheduled" data-source-ingestion-mode><span><strong>Scheduled</strong><small>Run now, then every full hour.</small></span></label>
+      </fieldset>
+      <div class="source-ingestion-schedule-contract" data-source-ingestion-schedule-contract hidden><span>Cadence <strong>Every hour</strong></span><span>Minute <strong>00</strong></span><span>Time zone <strong>Europe/Zurich</strong></span><p>The schedule is activated only after the immediate test run succeeds.</p></div>
+      <div class="sourcing-actions"><button class="modal-button modal-button-secondary" type="button" data-source-ingestion-back>Back</button><button class="modal-button" type="button" data-source-ingestion-next>Review ingestion</button></div>
+    </section>
+
+    <section class="sourcing-panel" data-source-ingestion-step="4" aria-labelledby="source-ingestion-review-title" hidden>
+      <div class="sourcing-panel-heading"><span>Step 4</span><h3 id="source-ingestion-review-title">Review and start</h3><p>Confirm the source, destination and replace effect before the first run starts.</p></div>
+      <label class="sourcing-field source-ingestion-name-field"><span>Ingestion name</span><input required minlength="3" data-source-ingestion-name></label>
+      <dl class="sourcing-review" data-source-ingestion-review></dl>
+      <label class="sourcing-confirm"><input type="checkbox" required data-source-ingestion-confirm><span>I understand that a successful run completely replaces the Parquet object at this S3 path.</span></label>
+      <div class="sourcing-actions"><button class="modal-button modal-button-secondary" type="button" data-source-ingestion-back>Back</button><button class="modal-button" type="submit" data-source-ingestion-submit>Run once</button></div>
+    </section>
+  </form>
+</section>

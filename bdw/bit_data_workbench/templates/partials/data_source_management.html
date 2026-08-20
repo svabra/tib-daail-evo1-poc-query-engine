@@ -150,6 +150,18 @@
             </div>
           </div>
           <div class="data-source-detail-action-cluster">
+            {% if selected_data_source.source_id.startswith('ora_') %}
+              <a
+                href="/ingestion-workbench/sourcing/ingestions/new?sourceId={{ selected_data_source.source_id | urlencode }}"
+                class="data-source-explorer-launcher source-ingestion-launcher"
+                aria-label="Create ingestion from {{ selected_data_source.name }}"
+              >
+                <span class="data-source-explorer-launcher-copy">
+                  <strong>Create ingestion</strong>
+                  <span>Run once or every hour to S3</span>
+                </span>
+              </a>
+            {% endif %}
             <a
               href="{{ selected_data_source.explorer_path }}"
               class="data-source-explorer-launcher"
