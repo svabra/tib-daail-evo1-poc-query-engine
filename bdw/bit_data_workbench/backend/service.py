@@ -197,6 +197,7 @@ from .source_discovery import (
     SqlDiscoveredRelation,
     SqlSourceDiscoverer,
 )
+from .source_sourcing import SourceSourcingCoordinator, SourceSourcingError
 
 
 SUPPORTED_S3_VIEW_FORMATS = {"parquet", "csv", "json"}
@@ -388,6 +389,7 @@ class WorkbenchService:
             self._pg_oltp_plugin.source_id: self._pg_oltp_plugin,
             self._pg_olap_plugin.source_id: self._pg_olap_plugin,
         }
+        self.source_sourcing = SourceSourcingCoordinator(settings)
         self._query_result_exports = QueryResultExportManager(
             settings=settings,
             connection_factory=self._create_worker_connection,
@@ -788,6 +790,15 @@ class WorkbenchService:
             ),
         )
 
+    def catalogs_for_actor(self, actor: str) -> list[SourceCatalog]:
+        catalogs = self.catalogs()
+        try:
+            catalogs.extend(self.source_sourcing.catalogs_for_actor(actor))
+        except SourceSourcingError:
+            # Oracle is governed fail-closed; legacy sources stay available.
+            pass
+        return catalogs
+
     def completion_schema(self) -> dict[str, object]:
         with self._lock:
             return dict(self._completion_schema)
@@ -795,6 +806,9 @@ class WorkbenchService:
     def source_options(self) -> list[dict[str, str]]:
         with self._lock:
             return [dict(option) for option in self._source_options]
+
+    def source_options_for_actor(self, actor: str) -> list[dict[str, str]]:
+        return build_source_options(self.catalogs_for_actor(actor))
 
     def notebook_tree(self):
         with self._lock:
@@ -1862,6 +1876,7 @@ class WorkbenchService:
         local_relation_map: dict[str, str] | None = None,
         query_options: dict[str, object] | None = None,
         stage: dict[str, object] | None = None,
+        actor: str = "",
     ) -> dict[str, object]:
         prepared = self._prepare_exploration_query(
             sql=sql,
@@ -1870,6 +1885,7 @@ class WorkbenchService:
             data_sources=data_sources,
             local_relation_map=local_relation_map,
             query_options=query_options,
+            actor=actor,
         )
         return self._prepare_query_sql_payload(
             prepared,
@@ -1977,6 +1993,7 @@ class WorkbenchService:
         query_options: dict[str, object] | None = None,
         client_pre_submit_ms: float | None = None,
         client_job_id: str = "",
+        actor: str = "",
     ) -> dict[str, object]:
         backend_prepare_started = time.perf_counter()
         start_preflight = getattr(self._query_jobs, "start_preflight_job", None)
@@ -2004,6 +2021,7 @@ class WorkbenchService:
                     data_sources=data_sources,
                     local_relation_map=local_relation_map,
                     query_options=query_options,
+                    actor=actor,
                 )
                 backend_prepare_ms = (time.perf_counter() - backend_prepare_started) * 1000
                 snapshot = start_prepared(
@@ -2038,6 +2056,7 @@ class WorkbenchService:
             data_sources=data_sources,
             local_relation_map=local_relation_map,
             query_options=query_options,
+            actor=actor,
         )
         backend_prepare_ms = (time.perf_counter() - backend_prepare_started) * 1000
         snapshot = self._query_jobs.start_job(
@@ -2130,6 +2149,7 @@ class WorkbenchService:
         data_sources: list[str] | None = None,
         local_relation_map: dict[str, str] | None = None,
         query_options: dict[str, object] | None = None,
+        actor: str = "",
     ) -> PreparedQuery:
         normalized_query_options = normalize_query_options(query_options)
         normalized_data_sources = [
@@ -2141,10 +2161,17 @@ class WorkbenchService:
         submitted_query_sql = str(sql or "")
         user_sql = display_query_sql or submitted_query_sql
         routing_sql = submitted_query_sql or user_sql
+        if actor:
+            self.source_sourcing.assert_query_authorized(
+                actor,
+                routing_sql,
+                normalized_data_sources,
+            )
         relation_index = self._query_source_relation_index(
             local_relation_map=local_relation_map,
             notebook_id=notebook_id,
             sql=routing_sql,
+            actor=actor,
         )
         if source_existence_validation_enabled(normalized_query_options):
             source_validation = self.validate_query_sources(
@@ -2490,10 +2517,16 @@ class WorkbenchService:
         local_relation_map: dict[str, str] | None = None,
         notebook_id: str = "",
         sql: str | None = None,
+        actor: str = "",
     ) -> dict[str, KnownRelationReference]:
         with self._lock:
             catalogs = list(self._catalogs)
-            relation_index = build_relation_index(catalogs)
+        if actor:
+            try:
+                catalogs.extend(self.source_sourcing.catalogs_for_actor(actor))
+            except SourceSourcingError:
+                pass
+        relation_index = build_relation_index(catalogs)
         self._add_kostenbelege_3_1_loader_relation_aliases(
             relation_index,
             catalogs=catalogs,
@@ -2962,14 +2995,46 @@ class WorkbenchService:
             query_sql = str(reference.query_sql or "").strip()
             if not query_sql:
                 continue
+            relation_key = str(reference.relation or "").strip()
+            if not relation_key:
+                continue
             if not (
                 normalized_relation.startswith("s3.")
                 or normalized_relation.startswith("stage.")
                 or normalized_relation.startswith("prdestv_")
             ):
-                continue
-            relation_key = str(reference.relation or "").strip()
-            if not relation_key:
+                if (
+                    str(reference.bucket or "").strip()
+                    or str(reference.key or "").strip()
+                    or "s3://" in query_sql.lower()
+                ):
+                    # Canonical names of S3-backed catalog objects are enriched
+                    # by the discovery block below (object path, revision,
+                    # format and query options included).
+                    continue
+                # A server-owned inline relation (for example an authorised
+                # Oracle PoC VALUES relation) is a complete isolated source in
+                # the same way as a generated S3 scan.  Retain it in the
+                # worker snapshot so source validation, view bootstrap and
+                # execution all use the exact same relation definition.
+                summaries.append(
+                    {
+                        "relation": relation_key,
+                        "query_alias": "",
+                        "query_reference": "",
+                        "bucket": "",
+                        "key": "",
+                        "path": "",
+                        "format": "",
+                        "size_bytes": 0,
+                        "object_revision": "",
+                        "display_name": (
+                            normalize_query_alias_key(relation_key).rsplit(".", 1)[-1]
+                        ),
+                        "query_sql": query_sql,
+                    }
+                )
+                summarized_keys.add(normalized_relation)
                 continue
             bucket_name = str(reference.bucket or "").strip()
             object_key = str(reference.key or "").strip()
@@ -3416,7 +3481,10 @@ class WorkbenchService:
         source_id: str,
         bucket: str = "",
         prefix: str = "",
+        actor: str = "",
     ) -> dict[str, object]:
+        if str(source_id or "").startswith("ora_"):
+            return self.source_sourcing.explorer_payload(actor, source_id)
         return build_data_source_explorer_payload(
             self,
             source_id=source_id,
@@ -4166,7 +4234,9 @@ class WorkbenchService:
         self._data_source_discovery.sync_source("s3", emit_event=True)
         return result.payload
 
-    def source_object_fields(self, relation: str) -> list[SourceField]:
+    def source_object_fields(self, relation: str, *, actor: str = "") -> list[SourceField]:
+        if str(relation or "").casefold().startswith(("ora_", "zoll.")):
+            return self.source_sourcing.fields_for_relation(actor, relation)
         normalized_relation = relation.strip()
         if not normalized_relation:
             raise KeyError("Missing source object relation.")

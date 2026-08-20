@@ -777,6 +777,18 @@ def build_source_options(catalogs: list[SourceCatalog]) -> list[dict[str, str]]:
 
         if catalog.name == "pg_olap":
             options.append(_source_option("pg_olap", "PostgreSQL OLAP"))
+            continue
+
+        if str(catalog.connection_source_id or catalog.name).startswith("ora_"):
+            options.append(
+                _source_option(
+                    str(catalog.connection_source_id or catalog.name),
+                    catalog.display_name or catalog.database_name or catalog.name,
+                    classification="RDBMS · Oracle PoC",
+                    computation_mode="DuckDB simulation",
+                    storage_tooltip="Governed by DaCa; synthetic read-only Oracle PoC data.",
+                )
+            )
 
     return options
 

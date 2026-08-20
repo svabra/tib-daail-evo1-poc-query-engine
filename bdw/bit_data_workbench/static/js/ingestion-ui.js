@@ -71,7 +71,7 @@ export function createIngestionUi(helpers) {
                     >${escapeHtml(file.label || file.fileName || "CSV-Datei herunterladen")}</a>
                   </li>
                   <li>
-                    Im <a href="/ingestion-workbench" data-open-ingestion-workbench>Ingestion Workbench</a>
+                    Im <a href="/ingestion-workbench/manual">Ingestion Workbench</a>
                     hochladen nach
                     <span class="ingestion-manual-target">
                       <button

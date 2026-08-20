@@ -482,7 +482,7 @@ class CustomerJourneyUiTests(unittest.TestCase):
         self.assertIn("downloadableFiles", app)
         self.assertIn("data-loader-downloadable-file", loader_ui)
         self.assertIn("CSV manuell einlesen", loader_ui)
-        self.assertIn("data-open-ingestion-workbench", loader_ui)
+        self.assertIn('href="/ingestion-workbench/manual"', loader_ui)
         self.assertIn("Ein erneuter Upload ersetzt nur diese manuelle Datei.", loader_ui)
         self.assertIn("data-loader-required-storage-format", loader_ui)
         self.assertIn("Erforderliches Speicherformat:", loader_ui)

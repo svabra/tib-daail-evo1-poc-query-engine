@@ -8,6 +8,7 @@ import unittest
 from pathlib import Path
 
 import duckdb
+from starlette.requests import Request
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -302,6 +303,20 @@ class QueryExplainApiTests(unittest.TestCase):
                     },
                 }
             ),
+            request=Request(
+                {
+                    "type": "http",
+                    "method": "POST",
+                    "path": "/api/query-sql/prepare",
+                    "headers": [],
+                    "query_string": b"",
+                    "server": ("testserver", 80),
+                    "client": ("test", 1),
+                    "scheme": "http",
+                    "root_path": "",
+                    "http_version": "1.1",
+                }
+            ),
             service=FakeWorkbenchService(),
         )
 
@@ -309,6 +324,7 @@ class QueryExplainApiTests(unittest.TestCase):
         self.assertEqual(payload["duckdbExecutionPath"], "isolated-read")
         self.assertEqual(captured["notebook_id"], "notebook")
         self.assertEqual(captured["cell_id"], "cell-4")
+        self.assertEqual(captured["actor"], "joel.ruod")
         self.assertEqual(captured["local_relation_map"], {"local.alias": "physical.alias"})
         self.assertEqual(
             captured["stage"],

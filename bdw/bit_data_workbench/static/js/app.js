@@ -21,6 +21,8 @@ import {
 } from "./dialog-manager.js";
 import { createIngestionController } from "./ingestion-controller.js";
 import { createIngestionUi } from "./ingestion-ui.js";
+import { initializeSourceSourcingWizard } from "./source-sourcing-wizard.js";
+import { initializeDataSourceWorkbenchControls } from "./data-source-workbench.js";
 import { createHomeUi } from "./home-ui.js";
 import { createFeatureListController } from "./feature-list-controller.js?v=2026-08-18-feature-list-3";
 import { initializeWorkbenchExpertSearch } from "./expert-search.js";
@@ -8549,6 +8551,8 @@ async function initializeDataSourceManagementPage() {
     return;
   }
 
+  initializeDataSourceWorkbenchControls(root.parentElement || document);
+
   await renderLocalWorkspaceSidebarEntries();
 
   const browseSourceId = String(root.dataset.browseSourceId || "").trim();
@@ -12731,6 +12735,7 @@ Promise.allSettled(initialLoadTasks)
     if (visibleWorkspaceMode === "ingestion") {
       renderCsvIngestionWorkbench();
       renderFileIngestionWorkbench();
+      initializeSourceSourcingWizard();
       renderQueryNotificationMenu();
       return;
     }

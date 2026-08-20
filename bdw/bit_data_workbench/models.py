@@ -74,6 +74,11 @@ class SourceConnectionStatus:
 class SourceCatalog:
     name: str
     connection_source_id: str | None = None
+    display_name: str = ""
+    database_name: str = ""
+    source_platform: str = ""
+    site_label: str = ""
+    owner_label: str = ""
     schemas: list[SourceSchema] = field(default_factory=list)
     connection_status: str | None = None
     connection_label: str | None = None

@@ -1,0 +1,75 @@
+<section class="sourcing-page" data-ingestion-workbench-page data-source-sourcing-wizard aria-labelledby="source-sourcing-title">
+  <header class="sourcing-hero">
+    <div>
+      <a class="sourcing-back-link" href="/ingestion-workbench">← Back to ingestion options</a>
+      <span class="home-eyebrow">Governed Data Sourcing</span>
+      <h2 id="source-sourcing-title">Connect an enterprise data source</h2>
+      <p>Joel Ruod requests access in DAAIF. DaCa remains the leading catalog and approval system.</p>
+    </div>
+    <span class="sourcing-poc-badge">Oracle PoC · no credentials</span>
+  </header>
+
+  <ol class="sourcing-stepper" aria-label="Sourcing progress">
+    {% for label in ["Data Source Type", "Find Database", "Request Access", "Review & Submit"] %}
+      <li data-sourcing-step-indicator="{{ loop.index }}"{% if loop.first %} class="is-active" aria-current="step"{% endif %}>
+        <span>{{ loop.index }}</span><strong>{{ label }}</strong>
+      </li>
+    {% endfor %}
+  </ol>
+
+  <div class="sourcing-alert" data-sourcing-alert role="status" aria-live="polite" hidden></div>
+
+  <section class="sourcing-panel" data-sourcing-step="1">
+    <div class="sourcing-panel-heading"><span>Step 1</span><h3>Choose a Data Source Type</h3><p>Only the Oracle path is enabled in this increment.</p></div>
+    <label class="sourcing-field">
+      <span>Data Source Type</span>
+      <select data-sourcing-source-type>
+        <option value="">Choose a source technology</option>
+        <option value="postgres" disabled>BIT PostgreSQL RDBMS · Not yet available in this PoC</option>
+        <option value="oracle">BIT Oracle RDBMS</option>
+        <option value="dwh" disabled>BIT DWH · Not yet available in this PoC</option>
+        <option value="s3" disabled>BIT S3 · Not yet available in this PoC</option>
+        <option value="http" disabled>BIT HTTP REST Endpoint · Not yet available in this PoC</option>
+      </select>
+    </label>
+    <div class="sourcing-actions"><button class="modal-button" type="button" data-sourcing-next disabled>Continue</button></div>
+  </section>
+
+  <section class="sourcing-panel" data-sourcing-step="2" hidden>
+    <div class="sourcing-panel-heading"><span>Step 2</span><h3>Find an Oracle database</h3><p data-sourcing-catalog-summary>Loading your discoverable catalog …</p></div>
+    <div class="sourcing-filter-bar">
+      <label class="sourcing-field"><span>Search databases and objects</span><input type="search" data-sourcing-query placeholder="Database, table, owner or organisation"></label>
+      <label class="sourcing-field"><span>Location</span><select data-sourcing-site><option value="">All locations</option><option value="PRIMUS">PRIMUS</option><option value="CAMPUS">CAMPUS</option><option value="BOTH">Both sites</option></select></label>
+    </div>
+    <div class="sourcing-catalog-results" data-sourcing-results aria-live="polite"></div>
+    <div class="sourcing-pagination"><button type="button" data-sourcing-page="previous" disabled>Previous</button><span data-sourcing-page-copy></span><button type="button" data-sourcing-page="next" disabled>Next</button></div>
+    <div class="sourcing-actions"><button class="modal-button modal-button-secondary" type="button" data-sourcing-back>Back</button><button class="modal-button" type="button" data-sourcing-next disabled>Request access</button></div>
+  </section>
+
+  <section class="sourcing-panel" data-sourcing-step="3" hidden>
+    <div class="sourcing-panel-heading"><span>Step 3</span><h3>Request access</h3><p>The selected database and owner remain fixed for this request.</p></div>
+    <div class="sourcing-selection-summary" data-sourcing-selection-summary></div>
+    <form class="sourcing-request-form" data-sourcing-request-form>
+      <label class="sourcing-field sourcing-span-2"><span>Request name</span><input name="requestTitle" required minlength="3" value="Oracle source access for customs analytics"></label>
+      <fieldset class="sourcing-subjects sourcing-span-2"><legend>Access for</legend><div data-sourcing-subjects></div></fieldset>
+      <label class="sourcing-field sourcing-span-2"><span>Purpose</span><textarea name="purpose" required minlength="10">Analyse synthetic customs declarations and duties in the DAAIF Oracle PoC journey.</textarea></label>
+      <label class="sourcing-field sourcing-span-2"><span>Legal basis / reason</span><textarea name="legalBasis" required minlength="5">PoC mandate for governed data sourcing between BIT, ESTV and BAZG.</textarea></label>
+      <label class="sourcing-field"><span>Valid from</span><input type="date" name="validFrom" required></label>
+      <label class="sourcing-field"><span>Valid until (optional)</span><input type="date" name="validUntil"></label>
+      <label class="sourcing-confirm sourcing-span-2"><input type="checkbox" name="conditionsAccepted" required><span>I confirm that the purpose, legal basis and subject are correct.</span></label>
+    </form>
+    <div class="sourcing-actions"><button class="modal-button modal-button-secondary" type="button" data-sourcing-back>Back</button><button class="modal-button" type="button" data-sourcing-next>Review request</button></div>
+  </section>
+
+  <section class="sourcing-panel" data-sourcing-step="4" hidden>
+    <div class="sourcing-panel-heading"><span>Step 4</span><h3>Review and submit</h3><p>DaCa will create one owner task for Sandro Wenger at BAZG.</p></div>
+    <dl class="sourcing-review" data-sourcing-review></dl>
+    <div class="sourcing-actions"><button class="modal-button modal-button-secondary" type="button" data-sourcing-back>Back</button><button class="modal-button" type="button" data-sourcing-submit>Submit access request</button></div>
+  </section>
+
+  <section class="sourcing-panel sourcing-receipt" data-sourcing-receipt hidden aria-live="polite">
+    <span class="sourcing-receipt-mark" aria-hidden="true">✓</span>
+    <div><span class="home-eyebrow">Request received</span><h3 data-sourcing-receipt-title></h3><p data-sourcing-receipt-copy></p><p data-sourcing-receipt-status></p></div>
+    <div class="sourcing-actions"><a class="modal-button" href="/data-sources" data-sourcing-open-source hidden>Open Data Source</a><a class="modal-button modal-button-secondary" href="/ingestion-workbench/sourcing">Start another request</a></div>
+  </section>
+</section>
