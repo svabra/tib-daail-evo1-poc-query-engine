@@ -15401,7 +15401,7 @@ body.data-platform-document {
 .sourcing-page { max-width: 1440px; margin: 0 auto; padding: 2rem; color: #142335; }
 .sourcing-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 2rem; padding: 2rem 2.25rem; background: #f3f7fa; border-top: 6px solid #e1001a; border-bottom: 1px solid #c9d4de; }
 .sourcing-hero h2 { margin: .35rem 0 .65rem; font-size: clamp(2rem, 4vw, 3.4rem); line-height: 1.05; }
-.sourcing-hero p { max-width: 820px; margin: 0; color: #526477; font-size: 1.1rem; }
+.sourcing-hero p { max-width: 820px; margin: 0; color: #526477; font-size: 1.1rem; overflow-wrap: anywhere; }
 .sourcing-back-link { display: block; margin-bottom: 1.35rem; color: #064b83; font-weight: 700; }
 .sourcing-poc-badge, .ingestion-splitter-status { display: inline-flex; padding: .35rem .55rem; border: 1px solid #7d92a5; background: #fff; color: #23384c; font-size: .78rem; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; white-space: nowrap; }
 .ingestion-splitter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.5rem; margin-top: 1.5rem; }
@@ -15462,6 +15462,73 @@ body.data-platform-document {
 .sourcing-receipt-mark { display: grid; width: 3.5rem; height: 3.5rem; place-items: center; border-radius: 50%; background: #188754; color: #fff; font-size: 1.8rem; font-weight: 900; }
 .sourcing-receipt .sourcing-actions { grid-column: 1 / -1; justify-content: flex-start; }
 .sourcing-empty { display: grid; gap: .35rem; padding: 2rem; border: 1px dashed #8da0b2; color: #617286; text-align: center; }
+
+/* Governed Oracle source ingestions */
+.source-ingestion-hub-hero { align-items: center; }
+.source-ingestion-hero-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .75rem; min-width: min(100%, 420px); }
+.source-ingestion-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; margin: 1.5rem 0; border: 1px solid #bdcbd7; background: #bdcbd7; }
+.source-ingestion-summary article { display: grid; gap: .3rem; min-height: 112px; align-content: center; padding: 1.2rem 1.4rem; background: #fff; }
+.source-ingestion-summary strong { color: #142335; font-size: 2rem; line-height: 1; }
+.source-ingestion-summary span { color: #617286; font-weight: 700; }
+.source-ingestion-hub-layout { display: grid; gap: 1.5rem; }
+.source-ingestion-hub-panel { min-width: 0; }
+.source-ingestion-section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1.5rem; margin-bottom: 1.4rem; }
+.source-ingestion-section-heading > div > span { color: #e1001a; font-size: .75rem; font-weight: 900; letter-spacing: .1em; text-transform: uppercase; }
+.source-ingestion-section-heading h3 { margin: .25rem 0; font-size: 1.55rem; }
+.source-ingestion-section-heading p { margin: 0; color: #617286; }
+.source-ingestion-section-heading a { color: #064b83; font-weight: 800; white-space: nowrap; }
+.source-ingestion-source-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 340px), 1fr)); gap: 1rem; }
+.source-ingestion-source-card { display: grid; gap: 1.1rem; padding: 1.35rem; border: 1px solid #bdcbd7; border-left: 5px solid #1d5c8f; background: #f8fafc; }
+.source-ingestion-source-card h4, .source-ingestion-definition-card h4, .source-ingestion-run-card h4 { margin: .35rem 0; font-size: 1.12rem; }
+.source-ingestion-source-card p, .source-ingestion-definition-card p, .source-ingestion-run-card p { margin: 0; color: #617286; }
+.source-ingestion-source-kind { color: #064b83; font-size: .75rem; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; }
+.source-ingestion-source-card dl, .source-ingestion-definition-card dl, .source-ingestion-run-card dl { display: flex; flex-wrap: wrap; gap: 1.25rem; margin: 0; }
+.source-ingestion-source-card dl div, .source-ingestion-definition-card dl div, .source-ingestion-run-card dl div { display: grid; gap: .15rem; }
+.source-ingestion-source-card dt, .source-ingestion-definition-card dt, .source-ingestion-run-card dt { color: #617286; font-size: .7rem; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; }
+.source-ingestion-source-card dd, .source-ingestion-definition-card dd, .source-ingestion-run-card dd { margin: 0; font-weight: 750; }
+.source-ingestion-card-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 1rem; }
+.source-ingestion-card-actions > a:not(.modal-button) { color: #064b83; font-weight: 800; }
+.source-ingestion-definition-list, .source-ingestion-run-list { display: grid; gap: .8rem; }
+.source-ingestion-definition-card { display: grid; grid-template-columns: minmax(0, 1.8fr) minmax(300px, 1fr); gap: 1.5rem; padding: 1.25rem; border: 1px solid #bdcbd7; border-left: 5px solid transparent; color: inherit; text-decoration: none; transition: border-color .15s ease, background .15s ease; }
+.source-ingestion-definition-card:hover, .source-ingestion-definition-card:focus-visible { border-left-color: #e1001a; background: #f4f8fb; outline: 3px solid rgba(29, 92, 143, .25); }
+.source-ingestion-definition-card code { display: block; max-width: 100%; margin-top: .65rem; overflow: hidden; color: #344b61; text-overflow: ellipsis; white-space: nowrap; }
+.source-ingestion-status { display: inline-flex; width: fit-content; padding: .3rem .5rem; border: 1px solid #8da0b2; background: #fff; color: #23384c; font-size: .72rem; font-weight: 900; letter-spacing: .04em; text-transform: uppercase; }
+.source-ingestion-status[data-status="active"] { border-color: #188754; background: #edf7f2; color: #136b48; }
+.source-ingestion-status[data-status="attention"] { border-color: #b00020; background: #fff1f2; color: #7c0016; }
+.source-ingestion-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.source-ingestion-grant-note { margin-top: 1rem; padding: 1rem 1.2rem; border-left: 5px solid #188754; background: #edf7f2; color: #245c47; font-weight: 750; }
+.source-ingestion-destination-summary, .source-ingestion-schedule-contract { display: flex; flex-wrap: wrap; gap: .65rem 1.5rem; margin-bottom: 1.2rem; padding: 1rem 1.2rem; border-left: 5px solid #1d5c8f; background: #edf5fb; }
+.source-ingestion-destination-summary span, .source-ingestion-schedule-contract span { color: #526477; }
+.source-ingestion-schedule-contract p { flex-basis: 100%; margin: .25rem 0 0; color: #526477; }
+.source-ingestion-path-preview { min-height: 1.5rem; margin: .75rem 0 0; color: #064b83; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; overflow-wrap: anywhere; }
+.source-ingestion-mode-switch { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; margin: 0 0 1rem; padding: 0; border: 0; }
+.source-ingestion-mode-switch legend { margin-bottom: .65rem; font-weight: 800; }
+.source-ingestion-mode-switch label { position: relative; display: block; cursor: pointer; }
+.source-ingestion-mode-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.source-ingestion-mode-switch label > span { display: grid; min-height: 96px; align-content: center; gap: .25rem; padding: 1rem 1.2rem; border: 1px solid #8da0b2; background: #fff; }
+.source-ingestion-mode-switch label > span small { color: #617286; }
+.source-ingestion-mode-switch input:checked + span { border-left: 6px solid #e1001a; background: #f4f8fb; box-shadow: inset 0 0 0 2px #1d5c8f; }
+.source-ingestion-mode-switch input:focus-visible + span { outline: 3px solid rgba(225, 0, 26, .24); outline-offset: 2px; }
+.source-ingestion-name-field { margin-bottom: 1rem; }
+.source-ingestion-detail-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin: 1.5rem 0; border: 1px solid #bdcbd7; background: #bdcbd7; }
+.source-ingestion-detail-summary article { display: grid; gap: .35rem; min-height: 108px; align-content: center; padding: 1.15rem; background: #fff; min-width: 0; }
+.source-ingestion-detail-summary span { color: #617286; font-size: .75rem; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; }
+.source-ingestion-detail-summary strong { overflow-wrap: anywhere; }
+.source-ingestion-control-panel { margin-bottom: 1.5rem; }
+.source-ingestion-control-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: .75rem; }
+.source-ingestion-detail-controls { display: grid; grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr); gap: 1rem; align-items: stretch; }
+.source-ingestion-detail-mode { margin: 0; }
+.source-ingestion-next-run { display: grid; align-content: center; gap: .35rem; padding: 1.2rem; border: 1px solid #bdcbd7; background: #f4f8fb; }
+.source-ingestion-next-run span { color: #617286; font-size: .75rem; font-weight: 800; text-transform: uppercase; }
+.source-ingestion-next-run strong { font-size: 1.1rem; }
+.source-ingestion-next-run small { color: #617286; }
+.source-ingestion-run-card { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(0, 2fr); gap: 1rem; padding: 1.1rem 1.2rem; border: 1px solid #bdcbd7; border-left: 5px solid #1d5c8f; }
+.source-ingestion-run-card[data-status="completed"] { border-left-color: #188754; }
+.source-ingestion-run-card[data-status="failed"], .source-ingestion-run-card[data-status="blocked"] { border-left-color: #b00020; }
+.source-ingestion-run-card[data-status="skipped"] { border-left-color: #a26600; }
+.source-ingestion-run-card > div > span { color: #617286; font-size: .72rem; font-weight: 900; text-transform: uppercase; }
+.source-ingestion-run-card > *, .source-ingestion-run-card p, .source-ingestion-run-card dl, .source-ingestion-run-card dl > div { min-width: 0; }
+.source-ingestion-run-card p, .source-ingestion-run-card code { overflow-wrap: anywhere; word-break: break-word; }
 @media (max-width: 820px) {
   .sourcing-page { padding: 1rem; }
   .sourcing-hero, .ingestion-splitter-grid, .sourcing-filter-bar, .sourcing-request-form, .sourcing-review { display: grid; grid-template-columns: 1fr; }
@@ -15470,4 +15537,15 @@ body.data-platform-document {
   .sourcing-stepper li:nth-child(2) { border-right: 0; }
   .sourcing-source-card { grid-template-columns: 1fr; }
   .sourcing-subjects > div { grid-template-columns: 1fr; }
+  .source-ingestion-summary, .source-ingestion-detail-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .source-ingestion-definition-card, .source-ingestion-run-card, .source-ingestion-detail-controls { grid-template-columns: 1fr; }
+  .source-ingestion-form-grid { grid-template-columns: 1fr; }
+  .source-ingestion-hero-actions { min-width: 0; justify-content: flex-start; }
+  .source-ingestion-section-heading { display: grid; }
+}
+
+@media (max-width: 560px) {
+  .source-ingestion-summary, .source-ingestion-detail-summary, .source-ingestion-mode-switch { grid-template-columns: 1fr; }
+  .source-ingestion-hero-actions, .source-ingestion-hero-actions .modal-button { width: 100%; }
+  .source-ingestion-stepper strong { font-size: .78rem; }
 }

@@ -2109,6 +2109,10 @@ async def stream_realtime_events(
         default=None,
         alias="serviceConsumptionVersion",
     ),
+    source_ingestions_version: int | None = Query(
+        default=None,
+        alias="sourceIngestionsVersion",
+    ),
     materialized_stages_version: int | None = Query(
         default=None,
         alias="materializedStagesVersion",
@@ -2132,6 +2136,7 @@ async def stream_realtime_events(
             "s3-delete-jobs": s3_delete_jobs_version,
             "data-source-events": data_source_events_version,
             "service-consumption": service_consumption_version,
+            "source-ingestions": source_ingestions_version,
             "materialized-stages": materialized_stages_version,
             "notebook-events": notebook_events_version,
             "client-connections": client_connections_version,
@@ -2184,6 +2189,7 @@ from .data_source_explorer import router as data_source_explorer_router
 from .download_jobs import router as download_jobs_router
 from .workbench_metadata import router as workbench_metadata_router
 from .source_sourcing import router as source_sourcing_router
+from .source_ingestions import router as source_ingestions_router
 
 
 router.include_router(data_source_explorer_router)
@@ -2192,3 +2198,4 @@ router.include_router(data_exchange_router)
 router.include_router(download_jobs_router)
 router.include_router(workbench_metadata_router)
 router.include_router(source_sourcing_router)
+router.include_router(source_ingestions_router)

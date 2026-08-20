@@ -923,6 +923,28 @@ def ingestion_workbench_sourcing(
     request: Request,
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> HTMLResponse:
+    template = "partials/source_sourcing_hub.html"
+    if not is_partial_request(request):
+        return templates.TemplateResponse(
+            request=request,
+            name="index.html",
+            context=shell_context(
+                request,
+                service,
+                active_notebook=None,
+                workspace_mode="ingestion",
+                workspace_partial_template=template,
+                shell_sidebar_hidden=True,
+            ),
+        )
+    return templates.TemplateResponse(request=request, name=template, context={})
+
+
+@router.get("/ingestion-workbench/sourcing/request", response_class=HTMLResponse)
+def ingestion_workbench_sourcing_request(
+    request: Request,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> HTMLResponse:
     template = "partials/source_sourcing_wizard.html"
     if not is_partial_request(request):
         return templates.TemplateResponse(
@@ -938,6 +960,59 @@ def ingestion_workbench_sourcing(
             ),
         )
     return templates.TemplateResponse(request=request, name=template, context={})
+
+
+@router.get(
+    "/ingestion-workbench/sourcing/ingestions/new", response_class=HTMLResponse
+)
+def source_ingestion_new(
+    request: Request,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> HTMLResponse:
+    template = "partials/source_ingestion_wizard.html"
+    if not is_partial_request(request):
+        return templates.TemplateResponse(
+            request=request,
+            name="index.html",
+            context=shell_context(
+                request,
+                service,
+                active_notebook=None,
+                workspace_mode="ingestion",
+                workspace_partial_template=template,
+                shell_sidebar_hidden=True,
+            ),
+        )
+    return templates.TemplateResponse(request=request, name=template, context={})
+
+
+@router.get(
+    "/ingestion-workbench/sourcing/ingestions/{definition_id}",
+    response_class=HTMLResponse,
+)
+def source_ingestion_detail(
+    definition_id: str,
+    request: Request,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> HTMLResponse:
+    template = "partials/source_ingestion_detail.html"
+    context = {"source_ingestion_id": definition_id}
+    if not is_partial_request(request):
+        shell = shell_context(
+            request,
+            service,
+            active_notebook=None,
+            workspace_mode="ingestion",
+            workspace_partial_template=template,
+            shell_sidebar_hidden=True,
+        )
+        shell.update(context)
+        return templates.TemplateResponse(
+            request=request,
+            name="index.html",
+            context=shell,
+        )
+    return templates.TemplateResponse(request=request, name=template, context=context)
 
 
 @router.get("/loader-workbench", response_class=HTMLResponse)

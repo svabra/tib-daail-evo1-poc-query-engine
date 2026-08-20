@@ -1,0 +1,53 @@
+<section class="sourcing-page source-ingestion-hub" data-ingestion-workbench-page data-source-ingestion-hub aria-labelledby="source-ingestion-hub-title">
+  <a class="sourcing-back-link" href="/ingestion-workbench">Back to ingestion options</a>
+  <header class="sourcing-hero source-ingestion-hub-hero">
+    <div>
+      <span class="home-eyebrow">Governed Data Sourcing</span>
+      <h2 id="source-ingestion-hub-title">Source once. Refresh on schedule.</h2>
+      <p>Use an approved enterprise source to create a complete Parquet snapshot in S3, run it once, or keep it current every hour.</p>
+    </div>
+    <div class="source-ingestion-hero-actions">
+      <a class="modal-button" href="/ingestion-workbench/sourcing/ingestions/new">Create ingestion</a>
+      <a class="modal-button modal-button-secondary" href="/ingestion-workbench/sourcing/request">Request a new Data Source</a>
+    </div>
+  </header>
+
+  <div class="sourcing-alert" data-source-ingestion-alert hidden role="alert"></div>
+
+  <section class="source-ingestion-summary" aria-label="Sourcing summary">
+    <article><strong data-source-ingestion-summary="sources">&ndash;</strong><span>Available sources</span></article>
+    <article><strong data-source-ingestion-summary="activeSchedules">&ndash;</strong><span>Active schedules</span></article>
+    <article><strong data-source-ingestion-summary="attention">&ndash;</strong><span>Need attention</span></article>
+    <article><strong data-source-ingestion-summary="runsLast24Hours">&ndash;</strong><span>Runs in 24 hours</span></article>
+  </section>
+
+  <div class="source-ingestion-hub-layout">
+    <section class="sourcing-panel source-ingestion-hub-panel" aria-labelledby="source-ingestion-sources-title">
+      <div class="source-ingestion-section-heading">
+        <div>
+          <span>Approved connections</span>
+          <h3 id="source-ingestion-sources-title">Available Data Sources</h3>
+          <p>Only sources covered by your current DaCa grant are shown.</p>
+        </div>
+        <a href="/data-sources">Manage sources</a>
+      </div>
+      <div class="source-ingestion-source-list" data-source-ingestion-sources aria-live="polite">
+        <div class="sourcing-empty"><strong>Loading available sources...</strong></div>
+      </div>
+    </section>
+
+    <section class="sourcing-panel source-ingestion-hub-panel" aria-labelledby="source-ingestion-list-title">
+      <div class="source-ingestion-section-heading">
+        <div>
+          <span>Reusable definitions</span>
+          <h3 id="source-ingestion-list-title">My Ingestions</h3>
+          <p>One-time runs and hourly schedules use the same tested definition.</p>
+        </div>
+        <a href="/ingestion-workbench/sourcing/ingestions/new">New ingestion</a>
+      </div>
+      <div class="source-ingestion-definition-list" data-source-ingestion-definitions aria-live="polite">
+        <div class="sourcing-empty"><strong>Loading ingestions...</strong></div>
+      </div>
+    </section>
+  </div>
+</section>

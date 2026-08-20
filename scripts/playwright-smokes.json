@@ -136,6 +136,11 @@
       "enabledByDefault": false
     },
     {
+      "id": "oracle-source-ingestion",
+      "script": "playwright_oracle_source_ingestion.py",
+      "enabledByDefault": false
+    },
+    {
       "id": "ingestion-query-handoff",
       "script": "playwright_ingestion_query_handoff_smoke.py",
       "enabledByDefault": true

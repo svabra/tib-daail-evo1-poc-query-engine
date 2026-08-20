@@ -198,6 +198,7 @@ from .source_discovery import (
     SqlSourceDiscoverer,
 )
 from .source_sourcing import SourceSourcingCoordinator, SourceSourcingError
+from .source_ingestions import SourceIngestionManager
 
 
 SUPPORTED_S3_VIEW_FORMATS = {"parquet", "csv", "json"}
@@ -218,6 +219,7 @@ REALTIME_TOPIC_ORDER = (
     "data-source-events",
     "service-consumption",
     "materialized-stages",
+    "source-ingestions",
     "notebook-events",
     "client-connections",
 )
@@ -390,6 +392,16 @@ class WorkbenchService:
             self._pg_olap_plugin.source_id: self._pg_olap_plugin,
         }
         self.source_sourcing = SourceSourcingCoordinator(settings)
+        self.source_ingestions = SourceIngestionManager(
+            settings,
+            source_sourcing=self.source_sourcing,
+            query_runner=self._run_source_ingestion_query,
+            metadata_refresher=self._refresh_source_ingestion_bucket,
+            state_change_callback=lambda snapshot: self._publish_realtime_snapshot(
+                "source-ingestions",
+                snapshot,
+            ),
+        )
         self._query_result_exports = QueryResultExportManager(
             settings=settings,
             connection_factory=self._create_worker_connection,
@@ -584,6 +596,11 @@ class WorkbenchService:
             self._materialized_stages.state_payload(),
             notify=False,
         )
+        self._set_realtime_snapshot(
+            "source-ingestions",
+            self.source_ingestions.state_payload(),
+            notify=False,
+        )
         with self._condition:
             self._set_realtime_snapshot_locked(
                 "notebook-events",
@@ -698,6 +715,18 @@ class WorkbenchService:
             )
         else:
             self._log_startup("Startup step complete: service consumption monitor started")
+        self._log_startup_section("Start source ingestion scheduler")
+        try:
+            self.source_ingestions.start()
+        except Exception as exc:
+            self._log_startup(
+                "Source ingestion scheduler failed to start: %s",
+                exc,
+                level=logging.WARNING,
+                exc_info=True,
+            )
+        else:
+            self._log_startup("Startup step complete: source ingestion scheduler started")
         self._log_startup("Workbench startup completed in %.2fs", time.perf_counter() - started)
         self._log_startup(STARTUP_DIVIDER)
 
@@ -738,6 +767,7 @@ class WorkbenchService:
     def stop(self) -> None:
         self._log_startup_section("Shutdown workbench service")
         self._log_startup("Workbench shutdown begin")
+        self.source_ingestions.stop()
         self._query_jobs.shutdown()
         self._service_consumption.stop()
         self._data_source_discovery.stop()
@@ -809,6 +839,35 @@ class WorkbenchService:
 
     def source_options_for_actor(self, actor: str) -> list[dict[str, str]]:
         return build_source_options(self.catalogs_for_actor(actor))
+
+    def source_ingestion_context(self, actor: str) -> dict[str, object]:
+        return self.source_ingestions.source_context(actor)
+
+    def list_source_ingestions(self, actor: str) -> dict[str, object]:
+        return self.source_ingestions.list_definitions(actor)
+
+    def source_ingestion(self, actor: str, definition_id: str) -> dict[str, object]:
+        return self.source_ingestions.get_definition(actor, definition_id)
+
+    def create_source_ingestion(
+        self, actor: str, payload: dict[str, object]
+    ) -> dict[str, object]:
+        return self.source_ingestions.create_definition(actor, payload)
+
+    def patch_source_ingestion(
+        self, actor: str, definition_id: str, payload: dict[str, object]
+    ) -> dict[str, object]:
+        return self.source_ingestions.patch_definition(actor, definition_id, payload)
+
+    def update_source_ingestion_schedule(
+        self, actor: str, definition_id: str, payload: dict[str, object]
+    ) -> dict[str, object]:
+        return self.source_ingestions.update_schedule(actor, definition_id, payload)
+
+    def start_source_ingestion_run(
+        self, actor: str, definition_id: str, payload: dict[str, object]
+    ) -> dict[str, object]:
+        return self.source_ingestions.start_run(actor, definition_id, payload)
 
     def notebook_tree(self):
         with self._lock:
@@ -2074,6 +2133,51 @@ class WorkbenchService:
             backend_prepare_ms=backend_prepare_ms,
         )
         return snapshot.payload
+
+    def _run_source_ingestion_query(
+        self,
+        *,
+        actor: str,
+        definition: dict[str, object],
+        run: dict[str, object],
+        display_sql: str,
+        staging_path: str,
+    ) -> dict[str, object]:
+        run_id = str(run.get("id") or "")
+        job = self.start_query_job(
+            sql=display_sql,
+            display_sql=display_sql,
+            notebook_id=f"source-ingestion-{definition.get('id')}",
+            notebook_title=str(definition.get("name") or "Source ingestion"),
+            cell_id=f"source-ingestion-run-{run_id[-16:]}",
+            data_sources=[str(definition.get("sourceId") or "")],
+            query_options={
+                "validation": {"sourceExistence": "on"},
+                "duckdb": {
+                    "resultStorage": {
+                        "mode": "on",
+                        "path": staging_path,
+                    }
+                },
+            },
+            client_job_id=f"client-query-source-ingestion-{run_id[-32:]}",
+            actor=actor,
+        )
+        job_id = str(job.get("jobId") or "")
+        if not job_id:
+            return {
+                **job,
+                "status": "failed",
+                "error": str(job.get("error") or "Source ingestion did not start a query job."),
+            }
+        return self._query_jobs.wait_for_terminal(job_id, timeout=3600.0).payload
+
+    def _refresh_source_ingestion_bucket(self, bucket: str) -> None:
+        sync_s3_buckets = getattr(self._data_source_discovery, "sync_s3_buckets", None)
+        if callable(sync_s3_buckets):
+            sync_s3_buckets([bucket], emit_event=True)
+            return
+        self._data_source_discovery.sync_source("s3", emit_event=True)
 
     def explain_query(
         self,

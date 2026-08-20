@@ -1,0 +1,30 @@
+<section class="sourcing-page source-ingestion-detail" data-ingestion-workbench-page data-source-ingestion-detail data-source-ingestion-id="{{ source_ingestion_id }}" aria-labelledby="source-ingestion-detail-title">
+  <a class="sourcing-back-link" href="/ingestion-workbench/sourcing">Back to Sourcing Hub</a>
+  <header class="sourcing-hero source-ingestion-detail-hero">
+    <div>
+      <span class="home-eyebrow">Oracle to S3</span>
+      <h2 id="source-ingestion-detail-title" data-source-ingestion-detail-name>Loading ingestion...</h2>
+      <p data-source-ingestion-detail-path>The persisted definition and its complete execution history are being loaded.</p>
+    </div>
+    <span class="source-ingestion-status" data-source-ingestion-detail-status>Loading</span>
+  </header>
+  <div class="sourcing-alert" data-source-ingestion-alert hidden role="alert"></div>
+
+  <section class="source-ingestion-detail-summary" data-source-ingestion-detail-summary></section>
+
+  <section class="sourcing-panel source-ingestion-control-panel" aria-labelledby="source-ingestion-control-title">
+    <div class="source-ingestion-section-heading">
+      <div><span>Execution control</span><h3 id="source-ingestion-control-title">Run and schedule</h3><p>Switching mode preserves the source, destination and full run history.</p></div>
+      <div class="source-ingestion-control-actions"><button class="modal-button modal-button-secondary" type="button" data-source-ingestion-schedule-action>Resume hourly</button><button class="modal-button" type="button" data-source-ingestion-run-now>Run now</button></div>
+    </div>
+    <div class="source-ingestion-detail-controls">
+      <fieldset class="source-ingestion-mode-switch source-ingestion-detail-mode"><legend>Run mode</legend><label><input type="radio" name="source-ingestion-detail-mode" value="once" data-source-ingestion-detail-mode><span><strong>One-Time</strong><small>No active schedule</small></span></label><label><input type="radio" name="source-ingestion-detail-mode" value="scheduled" data-source-ingestion-detail-mode><span><strong>Scheduled</strong><small>Every hour at minute 00</small></span></label></fieldset>
+      <div class="source-ingestion-next-run"><span>Next planned run</span><strong data-source-ingestion-detail-next-run>&ndash;</strong><small>Europe/Zurich</small></div>
+    </div>
+  </section>
+
+  <section class="sourcing-panel source-ingestion-history" aria-labelledby="source-ingestion-history-title">
+    <div class="source-ingestion-section-heading"><div><span>Audit trail</span><h3 id="source-ingestion-history-title">Run history</h3><p>Every manual, activation-test, scheduled and skipped execution remains visible.</p></div></div>
+    <div class="source-ingestion-run-list" data-source-ingestion-runs aria-live="polite"><div class="sourcing-empty"><strong>Loading run history...</strong></div></div>
+  </section>
+</section>

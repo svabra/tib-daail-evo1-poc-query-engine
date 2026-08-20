@@ -31,6 +31,13 @@ async def open_ingestion_workbench(page, base_url: str, timeout_ms: int) -> None
         wait_until="domcontentloaded",
         timeout=timeout_ms,
     )
+    splitter = page.locator("[data-ingestion-splitter-page]")
+    await splitter.wait_for(state="visible", timeout=timeout_ms)
+    manual = splitter.locator(
+        '.ingestion-splitter-card[href="/ingestion-workbench/manual"]'
+    )
+    await manual.wait_for(state="visible", timeout=timeout_ms)
+    await manual.click()
     await page.locator("[data-ingestion-workbench-page]").wait_for(
         state="visible",
         timeout=timeout_ms,
@@ -112,6 +119,11 @@ async def assert_ingestion_returns_to_landing_after_navigation(page, timeout_ms:
     await page.locator("[data-ingestion-workbench-page]").wait_for(state="hidden", timeout=timeout_ms)
 
     await page.locator("[data-open-ingestion-workbench]").click()
+    splitter = page.locator("[data-ingestion-splitter-page]")
+    await splitter.wait_for(state="visible", timeout=timeout_ms)
+    await splitter.locator(
+        '.ingestion-splitter-card[href="/ingestion-workbench/manual"]'
+    ).click()
     await page.locator("[data-ingestion-workbench-page]").wait_for(
         state="visible",
         timeout=timeout_ms,
@@ -184,27 +196,30 @@ async def assert_ingestion_state_survives_out_of_order_back_forward(
               window.__pwLateNotebookReturned = true;
               return response;
             }
-            if (url.pathname === '/ingestion-workbench' && init?.headers?.['HX-Request'] === 'true') {
+            if (url.pathname === '/ingestion-workbench/manual' && init?.headers?.['HX-Request'] === 'true') {
               const response = await originalFetch(input, init);
               window.__pwForwardIngestionReturned = true;
               return response;
             }
             return originalFetch(input, init);
           };
-          history.replaceState({ pw: 'ingestion-origin' }, '', '/ingestion-workbench');
+          history.replaceState({ pw: 'ingestion-origin' }, '', '/ingestion-workbench/manual');
           history.pushState(
             { pw: 'notebook' },
             '',
             '/notebooks/data-analysts-journey-cantonal-business-tax'
           );
-          history.pushState({ pw: 'ingestion-final' }, '', '/ingestion-workbench');
+          history.pushState({ pw: 'ingestion-final' }, '', '/ingestion-workbench/manual');
         }
         """
     )
     await page.go_back()
+    print("Manual ingestion smoke: waiting for delayed notebook navigation", flush=True)
     await page.wait_for_function("window.__pwLateNotebookStarted === true", timeout=timeout_ms)
     await page.go_forward()
+    print("Manual ingestion smoke: waiting for Manual forward navigation", flush=True)
     await page.wait_for_function("window.__pwForwardIngestionReturned === true", timeout=timeout_ms)
+    print("Manual ingestion smoke: waiting for stale notebook response", flush=True)
     await page.wait_for_function("window.__pwLateNotebookReturned === true", timeout=timeout_ms)
     await page.wait_for_timeout(250)
     state = await page.evaluate(
@@ -233,7 +248,7 @@ async def assert_ingestion_state_survives_out_of_order_back_forward(
         """
     )
     expected = {
-        "pathname": "/ingestion-workbench",
+        "pathname": "/ingestion-workbench/manual",
         "historyState": "ingestion-final",
         "fileName": "playwright-history.csv",
         "delimiter": "semicolon",
@@ -1005,10 +1020,14 @@ async def run_smoke(args: argparse.Namespace) -> int:
         )
 
         try:
+            print("Manual ingestion smoke: opening Splitter and Manual flow", flush=True)
             await open_ingestion_workbench(page, args.base_url, args.timeout_ms)
             await assert_ingestion_tile_copy(page, args.timeout_ms)
+            print("Manual ingestion smoke: checking navigation return", flush=True)
             await assert_ingestion_returns_to_landing_after_navigation(page, args.timeout_ms)
+            print("Manual ingestion smoke: checking Back/Forward state", flush=True)
             await assert_ingestion_state_survives_out_of_order_back_forward(page, args.timeout_ms)
+            print("Manual ingestion smoke: exercising CSV imports", flush=True)
             await open_csv_ingestor(page, args.timeout_ms)
             await reject_invalid_csv_file(page, args.timeout_ms)
             await import_local_csv_file(page, args.timeout_ms)

@@ -14,6 +14,7 @@ if str(BDW_ROOT) not in sys.path:
 
 from bit_data_workbench.web.router import (  # noqa: E402
     ingestion_workbench_sourcing,
+    ingestion_workbench_sourcing_request,
     ingestion_workbench_splitter,
 )
 from bit_data_workbench.api.source_sourcing import sync_identity  # noqa: E402
@@ -66,13 +67,26 @@ def test_ingestion_splitter_preserves_manual_flow_and_adds_governed_sourcing() -
 
 
 def test_sourcing_wizard_exposes_four_steps_and_no_client_actor_field() -> None:
-    response = ingestion_workbench_sourcing(request("/ingestion-workbench/sourcing"), service=object())
+    response = ingestion_workbench_sourcing_request(
+        request("/ingestion-workbench/sourcing/request"), service=object()
+    )
     body = response.body.decode()
     assert body.count("data-sourcing-step-indicator") == 4
     assert "30 of 38" not in body  # live server summary, never a forged client constant
     assert "BIT Oracle RDBMS" in body
     assert "ESTV Business Intelligence" not in body  # trusted groups arrive from DaCa
     assert 'name="actor"' not in body
+
+
+def test_sourcing_hub_separates_existing_sources_from_new_access_requests() -> None:
+    response = ingestion_workbench_sourcing(
+        request("/ingestion-workbench/sourcing"), service=object()
+    )
+    body = response.body.decode()
+    assert "Available Data Sources" in body
+    assert "My Ingestions" in body
+    assert 'href="/ingestion-workbench/sourcing/request"' in body
+    assert 'href="/ingestion-workbench/sourcing/ingestions/new"' in body
 
 
 def test_wizard_script_uses_cookie_backed_proxy_pagination_and_three_second_poll() -> None:
