@@ -34,6 +34,8 @@ def explorer_kind_for_source(source_id: str) -> str:
         return "s3"
     if normalized_source_id == "workspace.local":
         return "local-workspace"
+    if normalized_source_id.startswith("ora_"):
+        return "postgres"
     raise KeyError(f"Unsupported data source explorer: {source_id}")
 
 

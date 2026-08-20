@@ -131,6 +131,11 @@
       "enabledByDefault": true
     },
     {
+      "id": "oracle-source-access-journey",
+      "script": "playwright_oracle_source_access_journey.py",
+      "enabledByDefault": false
+    },
+    {
       "id": "ingestion-query-handoff",
       "script": "playwright_ingestion_query_handoff_smoke.py",
       "enabledByDefault": true

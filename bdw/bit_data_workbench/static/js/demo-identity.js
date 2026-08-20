@@ -42,6 +42,14 @@ export const DAAIF_DEMO_USERS = Object.freeze([
     role: "Leiter Datenanalyse / Publication Approver",
     avatarUrl: "",
   }),
+  Object.freeze({
+    id: "sandro.wenger",
+    displayName: "Sandro Wenger",
+    organization: "Bundesamt für Zoll und Grenzsicherheit BAZG",
+    email: "sandro.wenger@bazg.admin.ch",
+    role: "Data Owner / Data Consumer",
+    avatarUrl: "",
+  }),
 ]);
 
 const DEFAULT_USER_ID = "joel.ruod";
@@ -106,6 +114,14 @@ function publishIdentity(user, { announce = true } = {}) {
       })
     );
   }
+  void fetch("/api/ingestion/sourcing/identity", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ userId: user.id }),
+  }).catch(() => {
+    // DaCa-backed features report fail-closed errors; legacy DAAIF stays usable.
+  });
 }
 
 export function currentDaaifDemoUser() {

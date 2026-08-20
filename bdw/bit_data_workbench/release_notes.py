@@ -18,8 +18,9 @@ CURRENT_FEATURE_LIST: dict[str, object] = {
         {
             "title": "Datenquellen finden und verstehen",
             "description": (
-                "Durchsuchen Sie S3-, PostgreSQL- und lokale Quellen, prüfen Sie "
-                "Schemas und übernehmen Sie die passende Referenz direkt in Ihre Analyse."
+                "Durchsuchen Sie S3-, PostgreSQL-, lokale und freigegebene Oracle-PoC-"
+                "Quellen, prüfen Sie Schemas und übernehmen Sie die passende Referenz "
+                "direkt in Ihre Analyse."
             ),
         },
         {
@@ -65,6 +66,23 @@ CURRENT_FEATURE_LIST: dict[str, object] = {
 # RELEASE_NOTES below remain the technical source of truth; this list omits
 # test-only, deployment, worker, lock, and rollback details.
 USER_FACING_FEATURE_HISTORY: list[dict[str, object]] = [
+    {
+        "version": "0.10.50",
+        "features": [
+            (
+                "Oracle-Datenquelle kontrolliert beantragen",
+                "Der neue Sourcing-Wizard findet freigegebene BIT-Oracle-Quellen, übernimmt vertrauenswürdige DaCa-Gruppen und begleitet den Antrag bis zum Owner-Entscheid.",
+            ),
+            (
+                "Freigegebene Oracle-Daten sicher analysieren",
+                "Aktive Grants schalten eine klar gekennzeichnete, synthetische Oracle-PoC-Quelle im Explorer und Notebook frei; jede Abfrage wird serverseitig erneut autorisiert.",
+            ),
+            (
+                "Ingestion passend zum Vorhaben starten",
+                "Eine neue Einstiegsseite trennt den bestehenden manuellen Dateiimport von anspruchsvollen, verwalteten Sourcing-Journeys.",
+            ),
+        ],
+    },
     {
         "version": "0.10.49",
         "features": [
@@ -732,9 +750,34 @@ USER_FACING_FEATURE_HISTORY: list[dict[str, object]] = [
 ]
 
 
-# Derived from git history through version 0.10.49. Keep entries concise and
+# Derived from git history through version 0.10.50. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.50",
+        "releasedAt": "2026-08-20T16:02:12+02:00",
+        "features": [
+            (
+                "Ingestion now opens a two-path entry page: existing file imports keep "
+                "their direct manual route, while a four-step governed sourcing wizard "
+                "supports discovery, access context, review and idempotent submission."
+            ),
+            (
+                "DaCa-backed Oracle source grants are actor-specific, cached for no more "
+                "than three seconds and enforced again for explorer and query access; "
+                "Oracle fails closed without affecting existing S3, PostgreSQL or local sources."
+            ),
+            (
+                "The granted BAZG Oracle proof-of-concept source exposes three realistic, "
+                "typed synthetic customs relations through isolated DuckDB workers, with "
+                "no Oracle driver, credential or physical mock table."
+            ),
+            (
+                "The Data Source Workbench now uses the DaCa-inspired federal layout, "
+                "summary cards, filters and responsive source details across desktop and mobile."
+            ),
+        ],
+    },
     {
         "version": "0.10.49",
         "releasedAt": "2026-08-19T21:30:25+02:00",

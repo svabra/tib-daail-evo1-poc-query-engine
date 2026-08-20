@@ -352,6 +352,8 @@ def infer_source_types(data_sources: list[str]) -> list[str]:
             source_type = "postgres-native"
         elif normalized.startswith("pg_"):
             source_type = "postgres"
+        elif normalized.startswith("ora_"):
+            source_type = "oracle-poc"
         elif normalized == "s3" or normalized.startswith("s3."):
             source_type = "s3"
         elif normalized.startswith("workspace"):

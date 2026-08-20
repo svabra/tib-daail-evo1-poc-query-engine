@@ -17,6 +17,8 @@ from starlette.background import BackgroundTask
 from ..backend.service import WorkbenchService
 from ..backend.s3_delete_jobs import log_s3_delete_backend_event
 from ..dependencies import get_workbench_service
+from ..backend.source_sourcing import SourceSourcingError
+from .source_sourcing import actor_from_request
 
 
 router = APIRouter(tags=["api"])
@@ -372,11 +374,12 @@ def info(service: WorkbenchService = Depends(get_workbench_service)) -> JSONResp
 
 @router.get("/api/source-object-fields")
 def source_object_fields(
+    request: Request,
     relation: str = Query(""),
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> JSONResponse:
     try:
-        fields = service.source_object_fields(relation)
+        fields = service.source_object_fields(relation, actor=actor_from_request(request))
     except KeyError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -1502,6 +1505,7 @@ def explain_query(
 @router.post("/api/query-sql/prepare")
 def prepare_query_sql(
     payload: QuerySqlPreparePayload,
+    request: Request,
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> JSONResponse:
     try:
@@ -1519,9 +1523,12 @@ def prepare_query_sql(
             },
             query_options=payload.query_options,
             stage=payload.stage,
+            actor=actor_from_request(request),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except SourceSourcingError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     return JSONResponse(jsonable_encoder(result))
 
@@ -1623,6 +1630,7 @@ def delete_query_cache(
 
 @router.post("/api/query-jobs")
 def start_query_job(
+    request: Request,
     sql: str = Form(""),
     display_sql: str = Form("", alias="displaySql"),
     notebook_id: str = Form(""),
@@ -1665,9 +1673,12 @@ def start_query_job(
             query_options=query_options_payload,
             client_pre_submit_ms=client_pre_submit_ms,
             client_job_id=client_job_id,
+            actor=actor_from_request(request),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except SourceSourcingError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     return JSONResponse(jsonable_encoder(snapshot))
 
@@ -2172,6 +2183,7 @@ from .data_exchange import router as data_exchange_router
 from .data_source_explorer import router as data_source_explorer_router
 from .download_jobs import router as download_jobs_router
 from .workbench_metadata import router as workbench_metadata_router
+from .source_sourcing import router as source_sourcing_router
 
 
 router.include_router(data_source_explorer_router)
@@ -2179,3 +2191,4 @@ router.include_router(data_products_router)
 router.include_router(data_exchange_router)
 router.include_router(download_jobs_router)
 router.include_router(workbench_metadata_router)
+router.include_router(source_sourcing_router)

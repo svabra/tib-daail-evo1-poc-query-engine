@@ -10,6 +10,7 @@ from fastapi.templating import Jinja2Templates
 
 from ..backend.pure_duckdb import pure_duckdb_cells_payload
 from ..backend.service import WorkbenchService
+from ..backend.source_sourcing import validated_demo_actor
 from ..dependencies import get_workbench_service
 from ..models import SourceCatalog
 from .data_sources import (
@@ -28,6 +29,20 @@ register_template_filters(templates)
 
 def is_partial_request(request: Request) -> bool:
     return request.headers.get("HX-Request", "").lower() == "true"
+
+
+def demo_actor(request: Request) -> str:
+    return validated_demo_actor(request.cookies.get("daaif_demo_user"))
+
+
+def actor_catalogs(request: Request, service: WorkbenchService):
+    resolver = getattr(service, "catalogs_for_actor", None)
+    return resolver(demo_actor(request)) if callable(resolver) else service.catalogs()
+
+
+def actor_source_options(request: Request, service: WorkbenchService):
+    resolver = getattr(service, "source_options_for_actor", None)
+    return resolver(demo_actor(request)) if callable(resolver) else service.source_options()
 
 
 def brand_title_for_mode(workspace_mode: str) -> str:
@@ -476,10 +491,10 @@ def shell_context(
     # executable; the browser loads everything else on first use.
     defer_sidebar_source_tree = True
     defer_sidebar_notebook_tree = workspace_mode == "notebook"
-    catalogs = [] if shell_sidebar_hidden else service.catalogs()
+    catalogs = [] if shell_sidebar_hidden else actor_catalogs(request, service)
     notebooks = [] if defer_sidebar_notebook_tree else service.notebooks()
     include_editor_metadata = active_notebook is not None
-    source_options = service.source_options() if include_editor_metadata else []
+    source_options = actor_source_options(request, service) if include_editor_metadata else []
     data_generators = service.data_generators() if workspace_mode == "loader" else []
     runbook_tree = []
     return {
@@ -611,7 +626,7 @@ def query_workbench_entry(
     )
 
     if is_partial_request(request):
-        catalogs = service.catalogs()
+        catalogs = actor_catalogs(request, service)
         return templates.TemplateResponse(
             request=request,
             name="partials/query_workbench_entry.html",
@@ -672,7 +687,7 @@ def query_workbench_data_sources(
     browse: bool = Query(default=False),
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> HTMLResponse:
-    context = build_data_source_management_context(service, source_id)
+    context = build_data_source_management_context(service, source_id, demo_actor(request))
     browse_enabled = browse is True
     context["browse_data_source"] = (
         context.get("selected_data_source") if browse_enabled else None
@@ -712,7 +727,7 @@ def query_workbench_data_source_explorer(
     source_id: str | None = Query(default=None),
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> HTMLResponse:
-    context = build_data_source_explorer_context(service, source_id)
+    context = build_data_source_explorer_context(service, source_id, demo_actor(request))
     context["browse_data_source"] = context.get("selected_data_source")
 
     if is_partial_request(request):
@@ -806,7 +821,7 @@ def notebook_workspace(
         name="partials/workspace.html",
         context={
             "active_notebook": notebook,
-            "source_options": service.source_options(),
+            "source_options": actor_source_options(request, service),
         },
     )
 
@@ -822,7 +837,7 @@ def sidebar_partial(
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> HTMLResponse:
     workspace_mode = "loader" if mode == "loader" else "notebook"
-    catalogs = service.catalogs()
+    catalogs = actor_catalogs(request, service)
     defer_sidebar_source_tree = source_tree != "full"
     defer_sidebar_notebook_tree = workspace_mode == "notebook" and notebook_tree != "full"
     defer_sidebar_runbook_tree = workspace_mode == "loader" and runbook_tree != "full"
@@ -855,10 +870,11 @@ def sidebar_partial(
 
 
 @router.get("/ingestion-workbench", response_class=HTMLResponse)
-def ingestion_workbench_partial(
+def ingestion_workbench_splitter(
     request: Request,
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> HTMLResponse:
+    template = "partials/ingestion_splitter.html"
     if not is_partial_request(request):
         return templates.TemplateResponse(
             request=request,
@@ -868,16 +884,60 @@ def ingestion_workbench_partial(
                 service,
                 active_notebook=None,
                 workspace_mode="ingestion",
-                workspace_partial_template="partials/ingestion_workbench.html",
+                workspace_partial_template=template,
                 shell_sidebar_hidden=True,
             ),
         )
 
     return templates.TemplateResponse(
         request=request,
-        name="partials/ingestion_workbench.html",
+        name=template,
         context={},
     )
+
+
+@router.get("/ingestion-workbench/manual", response_class=HTMLResponse)
+def ingestion_workbench_partial(
+    request: Request,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> HTMLResponse:
+    template = "partials/ingestion_workbench.html"
+    if not is_partial_request(request):
+        return templates.TemplateResponse(
+            request=request,
+            name="index.html",
+            context=shell_context(
+                request,
+                service,
+                active_notebook=None,
+                workspace_mode="ingestion",
+                workspace_partial_template=template,
+                shell_sidebar_hidden=True,
+            ),
+        )
+    return templates.TemplateResponse(request=request, name=template, context={})
+
+
+@router.get("/ingestion-workbench/sourcing", response_class=HTMLResponse)
+def ingestion_workbench_sourcing(
+    request: Request,
+    service: WorkbenchService = Depends(get_workbench_service),
+) -> HTMLResponse:
+    template = "partials/source_sourcing_wizard.html"
+    if not is_partial_request(request):
+        return templates.TemplateResponse(
+            request=request,
+            name="index.html",
+            context=shell_context(
+                request,
+                service,
+                active_notebook=None,
+                workspace_mode="ingestion",
+                workspace_partial_template=template,
+                shell_sidebar_hidden=True,
+            ),
+        )
+    return templates.TemplateResponse(request=request, name=template, context={})
 
 
 @router.get("/loader-workbench", response_class=HTMLResponse)

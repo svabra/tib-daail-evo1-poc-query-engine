@@ -436,6 +436,15 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
         body = response.body.decode("utf-8")
         self.assertIn('data-data-source-management-page', body)
         self.assertIn('data-selected-source-id="pg_olap"', body)
+        self.assertIn('data-source-filter-query', body)
+        self.assertIn('data-source-filter-technology', body)
+        self.assertIn('data-source-view-mode="cards"', body)
+        self.assertIn('data-source-view-mode="list"', body)
+        self.assertIn('data-source-filter-card', body)
+        self.assertIn('data-source-technology="PostgreSQL"', body)
+        self.assertIn("Data sources", body)
+        self.assertIn("Available now", body)
+        self.assertIn("Checked: Current runtime", body)
         self.assertIn("Browse Data", body)
         self.assertIn('data-open-data-source-explorer="pg_olap"', body)
         self.assertIn(
@@ -608,6 +617,7 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
     def test_explorer_api_returns_postgres_catalog_payload(self) -> None:
         response = data_source_explorer_payload(
             source_id="pg_oltp_native",
+            request=build_request("/api/data-sources/pg_oltp_native/explorer"),
             bucket="",
             prefix="",
             service=FakeWorkbenchService(),

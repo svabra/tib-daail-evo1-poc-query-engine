@@ -122,6 +122,8 @@ def explorer_copy_for_source(source_kind: str) -> str:
         return "Browse buckets, prefixes, and files in Shared Workspace."
     if normalized_kind == "local-browser":
         return "Browse folders and files stored in this browser workspace."
+    if normalized_kind == "oracle-poc":
+        return "Browse the granted Oracle schemas and synthetic PoC relations."
     return "Open the explorer for this data source."
 
 
@@ -386,11 +388,50 @@ def _local_browser_source_record(
     )
 
 
+def _oracle_source_record(catalog: SourceCatalog) -> dict[str, object]:
+    schema_count, object_count = _source_metrics(catalog)
+    return _attach_source_navigation(
+        {
+            "source_id": catalog.connection_source_id or catalog.name,
+            "name": catalog.display_name or catalog.name,
+            "label": catalog.database_name or catalog.name,
+            "source_type": "RDBMS",
+            "kind": "oracle-poc",
+            "family": "BIT Oracle RDBMS",
+            "execution_mode": "Oracle PoC via DuckDB",
+            "catalog_name": catalog.name,
+            "summary": "Governed Oracle source granted by DaCa and simulated read-only with synthetic PoC data.",
+            "configured": True,
+            "schema_count": schema_count,
+            "object_count": object_count,
+            "status_tone": "available",
+            "status_label": "Grant active",
+            "status_detail": catalog.connection_detail or "Active DaCa source grant.",
+            "summary_metrics": [
+                {"label": "Technology", "value": "BIT Oracle RDBMS"},
+                {"label": "Location", "value": catalog.site_label or "BIT data center"},
+                {"label": "Schemas", "value": str(schema_count)},
+                {"label": "Objects", "value": str(object_count)},
+                {"label": "Access", "value": "DaCa grant"},
+            ],
+            "settings": [
+                {"label": "Database", "value": catalog.database_name or catalog.name},
+                {"label": "Data Owner", "value": catalog.owner_label or "Governed in DaCa"},
+                {"label": "Runtime", "value": "DuckDB-generated synthetic relations"},
+                {"label": "Credentials", "value": "None stored", "hint": "This is an explicitly labelled PoC simulation."},
+                {"label": "Query mode", "value": "Read-only"},
+            ],
+        }
+    )
+
+
 def data_source_management_context(
     service: WorkbenchService,
     selected_source_id: str | None,
+    actor: str = "",
 ) -> dict[str, object]:
-    catalogs = service.catalogs()
+    actor_catalogs = getattr(service, "catalogs_for_actor", None)
+    catalogs = actor_catalogs(actor) if actor and callable(actor_catalogs) else service.catalogs()
     catalogs_by_name = {catalog.name: catalog for catalog in catalogs}
     sources = [
         _local_browser_source_record(
@@ -444,6 +485,60 @@ def data_source_management_context(
             catalogs_by_name=catalogs_by_name,
         ),
     ]
+    sources.extend(
+        _oracle_source_record(catalog)
+        for catalog in catalogs
+        if str(catalog.connection_source_id or catalog.name).startswith("ora_")
+    )
+
+    for source in sources:
+        kind = str(source.get("kind") or "").strip()
+        if kind == "oracle-poc":
+            location_label = next(
+                (
+                    str(metric.get("value") or "").strip()
+                    for metric in source.get("summary_metrics", [])
+                    if metric.get("label") == "Location"
+                ),
+                "BIT data center",
+            )
+        elif kind == "object-storage":
+            location_label = "BIT object storage"
+        elif kind == "local-browser":
+            location_label = "Current browser"
+        else:
+            location_label = "BIT data platform"
+
+        source["location_label"] = location_label
+        source["last_checked_label"] = "Current runtime"
+        source["search_text"] = " ".join(
+            str(source.get(field) or "")
+            for field in (
+                "name",
+                "label",
+                "source_type",
+                "family",
+                "summary",
+                "status_label",
+                "location_label",
+            )
+        ).casefold()
+
+    source_summary = {
+        "total": len(sources),
+        "available": sum(
+            1 for source in sources if source.get("status_tone") == "available"
+        ),
+        "schemas": sum(int(source.get("schema_count") or 0) for source in sources),
+        "objects": sum(int(source.get("object_count") or 0) for source in sources),
+    }
+    source_technologies = sorted(
+        {
+            str(source.get("family") or source.get("source_type") or "Other").strip()
+            for source in sources
+        },
+        key=str.casefold,
+    )
 
     selected_source = next(
         (
@@ -478,6 +573,8 @@ def data_source_management_context(
 
     return {
         "data_sources": sources,
+        "source_summary": source_summary,
+        "source_technologies": source_technologies,
         "selected_data_source": selected_source,
         "inline_browse_catalogs": inline_browse_catalogs,
         "inline_source_tree_s3_hierarchy": build_source_tree_s3_hierarchy(
@@ -490,8 +587,9 @@ def data_source_management_context(
 def data_source_explorer_context(
     service: WorkbenchService,
     selected_source_id: str | None,
+    actor: str = "",
 ) -> dict[str, object]:
-    return data_source_management_context(service, selected_source_id)
+    return data_source_management_context(service, selected_source_id, actor)
 
 
 def home_data_source_context(service: WorkbenchService) -> dict[str, object]:
