@@ -143,9 +143,11 @@ async def create_scheduled_ingestion(
         timeout=timeout_ms,
     )
     await assert_no_horizontal_overflow(page)
-    source_card = hub.locator(".source-ingestion-source-card", has_text="BAZG Zentrale Zollabwicklung")
-    await source_card.wait_for(state="visible", timeout=timeout_ms)
-    await source_card.get_by_role("link", name="Create ingestion").click()
+    source_link = hub.locator(
+        'a[href="/ingestion-workbench/sourcing/ingestions/new?sourceId=ora_bazg_zoll"]'
+    ).first
+    await source_link.wait_for(state="attached", timeout=timeout_ms)
+    await source_link.click()
 
     wizard = page.locator("[data-source-ingestion-wizard]")
     await wizard.wait_for(state="visible", timeout=timeout_ms)

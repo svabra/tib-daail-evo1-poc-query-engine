@@ -40,8 +40,8 @@ CURRENT_FEATURE_LIST: dict[str, object] = {
         {
             "title": "Daten kontrolliert einlesen und bereitstellen",
             "description": (
-                "Importieren Sie Dateien, kopieren Sie freigegebene Oracle-Relationen "
-                "einmalig oder stündlich als vollständige Parquet-Stände nach S3 und "
+                "Importieren Sie Dateien, kopieren Sie freigegebene Oracle-, PostgreSQL- "
+                "oder S3-Relationen einmalig oder stündlich als vollständige Parquet-Stände nach S3 und "
                 "publizieren Sie kuratierte Datenprodukte mit nachvollziehbaren Metadaten."
             ),
         },
@@ -67,6 +67,23 @@ CURRENT_FEATURE_LIST: dict[str, object] = {
 # RELEASE_NOTES below remain the technical source of truth; this list omits
 # test-only, deployment, worker, lock, and rollback details.
 USER_FACING_FEATURE_HISTORY: list[dict[str, object]] = [
+    {
+        "version": "0.10.53",
+        "features": [
+            (
+                "Datenquellen kompakt durchsuchen",
+                "Der DaCa-nahe Quellenkatalog und der Explorer verwenden dieselbe kompakte Tabellen- und Listenansicht mit Technologie-Icons, Filtern, Pagination und eigenständigen Detailseiten.",
+            ),
+            (
+                "PostgreSQL und S3 wiederverwendbar ingestieren",
+                "One-Time- und stündliche Full-Replace-Ingestions verwenden nun denselben sicheren Ablauf für Oracle, PostgreSQL sowie entdeckte CSV-, JSON- und Parquet-Objekte aus S3.",
+            ),
+            (
+                "Plattformquellen ohne doppelte Einträge nutzen",
+                "PostgreSQL OLTP, PostgreSQL OLAP und Shared Workspace stehen direkt im Sourcing Hub bereit; neue S3-Ziel-Buckets lassen sich im Wizard anlegen und der Native-Alias bleibt ohne doppelten Quelleintrag kompatibel.",
+            ),
+        ],
+    },
     {
         "version": "0.10.51",
         "features": [
@@ -768,9 +785,37 @@ USER_FACING_FEATURE_HISTORY: list[dict[str, object]] = [
 ]
 
 
-# Derived from git history through version 0.10.51. Keep entries concise and
+# Derived from git history through version 0.10.53. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.53",
+        "releasedAt": "2026-08-21T15:54:27+02:00",
+        "features": [
+            (
+                "The Data Source Workbench now provides a DaCa-style, actor-aware catalog "
+                "with compact Table and List views, server-side filtering and pagination, "
+                "self-hosted technology icons and standalone source details; the browse page "
+                "reuses the same scalable source selector above its full-width object explorer."
+            ),
+            (
+                "The Sourcing Hub and one shared technology-neutral wizard now expose "
+                "authorized Oracle sources together with PostgreSQL OLTP, PostgreSQL OLAP "
+                "and discovered S3 CSV, JSON/JSONL and Parquet relations."
+            ),
+            (
+                "Trusted server-side source resolvers run PostgreSQL and S3 snapshots through "
+                "the same validated staging and atomic Full Replace flow as Oracle while "
+                "keeping Oracle grant checks fail closed and platform sources independent of DaCa."
+            ),
+            (
+                "Persisted definitions migrate to the normalized source-locator schema, and "
+                "the pg_oltp_native compatibility alias resolves to one logical OLTP source "
+                "with VMTP and Native access paths, while the destination step can create and "
+                "immediately select a new accessible S3 bucket."
+            ),
+        ],
+    },
     {
         "version": "0.10.51",
         "releasedAt": "2026-08-20T23:31:33+02:00",

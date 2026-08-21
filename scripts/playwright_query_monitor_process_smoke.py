@@ -1057,7 +1057,7 @@ async def assert_query_run_history(page, timeout_ms: int, cell_ids: list[str]) -
             && /Start date/.test(text)
             && /End date/.test(text)
             && /Progress/.test(text)
-            && /Shared DuckDB wait/.test(text)
+            && /Shared DuckDB wait/i.test(text)
             && /startup/.test(text)
             && /query/.test(text)
             && (/fetch/.test(text) || /Cancelled|Running/.test(text))

@@ -687,11 +687,14 @@ def query_workbench_data_sources(
     browse: bool = Query(default=False),
     service: WorkbenchService = Depends(get_workbench_service),
 ) -> HTMLResponse:
+    if browse is True:
+        return query_workbench_data_source_explorer(
+            request=request,
+            source_id=source_id,
+            service=service,
+        )
     context = build_data_source_management_context(service, source_id, demo_actor(request))
-    browse_enabled = browse is True
-    context["browse_data_source"] = (
-        context.get("selected_data_source") if browse_enabled else None
-    )
+    context["browse_data_source"] = None
 
     if is_partial_request(request):
         return templates.TemplateResponse(

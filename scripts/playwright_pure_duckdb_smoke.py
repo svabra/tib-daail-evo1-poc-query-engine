@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import zipfile
 from pathlib import Path
 
 from playwright.async_api import async_playwright
@@ -52,8 +53,8 @@ async def main() -> None:
                 raise RuntimeError(f"Unexpected Pure DuckDB path: {path!r}")
 
             cell_count = await page.locator("[data-pure-duckdb-cell]").count()
-            if cell_count != 17:
-                raise RuntimeError(f"Expected 17 Pure DuckDB cells, found {cell_count}.")
+            if cell_count != 20:
+                raise RuntimeError(f"Expected 20 Pure DuckDB cells, found {cell_count}.")
             forbidden_count = await page.locator("[data-sidebar], .topbar, [data-query-cell]").count()
             if forbidden_count:
                 raise RuntimeError("Pure DuckDB page rendered notebook shell elements.")
@@ -89,12 +90,17 @@ async def main() -> None:
             async with page.expect_download(timeout=args.timeout_ms) as download_info:
                 await first_cell.locator("[data-download-pure-duckdb-csv]").click()
             download = await download_info.value
-            if download.suggested_filename != "pure-duckdb-query-1.csv":
+            if download.suggested_filename != "pure-duckdb-query-1.csv.zip":
                 raise RuntimeError(
                     f"Unexpected CSV filename: {download.suggested_filename!r}"
                 )
             csv_path = await download.path()
-            csv_text = Path(str(csv_path)).read_text(encoding="utf-8")
+            with zipfile.ZipFile(Path(str(csv_path))) as archive:
+                if archive.namelist() != ["pure-duckdb-query-1.csv"]:
+                    raise RuntimeError(
+                        f"Unexpected CSV ZIP members: {archive.namelist()!r}"
+                    )
+                csv_text = archive.read("pure-duckdb-query-1.csv").decode("utf-8")
             if csv_text.replace("\r\n", "\n") != "pure_value\n1\n":
                 raise RuntimeError(f"Unexpected CSV content: {csv_text!r}")
             duration_one = (await first_cell.locator("[data-pure-duckdb-duration]").inner_text()).strip()

@@ -27,11 +27,19 @@
         <div>
           <span>Approved connections</span>
           <h3 id="source-ingestion-sources-title">Available Data Sources</h3>
-          <p>Only sources covered by your current DaCa grant are shown.</p>
+          <p>Platform sources and Oracle connections covered by your current DaCa grant are shown.</p>
         </div>
         <a href="/data-sources">Manage sources</a>
       </div>
-      <div class="source-ingestion-source-list" data-source-ingestion-sources aria-live="polite">
+      <div class="source-ingestion-catalog-toolbar">
+        <label class="source-catalog-field source-catalog-search"><span>Search available sources</span><span class="source-catalog-input-wrap"><img src="/static/img/source-icons/search.svg" alt=""><input type="search" placeholder="Name, technology or location" data-source-ingestion-catalog-query></span></label>
+        <div class="source-catalog-view-switch" role="group" aria-label="Available source view">
+          <button type="button" data-source-ingestion-catalog-view="list" aria-pressed="false"><img src="/static/img/source-icons/list.svg" alt="">List</button>
+          <button type="button" data-source-ingestion-catalog-view="table" aria-pressed="true"><img src="/static/img/source-icons/table.svg" alt="">Table</button>
+        </div>
+      </div>
+      <p class="source-catalog-result-count" data-source-ingestion-catalog-count aria-live="polite"></p>
+      <div class="source-ingestion-source-list source-catalog-results" data-source-ingestion-sources aria-live="polite">
         <div class="sourcing-empty"><strong>Loading available sources...</strong></div>
       </div>
     </section>

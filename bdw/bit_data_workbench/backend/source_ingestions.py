@@ -4,7 +4,6 @@ from contextlib import suppress
 from datetime import UTC, datetime
 import json
 import logging
-import re
 from threading import Event, RLock, Thread
 import time
 from typing import Any, Callable
@@ -19,11 +18,18 @@ from .runtime_connections import create_duckdb_worker_connection
 from .s3_hidden import INTERNAL_S3_PREFIX, is_hidden_s3_bucket_name, is_internal_s3_key
 from .s3_storage import ensure_s3_bucket, iter_s3_keys, list_s3_buckets, s3_client
 from .source_sourcing import SourceSourcingCoordinator, SourceSourcingError, validated_demo_actor
+from .source_ingestion_sources import (
+    SourceIngestionSourceResolver,
+    SourceResolutionError,
+    normalize_ingestion_source_id,
+    normalize_relation_selector,
+)
+from ..models import SourceCatalog, SourceObject
 
 
 logger = logging.getLogger(__name__)
 
-SOURCE_INGESTION_SCHEMA_VERSION = 1
+SOURCE_INGESTION_SCHEMA_VERSION = 2
 SOURCE_INGESTION_PREFIX = f"{INTERNAL_S3_PREFIX}source-ingestions/"
 SOURCE_INGESTION_DEFINITIONS_PREFIX = f"{SOURCE_INGESTION_PREFIX}definitions/"
 SOURCE_INGESTION_RUNS_PREFIX = f"{SOURCE_INGESTION_PREFIX}runs/"
@@ -34,8 +40,6 @@ SOURCE_INGESTION_TERMINAL_STATUSES = frozenset(
     {"completed", "failed", "blocked", "skipped", "cancelled"}
 )
 SOURCE_INGESTION_ACTIVE_STATUSES = frozenset({"queued", "running"})
-SOURCE_ID_RE = re.compile(r"^ora_[a-z0-9_]+$")
-RELATION_PART_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$#]*$")
 
 
 class SourceIngestionError(RuntimeError):
@@ -110,18 +114,41 @@ def _json_clone(payload: dict[str, Any]) -> dict[str, Any]:
     return json.loads(json.dumps(payload))
 
 
-def _validate_source_id(value: object) -> str:
-    source_id = str(value or "").strip().lower()
-    if not SOURCE_ID_RE.fullmatch(source_id):
-        raise SourceIngestionError(422, "Only a granted Oracle PoC source can be ingested.")
-    return source_id
-
-
-def _validate_relation_part(value: object, label: str) -> str:
-    normalized = str(value or "").strip().upper()
-    if not RELATION_PART_RE.fullmatch(normalized):
-        raise SourceIngestionError(422, f"Provide a valid Oracle {label}.")
-    return normalized
+def migrate_source_ingestion_definition(payload: dict[str, Any]) -> dict[str, Any]:
+    migrated = _json_clone(payload)
+    source_id = str(migrated.get("sourceId") or "").strip()
+    if source_id == "pg_oltp_native":
+        source_id = "pg_oltp"
+        migrated["sourceId"] = source_id
+    if int(migrated.get("schemaVersion") or 1) < SOURCE_INGESTION_SCHEMA_VERSION:
+        source_kind = (
+            "oracle-poc"
+            if source_id.startswith("ora_")
+            else ("s3-object" if source_id == "s3" else "postgresql")
+        )
+        migrated.setdefault("sourceKind", source_kind)
+        migrated.setdefault(
+            "technology",
+            "Oracle" if source_id.startswith("ora_") else ("MinIO / S3" if source_id == "s3" else "PostgreSQL"),
+        )
+        migrated.setdefault(
+            "accessModel",
+            "DaCa grant · checked per run"
+            if source_id.startswith("ora_")
+            else "Platform source · runtime access",
+        )
+        migrated.setdefault(
+            "sourceLocator",
+            {
+                "sourceId": source_id,
+                "schema": migrated.get("schemaName", ""),
+                "relation": migrated.get("relationName", ""),
+                "relationKind": migrated.get("relationKind", "table"),
+                "queryReference": "",
+            },
+        )
+        migrated["schemaVersion"] = SOURCE_INGESTION_SCHEMA_VERSION
+    return migrated
 
 
 def normalize_destination(settings: Settings, payload: object) -> tuple[str, str]:
@@ -186,7 +213,11 @@ class SourceIngestionStore:
                 for payload in [self._read_json(client, self._bucket, key)]
                 if payload is not None
             ]
-        return sorted(definitions, key=lambda item: str(item.get("updatedAt") or ""), reverse=True)
+        return sorted(
+            (migrate_source_ingestion_definition(item) for item in definitions),
+            key=lambda item: str(item.get("updatedAt") or ""),
+            reverse=True,
+        )
 
     def get_definition(self, definition_id: str) -> dict[str, Any]:
         with self._lock:
@@ -195,10 +226,10 @@ class SourceIngestionStore:
             )
         if payload is None:
             raise KeyError(f"Unknown source ingestion: {definition_id}")
-        return payload
+        return migrate_source_ingestion_definition(payload)
 
     def put_definition(self, definition: dict[str, Any]) -> dict[str, Any]:
-        payload = _json_clone(definition)
+        payload = migrate_source_ingestion_definition(definition)
         payload["schemaVersion"] = SOURCE_INGESTION_SCHEMA_VERSION
         with self._lock:
             self._client().put_object(
@@ -244,7 +275,7 @@ class SourceIngestionStore:
 
 
 class SourceIngestionManager:
-    """Actor-scoped Oracle-to-S3 full-refresh definitions and executions."""
+    """Actor-scoped source-to-S3 full-refresh definitions and executions."""
 
     def __init__(
         self,
@@ -252,6 +283,8 @@ class SourceIngestionManager:
         *,
         source_sourcing: SourceSourcingCoordinator,
         query_runner: Callable[..., dict[str, Any]],
+        catalog_provider: Callable[[str], list[SourceCatalog]] | None = None,
+        relation_fields_provider: Callable[[str, str, SourceObject], list[object]] | None = None,
         store: SourceIngestionStore | None = None,
         client_factory: Callable[[], Any] | None = None,
         validation_connection_factory: Callable[[], Any] | None = None,
@@ -262,6 +295,11 @@ class SourceIngestionManager:
     ) -> None:
         self._settings = settings
         self._source_sourcing = source_sourcing
+        self._source_resolver = SourceIngestionSourceResolver(
+            source_sourcing,
+            catalog_provider=catalog_provider,
+            fields_provider=relation_fields_provider,
+        )
         self._query_runner = query_runner
         self._store = store or SourceIngestionStore(settings, client_factory=client_factory)
         self._client_factory = client_factory or (lambda: s3_client(settings))
@@ -357,39 +395,9 @@ class SourceIngestionManager:
     def source_context(self, actor: str) -> dict[str, Any]:
         normalized_actor = validated_demo_actor(actor)
         try:
-            sources = self._source_sourcing.active_oracle_sources(normalized_actor)
-            catalogs = self._source_sourcing.catalogs_for_actor(normalized_actor)
-        except SourceSourcingError as exc:
+            items = self._source_resolver.context(normalized_actor)
+        except SourceResolutionError as exc:
             raise SourceIngestionError(exc.status_code, exc.detail) from exc
-        catalog_by_id = {catalog.name: catalog for catalog in catalogs}
-        items: list[dict[str, Any]] = []
-        for source in sources:
-            source_id = str(source.get("id") or "").strip()
-            catalog = catalog_by_id.get(source_id)
-            if catalog is None:
-                continue
-            relations = [
-                {
-                    "schema": schema.name,
-                    "name": source_object.name,
-                    "kind": source_object.kind,
-                    "relation": source_object.relation,
-                    "displayName": source_object.display_name or source_object.name,
-                }
-                for schema in catalog.schemas
-                for source_object in schema.objects
-            ]
-            items.append(
-                {
-                    "id": source_id,
-                    "displayName": catalog.display_name or source_id,
-                    "databaseName": catalog.database_name,
-                    "platform": catalog.source_platform or "BIT Oracle RDBMS",
-                    "site": catalog.site_label,
-                    "owner": catalog.owner_label,
-                    "relations": relations,
-                }
-            )
         try:
             visible_buckets = sorted(
                 bucket
@@ -460,17 +468,30 @@ class SourceIngestionManager:
                     "created": False,
                 }
 
-        source_id = _validate_source_id(payload.get("sourceId"))
+        try:
+            source_id = normalize_ingestion_source_id(payload.get("sourceId"))
+        except SourceResolutionError as exc:
+            raise SourceIngestionError(exc.status_code, exc.detail) from exc
         relation = payload.get("relation") if isinstance(payload.get("relation"), dict) else {}
-        schema_name = _validate_relation_part(relation.get("schema"), "schema")
-        relation_name = _validate_relation_part(relation.get("name"), "relation")
-        relation_kind = self._resolve_relation(
+        try:
+            schema_name = normalize_relation_selector(relation.get("schema"), "schema or bucket")
+            relation_name = normalize_relation_selector(relation.get("name"), "relation")
+        except SourceResolutionError as exc:
+            raise SourceIngestionError(exc.status_code, exc.detail) from exc
+        resolved = self._resolve_relation(
             normalized_actor, source_id, schema_name, relation_name, refresh=True
-        )["kind"]
+        )
+        source_id = str(resolved["sourceId"])
+        schema_name = str(resolved["schema"])
+        relation_name = str(resolved["name"])
+        relation_kind = str(resolved["kind"])
         destination_bucket, destination_key = normalize_destination(
             self._settings, payload.get("destination")
         )
         self._assert_bucket_accessible(destination_bucket)
+        self._assert_source_target_separation(
+            resolved, destination_bucket=destination_bucket, destination_key=destination_key
+        )
 
         schedule_payload = payload.get("schedule") if isinstance(payload.get("schedule"), dict) else {}
         requested_schedule = bool(schedule_payload.get("enabled"))
@@ -485,11 +506,14 @@ class SourceIngestionManager:
             "clientRequestId": client_request_id,
             "actorId": normalized_actor,
             "name": name,
-            "sourceKind": "oracle-poc",
+            "sourceKind": resolved["sourceKind"],
             "sourceId": source_id,
+            "technology": resolved["technology"],
+            "accessModel": resolved["accessModel"],
             "schemaName": schema_name,
             "relationName": relation_name,
             "relationKind": relation_kind,
+            "sourceLocator": resolved["locator"],
             "destinationBucket": destination_bucket,
             "destinationKey": destination_key,
             "format": "parquet",
@@ -539,6 +563,16 @@ class SourceIngestionManager:
         if "destination" in payload:
             bucket, key = normalize_destination(self._settings, payload.get("destination"))
             self._assert_bucket_accessible(bucket)
+            resolved = self._resolve_relation(
+                str(definition.get("actorId") or ""),
+                str(definition.get("sourceId") or ""),
+                str(definition.get("schemaName") or ""),
+                str(definition.get("relationName") or ""),
+                refresh=True,
+            )
+            self._assert_source_target_separation(
+                resolved, destination_bucket=bucket, destination_key=key
+            )
             changed_execution = (
                 bucket != definition.get("destinationBucket")
                 or key != definition.get("destinationKey")
@@ -723,22 +757,24 @@ class SourceIngestionManager:
             run["status"] = "running"
             run["startedAt"] = iso_utc(self._clock())
             run["updatedAt"] = run["startedAt"]
-            run["message"] = "Reading the granted Oracle relation into a staged Parquet object."
+            run["message"] = "Reading the trusted source relation into a staged Parquet object."
             self._store.put_run(run)
             self._notify()
 
-            self._resolve_relation(
+            resolved = self._resolve_relation(
                 run["actorId"],
                 definition["sourceId"],
                 definition["schemaName"],
                 definition["relationName"],
                 refresh=True,
             )
-            staging_path = f"s3://{definition['destinationBucket']}/{staging_key}"
-            display_sql = (
-                f"SELECT * FROM {definition['sourceId']}."
-                f"{definition['schemaName']}.{definition['relationName']}"
+            self._assert_source_target_separation(
+                resolved,
+                destination_bucket=str(definition["destinationBucket"]),
+                destination_key=str(definition["destinationKey"]),
             )
+            staging_path = f"s3://{definition['destinationBucket']}/{staging_key}"
+            display_sql = f"SELECT * FROM {resolved['queryReference']}"
             query = self._query_runner(
                 actor=run["actorId"],
                 definition=definition,
@@ -750,7 +786,7 @@ class SourceIngestionManager:
             if query.get("status") != "completed":
                 raise SourceIngestionError(
                     502,
-                    str(query.get("error") or query.get("message") or "Oracle extraction failed."),
+                    str(query.get("error") or query.get("message") or "Source extraction failed."),
                 )
             columns, row_count, staged_size = self._validate_staged_parquet(
                 definition["destinationBucket"], staging_key, staging_path
@@ -798,9 +834,12 @@ class SourceIngestionManager:
             with suppress(Exception):
                 self._metadata_refresher(definition["destinationBucket"])
         except SourceSourcingError as exc:
-            self._fail_run(run, exc.detail, blocked=exc.status_code in {401, 403, 404})
+            definition = self._store.get_definition(definition_id)
+            blocked = str(definition.get("sourceKind") or "") == "oracle-poc" and exc.status_code in {401, 403, 404}
+            self._fail_run(run, exc.detail, blocked=blocked)
         except SourceIngestionError as exc:
-            blocked = exc.status_code in {401, 403, 404}
+            definition = self._store.get_definition(definition_id)
+            blocked = str(definition.get("sourceKind") or "") == "oracle-poc" and exc.status_code in {401, 403, 404}
             self._fail_run(run, exc.detail, blocked=blocked)
         except Exception as exc:
             logger.exception("Source ingestion run %s failed", run_id)
@@ -898,33 +937,38 @@ class SourceIngestionManager:
         relation_name: str,
         *,
         refresh: bool,
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
         try:
-            active_sources = self._source_sourcing.active_oracle_sources(actor, refresh=refresh)
-            if source_id not in {str(item.get("id") or "") for item in active_sources}:
-                raise SourceIngestionError(403, "An active DaCa source grant is required.")
-            catalogs = self._source_sourcing.catalogs_for_actor(actor)
-        except SourceSourcingError as exc:
+            return self._source_resolver.resolve(
+                actor,
+                source_id,
+                schema_name,
+                relation_name,
+                refresh=refresh,
+            )
+        except SourceResolutionError as exc:
             raise SourceIngestionError(exc.status_code, exc.detail) from exc
-        for catalog in catalogs:
-            if catalog.name != source_id:
-                continue
-            for schema in catalog.schemas:
-                if schema.name.casefold() != schema_name.casefold():
-                    continue
-                for source_object in schema.objects:
-                    if source_object.name.casefold() == relation_name.casefold():
-                        fields = self._source_sourcing.fields_for_relation(
-                            actor, f"{source_id}.{schema.name}.{source_object.name}"
-                        )
-                        if not fields:
-                            raise SourceIngestionError(422, "The Oracle relation has no schema fields.")
-                        return {
-                            "schema": schema.name,
-                            "name": source_object.name,
-                            "kind": source_object.kind,
-                        }
-        raise SourceIngestionError(404, "The Oracle relation is not available to this user.")
+
+    @staticmethod
+    def _assert_source_target_separation(
+        resolved: dict[str, Any], *, destination_bucket: str, destination_key: str
+    ) -> None:
+        if resolved.get("sourceId") != "s3":
+            return
+        locator = resolved.get("locator") if isinstance(resolved.get("locator"), dict) else {}
+        source_bucket = str(locator.get("bucket") or "").strip()
+        source_key = str(locator.get("key") or "").strip().lstrip("/")
+        destination_key = str(destination_key or "").strip().lstrip("/")
+        if source_bucket != destination_bucket:
+            return
+        if source_key and source_key == destination_key:
+            raise SourceIngestionError(422, "The S3 source object and ingestion target must be different.")
+        pattern = source_key or str(locator.get("partPrefix") or "").strip().lstrip("/")
+        wildcard_positions = [position for token in "*?[" if (position := pattern.find(token)) >= 0]
+        if wildcard_positions:
+            prefix = pattern[: min(wildcard_positions)].rstrip("/")
+            if prefix and (destination_key == prefix or destination_key.startswith(f"{prefix}/")):
+                raise SourceIngestionError(422, "The S3 target must not be inside the source collection prefix.")
 
     def _assert_bucket_accessible(self, bucket: str) -> None:
         try:
@@ -934,7 +978,9 @@ class SourceIngestionManager:
 
     def _owned_definition(self, actor: str, definition_id: str) -> dict[str, Any]:
         try:
-            definition = self._store.get_definition(str(definition_id or "").strip())
+            definition = migrate_source_ingestion_definition(
+                self._store.get_definition(str(definition_id or "").strip())
+            )
         except KeyError as exc:
             raise SourceIngestionError(404, str(exc)) from exc
         if definition.get("actorId") != validated_demo_actor(actor):
@@ -990,7 +1036,7 @@ class SourceIngestionManager:
         return f"s3://{definition.get('destinationBucket')}/{definition.get('destinationKey')}"
 
     def _decorate_definition(self, definition: dict[str, Any]) -> dict[str, Any]:
-        payload = _json_clone(definition)
+        payload = migrate_source_ingestion_definition(definition)
         payload["destinationPath"] = self._destination_path(payload)
         payload["relation"] = (
             f"{payload.get('sourceId')}.{payload.get('schemaName')}.{payload.get('relationName')}"

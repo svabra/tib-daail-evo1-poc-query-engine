@@ -1,182 +1,143 @@
-{% macro data_source_icon(kind) -%}
-  {% if kind == "postgres" %}
-    <svg viewBox="0 0 64 64" aria-hidden="true">
-      <ellipse cx="23" cy="21" rx="12" ry="4.8"></ellipse>
-      <path d="M11 21v16.5c0 2.7 5.4 4.8 12 4.8s12-2.1 12-4.8V21"></path>
-      <path d="M11 29.2c0 2.6 5.4 4.8 12 4.8s12-2.2 12-4.8"></path>
-      <path d="M39 16h12.5l5.5 5.5v25H39z"></path>
-      <path d="M51.5 16v5.5H57"></path>
-      <path d="M43.5 31h9"></path>
-      <path d="M43.5 38h9"></path>
-      <path d="M43.5 45h6"></path>
-    </svg>
-  {% elif kind == "local-browser" %}
-    <svg viewBox="0 0 64 64" aria-hidden="true">
-      <path d="M10 20h18l4 4h22v24H10z"></path>
-      <path d="M10 20v28"></path>
-      <path d="M34 14h14l6 6v22"></path>
-      <path d="M48 14v6h6"></path>
-      <path d="M20 34h24"></path>
-      <path d="M20 42h16"></path>
-    </svg>
-  {% else %}
-    <svg viewBox="0 0 64 64" aria-hidden="true">
-      <path d="M10 22.5c0-4.7 9.8-8.5 22-8.5s22 3.8 22 8.5S44.2 31 32 31s-22-3.8-22-8.5Z"></path>
-      <path d="M10 22.5v12.8c0 4.7 9.8 8.5 22 8.5s22-3.8 22-8.5V22.5"></path>
-      <path d="M10 35.3v13.2C10 53.2 19.8 57 32 57s22-3.8 22-8.5V35.3"></path>
-      <path d="M40 11h12.2l4.8 4.8V30H40z"></path>
-      <path d="M52.2 11v4.8H57"></path>
-      <path d="M43.5 21.3h10"></path>
-      <path d="M43.5 26.8h6.5"></path>
-    </svg>
-  {% endif %}
-{%- endmacro %}
-
 <section
   class="data-source-explorer-page"
   data-data-source-explorer-page
+  data-source-catalog-mode="browser"
   data-selected-source-id="{{ selected_data_source.source_id if selected_data_source else '' }}"
   data-explorer-kind="{{ selected_data_source.explorer_kind if selected_data_source else '' }}"
   data-browse-source-id="{{ selected_data_source.explorer_source_id if selected_data_source else '' }}"
 >
-  <div class="home-hero data-source-management-hero">
-    <div class="home-hero-copy">
+  <header class="data-source-browser-heading">
+    <div>
       <span class="home-eyebrow">Data Source Explorer</span>
-      <h2>Browse each data source in its native shape</h2>
-      <p>
-        Navigate relations, workspace files, buckets, prefixes, and objects directly from the Data Source Workbench.
-      </p>
+      <h2>Browse Data Sources</h2>
+      <p>Find a governed source, then inspect its schemas, relations, buckets and objects in one workspace.</p>
     </div>
-    <div class="data-source-management-note">
-      <span class="data-source-readonly-pill">Browse-first PoC</span>
-      <p>
-        Query actions stay available, but browsing is split by source type so PostgreSQL, Shared Workspace, and Local Workspace each get their own explorer flow.
-      </p>
-      <a
-        href="{{ selected_data_source.management_path if selected_data_source else '/data-sources' }}"
-        class="data-source-management-back-link"
-        data-open-query-data-source="{{ selected_data_source.source_id if selected_data_source else '' }}"
-      >
-        Back to Source Details
-      </a>
-    </div>
-  </div>
+    <a class="sourcing-back-link" href="/data-sources">Back to Data Source Catalog</a>
+  </header>
 
-  <div class="data-source-management-layout">
-    <section class="home-section data-source-management-section">
-      <div class="home-section-header">
-        <h3>Source Types</h3>
-        <p>Switch explorers without leaving the workbench.</p>
+  <section class="data-source-browser-catalog" aria-labelledby="data-source-browser-catalog-title">
+    <div class="data-source-browser-section-heading">
+      <div>
+        <span class="home-eyebrow">Available connections</span>
+        <h3 id="data-source-browser-catalog-title">Choose a Data Source</h3>
       </div>
-      <div class="data-source-card-grid">
-        {% for source in data_sources %}
+      <p>Switch sources without leaving the explorer. Row actions appear on hover or keyboard focus.</p>
+    </div>
+
+    <div class="data-source-catalog-toolbar data-source-browser-toolbar">
+      <label class="source-catalog-field source-catalog-search">
+        <span>Search data sources</span>
+        <span class="source-catalog-input-wrap">
+          <img src="/static/img/source-icons/search.svg" alt="">
+          <input type="search" placeholder="Name, technology, location or status" autocomplete="off" data-source-catalog-query>
+        </span>
+      </label>
+      <label class="source-catalog-field">
+        <span>Technology</span>
+        <select data-source-catalog-technology><option value="">All technologies</option></select>
+      </label>
+      <label class="source-catalog-field">
+        <span>Status</span>
+        <select data-source-catalog-status><option value="">All statuses</option></select>
+      </label>
+      <label class="source-catalog-field">
+        <span>Location</span>
+        <select data-source-catalog-location><option value="">All locations</option></select>
+      </label>
+      <button type="button" class="source-catalog-reset" data-source-catalog-reset>Reset</button>
+      <div class="source-catalog-view-switch" role="group" aria-label="Data source view">
+        <button type="button" data-source-catalog-view="list" aria-pressed="false">
+          <img src="/static/img/source-icons/list.svg" alt="">List
+        </button>
+        <button type="button" data-source-catalog-view="table" aria-pressed="true">
+          <img src="/static/img/source-icons/table.svg" alt="">Table
+        </button>
+      </div>
+    </div>
+    <p class="source-catalog-result-count" data-source-catalog-count aria-live="polite">Loading data sources&hellip;</p>
+    <div class="source-catalog-results data-source-browser-results" data-source-catalog aria-live="polite">
+      <div class="source-catalog-loading">Loading data sources&hellip;</div>
+    </div>
+    <nav class="source-catalog-pagination" aria-label="Data source result pages" data-source-catalog-pagination hidden>
+      <button type="button" data-source-catalog-page="previous">Previous</button>
+      <span data-source-catalog-page-label></span>
+      <button type="button" data-source-catalog-page="next">Next</button>
+    </nav>
+  </section>
+
+  {% if selected_data_source %}
+    <section class="data-source-browser-workspace" aria-labelledby="selected-data-source-title">
+      <header class="data-source-browser-selection">
+        <div class="data-source-browser-selection-main">
+          <span class="source-technology-icon source-technology-icon-large">
+            <img src="{{ selected_data_source.icon_path }}" alt="{{ selected_data_source.family }}">
+          </span>
+          <div>
+            <span class="home-eyebrow">{{ selected_data_source.source_type }} &middot; {{ selected_data_source.family }}</span>
+            <h3 id="selected-data-source-title">{{ selected_data_source.name }}</h3>
+            <p>{{ selected_data_source.summary }}</p>
+          </div>
+        </div>
+        <div class="data-source-browser-selection-actions">
+          <span class="data-source-status-pill" data-tone="{{ selected_data_source.status_tone }}">{{ selected_data_source.status_label }}</span>
           <a
-            href="{{ source.explorer_path }}"
-            class="data-source-card{% if selected_data_source and source.source_id == selected_data_source.source_id %} is-active{% endif %}"
-            data-open-data-source-explorer="{{ source.source_id }}"
-            aria-current="{% if selected_data_source and source.source_id == selected_data_source.source_id %}page{% else %}false{% endif %}"
-            {% if source.storage_tooltip %}title="{{ source.storage_tooltip }}"{% endif %}
+            href="{{ selected_data_source.management_path }}"
+            class="source-catalog-button source-catalog-button-secondary"
+            data-open-query-data-source="{{ selected_data_source.source_id }}"
+          >Source details</a>
+          {% if selected_data_source.ingestion_capable %}
+            <a class="source-catalog-button" href="/ingestion-workbench/sourcing/ingestions/new?sourceId={{ selected_data_source.source_id | urlencode }}">Create ingestion</a>
+          {% endif %}
+        </div>
+      </header>
+
+      <div class="data-source-browser-selection-meta" aria-label="Selected data source summary">
+        <span><small>Technology</small><strong>{{ selected_data_source.family }}</strong></span>
+        <span><small>Access</small><strong>{{ selected_data_source.access_model }}</strong></span>
+        <span><small>Schemas</small><strong>{{ selected_data_source.schema_count }}</strong></span>
+        <span><small>Objects</small><strong>{{ selected_data_source.object_count }}</strong></span>
+      </div>
+
+      <div class="data-source-explorer-shell">
+        <section class="data-source-explorer-browser-panel">
+          <div class="data-source-explorer-panel-header">
+            <span class="home-eyebrow">Catalog</span>
+            <h4>Browse {{ selected_data_source.name }}</h4>
+            <p>Expand a schema, bucket or prefix and select an object to inspect it.</p>
+          </div>
+          <div
+            class="data-source-explorer-browser"
+            data-data-source-explorer-navigation
+            data-data-source-explorer-source-tree-browser
           >
-            <span class="data-source-card-icon" aria-hidden="true">
-              {{ data_source_icon(source.kind) }}
-            </span>
-            <span class="data-source-card-copy">
-              <span class="data-source-card-title-row">
-                <strong class="data-source-card-title">{{ source.name }}</strong>
-                <span class="data-source-status-pill" data-tone="{{ source.status_tone }}">{{ source.status_label }}</span>
-              </span>
-              <span class="data-source-card-type">{{ source.source_type }}</span>
-              <span class="data-source-card-subtitle">{{ source.label }}</span>
-              <span class="data-source-card-summary">{{ source.summary }}</span>
-            </span>
-            <span class="data-source-card-meta">
-              <span>{{ source.schema_count }} schema{% if source.schema_count != 1 %}s{% endif %}</span>
-              <span>{{ source.object_count }} object{% if source.object_count != 1 %}s{% endif %}</span>
-            </span>
-          </a>
-        {% endfor %}
+            {% if inline_browse_catalogs %}
+              {% set source_tree_catalogs = inline_browse_catalogs %}
+              {% set source_tree_s3_hierarchy = inline_source_tree_s3_hierarchy %}
+              {% set source_tree_scope = 'explorer' %}
+              {% set source_tree_force_source_option_id = inline_source_option_id %}
+              {% set source_tree_open_catalogs = true %}
+              {% include "partials/source_tree.html" %}
+            {% else %}
+              <p class="home-empty">Loading explorer...</p>
+            {% endif %}
+          </div>
+        </section>
+        <aside class="data-source-explorer-detail-panel">
+          <div class="data-source-explorer-panel-header">
+            <span class="home-eyebrow">Selection</span>
+            <h4>Object details</h4>
+            <p>Fields, query references and available actions appear here.</p>
+          </div>
+          <div class="data-source-explorer-detail" data-data-source-explorer-detail>
+            <p class="home-empty">Select something from the explorer to inspect it.</p>
+          </div>
+        </aside>
       </div>
     </section>
-
-    <section class="home-section data-source-management-section data-source-detail-section">
-      {% if selected_data_source %}
-        <div class="data-source-detail-header">
-          <div class="data-source-detail-title-group">
-            <span class="data-source-detail-icon" aria-hidden="true">
-              {{ data_source_icon(selected_data_source.kind) }}
-            </span>
-            <div class="data-source-detail-copy">
-              <span class="home-eyebrow">{{ selected_data_source.source_type }} • {{ selected_data_source.family }}</span>
-              <h3{% if selected_data_source.storage_tooltip %} title="{{ selected_data_source.storage_tooltip }}"{% endif %}>{{ selected_data_source.name }}</h3>
-              <p>{{ selected_data_source.explorer_cta_copy }}</p>
-            </div>
-          </div>
-          <div class="data-source-detail-action-cluster">
-            <a
-              href="{{ selected_data_source.management_path }}"
-              class="data-source-explorer-launcher is-detail-toggle"
-              data-open-query-data-source="{{ selected_data_source.source_id }}"
-              aria-label="Open source details for {{ selected_data_source.name }}"
-            >
-              <span class="data-source-explorer-launcher-icon" aria-hidden="true">
-                <svg viewBox="0 0 64 64">
-                  <rect x="11" y="11" width="42" height="42" rx="10"></rect>
-                  <path d="M22 23h20"></path>
-                  <path d="M22 32h20"></path>
-                  <path d="M22 41h12"></path>
-                  <path d="M44 18v28"></path>
-                </svg>
-              </span>
-              <span class="data-source-explorer-launcher-copy">
-                <strong>View Source Details</strong>
-                <span>Switch back to the configuration, catalog footprint, and runtime status view for this source.</span>
-              </span>
-            </a>
-            <div class="data-source-detail-status-panel">
-              <span class="data-source-status-pill" data-tone="{{ selected_data_source.status_tone }}">
-                {{ selected_data_source.status_label }}
-              </span>
-              <p>{{ selected_data_source.status_detail }}</p>
-            </div>
-          </div>
-        </div>
-
-        <div class="data-source-explorer-shell">
-          <section class="data-source-explorer-browser-panel">
-            <div class="data-source-explorer-panel-header">
-              <h4>Browse {{ selected_data_source.name }}</h4>
-              <p>Objects appear here using the explorer flow for this source type.</p>
-            </div>
-            <div
-              class="data-source-explorer-browser"
-              data-data-source-explorer-navigation
-              data-data-source-explorer-source-tree-browser
-            >
-              {% if inline_browse_catalogs %}
-                {% set source_tree_catalogs = inline_browse_catalogs %}
-                {% set source_tree_s3_hierarchy = inline_source_tree_s3_hierarchy %}
-                {% set source_tree_scope = 'explorer' %}
-                {% set source_tree_force_source_option_id = inline_source_option_id %}
-                {% set source_tree_open_catalogs = true %}
-                {% include "partials/source_tree.html" %}
-              {% else %}
-                <p class="home-empty">Loading explorer...</p>
-              {% endif %}
-            </div>
-          </section>
-          <aside class="data-source-explorer-detail-panel">
-            <div class="data-source-explorer-panel-header">
-              <h4>Selection</h4>
-              <p>Inspect the currently selected object, file, bucket, or prefix here.</p>
-            </div>
-            <div class="data-source-explorer-detail" data-data-source-explorer-detail>
-              <p class="home-empty">Select something from the explorer to inspect it.</p>
-            </div>
-          </aside>
-        </div>
-      {% else %}
-        <p class="home-empty">No data sources are available in the current runtime.</p>
-      {% endif %}
+  {% else %}
+    <section class="source-catalog-empty">
+      <strong>Select a data source</strong>
+      <p>Choose an available connection above to open its explorer.</p>
     </section>
-  </div>
+  {% endif %}
 </section>
