@@ -2,11 +2,11 @@
   <a class="sourcing-back-link" href="/ingestion-workbench/sourcing">Back to Sourcing Hub</a>
   <header class="sourcing-hero">
     <div>
-      <span class="home-eyebrow">Oracle to S3</span>
+      <span class="home-eyebrow">Enterprise source to S3</span>
       <h2 id="source-ingestion-wizard-title">Create a complete data snapshot</h2>
-      <p>Choose one approved Oracle relation and write it to a stable Parquet object. You can run the same definition once or every full hour.</p>
+      <p>Choose one available Oracle, PostgreSQL or S3 relation and write it to a stable Parquet object. You can run the same definition once or every full hour.</p>
     </div>
-    <span class="sourcing-poc-badge">Oracle PoC &middot; Full Replace</span>
+    <span class="sourcing-poc-badge">One relation &middot; Atomic Full Replace</span>
   </header>
 
   <ol class="sourcing-stepper source-ingestion-stepper" aria-label="Ingestion setup progress">
@@ -19,9 +19,9 @@
 
   <form data-source-ingestion-form novalidate>
     <section class="sourcing-panel" data-source-ingestion-step="1" aria-labelledby="source-ingestion-source-title">
-      <div class="sourcing-panel-heading"><span>Step 1</span><h3 id="source-ingestion-source-title">Choose the governed source object</h3><p>Your DaCa grant is checked again for every execution.</p></div>
+      <div class="sourcing-panel-heading"><span>Step 1</span><h3 id="source-ingestion-source-title">Choose the source object</h3><p>Oracle checks the DaCa grant per run. Platform sources verify their live runtime access.</p></div>
       <div class="source-ingestion-form-grid">
-        <label class="sourcing-field"><span>Oracle source</span><select required data-source-ingestion-source><option value="">Loading approved Oracle sources...</option></select></label>
+        <label class="sourcing-field"><span>Data source</span><select required data-source-ingestion-source><option value="">Loading available sources...</option></select></label>
         <label class="sourcing-field"><span>Table or view</span><select required data-source-ingestion-relation disabled><option value="">Choose a source first</option></select></label>
       </div>
       <div class="source-ingestion-grant-note" data-source-ingestion-grant-note hidden></div>
@@ -32,7 +32,16 @@
       <div class="sourcing-panel-heading"><span>Step 2</span><h3 id="source-ingestion-destination-title">Choose the stable S3 target</h3><p>Parquet and Full Replace are fixed for this PoC. Existing data at the target is replaced only after the new snapshot is validated.</p></div>
       <div class="source-ingestion-destination-summary"><span>Format <strong>Parquet</strong></span><span>Write mode <strong>Atomic Full Replace</strong></span></div>
       <div class="source-ingestion-form-grid">
-        <label class="sourcing-field"><span>Visible S3 bucket</span><input required autocomplete="off" list="source-ingestion-visible-buckets" data-source-ingestion-bucket><datalist id="source-ingestion-visible-buckets" data-source-ingestion-buckets></datalist></label>
+        <div class="sourcing-field source-ingestion-bucket-field">
+          <label for="source-ingestion-bucket">Visible S3 bucket</label>
+          <div class="source-ingestion-bucket-input-row">
+            <input id="source-ingestion-bucket" required autocomplete="off" list="source-ingestion-visible-buckets" aria-describedby="source-ingestion-bucket-help source-ingestion-bucket-status" data-source-ingestion-bucket>
+            <datalist id="source-ingestion-visible-buckets" data-source-ingestion-buckets></datalist>
+            <button class="modal-button modal-button-secondary source-ingestion-create-bucket" type="button" data-source-ingestion-create-bucket>Create bucket</button>
+          </div>
+          <small id="source-ingestion-bucket-help" class="source-ingestion-field-help">Choose an existing bucket, or enter a new name and create it here.</small>
+          <p id="source-ingestion-bucket-status" class="source-ingestion-bucket-status" data-source-ingestion-bucket-status role="status" aria-live="polite" hidden></p>
+        </div>
         <label class="sourcing-field"><span>Object key</span><input required autocomplete="off" spellcheck="false" data-source-ingestion-key></label>
       </div>
       <p class="source-ingestion-path-preview" data-source-ingestion-path-preview></p>

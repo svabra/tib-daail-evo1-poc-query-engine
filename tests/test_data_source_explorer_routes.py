@@ -425,7 +425,7 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
             self.assertIn(f'data-home-sample-notebook="{notebook_id}"', body)
             self.assertIn(f'data-open-recent-notebook="{notebook_id}"', body)
 
-    def test_management_page_uses_standalone_url_and_explorer_launcher(self) -> None:
+    def test_management_page_uses_standalone_full_width_detail(self) -> None:
         response = query_workbench_data_sources(
             request=build_request("/data-sources", partial=True),
             source_id="pg_olap",
@@ -436,22 +436,35 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
         body = response.body.decode("utf-8")
         self.assertIn('data-data-source-management-page', body)
         self.assertIn('data-selected-source-id="pg_olap"', body)
-        self.assertIn('data-source-filter-query', body)
-        self.assertIn('data-source-filter-technology', body)
-        self.assertIn('data-source-view-mode="cards"', body)
-        self.assertIn('data-source-view-mode="list"', body)
-        self.assertIn('data-source-filter-card', body)
-        self.assertIn('data-source-technology="PostgreSQL"', body)
-        self.assertIn("Data sources", body)
-        self.assertIn("Available now", body)
-        self.assertIn("Checked: Current runtime", body)
-        self.assertIn("Browse Data", body)
-        self.assertIn('data-open-data-source-explorer="pg_olap"', body)
+        self.assertIn('class="data-source-detail-page"', body)
+        self.assertIn("Back to all data sources", body)
+        self.assertIn("Runtime configuration", body)
+        self.assertIn("Browse data", body)
+        self.assertIn("Create ingestion", body)
         self.assertIn(
             'href="/data-sources/browser?source_id=pg_olap"',
             body,
         )
         self.assertNotIn('data-data-source-explorer-page', body)
+        self.assertNotIn('data-inline-source-browser', body)
+
+    def test_management_catalog_defaults_to_table_and_exposes_list_toggle(self) -> None:
+        response = query_workbench_data_sources(
+            request=build_request("/data-sources", partial=True),
+            source_id="",
+            service=FakeWorkbenchService(),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.body.decode("utf-8")
+        self.assertIn('data-selected-source-id=""', body)
+        self.assertIn('data-source-catalog-query', body)
+        self.assertIn('data-source-catalog-technology', body)
+        self.assertIn('data-source-catalog-status', body)
+        self.assertIn('data-source-catalog-location', body)
+        self.assertIn('data-source-catalog-view="list"', body)
+        self.assertIn('data-source-catalog-view="table" aria-pressed="true"', body)
+        self.assertIn('data-source-catalog-context="management"', body)
         self.assertNotIn('data-inline-source-browser', body)
 
     def test_management_full_page_hides_global_sidebar(self) -> None:
@@ -465,7 +478,7 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
         body = response.body.decode("utf-8")
         self.assertIn('class="shell shell-sidebar-hidden"', body)
 
-    def test_browse_mode_renders_inline_browser_for_each_source(self) -> None:
+    def test_legacy_browse_mode_opens_dedicated_browser_for_each_source(self) -> None:
         cases = [
             ("s3", "s3"),
             ("workspace.local", "workspace.local"),
@@ -485,15 +498,11 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
 
                 self.assertEqual(response.status_code, 200)
                 body = response.body.decode("utf-8")
-                self.assertIn('data-inline-source-browser', body)
-                self.assertIn(f'data-browse-source-id="{source_id}"', body)
-                self.assertIn(
-                    f'data-browse-sidebar-source-id="{sidebar_source_id}"',
-                    body,
-                )
-                self.assertNotIn('data-data-source-explorer-page', body)
+                self.assertIn('data-data-source-explorer-page', body)
+                self.assertIn(f'data-browse-source-id="{sidebar_source_id}"', body)
+                self.assertNotIn('data-inline-source-browser', body)
 
-    def test_inline_native_postgres_browser_preserves_native_source_id(self) -> None:
+    def test_legacy_native_postgres_browser_keeps_native_query_access_path(self) -> None:
         response = query_workbench_data_sources(
             request=build_request("/data-sources", partial=True),
             source_id="pg_oltp_native",
@@ -503,7 +512,7 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         body = response.body.decode("utf-8")
-        self.assertIn('data-inline-source-browser', body)
+        self.assertIn('data-data-source-explorer-page', body)
         self.assertIn('data-source-catalog-source-id="pg_oltp"', body)
         self.assertIn('data-source-option-id="pg_oltp_native"', body)
 
@@ -587,14 +596,22 @@ class DataSourceExplorerRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.body.decode("utf-8")
         self.assertIn('data-data-source-explorer-page', body)
-        self.assertIn('data-selected-source-id="pg_oltp_native"', body)
+        self.assertIn('data-selected-source-id="pg_oltp"', body)
         self.assertIn('data-explorer-kind="postgres"', body)
         self.assertIn('data-browse-source-id="pg_oltp"', body)
-        self.assertIn('data-open-query-data-source="pg_oltp_native"', body)
+        self.assertIn('data-source-catalog-mode="browser"', body)
+        self.assertIn('data-source-catalog-query', body)
+        self.assertIn('data-source-catalog-view="list"', body)
+        self.assertIn('data-source-catalog-view="table"', body)
+        self.assertIn('data-source-browser-workspace', body)
+        self.assertIn('/static/img/source-icons/postgresql.svg', body)
+        self.assertIn('data-open-query-data-source="pg_oltp"', body)
         self.assertIn(
-            'href="/data-sources?source_id=pg_oltp_native"',
+            'href="/data-sources?source_id=pg_oltp"',
             body,
         )
+        self.assertNotIn('data-source-card-grid', body)
+        self.assertNotIn('Browse each data source in its native shape', body)
         self.assertNotIn('data-data-source-management-page', body)
 
     def test_query_runs_page_renders_history_shell(self) -> None:

@@ -1,250 +1,98 @@
-{% macro data_source_icon(kind) -%}
-  {% if kind == "postgres" %}
-    <svg viewBox="0 0 64 64" aria-hidden="true">
-      <ellipse cx="23" cy="21" rx="12" ry="4.8"></ellipse>
-      <path d="M11 21v16.5c0 2.7 5.4 4.8 12 4.8s12-2.1 12-4.8V21"></path>
-      <path d="M11 29.2c0 2.6 5.4 4.8 12 4.8s12-2.2 12-4.8"></path>
-      <path d="M39 16h12.5l5.5 5.5v25H39z"></path>
-      <path d="M51.5 16v5.5H57"></path>
-      <path d="M43.5 31h9"></path>
-      <path d="M43.5 38h9"></path>
-      <path d="M43.5 45h6"></path>
-    </svg>
-  {% elif kind == "local-browser" %}
-    <svg viewBox="0 0 64 64" aria-hidden="true">
-      <path d="M10 20h18l4 4h22v24H10z"></path>
-      <path d="M10 20v28"></path>
-      <path d="M34 14h14l6 6v22"></path>
-      <path d="M48 14v6h6"></path>
-      <path d="M20 34h24"></path>
-      <path d="M20 42h16"></path>
-    </svg>
-  {% else %}
-    <svg viewBox="0 0 64 64" aria-hidden="true">
-      <path d="M10 22.5c0-4.7 9.8-8.5 22-8.5s22 3.8 22 8.5S44.2 31 32 31s-22-3.8-22-8.5Z"></path>
-      <path d="M10 22.5v12.8c0 4.7 9.8 8.5 22 8.5s22-3.8 22-8.5V22.5"></path>
-      <path d="M10 35.3v13.2C10 53.2 19.8 57 32 57s22-3.8 22-8.5V35.3"></path>
-      <path d="M40 11h12.2l4.8 4.8V30H40z"></path>
-      <path d="M52.2 11v4.8H57"></path>
-      <path d="M43.5 21.3h10"></path>
-      <path d="M43.5 26.8h6.5"></path>
-    </svg>
-  {% endif %}
-{%- endmacro %}
-
 <section
   class="data-source-management-page"
   data-data-source-management-page
   data-selected-source-id="{{ selected_data_source.source_id if selected_data_source else '' }}"
-  data-browse-source-id="{{ browse_data_source.source_id if browse_data_source else '' }}"
-  data-browse-sidebar-source-id="{{ browse_data_source.explorer_source_id if browse_data_source else '' }}"
 >
-  <div class="home-hero data-source-management-hero">
-    <div class="home-hero-copy">
-      <span class="home-eyebrow">Managed Data Sources</span>
-      <h2>Inspect source configurations in one place</h2>
-      <p>
-        This prototype stays read-only for data source management. Select a source card to inspect its current connection settings, discovered catalog footprint, and runtime status.
-      </p>
-    </div>
-    <div class="data-source-management-note">
-      <span class="data-source-readonly-pill">Read-only PoC</span>
-      <p>Creating, editing, and deleting sources is intentionally disabled in this prototype.</p>
-      <a href="/query-workbench" class="data-source-management-back-link" data-open-query-workbench-entry>
-        Back to Query Workbench
-      </a>
-    </div>
-  </div>
+  {% if selected_data_source %}
+    <a class="sourcing-back-link" href="/data-sources">Back to all data sources</a>
+    <section class="data-source-detail-page" aria-labelledby="data-source-detail-title">
+      <header class="data-source-detail-hero">
+        <div class="data-source-detail-heading">
+          <span class="source-technology-icon source-technology-icon-large">
+            <img src="{{ selected_data_source.icon_path }}" alt="{{ selected_data_source.family }}">
+          </span>
+          <div>
+            <span class="home-eyebrow">{{ selected_data_source.source_type }} · {{ selected_data_source.family }}</span>
+            <h2 id="data-source-detail-title">{{ selected_data_source.name }}</h2>
+            <p>{{ selected_data_source.summary }}</p>
+          </div>
+        </div>
+        <div class="data-source-detail-primary-actions">
+          <span class="data-source-status-pill" data-tone="{{ selected_data_source.status_tone }}">{{ selected_data_source.status_label }}</span>
+          <a class="source-catalog-button source-catalog-button-secondary" href="{{ selected_data_source.explorer_path }}">Browse data</a>
+          {% if selected_data_source.ingestion_capable %}
+            <a class="source-catalog-button" href="/ingestion-workbench/sourcing/ingestions/new?sourceId={{ selected_data_source.source_id | urlencode }}">Create ingestion</a>
+          {% endif %}
+        </div>
+      </header>
 
-  <section class="data-source-overview" aria-label="Data source overview">
-    <div class="data-source-summary-grid">
-      <article><strong>{{ source_summary.total }}</strong><span>Data sources</span></article>
-      <article><strong>{{ source_summary.available }}</strong><span>Available now</span></article>
-      <article><strong>{{ source_summary.schemas }}</strong><span>Visible schemas</span></article>
-      <article><strong>{{ source_summary.objects }}</strong><span>Queryable objects</span></article>
-    </div>
-    <div class="data-source-filter-bar">
-      <label class="data-source-filter-field data-source-filter-search">
-        <span>Search data sources</span>
-        <input
-          type="search"
-          placeholder="Name, technology, location or status"
-          autocomplete="off"
-          data-source-filter-query
-        >
-      </label>
-      <label class="data-source-filter-field">
-        <span>Technology</span>
-        <select data-source-filter-technology>
-          <option value="">All technologies</option>
-          {% for technology in source_technologies %}
-            <option value="{{ technology }}">{{ technology }}</option>
-          {% endfor %}
-        </select>
-      </label>
-      <button type="button" class="data-source-filter-reset" data-source-filter-reset>Reset filters</button>
-      <div class="data-source-view-switch" role="group" aria-label="Data source view">
-        <button type="button" data-source-view-mode="cards" aria-pressed="true">Cards</button>
-        <button type="button" data-source-view-mode="list" aria-pressed="false">List</button>
-      </div>
-    </div>
-    <p class="data-source-filter-status" data-source-filter-status aria-live="polite"></p>
-  </section>
-
-  <div class="data-source-management-layout">
-    <section class="home-section data-source-management-section">
-      <div class="home-section-header">
-        <h3>Source Types</h3>
-        <p>Choose a source to review the current configuration and availability.</p>
-      </div>
-      <div class="data-source-card-grid">
-        {% for source in data_sources %}
-          <a
-            href="{{ source.management_path }}"
-            class="data-source-card{% if selected_data_source and source.source_id == selected_data_source.source_id %} is-active{% endif %}"
-            data-open-query-data-source="{{ source.source_id }}"
-            data-source-filter-card
-            data-source-search="{{ source.search_text }}"
-            data-source-technology="{{ source.family }}"
-            aria-current="{% if selected_data_source and source.source_id == selected_data_source.source_id %}page{% else %}false{% endif %}"
-            {% if source.storage_tooltip %}title="{{ source.storage_tooltip }}"{% endif %}
-          >
-            <span class="data-source-card-icon" aria-hidden="true">
-              {{ data_source_icon(source.kind) }}
-            </span>
-            <span class="data-source-card-copy">
-              <span class="data-source-card-title-row">
-                <strong class="data-source-card-title">{{ source.name }}</strong>
-                <span class="data-source-status-pill" data-tone="{{ source.status_tone }}">{{ source.status_label }}</span>
-              </span>
-              <span class="data-source-card-type">{{ source.source_type }}</span>
-              <span class="data-source-card-subtitle">{{ source.label }}</span>
-              <span class="data-source-card-summary">{{ source.summary }}</span>
-            </span>
-            <span class="data-source-card-meta">
-              <span>{{ source.schema_count }} schema{% if source.schema_count != 1 %}s{% endif %}</span>
-              <span>{{ source.object_count }} object{% if source.object_count != 1 %}s{% endif %}</span>
-              <span>{{ source.location_label }}</span>
-              <span>Checked: {{ source.last_checked_label }}</span>
-            </span>
-          </a>
+      <div class="data-source-detail-metric-grid">
+        {% for metric in selected_data_source.summary_metrics %}
+          <article class="data-source-metric-card"><span class="data-source-metric-label">{{ metric.label }}</span><strong class="data-source-metric-value">{{ metric.value }}</strong></article>
         {% endfor %}
       </div>
-      <div class="data-source-filter-empty" data-source-filter-empty hidden>
-        <strong>No matching data sources</strong>
-        <p>Adjust the search term or reset the technology filter.</p>
-      </div>
-    </section>
-
-    <section class="home-section data-source-management-section data-source-detail-section">
-      {% if selected_data_source %}
-        <div class="data-source-detail-header">
-          <div class="data-source-detail-title-group">
-            <span class="data-source-detail-icon" aria-hidden="true">
-              {{ data_source_icon(selected_data_source.kind) }}
-            </span>
-            <div class="data-source-detail-copy">
-              <span class="home-eyebrow">{{ selected_data_source.source_type }} • {{ selected_data_source.family }}</span>
-              <h3{% if selected_data_source.storage_tooltip %} title="{{ selected_data_source.storage_tooltip }}"{% endif %}>{{ selected_data_source.name }}</h3>
-              <p>{{ selected_data_source.summary }}</p>
-            </div>
-          </div>
-          <div class="data-source-detail-action-cluster">
-            {% if selected_data_source.source_id.startswith('ora_') %}
-              <a
-                href="/ingestion-workbench/sourcing/ingestions/new?sourceId={{ selected_data_source.source_id | urlencode }}"
-                class="data-source-explorer-launcher source-ingestion-launcher"
-                aria-label="Create ingestion from {{ selected_data_source.name }}"
-              >
-                <span class="data-source-explorer-launcher-copy">
-                  <strong>Create ingestion</strong>
-                  <span>Run once or every hour to S3</span>
-                </span>
-              </a>
-            {% endif %}
-            <a
-              href="{{ selected_data_source.explorer_path }}"
-              class="data-source-explorer-launcher"
-              data-open-data-source-explorer="{{ selected_data_source.source_id }}"
-              aria-label="Browse data for {{ selected_data_source.name }}"
-            >
-              <span class="data-source-explorer-launcher-icon" aria-hidden="true">
-                <svg viewBox="0 0 64 64">
-                  <rect x="11" y="11" width="42" height="42" rx="10"></rect>
-                  <path d="M21 23h22"></path>
-                  <path d="M21 32h22"></path>
-                  <path d="M21 41h14"></path>
-                  <path d="M41 19l6 6-6 6"></path>
-                </svg>
-              </span>
-              <span class="data-source-explorer-launcher-copy">
-                <strong>Browse Data</strong>
-                <span>{{ selected_data_source.explorer_cta_copy }}</span>
-              </span>
-            </a>
-            <div class="data-source-detail-status-panel">
-              <span class="data-source-status-pill" data-tone="{{ selected_data_source.status_tone }}">
-                {{ selected_data_source.status_label }}
-              </span>
-              <p>{{ selected_data_source.status_detail }}</p>
-            </div>
-          </div>
+      <section class="data-source-detail-content">
+        <div>
+          <span class="home-eyebrow">Connection</span>
+          <h3>Runtime configuration</h3>
+          <p>{{ selected_data_source.status_detail }}</p>
         </div>
-
-        {% if browse_data_source %}
-          <section
-            class="data-source-inline-browser"
-            data-inline-source-browser
-            data-source-browser-scope
-            data-browse-source-id="{{ browse_data_source.source_id }}"
-            data-browse-sidebar-source-id="{{ browse_data_source.explorer_source_id }}"
-          >
-            <div class="data-source-inline-browser-header">
-              <div>
-                <span class="home-eyebrow">Browse Data</span>
-                <h4>{{ browse_data_source.name }}</h4>
-                <p>{{ browse_data_source.explorer_cta_copy }}</p>
-              </div>
-              <a
-                href="{{ browse_data_source.management_path }}"
-                class="data-source-management-back-link data-source-inline-browser-detail-link"
-                data-open-query-data-source="{{ browse_data_source.source_id }}"
-              >
-                View Source Details
-              </a>
-            </div>
-            {% set source_tree_catalogs = inline_browse_catalogs %}
-            {% set source_tree_s3_hierarchy = inline_source_tree_s3_hierarchy %}
-            {% set source_tree_scope = 'inline' %}
-            {% set source_tree_force_source_option_id = inline_source_option_id %}
-            {% set source_tree_open_catalogs = true %}
-            {% include "partials/source_tree.html" %}
-          </section>
-        {% endif %}
-
-        <div class="data-source-detail-metric-grid">
-          {% for metric in selected_data_source.summary_metrics %}
-            <article class="data-source-metric-card">
-              <span class="data-source-metric-label">{{ metric.label }}</span>
-              <strong class="data-source-metric-value">{{ metric.value }}</strong>
-            </article>
-          {% endfor %}
-        </div>
-
         <div class="data-source-settings-grid">
           {% for setting in selected_data_source.settings %}
             <article class="data-source-setting-card">
               <span class="data-source-setting-label">{{ setting.label }}</span>
               <strong class="data-source-setting-value">{{ setting.value }}</strong>
-              {% if setting.hint %}
-                <p class="data-source-setting-hint">{{ setting.hint }}</p>
-              {% endif %}
+              {% if setting.hint %}<p class="data-source-setting-hint">{{ setting.hint }}</p>{% endif %}
             </article>
           {% endfor %}
         </div>
-      {% else %}
-        <p class="home-empty">No data sources are available in the current runtime.</p>
-      {% endif %}
+      </section>
     </section>
-  </div>
+  {% else %}
+    <header class="data-source-catalog-hero">
+      <div>
+        <span class="home-eyebrow">Managed Data Sources</span>
+        <h2>Data Source Catalog</h2>
+        <p>Find governed databases and storage connections, inspect their catalog footprint, and start a reusable ingestion.</p>
+      </div>
+      <div class="data-source-catalog-hero-note">
+        <strong>Read-only PoC</strong>
+        <span>Source configuration stays centrally managed.</span>
+        <a href="/query-workbench">Open Query Workbench</a>
+      </div>
+    </header>
+
+    <section class="data-source-catalog-controls" aria-label="Data source catalog filters">
+      <div class="data-source-summary-grid">
+        <article><strong data-source-catalog-summary="total">–</strong><span>Data sources</span></article>
+        <article><strong data-source-catalog-summary="available">–</strong><span>Available now</span></article>
+        <article><strong data-source-catalog-summary="schemas">–</strong><span>Visible schemas</span></article>
+        <article><strong data-source-catalog-summary="objects">–</strong><span>Queryable objects</span></article>
+      </div>
+      <div class="data-source-catalog-toolbar">
+        <label class="source-catalog-field source-catalog-search">
+          <span>Search data sources</span>
+          <span class="source-catalog-input-wrap"><img src="/static/img/source-icons/search.svg" alt=""><input type="search" placeholder="Name, technology, location or status" autocomplete="off" data-source-catalog-query></span>
+        </label>
+        <label class="source-catalog-field"><span>Technology</span><select data-source-catalog-technology><option value="">All technologies</option></select></label>
+        <label class="source-catalog-field"><span>Status</span><select data-source-catalog-status><option value="">All statuses</option></select></label>
+        <label class="source-catalog-field"><span>Location</span><select data-source-catalog-location><option value="">All locations</option></select></label>
+        <button type="button" class="source-catalog-reset" data-source-catalog-reset>Reset</button>
+        <div class="source-catalog-view-switch" role="group" aria-label="Data source view">
+          <button type="button" data-source-catalog-view="list" aria-pressed="false"><img src="/static/img/source-icons/list.svg" alt="">List</button>
+          <button type="button" data-source-catalog-view="table" aria-pressed="true"><img src="/static/img/source-icons/table.svg" alt="">Table</button>
+        </div>
+      </div>
+      <p class="source-catalog-result-count" data-source-catalog-count aria-live="polite">Loading data sources…</p>
+    </section>
+
+    <section class="source-catalog-results" data-source-catalog data-source-catalog-context="management" aria-live="polite">
+      <div class="source-catalog-loading">Loading data sources…</div>
+    </section>
+    <nav class="source-catalog-pagination" aria-label="Data source result pages" data-source-catalog-pagination hidden>
+      <button type="button" data-source-catalog-page="previous">Previous</button>
+      <span data-source-catalog-page-label></span>
+      <button type="button" data-source-catalog-page="next">Next</button>
+    </nav>
+  {% endif %}
 </section>

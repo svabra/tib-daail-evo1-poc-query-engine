@@ -54,6 +54,7 @@ from .data_sources.publication_links import annotate_catalogs_with_published_pro
 from .data_sources.postgres import PostgresDataSourcePlugin
 from .data_sources.s3 import S3DataSourcePlugin
 from .data_sources.s3.explorer import normalize_s3_bucket_name, normalize_s3_object_key
+from .data_source_catalog import data_source_catalog_payload
 from .data_products import (
     DacaMetadataPublicationClient,
     DacaPublicationCoordinator,
@@ -396,6 +397,8 @@ class WorkbenchService:
             settings,
             source_sourcing=self.source_sourcing,
             query_runner=self._run_source_ingestion_query,
+            catalog_provider=self.catalogs_for_actor,
+            relation_fields_provider=self._source_ingestion_relation_fields,
             metadata_refresher=self._refresh_source_ingestion_bucket,
             state_change_callback=lambda snapshot: self._publish_realtime_snapshot(
                 "source-ingestions",
@@ -828,6 +831,30 @@ class WorkbenchService:
             # Oracle is governed fail-closed; legacy sources stay available.
             pass
         return catalogs
+
+    def data_source_catalog(
+        self,
+        actor: str,
+        *,
+        query: str = "",
+        technology: str = "",
+        status: str = "",
+        location: str = "",
+        ingestion_capable: bool | None = None,
+        offset: int = 0,
+        limit: int = 25,
+    ) -> dict[str, object]:
+        return data_source_catalog_payload(
+            self.settings,
+            self.catalogs_for_actor(actor),
+            query=query,
+            technology=technology,
+            status=status,
+            location=location,
+            ingestion_capable=ingestion_capable,
+            offset=offset,
+            limit=limit,
+        )
 
     def completion_schema(self) -> dict[str, object]:
         with self._lock:
@@ -2171,6 +2198,27 @@ class WorkbenchService:
                 "error": str(job.get("error") or "Source ingestion did not start a query job."),
             }
         return self._query_jobs.wait_for_terminal(job_id, timeout=3600.0).payload
+
+    def _source_ingestion_relation_fields(
+        self,
+        actor: str,
+        source_id: str,
+        source_object: SourceObject,
+    ) -> list[SourceField]:
+        if source_id == "s3":
+            path = str(source_object.s3_path or "").strip()
+            if not path and source_object.s3_bucket and source_object.s3_key:
+                path = f"s3://{source_object.s3_bucket}/{source_object.s3_key.lstrip('/')}"
+            if not path:
+                raise KeyError("The S3 source object has no concrete storage path.")
+            return self._s3_object_fields(
+                path=path,
+                file_format=str(source_object.s3_file_format or ""),
+            )
+        relation = str(source_object.relation or "").strip()
+        if not relation:
+            raise KeyError("The source object has no relation reference.")
+        return self.source_object_fields(relation, actor=actor)
 
     def _refresh_source_ingestion_bucket(self, bucket: str) -> None:
         sync_s3_buckets = getattr(self._data_source_discovery, "sync_s3_buckets", None)

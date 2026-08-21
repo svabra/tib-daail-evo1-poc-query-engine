@@ -141,6 +141,11 @@
       "enabledByDefault": false
     },
     {
+      "id": "platform-source-ingestions",
+      "script": "playwright_platform_source_ingestions.py",
+      "enabledByDefault": false
+    },
+    {
       "id": "ingestion-query-handoff",
       "script": "playwright_ingestion_query_handoff_smoke.py",
       "enabledByDefault": true

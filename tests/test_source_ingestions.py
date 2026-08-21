@@ -18,10 +18,12 @@ if str(BDW_ROOT) not in sys.path:
 
 from bit_data_workbench.backend.source_ingestions import (  # noqa: E402
     SOURCE_INGESTION_PREFIX,
+    SOURCE_INGESTION_SCHEMA_VERSION,
     SourceIngestionError,
     SourceIngestionManager,
     SourceIngestionStore,
     iso_utc,
+    migrate_source_ingestion_definition,
     next_full_hour,
     scheduled_run_id,
 )
@@ -228,6 +230,129 @@ def make_manager(*, query_status="completed", row_count=4, columns=None, now=Non
         clock=lambda: current,
     )
     return manager, store, client, sourcing, calls, refreshes
+
+
+def platform_catalogs() -> list[SourceCatalog]:
+    return [
+        SourceCatalog(
+            name="pg_oltp",
+            connection_source_id="pg_oltp",
+            display_name="PostgreSQL OLTP",
+            connection_status="connected",
+            schemas=[
+                SourceSchema(
+                    name="public",
+                    objects=[
+                        SourceObject(
+                            name="vat_smoke_test_reference",
+                            kind="table",
+                            relation="pg_oltp.public.vat_smoke_test_reference",
+                            query_reference='pg.pg_oltp."public.vat_smoke_test_reference"',
+                        )
+                    ],
+                )
+            ],
+        ),
+        SourceCatalog(
+            name="workspace",
+            connection_source_id="s3",
+            display_name="Shared Workspace",
+            connection_status="connected",
+            schemas=[
+                SourceSchema(
+                    name="source_bucket_123",
+                    objects=[
+                        SourceObject(
+                            name="input_orders",
+                            kind="view",
+                            relation="source_bucket_123.input_orders",
+                            query_reference='s3."source-bucket"."incoming/orders.csv"',
+                            s3_bucket="source-bucket",
+                            s3_key="incoming/orders.csv",
+                            s3_path="s3://source-bucket/incoming/orders.csv",
+                            s3_file_format="csv",
+                        ),
+                        SourceObject(
+                            name="partitioned_orders",
+                            kind="view",
+                            relation="source_bucket_123.partitioned_orders",
+                            query_reference='s3."source-bucket"."incoming/parts/*.parquet"',
+                            s3_bucket="source-bucket",
+                            s3_key="incoming/parts/*.parquet",
+                            s3_path="s3://source-bucket/incoming/parts/*.parquet",
+                            s3_file_format="parquet",
+                            s3_part_prefix="incoming/parts/",
+                        ),
+                        SourceObject(
+                            name="orders_parquet",
+                            kind="view",
+                            relation="source_bucket_123.orders_parquet",
+                            query_reference='s3."source-bucket"."incoming/orders.parquet"',
+                            s3_bucket="source-bucket",
+                            s3_key="incoming/orders.parquet",
+                            s3_path="s3://source-bucket/incoming/orders.parquet",
+                            s3_file_format="parquet",
+                        ),
+                    ],
+                )
+            ],
+        ),
+    ]
+
+
+def make_platform_manager(*, query_status="completed"):
+    store = MemoryStore()
+    client = FakeS3Client()
+    client.buckets.add("source-bucket")
+    calls = []
+
+    def runner(**kwargs):
+        calls.append(kwargs)
+        if query_status == "completed":
+            path = kwargs["staging_path"].removeprefix("s3://")
+            bucket, key = path.split("/", 1)
+            client.objects[(bucket, key)] = b"PARQUET-STAGED-CONTENT"
+            return {"jobId": "query-platform-copy", "status": "completed"}
+        return {"jobId": "query-platform-copy", "status": "failed", "error": "runtime unavailable"}
+
+    manager = SourceIngestionManager(
+        settings(),
+        source_sourcing=FakeSourceSourcing(),
+        query_runner=runner,
+        catalog_provider=lambda actor: platform_catalogs() if actor == "joel.ruod" else [],
+        relation_fields_provider=lambda _actor, _source_id, _source_object: [
+            SourceField("record_id", "BIGINT")
+        ],
+        store=store,
+        client_factory=lambda: client,
+        validation_connection_factory=lambda: ValidationConnection(row_count=3),
+    )
+    return manager, store, client, calls
+
+
+def platform_payload(source_id: str) -> dict:
+    if source_id == "s3":
+        schema, relation, bucket, key = (
+            "source_bucket_123",
+            "input_orders",
+            "visible-bucket",
+            "ingestions/s3/s3/input-orders.parquet",
+        )
+    else:
+        schema, relation, bucket, key = (
+            "public",
+            "vat_smoke_test_reference",
+            "visible-bucket",
+            "ingestions/postgresql/pg_oltp/public/vat-smoke.parquet",
+        )
+    return {
+        "clientRequestId": f"create-{source_id}",
+        "name": f"{source_id} full refresh",
+        "sourceId": source_id,
+        "relation": {"schema": schema, "name": relation},
+        "destination": {"bucket": bucket, "key": key},
+        "schedule": {"enabled": False},
+    }
 
 
 def wait_for_run(manager, run):
@@ -538,3 +663,95 @@ def test_s3_store_restores_definitions_and_runs_after_new_manager_instance(monke
         "source-ingestion-run-persisted"
     )
     assert all(key.startswith(SOURCE_INGESTION_PREFIX) for _, key in client.objects)
+
+
+@pytest.mark.parametrize(
+    ("source_id", "expected_kind", "expected_reference"),
+    [
+        (
+            "pg_oltp",
+            "postgresql",
+            'pg.pg_oltp."public.vat_smoke_test_reference"',
+        ),
+        (
+            "s3",
+            "s3-object",
+            's3."source-bucket"."incoming/orders.csv"',
+        ),
+    ],
+)
+def test_postgresql_and_s3_use_the_same_trusted_full_replace_run_path(
+    source_id, expected_kind, expected_reference
+) -> None:
+    manager, store, client, calls = make_platform_manager()
+    created = manager.create_definition("joel.ruod", platform_payload(source_id))
+    completed = wait_for_run(manager, created["run"])
+    definition = store.get_definition(created["definition"]["id"])
+
+    assert completed["status"] == "completed"
+    assert completed["rowCount"] == 3
+    assert definition["sourceKind"] == expected_kind
+    assert definition["sourceLocator"]["queryReference"] == expected_reference
+    assert calls[0]["display_sql"] == f"SELECT * FROM {expected_reference}"
+    assert client.objects[(definition["destinationBucket"], definition["destinationKey"])] == (
+        b"PARQUET-STAGED-CONTENT"
+    )
+
+
+def test_platform_source_runtime_failure_does_not_become_oracle_grant_attention() -> None:
+    manager, store, client, _calls = make_platform_manager(query_status="failed")
+    payload = platform_payload("pg_oltp")
+    target = (payload["destination"]["bucket"], payload["destination"]["key"])
+    client.objects[target] = b"PREVIOUS-COMPLETE-VERSION"
+    created = manager.create_definition("joel.ruod", payload)
+    failed = wait_for_run(manager, created["run"])
+    definition = store.get_definition(created["definition"]["id"])
+
+    assert failed["status"] == "failed"
+    assert definition["state"] == "draft"
+    assert client.objects[target] == b"PREVIOUS-COMPLETE-VERSION"
+
+
+def test_s3_source_and_target_must_not_overlap() -> None:
+    manager, *_ = make_platform_manager()
+    same_object = platform_payload("s3")
+    same_object["relation"]["name"] = "orders_parquet"
+    same_object["destination"] = {
+        "bucket": "source-bucket",
+        "key": "incoming/orders.parquet",
+    }
+    with pytest.raises(SourceIngestionError) as exact_error:
+        manager.create_definition("joel.ruod", same_object)
+    assert exact_error.value.status_code == 422
+    assert "source object and ingestion target" in exact_error.value.detail
+
+    wildcard = platform_payload("s3")
+    wildcard["clientRequestId"] = "create-s3-wildcard"
+    wildcard["relation"]["name"] = "partitioned_orders"
+    wildcard["destination"] = {
+        "bucket": "source-bucket",
+        "key": "incoming/parts/published.parquet",
+    }
+    with pytest.raises(SourceIngestionError) as prefix_error:
+        manager.create_definition("joel.ruod", wildcard)
+    assert prefix_error.value.status_code == 422
+    assert "source collection prefix" in prefix_error.value.detail
+
+
+def test_native_alias_is_migrated_without_changing_definition_identity() -> None:
+    migrated = migrate_source_ingestion_definition(
+        {
+            "schemaVersion": 1,
+            "id": "source-ingestion-old-native",
+            "actorId": "joel.ruod",
+            "sourceId": "pg_oltp_native",
+            "schemaName": "public",
+            "relationName": "orders",
+            "relationKind": "table",
+        }
+    )
+    assert migrated["id"] == "source-ingestion-old-native"
+    assert migrated["schemaVersion"] == SOURCE_INGESTION_SCHEMA_VERSION
+    assert migrated["sourceId"] == "pg_oltp"
+    assert migrated["sourceKind"] == "postgresql"
+    assert migrated["sourceLocator"]["sourceId"] == "pg_oltp"

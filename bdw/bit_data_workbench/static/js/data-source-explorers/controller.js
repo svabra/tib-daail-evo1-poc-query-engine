@@ -1,6 +1,7 @@
 import { createLocalWorkspaceDataSourceExplorer } from "./local-workspace-explorer.js";
 import { createPostgresDataSourceExplorer } from "./postgres-explorer.js";
 import { createS3DataSourceExplorer } from "./s3-explorer.js";
+import { initializeRemoteSourceCatalog } from "../source-catalog.js";
 import {
   detailCardMarkup,
   explorerEmptyStateMarkup,
@@ -406,6 +407,8 @@ export function createDataSourceExplorerController(helpers) {
     if (!(root instanceof HTMLElement)) {
       return;
     }
+
+    initializeRemoteSourceCatalog(root);
 
     if (root.dataset.dataSourceExplorerBound !== "true") {
       root.addEventListener("click", (event) => {

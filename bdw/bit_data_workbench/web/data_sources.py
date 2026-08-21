@@ -5,6 +5,7 @@ from ..backend.data_sources.explorer_payloads import (
     canonical_explorer_source_id,
     explorer_kind_for_source,
 )
+from ..backend.data_source_catalog import canonical_data_source_id
 from ..models import SourceCatalog
 from .source_tree import build_source_tree_s3_hierarchy
 
@@ -172,6 +173,7 @@ def _postgres_source_record(
         object_count=object_count,
     )
 
+    access_paths = "VMTP · Native" if source_id == "pg_oltp" else execution_mode
     return _attach_source_navigation(
         {
             "source_id": source_id,
@@ -180,7 +182,7 @@ def _postgres_source_record(
             "source_type": source_type,
             "kind": "postgres",
             "family": "PostgreSQL",
-            "execution_mode": execution_mode,
+            "execution_mode": access_paths,
             "catalog_name": catalog_name,
             "summary": summary,
             "configured": configured,
@@ -189,10 +191,14 @@ def _postgres_source_record(
             "status_tone": status_tone,
             "status_label": status_label,
             "status_detail": status_detail,
+            "technology_key": "postgresql",
+            "icon_path": "/static/img/source-icons/postgresql.svg",
+            "access_model": "Platform source · runtime access",
+            "ingestion_capable": status_tone == "available" and object_count > 0,
             "summary_metrics": [
                 {"label": "Type", "value": source_type},
                 {"label": "Family", "value": "PostgreSQL"},
-                {"label": "Execution", "value": execution_mode},
+                {"label": "Access paths", "value": access_paths},
                 {"label": "Schemas", "value": str(schema_count)},
                 {"label": "Objects", "value": str(object_count)},
             ],
@@ -257,6 +263,10 @@ def _s3_source_record(
             "status_tone": status_tone,
             "status_label": status_label,
             "status_detail": status_detail,
+            "technology_key": "s3",
+            "icon_path": "/static/img/source-icons/s3.svg",
+            "access_model": "Platform source · runtime access",
+            "ingestion_capable": status_tone == "available" and object_count > 0,
             "summary_metrics": [
                 {"label": "Type", "value": "Workspace Storage"},
                 {"label": "Family", "value": "MinIO / S3"},
@@ -348,6 +358,10 @@ def _local_browser_source_record(
                 "right reference storage model for larger local datasets and "
                 "file-like artifacts."
             ),
+            "technology_key": "local",
+            "icon_path": "/static/img/source-icons/local.svg",
+            "access_model": "Browser-local access",
+            "ingestion_capable": False,
             "summary_metrics": [
                 {"label": "Type", "value": "Workspace Storage"},
                 {"label": "Family", "value": "IndexedDB"},
@@ -407,6 +421,10 @@ def _oracle_source_record(catalog: SourceCatalog) -> dict[str, object]:
             "status_tone": "available",
             "status_label": "Grant active",
             "status_detail": catalog.connection_detail or "Active DaCa source grant.",
+            "technology_key": "oracle",
+            "icon_path": "/static/img/source-icons/oracle.svg",
+            "access_model": "DaCa grant · checked per run",
+            "ingestion_capable": object_count > 0,
             "summary_metrics": [
                 {"label": "Technology", "value": "BIT Oracle RDBMS"},
                 {"label": "Location", "value": catalog.site_label or "BIT data center"},
@@ -450,21 +468,6 @@ def data_source_management_context(
             summary=(
                 "Transactional PostgreSQL catalog exposed through the "
                 "workbench query path."
-            ),
-            service=service,
-            catalogs_by_name=catalogs_by_name,
-        ),
-        _postgres_source_record(
-            source_id="pg_oltp_native",
-            name="OLTP Direct",
-            label="PostgreSQL Native",
-            source_type="RDBMS",
-            execution_mode="PostgreSQL Native",
-            catalog_name="pg_oltp",
-            database_name=service.settings.pg_oltp_database,
-            summary=(
-                "Direct PostgreSQL execution path for the OLTP source "
-                "without the VMTP indirection."
             ),
             service=service,
             catalogs_by_name=catalogs_by_name,
@@ -540,19 +543,15 @@ def data_source_management_context(
         key=str.casefold,
     )
 
+    normalized_selected_source_id = canonical_data_source_id(selected_source_id)
     selected_source = next(
         (
             source
             for source in sources
-            if source["source_id"] == selected_source_id
+            if source["source_id"] == normalized_selected_source_id
         ),
         None,
     )
-    if selected_source is None and sources:
-        selected_source = next(
-            (source for source in sources if source["configured"]),
-            sources[0],
-        )
 
     inline_catalog_source_id = (
         str(selected_source.get("explorer_source_id") or "").strip()
@@ -566,9 +565,7 @@ def data_source_management_context(
         or catalog.name == inline_catalog_source_id
     ]
     inline_source_option_id = (
-        "pg_oltp_native"
-        if selected_source and selected_source.get("source_id") == "pg_oltp_native"
-        else ""
+        "pg_oltp_native" if selected_source_id == "pg_oltp_native" else ""
     )
 
     return {

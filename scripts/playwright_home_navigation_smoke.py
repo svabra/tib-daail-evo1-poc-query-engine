@@ -143,13 +143,13 @@ async def open_focused_data_source_and_explorer_from_home(page, timeout_ms: int)
         timeout=timeout_ms,
     )
     await page.locator(
-        "[data-data-source-management-page] [data-open-query-data-source='workspace.local'][aria-current='page']"
+        "[data-data-source-management-page][data-selected-source-id='workspace.local'] .data-source-detail-page"
     ).wait_for(
         state="visible",
         timeout=timeout_ms,
     )
     browse_button = page.locator(
-        "[data-data-source-management-page] [data-open-data-source-explorer='workspace.local']"
+        "[data-data-source-management-page] .data-source-detail-page a[href='/data-sources/browser?source_id=workspace.local']"
     ).first
     await click_control(browse_button, timeout_ms)
     await wait_for_location(
@@ -198,6 +198,7 @@ async def verify_inline_browser_for_source(
     source_id: str,
     sidebar_source_id: str,
 ) -> None:
+    canonical_source_id = "pg_oltp" if source_id == "pg_oltp_native" else source_id
     await page.goto(
         urljoin(args.base_url, f"/data-sources?source_id={source_id}"),
         wait_until="domcontentloaded",
@@ -210,22 +211,22 @@ async def verify_inline_browser_for_source(
         search=f"?source_id={source_id}",
     )
     await page.locator(
-        f"[data-data-source-management-page][data-selected-source-id='{source_id}']"
+        f"[data-data-source-management-page][data-selected-source-id='{canonical_source_id}'] .data-source-detail-page"
     ).wait_for(state="visible", timeout=args.timeout_ms)
 
     browse_button = page.locator(
-        f"[data-data-source-management-page] [data-open-data-source-explorer='{source_id}']"
+        f"[data-data-source-management-page] .data-source-detail-page a[href='/data-sources/browser?source_id={canonical_source_id}']"
     ).first
     await click_control(browse_button, args.timeout_ms)
     await wait_for_location(
         page,
         args.timeout_ms,
         pathname="/data-sources/browser",
-        search=f"?source_id={source_id}",
+        search=f"?source_id={canonical_source_id}",
     )
 
     explorer_page = page.locator(
-        f"[data-data-source-explorer-page][data-selected-source-id='{source_id}'][data-browse-source-id='{sidebar_source_id}']"
+        f"[data-data-source-explorer-page][data-selected-source-id='{canonical_source_id}'][data-browse-source-id='{sidebar_source_id}']"
     ).first
     await explorer_page.wait_for(state="visible", timeout=args.timeout_ms)
     explorer_browser = page.locator("[data-data-source-explorer-navigation]").first
@@ -249,7 +250,7 @@ async def verify_inline_browser_for_source(
             && catalog?.open === true
             && document.querySelector("[data-data-source-explorer-page]");
         }""",
-        arg={"sourceId": source_id, "sidebarSourceId": sidebar_source_id},
+        arg={"sourceId": canonical_source_id, "sidebarSourceId": sidebar_source_id},
         timeout=args.timeout_ms,
     )
 
@@ -313,8 +314,8 @@ async def open_feature_list_dialog(page, timeout_ms: int) -> None:
     settings_summary = settings_menu.locator(":scope > summary")
     await click_control(settings_summary, timeout_ms)
 
-    feature_button = page.locator("[data-open-feature-list]").first
-    await click_control(feature_button, timeout_ms)
+    feature_button = settings_menu.locator("[data-open-feature-list]").first
+    await feature_button.click(timeout=timeout_ms)
 
     await page.wait_for_function(
         "() => Boolean(document.querySelector('[data-feature-list-dialog]')?.open)",
@@ -360,6 +361,11 @@ async def run_smoke(args: argparse.Namespace) -> int:
             await open_home(page, args)
             await open_data_source_management(page, args.timeout_ms)
             await open_query_navigation_from_topbar(page, args.timeout_ms)
+            await page.reload(wait_until="domcontentloaded", timeout=args.timeout_ms)
+            await page.wait_for_function(
+                "() => document.documentElement.dataset.workbenchInteractive === 'true'",
+                timeout=args.timeout_ms,
+            )
             await open_feature_list_dialog(page, args.timeout_ms)
             page_errors = [
                 message for message in console_messages if message.startswith("pageerror:")
