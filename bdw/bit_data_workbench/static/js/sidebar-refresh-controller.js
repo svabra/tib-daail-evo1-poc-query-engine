@@ -105,7 +105,7 @@ export function createSidebarRefreshController(helpers) {
 
   async function refreshSidebar(
     mode = currentWorkspaceMode(),
-    { signal = null, isCurrent = null, force = false } = {}
+    { signal = null, isCurrent = null, force = false, forceNotebookTree = false } = {}
   ) {
     const sidebar = document.querySelector("[data-sidebar]");
     if (!sidebar) {
@@ -120,7 +120,7 @@ export function createSidebarRefreshController(helpers) {
     const sidebarState = captureSidebarState();
     const activeNotebookId = currentActiveNotebookId() || workspaceNotebookId() || "";
     const sourceTreeMode = sidebarState.dataSourcesSectionOpen ? "full" : "deferred";
-    const notebookTreeMode = sidebarState.notebookSectionOpen ? "full" : "deferred";
+    const notebookTreeMode = forceNotebookTree || sidebarState.notebookSectionOpen ? "full" : "deferred";
     const runbookTreeMode = sidebarState.ingestionRunbookSectionOpen ? "full" : "deferred";
     const response = await window.fetch(
       `/sidebar?active_notebook_id=${encodeURIComponent(activeNotebookId)}&mode=${encodeURIComponent(mode)}&source_tree=${sourceTreeMode}&notebook_tree=${notebookTreeMode}&runbook_tree=${runbookTreeMode}`,

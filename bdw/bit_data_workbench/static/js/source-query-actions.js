@@ -114,7 +114,10 @@ export function createSourceQueryActions(helpers) {
     }
 
     if (getCurrentSidebarMode() !== "notebook" || !getNotebookTreeRoot()) {
-      await refreshSidebar("notebook");
+      await refreshSidebar("notebook", {
+        force: true,
+        forceNotebookTree: true,
+      });
     }
 
     const targetContainer = defaultNotebookCreateTarget();
