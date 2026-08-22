@@ -24,6 +24,20 @@ class NotebookCreationPerformanceUiTests(unittest.TestCase):
         self.assertIn("const notebookId = await createNotebook", function_source)
         self.assertIn("enrichSourceQueryNotebook(", function_source)
         self.assertNotIn("await loadFieldsForSourceQuery", function_source)
+        self.assertIn('await refreshSidebar("notebook", {', function_source)
+        self.assertIn("force: true", function_source)
+        self.assertIn("forceNotebookTree: true", function_source)
+
+    def test_forced_notebook_tree_load_overrides_hidden_sidebar_deferment(self) -> None:
+        source = (STATIC_JS_ROOT / "sidebar-refresh-controller.js").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("forceNotebookTree = false", source)
+        self.assertIn(
+            'forceNotebookTree || sidebarState.notebookSectionOpen ? "full" : "deferred"',
+            source,
+        )
 
     def test_notebook_workspace_render_avoids_full_sidebar_metadata_sweep(self) -> None:
         source = (STATIC_JS_ROOT / "app.js").read_text(encoding="utf-8")

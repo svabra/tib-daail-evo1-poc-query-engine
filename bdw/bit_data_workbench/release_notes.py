@@ -19,8 +19,8 @@ CURRENT_FEATURE_LIST: dict[str, object] = {
             "title": "Datenquellen finden und verstehen",
             "description": (
                 "Durchsuchen Sie S3-, PostgreSQL-, lokale und freigegebene Oracle-PoC-"
-                "Quellen, prüfen Sie Schemas und übernehmen Sie die passende Referenz "
-                "direkt in Ihre Analyse."
+                "Quellen, prüfen Sie Schemas und öffnen Sie eine ausgewählte Relation "
+                "direkt als ausführbare Abfrage in einem neuen Notebook."
             ),
         },
         {
@@ -67,6 +67,15 @@ CURRENT_FEATURE_LIST: dict[str, object] = {
 # RELEASE_NOTES below remain the technical source of truth; this list omits
 # test-only, deployment, worker, lock, and rollback details.
 USER_FACING_FEATURE_HISTORY: list[dict[str, object]] = [
+    {
+        "version": "0.10.54",
+        "features": [
+            (
+                "Datenquellen direkt im neuen Notebook abfragen",
+                "Die Aktion «Query in new notebook» im Data Source Explorer öffnet nun zuverlässig ein neues lokales Notebook, wählt die passende Quelle und übernimmt die generierte SQL-Abfrage.",
+            ),
+        ],
+    },
     {
         "version": "0.10.53",
         "features": [
@@ -785,9 +794,20 @@ USER_FACING_FEATURE_HISTORY: list[dict[str, object]] = [
 ]
 
 
-# Derived from git history through version 0.10.53. Keep entries concise and
+# Derived from git history through version 0.10.54. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.54",
+        "releasedAt": "2026-08-22T11:42:23+02:00",
+        "features": [
+            (
+                "The Data Source Explorer now loads the hidden full notebook tree on demand "
+                "before creating a notebook, so Query in new notebook reliably opens a local "
+                "notebook with the selected source and generated SQL instead of silently stopping."
+            ),
+        ],
+    },
     {
         "version": "0.10.53",
         "releasedAt": "2026-08-21T15:54:27+02:00",
