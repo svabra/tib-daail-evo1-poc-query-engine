@@ -68,6 +68,15 @@ CURRENT_FEATURE_LIST: dict[str, object] = {
 # test-only, deployment, worker, lock, and rollback details.
 USER_FACING_FEATURE_HISTORY: list[dict[str, object]] = [
     {
+        "version": "0.10.55",
+        "features": [
+            (
+                "Neue S3-Ziel-Buckets zuverlässig anlegen",
+                "Der Sourcing-Wizard bestätigt neue S3-Buckets mit einer gezielten Metadatenaktualisierung, sodass sie ohne langsamen vollständigen S3-Scan direkt für die Ingestion bereitstehen.",
+            ),
+        ],
+    },
+    {
         "version": "0.10.54",
         "features": [
             (
@@ -794,9 +803,20 @@ USER_FACING_FEATURE_HISTORY: list[dict[str, object]] = [
 ]
 
 
-# Derived from git history through version 0.10.54. Keep entries concise and
+# Derived from git history through version 0.10.55. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.55",
+        "releasedAt": "2026-08-24T11:02:28+02:00",
+        "features": [
+            (
+                "S3 bucket creation now refreshes only the normalized bucket returned by "
+                "object storage, preserving immediate sourcing availability and metadata "
+                "events without triggering a site-wide S3 discovery scan."
+            ),
+        ],
+    },
     {
         "version": "0.10.54",
         "releasedAt": "2026-08-22T11:42:23+02:00",

@@ -4,6 +4,7 @@ import io
 from pathlib import Path
 import shutil
 import sys
+from types import SimpleNamespace
 import zipfile
 from unittest.mock import patch
 
@@ -120,6 +121,12 @@ def import_s3_explorer():
     return explorer
 
 
+def import_workbench_service():
+    from bit_data_workbench.backend.service import WorkbenchService
+
+    return WorkbenchService
+
+
 def test_normalize_s3_bucket_name_rejects_underscores() -> None:
     explorer = import_s3_explorer()
 
@@ -147,6 +154,59 @@ def test_create_bucket_normalizes_valid_bucket_name() -> None:
 
     ensure_s3_bucket.assert_called_once_with(manager._settings, "client-bucket")
     assert created.bucket == "client-bucket"
+
+
+def test_service_create_bucket_uses_bounded_discovery_for_normalized_bucket() -> None:
+    WorkbenchService = import_workbench_service()
+    service = WorkbenchService.__new__(WorkbenchService)
+    requests = []
+    sync_calls = []
+    service._s3_plugin = SimpleNamespace(
+        create=lambda request: (
+            requests.append(request)
+            or SimpleNamespace(
+                bucket="normalized-client-bucket",
+                payload={"entryKind": "bucket", "bucket": "normalized-client-bucket"},
+            )
+        )
+    )
+    service._data_source_discovery = SimpleNamespace(
+        sync_s3_buckets=lambda buckets, *, emit_event=True: sync_calls.append(
+            (tuple(buckets), emit_event)
+        ),
+        sync_source=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("bucket creation must not run full S3 discovery")
+        ),
+    )
+
+    payload = service.create_s3_bucket(" Client_Bucket ")
+
+    assert [(request.kind, request.name) for request in requests] == [
+        ("bucket", " Client_Bucket ")
+    ]
+    assert sync_calls == [(('normalized-client-bucket',), True)]
+    assert payload == {"entryKind": "bucket", "bucket": "normalized-client-bucket"}
+
+
+def test_service_create_bucket_preserves_full_discovery_compatibility_fallback() -> None:
+    WorkbenchService = import_workbench_service()
+    service = WorkbenchService.__new__(WorkbenchService)
+    sync_calls = []
+    service._s3_plugin = SimpleNamespace(
+        create=lambda _request: SimpleNamespace(
+            bucket="client-bucket",
+            payload={"entryKind": "bucket", "bucket": "client-bucket"},
+        )
+    )
+    service._data_source_discovery = SimpleNamespace(
+        sync_source=lambda source_id, *, emit_event=True: sync_calls.append(
+            (source_id, emit_event)
+        )
+    )
+
+    service.create_s3_bucket("client-bucket")
+
+    assert sync_calls == [("s3", True)]
 
 
 def test_stream_object_allows_existing_digit_start_bucket() -> None:

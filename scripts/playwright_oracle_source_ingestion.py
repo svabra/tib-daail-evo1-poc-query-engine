@@ -10,6 +10,7 @@ import uuid
 
 import boto3
 from botocore.config import Config
+from botocore.exceptions import ClientError
 import duckdb
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
@@ -46,6 +47,19 @@ def s3_client(args: argparse.Namespace):
         region_name="us-east-1",
         config=Config(s3={"addressing_style": "path"}),
     )
+
+
+def bucket_exists(client, bucket: str) -> bool:
+    try:
+        client.head_bucket(Bucket=bucket)
+        return True
+    except ClientError as exc:
+        error = exc.response.get("Error") if isinstance(exc.response, dict) else {}
+        code = str((error or {}).get("Code") or "").strip()
+        status = int((exc.response.get("ResponseMetadata") or {}).get("HTTPStatusCode") or 0)
+        if code in {"404", "NoSuchBucket", "NotFound"} or status == 404:
+            return False
+        raise
 
 
 async def response_json(response) -> dict[str, object]:
@@ -126,11 +140,12 @@ def parquet_row_count(client, bucket: str, key: str) -> tuple[int, int]:
 
 async def create_scheduled_ingestion(
     page,
+    client,
     base_url: str,
     bucket: str,
     target_key: str,
     timeout_ms: int,
-) -> dict[str, object]:
+) -> tuple[dict[str, object], float]:
     await page.goto(
         f"{base_url}/ingestion-workbench/sourcing",
         wait_until="domcontentloaded",
@@ -162,6 +177,27 @@ async def create_scheduled_ingestion(
     await wizard.locator('[data-source-ingestion-step="1"] [data-source-ingestion-next]').click()
     await wizard.locator("[data-source-ingestion-bucket]").fill(bucket)
     await wizard.locator("[data-source-ingestion-key]").fill(target_key)
+    create_bucket_button = wizard.locator("[data-source-ingestion-create-bucket]")
+    await create_bucket_button.wait_for(state="visible", timeout=timeout_ms)
+    bucket_create_started = time.monotonic()
+    async with page.expect_response(
+        lambda response: response.request.method == "POST"
+        and response.url.endswith("/api/s3/explorer/buckets"),
+        timeout=timeout_ms,
+    ) as bucket_response_info:
+        await create_bucket_button.click()
+    bucket_response = await bucket_response_info.value
+    bucket_payload = await response_json(bucket_response)
+    bucket_create_ms = (time.monotonic() - bucket_create_started) * 1000
+    if bucket_payload.get("bucket") != bucket:
+        raise RuntimeError(f"Unexpected created bucket response: {bucket_payload}")
+    await wizard.locator(
+        "[data-source-ingestion-bucket-status]",
+        has_text="is ready and selected.",
+    ).wait_for(timeout=timeout_ms)
+    if not bucket_exists(client, bucket):
+        raise RuntimeError(f"Sourcing UI reported success but S3 bucket does not exist: {bucket}")
+    client.put_object(Bucket=bucket, Key=target_key, Body=b"OLD-COMPLETE-SNAPSHOT")
     await wizard.locator('[data-source-ingestion-step="2"] [data-source-ingestion-next]').click()
     await wizard.locator('[data-source-ingestion-mode][value="scheduled"]').check()
     await wizard.locator("[data-source-ingestion-schedule-contract]").wait_for(
@@ -188,11 +224,12 @@ async def create_scheduled_ingestion(
         timeout=timeout_ms,
     )
     definition_id = page.url.rsplit("/", 1)[-1]
-    return await response_json(
+    created = await response_json(
         await page.context.request.get(
             f"{base_url}/api/ingestion/source-ingestions/{definition_id}"
         )
     )
+    return created, bucket_create_ms
 
 
 async def verify_detail_and_second_run(
@@ -259,51 +296,76 @@ async def verify_noemie_is_isolated(context, base_url: str, definition_id: str) 
 
 def cleanup_artifacts(
     client,
-    bucket: str,
+    state_bucket: str,
+    destination_bucket: str,
     target_key: str,
     client_request_id: str,
 ) -> list[str]:
     definitions: list[dict[str, object]] = []
     for page in client.get_paginator("list_objects_v2").paginate(
-        Bucket=bucket, Prefix=f"{STATE_PREFIX}definitions/"
+        Bucket=state_bucket, Prefix=f"{STATE_PREFIX}definitions/"
     ):
         for item in page.get("Contents", []):
             key = item["Key"]
-            payload = json.loads(client.get_object(Bucket=bucket, Key=key)["Body"].read())
+            payload = json.loads(
+                client.get_object(Bucket=state_bucket, Key=key)["Body"].read()
+            )
             if payload.get("clientRequestId") == client_request_id:
                 payload["storeKey"] = key
                 definitions.append(payload)
     definition_ids = {str(item["id"]) for item in definitions}
-    keys = [target_key, *(str(item["storeKey"]) for item in definitions)]
+    state_keys = [str(item["storeKey"]) for item in definitions]
     for prefix in (f"{STATE_PREFIX}runs/", f"{STATE_PREFIX}staging/"):
-        for page in client.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
+        for page in client.get_paginator("list_objects_v2").paginate(
+            Bucket=state_bucket, Prefix=prefix
+        ):
             for item in page.get("Contents", []):
                 key = item["Key"]
                 if prefix.endswith("staging/"):
                     if any(f"/{definition_id}/" in key for definition_id in definition_ids):
-                        keys.append(key)
+                        state_keys.append(key)
                     continue
-                payload = json.loads(client.get_object(Bucket=bucket, Key=key)["Body"].read())
+                payload = json.loads(
+                    client.get_object(Bucket=state_bucket, Key=key)["Body"].read()
+                )
                 if str(payload.get("definitionId") or "") in definition_ids:
-                    keys.append(key)
-    unique_keys = sorted(set(keys))
-    if unique_keys:
-        client.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": key} for key in unique_keys]})
-    return unique_keys
+                    state_keys.append(key)
+    deleted_paths: list[str] = []
+    unique_state_keys = sorted(set(state_keys))
+    if unique_state_keys:
+        client.delete_objects(
+            Bucket=state_bucket,
+            Delete={"Objects": [{"Key": key} for key in unique_state_keys]},
+        )
+        deleted_paths.extend(f"s3://{state_bucket}/{key}" for key in unique_state_keys)
+
+    if bucket_exists(client, destination_bucket):
+        client.delete_object(Bucket=destination_bucket, Key=target_key)
+        deleted_paths.append(f"s3://{destination_bucket}/{target_key}")
+        remaining = client.list_objects_v2(Bucket=destination_bucket).get("Contents", [])
+        if remaining:
+            raise RuntimeError(
+                f"Refusing to remove non-empty test bucket {destination_bucket}: {remaining}"
+            )
+        client.delete_bucket(Bucket=destination_bucket)
+    return deleted_paths
 
 
 async def run_smoke(args: argparse.Namespace) -> int:
     base_url = args.base_url.rstrip("/")
     token = uuid.uuid4().hex
     client_request_id = f"oracle-ingestion-playwright:{token}"
+    destination_bucket = f"pw-source-ingestion-{token[:24]}"
     target_key = f"codex-regression/source-ingestions/{token}/anmeldungen.parquet"
     artifacts = Path(args.artifact_dir).resolve() if args.artifact_dir else None
     if artifacts:
         artifacts.mkdir(parents=True, exist_ok=True)
     client = s3_client(args)
-    client.put_object(Bucket=args.s3_bucket, Key=target_key, Body=b"OLD-COMPLETE-SNAPSHOT")
+    if bucket_exists(client, destination_bucket):
+        raise RuntimeError(f"Unique destination bucket unexpectedly exists: {destination_bucket}")
     definition_id = ""
     final: dict[str, object] = {}
+    bucket_create_ms = 0.0
     diagnostics: list[str] = []
     try:
         async with async_playwright() as playwright:
@@ -315,8 +377,13 @@ async def run_smoke(args: argparse.Namespace) -> int:
             page.on("pageerror", lambda error: diagnostics.append(f"pageerror:{error}"))
             try:
                 await select_actor(context, base_url, "joel.ruod")
-                created = await create_scheduled_ingestion(
-                    page, base_url, args.s3_bucket, target_key, args.timeout_ms
+                created, bucket_create_ms = await create_scheduled_ingestion(
+                    page,
+                    client,
+                    base_url,
+                    destination_bucket,
+                    target_key,
+                    args.timeout_ms,
                 )
                 definition = created.get("definition") if isinstance(created.get("definition"), dict) else {}
                 definition_id = str(definition.get("id") or "")
@@ -326,7 +393,7 @@ async def run_smoke(args: argparse.Namespace) -> int:
                 final = await verify_detail_and_second_run(
                     page, context, base_url, definition_id, args.timeout_ms
                 )
-                rows, columns = parquet_row_count(client, args.s3_bucket, target_key)
+                rows, columns = parquet_row_count(client, destination_bucket, target_key)
                 if rows != 4 or columns < 1:
                     raise RuntimeError(
                         f"The promoted Parquet snapshot has rows={rows}, columns={columns}; expected 4 rows."
@@ -361,12 +428,19 @@ async def run_smoke(args: argparse.Namespace) -> int:
             print(diagnostic, flush=True)
         return 1
     finally:
-        deleted = cleanup_artifacts(client, args.s3_bucket, target_key, client_request_id)
+        deleted = cleanup_artifacts(
+            client,
+            args.s3_bucket,
+            destination_bucket,
+            target_key,
+            client_request_id,
+        )
         print(f"Cleaned {len(deleted)} exact source-ingestion test object(s).", flush=True)
     runs = final.get("runs") if isinstance(final.get("runs"), list) else []
     print(
         "Oracle source-ingestion journey passed: "
-        f"definition={definition_id} completedRuns={len(runs)} rows=4 mode=one-time",
+        f"definition={definition_id} completedRuns={len(runs)} rows=4 mode=one-time "
+        f"bucketCreateMs={bucket_create_ms:.0f}",
         flush=True,
     )
     return 0

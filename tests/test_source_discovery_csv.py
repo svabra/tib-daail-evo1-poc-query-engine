@@ -21,6 +21,7 @@ if str(BDW_ROOT) not in sys.path:
 
 from bit_data_workbench.backend.service import STARTUP_SEED_S3_BUCKETS, WorkbenchService  # noqa: E402
 from bit_data_workbench.backend.s3_storage import s3_bucket_schema_name  # noqa: E402
+from bit_data_workbench.backend.source_discovery import DataSourceDiscoveryManager  # noqa: E402
 from bit_data_workbench.backend.source_discovery import DiscoveredRelationSpec  # noqa: E402
 from bit_data_workbench.backend.source_discovery import S3DataSourceDiscoverer  # noqa: E402
 from bit_data_workbench.backend.source_discovery import build_s3_query  # noqa: E402
@@ -258,6 +259,28 @@ class StartupSeedBucketS3Client:
         }
 
 
+class EmptyBucketS3Client:
+    bucket = "new-client-bucket"
+
+    def __init__(self) -> None:
+        self.head_bucket_requests: list[str] = []
+        self.list_object_buckets: list[str] = []
+
+    def head_bucket(self, **kwargs):
+        bucket = kwargs["Bucket"]
+        self.head_bucket_requests.append(bucket)
+        if bucket != self.bucket:
+            raise AssertionError(f"Unexpected empty bucket probe: {bucket}")
+        return {}
+
+    def list_objects_v2(self, **kwargs):
+        bucket = kwargs["Bucket"]
+        self.list_object_buckets.append(bucket)
+        if bucket != self.bucket:
+            raise AssertionError(f"Unexpected empty bucket listing: {bucket}")
+        return {"Contents": [], "IsTruncated": False}
+
+
 class CsvS3DiscoveryTests(TestCase):
     def test_drop_discovered_relation_object_handles_stale_table(self) -> None:
         connection = duckdb.connect(":memory:")
@@ -397,6 +420,58 @@ class CsvS3DiscoveryTests(TestCase):
                 self.assertIn((seed_schema, "mwa_abrechnung_entities_parquet"), discovered)
             finally:
                 connection.close()
+
+    def test_bounded_empty_bucket_sync_preserves_other_relations_and_emits_metadata_event(self) -> None:
+        client = EmptyBucketS3Client()
+        metadata_refreshes: list[str] = []
+        published_snapshots: list[dict[str, object]] = []
+        with TemporaryDirectory() as temp_dir:
+            database_path = Path(temp_dir) / "workspace.duckdb"
+            connection = duckdb.connect(str(database_path))
+            try:
+                connection.execute("CREATE SCHEMA other_bucket")
+                connection.execute("CREATE VIEW other_bucket.keep_me AS SELECT 1 AS value")
+            finally:
+                connection.close()
+
+            discoverer = S3DataSourceDiscoverer(make_temp_settings(database_path))
+            discoverer._current_buckets = {"other-bucket"}
+            manager = DataSourceDiscoveryManager(
+                connection_factory=lambda: duckdb.connect(str(database_path)),
+                metadata_refresher=lambda: metadata_refreshes.append("refreshed"),
+                discoverers=[discoverer],
+                state_change_callback=lambda snapshot: published_snapshots.append(snapshot),
+            )
+
+            with (
+                patch(
+                    "bit_data_workbench.backend.source_discovery.s3_client",
+                    return_value=client,
+                ),
+                patch(
+                    "bit_data_workbench.backend.source_discovery.list_s3_buckets",
+                    side_effect=AssertionError("bounded bucket discovery must not list every S3 bucket"),
+                ),
+            ):
+                state = manager.sync_s3_buckets([client.bucket], emit_event=True)
+
+            verification = duckdb.connect(str(database_path), read_only=True)
+            try:
+                self.assertEqual(
+                    verification.execute(
+                        "SELECT value FROM other_bucket.keep_me"
+                    ).fetchall(),
+                    [(1,)],
+                )
+            finally:
+                verification.close()
+
+        self.assertEqual(client.head_bucket_requests, [client.bucket])
+        self.assertEqual(client.list_object_buckets, [client.bucket])
+        self.assertEqual(metadata_refreshes, ["refreshed"])
+        self.assertEqual(state["summary"]["eventCount"], 1)
+        self.assertIn("buckets added 1", state["events"][0]["message"])
+        self.assertEqual(published_snapshots[-1], state)
 
     def test_startup_seed_source_sync_uses_bounded_s3_buckets(self) -> None:
         calls: list[tuple[tuple[str, ...], bool]] = []

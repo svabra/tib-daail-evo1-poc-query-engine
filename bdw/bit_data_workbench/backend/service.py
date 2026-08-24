@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from threading import RLock, Thread
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 import duckdb
 
@@ -2220,12 +2220,29 @@ class WorkbenchService:
             raise KeyError("The source object has no relation reference.")
         return self.source_object_fields(relation, actor=actor)
 
-    def _refresh_source_ingestion_bucket(self, bucket: str) -> None:
+    def _refresh_s3_buckets(
+        self,
+        buckets: Sequence[str],
+        *,
+        emit_event: bool = True,
+    ) -> None:
+        normalized_buckets = list(
+            dict.fromkeys(
+                str(bucket or "").strip()
+                for bucket in buckets
+                if str(bucket or "").strip()
+            )
+        )
+        if not normalized_buckets:
+            return
         sync_s3_buckets = getattr(self._data_source_discovery, "sync_s3_buckets", None)
         if callable(sync_s3_buckets):
-            sync_s3_buckets([bucket], emit_event=True)
+            sync_s3_buckets(normalized_buckets, emit_event=emit_event)
             return
-        self._data_source_discovery.sync_source("s3", emit_event=True)
+        self._data_source_discovery.sync_source("s3", emit_event=emit_event)
+
+    def _refresh_source_ingestion_bucket(self, bucket: str) -> None:
+        self._refresh_s3_buckets([bucket], emit_event=True)
 
     def explain_query(
         self,
@@ -3645,10 +3662,20 @@ class WorkbenchService:
         )
 
     def create_s3_bucket(self, bucket_name: str) -> dict[str, object]:
+        started_at = time.monotonic()
         result = self._s3_plugin.create(
             DataSourceCreateRequest(kind="bucket", name=bucket_name)
         )
-        self._data_source_discovery.sync_source("s3", emit_event=True)
+        created_at = time.monotonic()
+        self._refresh_s3_buckets([result.bucket], emit_event=True)
+        completed_at = time.monotonic()
+        logger.info(
+            "S3 bucket create completed: bucket=%r create_ms=%.0f discovery_ms=%.0f total_ms=%.0f",
+            result.bucket,
+            (created_at - started_at) * 1000,
+            (completed_at - created_at) * 1000,
+            (completed_at - started_at) * 1000,
+        )
         return result.payload
 
     def create_s3_folder(self, *, bucket: str, prefix: str = "", folder_name: str) -> dict[str, object]:
