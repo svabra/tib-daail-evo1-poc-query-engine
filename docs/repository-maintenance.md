@@ -110,3 +110,7 @@ The publication workflow now runs the full backend regression suite on Python 3.
 building an image. It installs the canonical requirements and generates coverage XML.
 Browser checks require live services and remain covered by the separately dispatched
 cross-system journey workflow in DaCa.
+
+PostgreSQL readiness uses TCP on `127.0.0.1`. The temporary socket-only server used by
+the official image during initialization no longer marks the dependency ready while it
+is still creating the application databases and preparing to restart.
