@@ -1,0 +1,14 @@
+{
+  "id": "jan.waser",
+  "created": "2026-11-12",
+  "generator": "Built-in image_gen",
+  "purpose": "Synthetic PoC persona illustration, not a photograph of an actual person",
+  "prompt": "Use case: photorealistic-natural. Asset type: synthetic PoC employee profile portrait for a Swiss public-administration data catalog. Create a SINGLE realistic head-and-shoulders studio photograph of one fictional male office professional, about 35 years old, short neatly styled dark blond hair, clean-shaven, light skin, pale blue collared shirt with a simple navy blazer and no tie. Friendly natural composed expression with a slight smile, looking directly at the camera. Centered square composition, entire head including hair and both shoulders visible, enough margin for a circular avatar crop. Plain warm gray studio background, soft even natural lighting, realistic skin texture and restrained professional photographic style. This is the fictional demo persona Jan Waser, Data Analyst for Kanton St. Gallen, not a depiction of any actual person with that name. No text, logos, watermark, border or additional people.",
+  "file": "jan-waser.webp",
+  "export": {
+    "format": "WebP",
+    "width": 256,
+    "height": 256,
+    "quality": 86
+  }
+}

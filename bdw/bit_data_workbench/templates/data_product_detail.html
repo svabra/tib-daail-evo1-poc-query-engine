@@ -7,6 +7,7 @@
     <link rel="icon" type="image/png" href="/static/img/favicon.png">
     <link rel="shortcut icon" href="/static/img/favicon.ico">
     <link rel="stylesheet" href="/static/css/app.css?v={{ runtime.timestamp_utc | urlencode }}">
+    <link rel="stylesheet" href="/static/css/journeys.css?v={{ runtime.image_version | urlencode }}">
   </head>
   <body class="dataproducts-site">
     <main class="dataproducts-shell">
@@ -38,7 +39,7 @@
           <span class="workspace-tags-label">Published endpoint</span>
           <p class="modal-copy">{{ documentation.liveReadOnlyCopy }}</p>
           <a
-            href="{{ product.publicPath }}"
+            href="{{ product.documentationPath ~ '?format=rest' if product.sourceKind == 'relation' else product.publicPath }}"
             target="_blank"
             rel="noreferrer"
             class="workspace-action-menu-item data-product-link-button"
@@ -48,6 +49,19 @@
         </div>
       </section>
 
+      {% if product.sourceKind == 'relation' %}
+      <section class="product-consumer-downloads" data-product-consumer-downloads data-product-slug="{{ product.slug }}">
+        <h2>Daten über HTTP beziehen</h2>
+        <p>Ein Datenprodukt, vier Formate und dieselbe Produktfreigabe. Demo-Identität: <strong data-product-consumer-identity></strong>.</p>
+        <button class="modal-button" type="button" data-product-download-format="rest">HTTP / REST (JSON)</button>
+        <button class="modal-button" type="button" data-product-download-format="xlsx">Excel (.xlsx)</button>
+        <button class="modal-button" type="button" data-product-download-format="parquet">Parquet</button>
+        <button class="modal-button" type="button" data-product-download-format="csv">CSV</button>
+        <p data-product-download-status aria-live="polite"></p>
+        <pre class="data-product-contract-pre" data-product-rest-response aria-label="HTTP REST Antwort" hidden></pre>
+        {% if product.dacaPublication %}<h3>SLA &amp; Nutzungsbedingungen</h3><p data-product-sla-copy>Aktuelle SLA wird aus DaCa geladen …</p><a href="{{ product.dacaPublication.catalogUrl.split('?')[0].replace('/overview', '/sla') }}" target="_blank" rel="noreferrer">SLA in DaCa öffnen ↗</a>{% endif %}
+      </section>
+      {% endif %}
       <section class="dataproducts-detail-grid">
         <article class="data-product-preview-summary-card">
           <span class="data-product-preview-summary-label">Endpoint path</span>
@@ -129,5 +143,6 @@
         </article>
       </section>
     </main>
+    <script type="module" src="/static/js/product-consumer-downloads.js?v={{ runtime.image_version | urlencode }}"></script>
   </body>
 </html>

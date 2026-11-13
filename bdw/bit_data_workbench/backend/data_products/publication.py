@@ -38,9 +38,7 @@ FIELD_DESCRIPTIONS = {
     "canton_name": "Bezeichnung des Kantons.",
     "tax_year": "Steuerjahr der aggregierten Kennzahl.",
     "annual_plan_chf": "Jahresplanwert der kantonalen Gewerbesteuer in CHF.",
-    "expected_receipts_to_date_chf": (
-        "Bis zum Stichtag erwarteter Ist-Eingang in CHF."
-    ),
+    "expected_receipts_to_date_chf": ("Bis zum Stichtag erwarteter Ist-Eingang in CHF."),
     "actual_receipts_to_date_chf": "Bis zum Stichtag effektiv gemeldeter Eingang in CHF.",
     "annual_projection_chf": "Auf das vollständige Steuerjahr hochgerechneter Betrag in CHF.",
     "variance_chf": "Differenz zwischen Hochrechnung beziehungsweise Ist und Jahresplan in CHF.",
@@ -57,9 +55,7 @@ def owner_user_id(owner: str, *, slug: str) -> str:
         return "joel.ruod"
     resolved = DEMO_USER_ALIASES.get(normalized)
     if resolved is None:
-        raise ValueError(
-            "Publishing to DaCa requires one of the selectable PoC users as owner."
-        )
+        raise ValueError("Publishing to DaCa requires one of the selectable PoC users as owner.")
     if slug == JOURNEY_SLUG and resolved != "joel.ruod":
         raise ValueError("The Data Analyst's Journey must be published by Joel Ruod.")
     return resolved
@@ -128,6 +124,19 @@ class DacaPublicationCoordinator:
         self._daca_ui_url = str(daca_ui_url or "").strip().rstrip("/")
         self._public_base_url = str(public_base_url or "").strip().rstrip("/")
         self._last_reconciliation_attempt: dict[str, float] = {}
+        self._synced_http_formats: set[str] = set()
+        self._last_format_sync_attempt: dict[str, float] = {}
+
+    def _ensure_http_formats(self, product: DataProductDefinition, catalog_product_id: str) -> None:
+        from .http_formats import supports_tabular_downloads
+
+        if not supports_tabular_downloads(product):
+            return
+        self._client.ensure_http_formats(
+            product_id=catalog_product_id, owner_user_id=owner_user_id(product.owner, slug=product.slug),
+            public_path=product.public_path,
+        )
+        self._synced_http_formats.add(catalog_product_id)
 
     def create_managed_product(
         self,
@@ -175,12 +184,17 @@ class DacaPublicationCoordinator:
         operation = "replace" if overwrite_existing else "create"
         existing_reference = candidate.daca_publication
         try:
+            from .tabular import product_scope
+
+            if product_scope(candidate):
+                self._manager.validate_product_scope(candidate)
             if (
                 existing_product is not None
                 and existing_reference is not None
                 and same_publishable_definition(existing_product, candidate)
             ):
                 resolved_owner = owner_user_id(candidate.owner, slug=candidate.slug)
+                self._ensure_http_formats(candidate, existing_reference.product_id)
                 self._client.record_source_refresh(
                     product_id=existing_reference.product_id,
                     owner_user_id=resolved_owner,
@@ -227,6 +241,7 @@ class DacaPublicationCoordinator:
                 product_id=outcome.product_id,
                 demo_user_id=str(metadata_payload["ownerUserId"]),
             )
+            self._ensure_http_formats(candidate, outcome.product_id)
             reference = DacaPublicationReference(
                 source_product_id=str(metadata_payload["sourceProductId"]),
                 publication_id=outcome.publication_id,
@@ -260,6 +275,14 @@ class DacaPublicationCoordinator:
             reference = product.daca_publication
             if reference is None:
                 continue
+            if reference.product_id not in self._synced_http_formats and now - self._last_format_sync_attempt.get(reference.product_id, 0) >= max(0, minimum_interval_seconds):
+                self._last_format_sync_attempt[reference.product_id] = now
+                try:
+                    self._ensure_http_formats(product, reference.product_id)
+                except DacaPublicationError:
+                    # An unavailable metadata API cannot bypass or replace the product policy.
+                    # Preserve the existing product and retry on a later reconciliation.
+                    pass
             resolved_owner = owner_user_id(product.owner, slug=product.slug)
             canonical_catalog_url = self.catalog_url(
                 product_id=reference.product_id,
@@ -309,10 +332,25 @@ class DacaPublicationCoordinator:
             raise ValueError("A public DAAIF base URL is required for DaCa publication.")
 
         schema_fields = self._manager.publication_schema_fields(product)
+        from ...data_generator.mwst_journey import (
+            FIELD_DESCRIPTIONS as MWST_FIELDS,
+            FIELD_TERMS,
+            NATIONAL_SLUG,
+        )
+        from .tabular import product_scope
+
+        scope = product_scope(product)
         for field in schema_fields:
-            field["businessDescription"] = field_business_description(
-                str(field.get("name") or "")
+            name = str(field.get("name") or "")
+            field["businessDescription"] = (
+                MWST_FIELDS.get(name, field_business_description(name))
+                if product.slug.startswith("mwst-")
+                else field_business_description(name)
             )
+            if product.slug.startswith("mwst-"):
+                field["keyField"] = name in {"company_id", "tax_year"}
+                if name in FIELD_TERMS:
+                    field["ontologyTermUri"] = f"urn:daca:ontology:tax:{FIELD_TERMS[name]}"
 
         properties = dict(product.custom_properties)
         frequency = properties.get("updateFrequency") or (
@@ -331,9 +369,7 @@ class DacaPublicationCoordinator:
             "EFV" if target_audience else "",
             "Bundestresorerie" if target_audience else "",
         ):
-            if keyword and keyword.casefold() not in {
-                item.casefold() for item in keywords
-            }:
+            if keyword and keyword.casefold() not in {item.casefold() for item in keywords}:
                 keywords.append(keyword)
 
         return {
@@ -355,6 +391,18 @@ class DacaPublicationCoordinator:
                 "schemaFields": schema_fields,
             },
             "businessMetadata": {
+                **(
+                    {
+                        "productClassUri": "urn:daca:ontology:tax:"
+                        + (
+                            "VatNationalRevenueDataset"
+                            if product.slug == NATIONAL_SLUG
+                            else "VatCompanyRevenueDataset"
+                        )
+                    }
+                    if product.slug.startswith("mwst-")
+                    else {}
+                ),
                 "title": product.title,
                 "description": product.description,
                 "domain": product.domain,
@@ -367,6 +415,9 @@ class DacaPublicationCoordinator:
                 ),
                 "updateFrequency": frequency or None,
                 "graph": {
+                    "daca:productScope": scope,
+                    "daca:downloadFormats": ["xlsx", "parquet", "csv"],
+                    "daca:documentationPath": product.documentation_path(),
                     "@context": {
                         "dcat": "http://www.w3.org/ns/dcat#",
                         "dct": "http://purl.org/dc/terms/",
@@ -374,11 +425,13 @@ class DacaPublicationCoordinator:
                     },
                     "@type": "dcat:Dataset",
                     "dct:title": product.title,
-                    "dct:spatial": "Schweiz / 26 Kantone",
+                    "dct:spatial": f"Schweiz / Kanton {scope['cantonCode']}"
+                    if "cantonCode" in scope
+                    else "Nicht angegeben" if "basisFrom" in scope or scope.get("basisWindowType") == "rolling" else "Schweiz / 26 Kantone",
                     "dct:audience": target_audience,
                     "dct:provenance": (
                         "Vollständig synthetischer PoC-Datenbestand aus DAAIF."
-                        if product.slug == JOURNEY_SLUG
+                        if product.slug == JOURNEY_SLUG or product.slug.startswith("mwst-")
                         else "Metadaten aus DAAIF."
                     ),
                 },

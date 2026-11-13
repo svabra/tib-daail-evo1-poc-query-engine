@@ -38,6 +38,7 @@ import { initializeHomeNotebookSearch } from "./home-notebook-search.js";
 import { createCsvIngestionController } from "./ingestion-types/csv/index.js";
 import { createFileIngestionController } from "./ingestion-types/file/index.js";
 import { createDataProductsController } from "./data-products-controller.js";
+import { publishStoredResult, initializeCreationRequestBanner } from "./result-product-publication.js";
 import { createDataProductsSampleContracts } from "./data-products-sample-contracts.js";
 import { createDataProductsUi } from "./data-products-ui.js";
 import { createDataExchangeController } from "./data-exchange-controller.js";
@@ -202,6 +203,7 @@ import { createWorkbenchStorage } from "./workbench-storage.js";
 
 createAppTooltipController().install();
 initializeDaaifDemoIdentity();
+void initializeCreationRequestBanner();
 
 const editorRegistry = new WeakMap();
 const editorSizingRegistry = new WeakMap();
@@ -1894,6 +1896,7 @@ function openLoaderNavigation(generatorId = "") {
 
 function syncShellVisibility() {
   if (
+    document.querySelector("[data-documentation-page]") ||
     homePageRoot() ||
     workbenchExpertSearchPageRoot() ||
     dataProductsPageRoot() ||
@@ -11896,7 +11899,7 @@ document.body.addEventListener("click", async (event) => {
   }
 
   const publishJourneyDataProductTrigger = event.target.closest(
-    "[data-publish-journey-data-product]"
+    "[data-publish-result-data-product], [data-publish-journey-data-product]"
   );
   if (publishJourneyDataProductTrigger) {
     event.preventDefault();
@@ -11910,19 +11913,11 @@ document.body.addEventListener("click", async (event) => {
       });
       return;
     }
-    await dataProductsController.openPublishDialog({
-      source: {
-        sourceKind: "relation",
-        sourceId: "s3",
-        relation: "",
-        bucket: configuredTarget.bucket,
-        key: configuredTarget.key,
-        sourceDisplayName: "Kantonale Gewerbesteuer Soll/Ist 2022–2026",
-        sourcePlatform: "s3",
-      },
-      lockSource: true,
-      startStep: 2,
-    });
+    try {
+      await publishStoredResult({ job, target: configuredTarget, controller: dataProductsController });
+    } catch (error) {
+      await showMessageDialog({ title: "Datenprodukt veröffentlichen", copy: error.message });
+    }
     return;
   }
 
@@ -12739,6 +12734,7 @@ Promise.allSettled(initialLoadTasks)
     const visibleWorkspaceMode = currentWorkspaceMode();
     const initialSidebarMode = visibleWorkspaceMode === "loader" ? "loader" : "notebook";
     const shouldRefreshSidebarDuringStartup = !(
+      document.querySelector("[data-documentation-page]") ||
       homePageRoot() ||
       workbenchExpertSearchPageRoot() ||
       dataProductsPageRoot() ||
@@ -12756,6 +12752,7 @@ Promise.allSettled(initialLoadTasks)
         })
       : Promise.resolve();
 
+    if (document.querySelector("[data-documentation-page]")) return;
     if (visibleWorkspaceMode === "loader") {
       renderIngestionWorkbench();
       renderDataGenerationMonitor();

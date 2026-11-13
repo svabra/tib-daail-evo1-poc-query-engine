@@ -35,6 +35,7 @@ from ..data_generator.kostenbelege_fact_builder_sample import (
 )
 from ..models import NotebookCellDefinition, NotebookDefinition
 from .source_references import s3_source_reference
+from .mwst_notebook import build_mwst_journey_notebook
 
 
 DATA_PIPELINES_TREE_PATH = (
@@ -4111,6 +4112,7 @@ def build_static_notebooks(
 
     return [
         build_data_analysts_journey_notebook(),
+        build_mwst_journey_notebook(),
         NotebookDefinition(
             notebook_id="s3-smoke-test",
             title="S3 Smoke Test",

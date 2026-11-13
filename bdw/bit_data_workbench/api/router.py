@@ -2191,6 +2191,7 @@ from .workbench_metadata import router as workbench_metadata_router
 from .source_sourcing import router as source_sourcing_router
 from .source_ingestions import router as source_ingestions_router
 from .data_sources import router as data_sources_router
+from .product_creation import router as product_creation_router
 
 
 router.include_router(data_source_explorer_router)
@@ -2201,3 +2202,4 @@ router.include_router(workbench_metadata_router)
 router.include_router(source_sourcing_router)
 router.include_router(source_ingestions_router)
 router.include_router(data_sources_router)
+router.include_router(product_creation_router)

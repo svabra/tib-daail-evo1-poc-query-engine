@@ -2,6 +2,8 @@ import { closeDialog } from "./dialog-manager.js";
 
 import { dataProductSourceForPublication } from "./data-products-source.js";
 
+import { currentDaaifDemoUser } from "./demo-identity.js";
+
 export function createDataProductsController(helpers) {
   const {
     fetchJsonOrThrow,
@@ -59,6 +61,8 @@ export function createDataProductsController(helpers) {
   };
 
   function currentDemoUser() {
+    const identity = currentDaaifDemoUser();
+    if (identity) return identity;
     let storedUser = "";
     try {
       storedUser = window.localStorage.getItem("daaif-demo-user") || "";
@@ -81,6 +85,7 @@ export function createDataProductsController(helpers) {
   }
 
   function applyMetadataDefaults(source) {
+    publicationState.customProperties = {};
     const user = currentDemoUser();
     publicationState.owner = user.displayName;
     publicationState.requestAccessContact = user.email;
@@ -435,6 +440,7 @@ export function createDataProductsController(helpers) {
       accessNote: publicationState.accessNote,
       requestAccessContact: publicationState.requestAccessContact,
       customProperties: {
+        ...publicationState.customProperties,
         ...(publicationState.updateFrequency
           ? { updateFrequency: publicationState.updateFrequency }
           : {}),
@@ -655,6 +661,7 @@ export function createDataProductsController(helpers) {
     source = null,
     lockSource = false,
     startStep = 1,
+    metadataDefaults = {},
   } = {}) {
     publicationState.step = lockSource ? Math.max(startStep, 2) : 1;
     publicationState.sourceLocked = lockSource;
@@ -667,6 +674,7 @@ export function createDataProductsController(helpers) {
     publicationState.slugTouched = false;
     publicationState.selectedSourceType = "all";
     applyMetadataDefaults(source);
+    Object.assign(publicationState, metadataDefaults);
 
     renderPublicationDialog();
     publicationDialog().showModal();

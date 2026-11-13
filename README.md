@@ -1,5 +1,27 @@
 # tib-daail-evo1-poc-query-engine
 
+Release **0.10.56** (2026-11-13) adds electronic product-creation journeys, publication from
+saved Parquet results, shared demo profiles and four HTTP formats registered on one DaCa
+product. Orders complete once the published result is ready for the requester. The
+[MWST journey](docs/mwst-journey.md) records the verified flow and its current limitations.
+
+Tabular products expose REST/JSON, CSV, Excel and Parquet over HTTP with one shared DaCa
+product permission. All four formats are registered under the same catalog product.
+DaCa's format selection opens DAAIF and immediately starts the chosen data request.
+See [HTTP product formats](docs/http-product-formats.md).
+
+Jan Waser's profile selector uses the same locally stored synthetic portrait as DaCa.
+The asset's adjacent `jan-waser.provenance.json` records its generation prompt.
+
+The [MWST journey](docs/mwst-journey.md) starts with Jan Waser's direct electronic request
+for a new data product in DaCa. Kassandra Valdata prepares it in her editable filter notebook
+and completes the order once the reviewed product is ready for Jan. Open `/documentation`
+using the information icon in the header. The repeatable setup uses
+`./.venv/Scripts/python.exe scripts/setup-mwst-journey.py` with DAAIF on port 8011 and DaCa on
+8080. It prepares synthetic source products and a separate finished example through the
+normal SLA and publication approvals. Tabular products support full CSV, Excel and Parquet
+downloads with the same DaCa policy check as their REST endpoint.
+
 ## TODO
 
 1. [AM-1] Formalize the audience model before introducing real multi-user isolation. See [AM-1] Audience Model below.
@@ -309,7 +331,7 @@ The practical rule is simple: the app does not detect "where it is" by hostname.
 Build locally:
 
 ```bash
-docker build -f bdw/Dockerfile -t bit-data-workbench:0.10.55 .
+docker build -f bdw/Dockerfile -t bit-data-workbench:0.10.56 .
 ```
 
 Run directly without Compose-managed service wiring:
@@ -320,7 +342,7 @@ docker run --rm -d ^
   -p 8000:8000 ^
   -v "%cd%\\logs:/app/logs" ^
   -v "%cd%\\workspace:/workspace" ^
-  -e IMAGE_VERSION=0.10.55 ^
+  -e IMAGE_VERSION=0.10.56 ^
   -e DUCKDB_DATABASE=/workspace/bit-data-workbench.duckdb ^
   -e DUCKDB_EXTENSION_DIRECTORY=/opt/duckdb/extensions ^
   -e S3_ENDPOINT=minio:9000 ^
@@ -338,7 +360,7 @@ docker run --rm -d ^
   -e PG_PASSWORD=evo1 ^
   -e PG_OLTP_DATABASE=evo1_oltp ^
   -e PG_OLAP_DATABASE=evo1_olap ^
-  bit-data-workbench:0.10.55
+  bit-data-workbench:0.10.56
 ```
 
 ### TODO
@@ -365,7 +387,7 @@ The route is an OpenShift `edge` route and exposes the HTTP service externally t
 Current image:
 
 ```text
-docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.10.55
+docker-hub.nexus.bit.admin.ch/svabra/bit-data-workbench:0.10.56
 ```
 
 ### RHOS S3 Authentication
@@ -495,3 +517,10 @@ Health endpoint:
 ```text
 http://localhost:8000/info
 ```
+## Derived-product request context
+
+DaCa requests now carry data-basis dates, a legal mandate, selected Parquet/HTTP REST/CSV/Excel
+delivery and update frequency. DAAIF shows these owner/requester-scoped requirements and can
+propose them in result publication without adding SG/2026 defaults. Published generic scope
+records the request ID and requested period; existing MWST canton/year row validation remains
+in place. See [the MWST journey and request bridge](docs/mwst-journey.md).

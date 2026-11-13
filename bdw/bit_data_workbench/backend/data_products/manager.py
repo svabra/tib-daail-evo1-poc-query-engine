@@ -686,6 +686,20 @@ class DataProductManager:
         product = self.product_by_slug(slug)
         return self._documentation_contract(product, base_url=base_url)
 
+    def download(self, *, slug: str, export_format: str):
+        from .downloads import prepare_download
+        return prepare_download(self.product_by_slug(slug), export_format, self._create_worker_connection)
+
+    def validate_product_scope(self, product) -> None:
+        from .tabular import product_scope, validate_scope
+        if not product_scope(product):
+            return
+        connection = self._create_worker_connection()
+        try:
+            validate_scope(connection, product)
+        finally:
+            connection.close()
+
     def public_relation_payload(
         self,
         *,
@@ -702,6 +716,20 @@ class DataProductManager:
 
         normalized_limit = self._normalized_limit(limit)
         normalized_offset = self._normalized_offset(offset)
+        from .tabular import product_scope, select_sql
+        if product_scope(product):
+            connection = self._create_worker_connection()
+            try:
+                cursor = connection.execute(f"{select_sql(product)} LIMIT {normalized_limit + 1} OFFSET {normalized_offset}")
+                fields = [SourceField(name=column[0], data_type=str(column[1])) for column in cursor.description]
+                rows = cursor.fetchall()
+            finally:
+                connection.close()
+            return {
+                "product": product.payload(base_url=base_url), "columns": [field.payload for field in fields],
+                "items": [dict(zip([field.name for field in fields], row)) for row in rows[:normalized_limit]],
+                "limit": normalized_limit, "offset": normalized_offset, "hasMore": len(rows) > normalized_limit,
+            }
         if self._is_s3_parquet_source(product.source):
             if self._s3_parquet_page_provider is None:
                 raise ValueError("Direct Parquet data-product reads are not configured.")

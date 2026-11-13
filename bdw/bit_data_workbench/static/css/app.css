@@ -14649,8 +14649,21 @@ body.data-platform-document {
   gap: 8px;
   min-width: 0;
   margin-left: auto;
+  border: 0;
   padding-inline: 12px;
+  background: transparent;
   color: #fff;
+  font: inherit;
+  cursor: pointer;
+}
+
+.federal-demo-user:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.federal-demo-user:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -3px;
 }
 
 .federal-demo-user img,
@@ -14679,39 +14692,9 @@ body.data-platform-document {
   display: none;
 }
 
-.federal-demo-user-copy {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  gap: 0 6px;
-  min-width: 0;
-}
-
-.federal-demo-user-label {
-  font-weight: 400;
-}
-
-.federal-demo-user select {
-  max-width: 390px;
-  min-width: 0;
-  border: 0;
-  padding: 3px 24px 3px 2px;
-  background: transparent;
-  color: #fff;
-  font-weight: 750;
-  cursor: pointer;
-}
-
-.federal-demo-user select option {
-  background: #fff;
-  color: var(--text);
-}
-
-.federal-demo-user-role {
-  grid-column: 2;
+.federal-demo-user-name {
+  max-width: 250px;
   overflow: hidden;
-  color: rgba(255, 255, 255, 0.75);
-  font-size: 0.68rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -15545,19 +15528,6 @@ body.data-platform-document {
     padding-inline: 22px;
   }
 
-  .federal-demo-user-label,
-  .federal-demo-user-role {
-    display: none;
-  }
-
-  .federal-demo-user-copy {
-    display: block;
-  }
-
-  .federal-demo-user select {
-    max-width: 250px;
-  }
-
   .federal-brand-inner {
     grid-template-columns: 180px minmax(0, 1fr) auto;
     min-height: 94px;
@@ -15602,8 +15572,8 @@ body.data-platform-document {
     padding-inline: 6px;
   }
 
-  .federal-demo-user select {
-    width: min(210px, 50vw);
+  .federal-demo-user-name {
+    max-width: min(210px, 50vw);
   }
 
   .federal-brand-inner {

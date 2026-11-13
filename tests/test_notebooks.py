@@ -464,6 +464,8 @@ class GeneratorNotebookLinkTests(unittest.TestCase):
             if "s3." in sql:
                 if notebook.notebook_id == "data-analysts-journey-cantonal-business-tax":
                     self.assertIn('"manual/aargau/', sql, notebook.notebook_id)
+                elif notebook.notebook_id == "mwst-ertraege-st-gallen-2026":
+                    self.assertIn('"sources/mwst_firmen_2016_2026.parquet"', sql)
                 else:
                     self.assertIn('"generated/', sql, notebook.notebook_id)
 

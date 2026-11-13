@@ -1061,8 +1061,8 @@ export function createQueryUi(helpers) {
           <button type="button" class="result-storage-copy-button" data-copy-result-storage-virtual title="Copy virtual S3 source path">Virtual</button>
           <button type="button" class="result-storage-copy-button" data-copy-result-storage-duckdb title="Copy DuckDB read_parquet path">DuckDB</button>
           ${
-            journeyResult && status === "completed"
-              ? `<button type="button" class="result-storage-copy-button result-storage-publish-button" data-publish-journey-data-product>Publish data product</button>`
+            path.toLowerCase().endsWith(".parquet") && status === "completed"
+              ? `<button type="button" class="result-storage-copy-button result-storage-publish-button" data-publish-result-data-product ${journeyResult ? "data-publish-journey-data-product" : ""}>Publish data product</button>`
               : ""
           }
         </div>

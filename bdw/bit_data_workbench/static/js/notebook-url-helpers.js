@@ -1,15 +1,28 @@
 export function createNotebookUrlHelpers({ isLocalNotebookId }) {
+  function withCreationRequestContext(path) {
+    const href = globalThis.window?.location?.href;
+    if (!href) return path;
+    const current = new URL(href);
+    const requestId = current.searchParams.get("creationRequest");
+    if (!requestId) return path;
+    const next = new URL(path, current);
+    next.searchParams.set("creationRequest", requestId);
+    const user = current.searchParams.get("demoUser");
+    if (user) next.searchParams.set("demoUser", user);
+    return `${next.pathname}${next.search}`;
+  }
+
   function notebookUrl(notebookId) {
     if (!notebookId || isLocalNotebookId(notebookId)) {
       return null;
     }
 
-    return `/notebooks/${encodeURIComponent(notebookId)}`;
+    return withCreationRequestContext(`/notebooks/${encodeURIComponent(notebookId)}`);
   }
 
   function pushNotebookHistory(notebookId) {
     const nextUrl = notebookUrl(notebookId);
-    if (!nextUrl || window.location.pathname === nextUrl) {
+    if (!nextUrl || window.location.pathname === nextUrl.split("?")[0]) {
       return;
     }
 
@@ -21,7 +34,7 @@ export function createNotebookUrlHelpers({ isLocalNotebookId }) {
       return;
     }
 
-    window.history.pushState({ mode: "query-workbench" }, "", "/query-workbench");
+    window.history.pushState({ mode: "query-workbench" }, "", withCreationRequestContext("/query-workbench"));
   }
 
   function pushQueryRunsHistory() {
@@ -32,7 +45,7 @@ export function createNotebookUrlHelpers({ isLocalNotebookId }) {
     window.history.pushState(
       { mode: "query-runs" },
       "",
-      "/query-workbench/query-runs"
+      withCreationRequestContext("/query-workbench/query-runs")
     );
   }
 
@@ -46,16 +59,16 @@ export function createNotebookUrlHelpers({ isLocalNotebookId }) {
       params.set("browse", "1");
     }
     const query = params.toString();
-    return query ? `/data-sources?${query}` : "/data-sources";
+    return withCreationRequestContext(query ? `/data-sources?${query}` : "/data-sources");
   }
 
   function queryWorkbenchDataSourceExplorerUrl(sourceId = "") {
     const normalizedSourceId = String(sourceId || "").trim();
     if (!normalizedSourceId) {
-      return "/data-sources/browser";
+      return withCreationRequestContext("/data-sources/browser");
     }
 
-    return `/data-sources/browser?source_id=${encodeURIComponent(normalizedSourceId)}`;
+    return withCreationRequestContext(`/data-sources/browser?source_id=${encodeURIComponent(normalizedSourceId)}`);
   }
 
   function pushQueryWorkbenchDataSourcesHistory(sourceId = "", { browse = false } = {}) {

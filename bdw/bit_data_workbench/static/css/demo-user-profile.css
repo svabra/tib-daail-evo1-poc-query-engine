@@ -1,0 +1,238 @@
+.demo-user-dialog {
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  border: 0;
+  border-top: 6px solid var(--federal-red);
+  padding: 0;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+
+.demo-user-dialog::backdrop {
+  background: rgba(47, 67, 86, 0.35);
+}
+
+.demo-user-dialog-card {
+  padding: 30px;
+}
+
+.demo-user-dialog-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.demo-user-eyebrow {
+  margin: 0 0 10px;
+  color: var(--federal-red);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.demo-user-dialog-heading h2 {
+  margin: 0;
+  font-size: 2rem;
+  line-height: 1.2;
+}
+
+.demo-user-dialog-heading h2:focus {
+  outline: none;
+}
+
+.demo-user-dialog-close {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  font-size: 1.5rem;
+  cursor: pointer;
+}
+
+.demo-user-dialog-description {
+  margin: 20px 0;
+  line-height: 1.5;
+}
+
+.demo-user-profile-identity,
+.demo-user-option-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.demo-user-profile-identity {
+  gap: 20px;
+  border: 1px solid var(--border);
+  border-top: 4px solid var(--status-blue);
+  padding: 20px;
+}
+
+.demo-user-portrait {
+  display: grid;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  overflow: hidden;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--federal-blue);
+  color: #fff;
+  font-weight: 700;
+}
+
+.demo-user-portrait img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.demo-user-portrait-large {
+  width: 80px;
+  height: 80px;
+  font-size: 1.75rem;
+}
+
+.demo-user-profile-copy {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.demo-user-profile-copy h3 {
+  margin: 0;
+  font-size: 1.4rem;
+}
+
+.demo-user-profile-copy p {
+  margin: 5px 0;
+  color: var(--text-muted);
+}
+
+.demo-user-profile-copy a {
+  color: var(--status-blue);
+}
+
+.demo-user-profile-roles {
+  margin-block: 20px;
+}
+
+.demo-user-profile-roles h3 {
+  margin: 0 0 8px;
+  font-size: 1rem;
+}
+
+.demo-user-profile-roles p {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.demo-user-options {
+  display: grid;
+  max-height: 60dvh;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.demo-user-options[hidden],
+.demo-user-profile[hidden],
+.demo-user-portrait [hidden],
+.demo-user-current[hidden] {
+  display: none;
+}
+
+.demo-user-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid var(--border);
+  padding: 10px;
+}
+
+.demo-user-option.is-current {
+  border-color: var(--status-blue);
+}
+
+.demo-user-option-copy {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.demo-user-option-copy small,
+.demo-user-current {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.demo-user-current {
+  margin-left: auto;
+}
+
+.demo-user-button {
+  flex: none;
+  border: 1px solid var(--federal-red);
+  padding: 10px 14px;
+  background: var(--federal-red);
+  color: #fff;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.demo-user-button:hover {
+  filter: brightness(0.94);
+}
+
+.demo-user-button-secondary {
+  border-color: var(--border-strong);
+  background: var(--panel);
+  color: var(--text);
+}
+
+.demo-user-dialog button:focus-visible,
+.demo-user-dialog a:focus-visible {
+  outline: 2px solid var(--status-blue);
+  outline-offset: 2px;
+}
+
+@media (max-width: 550px) {
+  .demo-user-dialog-card {
+    padding: 20px;
+  }
+
+  .demo-user-dialog-heading h2 {
+    font-size: 1.6rem;
+  }
+
+  .demo-user-profile-identity {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 16px;
+  }
+
+  .demo-user-option {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .demo-user-option-identity,
+  .demo-user-option > .demo-user-button {
+    width: 100%;
+  }
+
+  .demo-user-option-copy {
+    flex-direction: column;
+    gap: 2px;
+  }
+}

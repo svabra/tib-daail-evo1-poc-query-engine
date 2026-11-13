@@ -1,0 +1,28 @@
+<div class="journey-page" data-documentation-page>
+  <nav aria-label="Brotkrumennavigation"><a href="/documentation">Dokumentation</a> / <a href="/documentation/journeys">User Journeys</a></nav>
+  <p class="journey-eyebrow">DAAIF und DaCa · User Journey 01</p>
+  {% if not journey_detail %}
+    <h2>Dokumentation und User Journeys</h2>
+    <p>Schritt für Schritt durch Daten, Zuständigkeiten und ein eigenes Datenprodukt.</p>
+    <a class="journey-overview-card" href="/documentation/journeys/{{ journey_id }}">
+      <span class="journey-eyebrow">01 · DaCa → DAAIF → DaCa</span><h3>MWST-Erträge für St. Gallen</h3>
+      <p>Jan Waser beantragt in DaCa direkt elektronisch ein neues Datenprodukt mit SG-Firmenzeilen. Kassandra Valdata erstellt und veröffentlicht es; sobald es für Jan bereitsteht, schliesst sie den Auftrag ab.</p>
+      <strong>Journey öffnen →</strong>
+    </a>
+  {% else %}
+    <h2>MWST-Erträge für St. Gallen</h2>
+    <p>Jan Waser · Data Analyst, Kanton St. Gallen. Kassandra Valdata · Data Owner, ESTV. Thomas Kriegli · Kontrollperson.</p>
+    <aside class="journey-note">Alle Firmen und Beträge sind synthetisch. 2016–2025 sind vollständige Jahreswerte. 2026 ist vorläufig per <strong>12.11.2026</strong>. Die Kantonszuordnung folgt dem Firmensitz.</aside>
+    <div class="journey-actions"><a href="/loader-workbench">MWST-Loader öffnen</a><a href="/dataproducts/{{ example_slug }}?demoUser=jan.waser">Fertigen Beispielstand öffnen</a><a href="{{ daca_ui_url }}/documentation/journeys/{{ journey_id }}?demoUser=jan.waser" target="_blank" rel="noreferrer">Journey in DaCa ↗</a></div>
+    <ol class="journey-steps">
+      <li><h3>Jan entdeckt die Datenprodukte</h3><p>Die Schweiz-Zeitreihe enthält elf Jahreswerte. Das Firmenprodukt enthält 260 Firmen aus allen 26 Kantonen und 2.860 Firmen-Jahreszeilen; 60 Firmen stammen aus SG. Jan liest Beschreibung, Schema und SLA.</p><div class="journey-actions"><a href="/dataproducts/{{ national_slug }}?demoUser=jan.waser">Schweizer Jahreswerte</a><a href="/dataproducts/{{ company_slug }}?demoUser=jan.waser">Firmenprodukt und Kontakt</a></div></li>
+      <li><h3>Neues Datenprodukt elektronisch beantragen</h3><p>Jan stellt direkt in DaCa einen elektronischen Antrag für ein neues Datenprodukt mit den Firmenzeilen aus SG für 2026. Er begründet den Verwendungszweck und wählt Excel, Parquet und CSV.</p><a href="{{ daca_ui_url }}/product-creation-requests/new?demoUser=jan.waser&amp;source=daaif:{{ company_slug }}:v1" target="_blank" rel="noreferrer">Als Jan neues Datenprodukt beantragen ↗</a></li>
+      <li><h3>Kassandra nimmt den Auftrag an</h3><p>Als Kassandra die Aufgabe in DaCa öffnen, den Antrag prüfen und annehmen. Der Knopf im Antrag öffnet dieses Notizbuch mit dem Antragsbezug.</p><a href="{{ daca_ui_url }}/tasks?demoUser=kassandra.valdata" target="_blank" rel="noreferrer">Kassandras Aufgaben ↗</a></li>
+      <li><h3>SG-Produkt selbst erstellen</h3><p>Kassandra führt die bearbeitbare Abfrage selbst aus. Es werden Firmenzeilen gefiltert, keine Beträge summiert.</p><pre>WHERE tax_year = 2026
+  AND canton_code = 'SG'</pre><p>Erwartet: 60 Firmen, ausschliesslich SG und 2026. Die Ergebnisspeicherung legt ein Parquet-Ergebnis ab. Danach «Publish data product» wählen, Beschreibung prüfen und in DaCa veröffentlichen.</p><a href="/notebooks/{{ journey_id }}?demoUser=kassandra.valdata">Notizbuch als Kassandra öffnen</a></li>
+      <li><h3>SLA und Veröffentlichung freigeben</h3><p>Kassandra ergänzt die produktspezifische SLA und beantragt die vorhandene Vier-Augen-Freigabe. Thomas kontrolliert SLA und Veröffentlichung. Jan wird für das neue SG-Produkt freigegeben; das schweizweite Firmenprodukt erhält dadurch keine Freigabe.</p><a href="{{ daca_ui_url }}/tasks?demoUser=thomas.kriegli" target="_blank" rel="noreferrer">Thomas’ Aufgaben ↗</a></li>
+      <li><h3>Auftrag abschliessen und herunterladen</h3><p>Sobald das neue Datenprodukt veröffentlicht und für Jan freigegeben ist, ordnet Kassandra es dem Antrag zu und schliesst den Auftrag ab. Jan erhält die Ergebnisbenachrichtigung und kann die 60 SG-Firmen als Excel, Parquet oder CSV herunterladen.</p><a href="{{ daca_ui_url }}/product-creation-requests?demoUser=jan.waser" target="_blank" rel="noreferrer">Jans Anträge ↗</a></li>
+    </ol>
+    <aside class="journey-note">Der fertige Beispielstand verwendet einen eigenen Produktnamen. Kassandras eigenes Produkt wird erst durch ihre Abfrage und Veröffentlichung erstellt. Ein erneuter Loader-Lauf ersetzt ausschliesslich die drei deterministischen Quelldateien und löscht keine Produkte oder Anträge.</aside>
+  {% endif %}
+</div>

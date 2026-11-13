@@ -70,8 +70,12 @@ class ResultStorageExportTargetTests(TestCase):
             "const job = queryJobForResultActionTarget(publishJourneyDataProductTrigger);",
             app_source,
         )
-        self.assertIn("bucket: configuredTarget.bucket", app_source)
-        self.assertIn("key: configuredTarget.key", app_source)
+        publication_source = (
+            REPO_ROOT / "bdw/bit_data_workbench/static/js/result-product-publication.js"
+        ).read_text(encoding="utf-8")
+        self.assertIn("publishStoredResult({", app_source)
+        self.assertIn("bucket: target.bucket", publication_source)
+        self.assertIn("key: target.key", publication_source)
         self.assertNotIn(
             "data_analysts_journey_6f15a669.kantonale_gewerbesteuer_soll_ist_2022_2026",
             app_source,

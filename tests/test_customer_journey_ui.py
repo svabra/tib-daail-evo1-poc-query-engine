@@ -82,7 +82,7 @@ class CustomerJourneyUiTests(unittest.TestCase):
         styles = (STATIC_ROOT / "css/app.css").read_text(encoding="utf-8")
         identity = (STATIC_ROOT / "js/demo-identity.js").read_text(encoding="utf-8")
         self.assertIn("federal-authority-strip", header)
-        self.assertIn("data-demo-user-select", header)
+        self.assertIn("data-demo-user-profile", header)
         self.assertIn(
             ".federal-workbench-nav .topbar-actions-primary {\n"
             "  display: flex;\n"
@@ -101,7 +101,7 @@ class CustomerJourneyUiTests(unittest.TestCase):
             "Joel Ruod",
             "Thomas Kriegli",
         ):
-            self.assertIn(name, header)
+            self.assertIn(name, identity)
         self.assertIn('DAAIF_DEMO_USER_STORAGE_KEY = "daaif-demo-user"', identity)
         self.assertIn('DAAIF_DEMO_USER_CHANGE_EVENT = "daaif-demo-user-change"', identity)
         self.assertIn('DEFAULT_USER_ID = "joel.ruod"', identity)

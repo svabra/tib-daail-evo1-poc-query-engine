@@ -1049,8 +1049,10 @@ def loader_workbench_partial(
 from .data_products import router as data_products_router
 from .data_exchange import router as data_exchange_router
 from .data_platform import router as data_platform_router
+from .documentation import router as documentation_router
 
 
 router.include_router(data_products_router)
 router.include_router(data_exchange_router)
 router.include_router(data_platform_router)
+router.include_router(documentation_router)

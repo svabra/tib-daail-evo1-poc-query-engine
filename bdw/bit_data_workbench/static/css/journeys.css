@@ -1,0 +1,22 @@
+.federal-documentation-link { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; color: #fff; }
+.federal-documentation-link svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.federal-documentation-link:hover, .federal-documentation-link:focus-visible { background: rgba(255,255,255,.12); color: #fff; }
+.journey-page { max-width: 1200px; margin: auto; padding: 36px; line-height: 1.6; }
+.journey-page h2 { margin: 8px 0 16px; font-size: clamp(1.7rem, 3vw, 2.7rem); line-height: 1.2; }
+.journey-eyebrow { color: var(--federal-red); font-size: .75rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.journey-page nav { font-size: .85rem; }
+.journey-overview-card { display: block; max-width: 650px; margin-top: 26px; border: 1px solid var(--border); border-top: 5px solid var(--federal-red); padding: 26px; background: var(--panel); color: var(--text); text-decoration: none; }
+.journey-overview-card h3 { font-size: 1.5rem; }
+.journey-overview-card:hover, .journey-overview-card:focus-visible { border-color: var(--status-blue); box-shadow: var(--shadow); }
+.journey-note, .creation-request-banner { border-left: 4px solid var(--status-blue); padding: 18px; background: var(--panel-alt); }
+.creation-request-banner { margin: 16px; }
+.journey-actions { display: flex; flex-wrap: wrap; gap: 12px; margin: 20px 0; }
+.journey-actions a, .journey-steps > li > a { display: inline-block; border: 1px solid var(--border-strong); padding: 10px 14px; background: var(--panel); color: var(--status-blue); font-weight: 700; text-decoration: none; }
+.journey-steps { display: grid; gap: 18px; padding-left: 30px; }
+.journey-steps > li { border: 1px solid var(--border); border-top: 4px solid var(--status-blue); padding: 22px; background: var(--panel); }
+.journey-steps h3 { margin: 0; font-size: 1.25rem; }
+.journey-steps pre { overflow-x: auto; padding: 14px; background: var(--panel-alt); }
+.product-consumer-downloads { border: 1px solid var(--border); border-top: 4px solid var(--status-blue); padding: 24px; background: var(--panel); }
+.product-consumer-downloads button { margin: 6px 8px 6px 0; }
+.product-consumer-downloads [role=alert] { color: var(--accent-deep); }
+@media(max-width: 680px) { .journey-page { padding: 22px 16px; } .journey-actions { flex-direction: column; } .journey-steps { padding-left: 24px; } .journey-steps > li { padding: 16px; } }

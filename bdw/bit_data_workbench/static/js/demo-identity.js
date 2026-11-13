@@ -1,11 +1,19 @@
+import { initializeDemoUserProfile, syncDemoUserProfile } from "./demo-user-profile.js";
+
 export const DAAIF_DEMO_USER_STORAGE_KEY = "daaif-demo-user";
 export const DAAIF_DEMO_USER_CHANGE_EVENT = "daaif-demo-user-change";
 
 export const DAAIF_DEMO_USERS = Object.freeze([
   Object.freeze({
+    id: "jan.waser", displayName: "Jan Waser", organization: "Kanton St. Gallen",
+    organizationShort: "Kanton St. Gallen", email: "jan.waser@sg.ch",
+    role: "Data Analyst", avatarUrl: "/static/img/daca/jan-waser.webp",
+  }),
+  Object.freeze({
     id: "kassandra.valdata",
     displayName: "Kassandra Valdata",
     organization: "Eidgenössische Steuerverwaltung ESTV",
+    organizationShort: "ESTV",
     email: "kassandra.valdata@estv.admin.ch",
     role: "Data Owner",
     avatarUrl: "/static/img/daca/kassandra-valdata.webp",
@@ -14,6 +22,7 @@ export const DAAIF_DEMO_USERS = Object.freeze([
     id: "noemie.rochat",
     displayName: "Noémie Rochat",
     organization: "Kanton Neuchâtel",
+    organizationShort: "Kanton Neuchâtel",
     email: "noemie.rochat@ne.ch",
     role: "Data Owner",
     avatarUrl: "/static/img/daca/noemie-rochat.webp",
@@ -22,33 +31,37 @@ export const DAAIF_DEMO_USERS = Object.freeze([
     id: "beat.stalder",
     displayName: "Beat Stalder",
     organization: "Kanton St. Gallen",
+    organizationShort: "Kanton St. Gallen",
     email: "beat.stalder@sg.ch",
     role: "Data Consumer",
-    avatarUrl: "",
+    avatarUrl: "/static/img/daca/beat-stalder.webp",
   }),
   Object.freeze({
     id: "joel.ruod",
     displayName: "Joel Ruod",
     organization: "Eidgenössische Steuerverwaltung ESTV",
+    organizationShort: "ESTV",
     email: "joel.ruod@estv.admin.ch",
     role: "Data Analyst / Data Owner",
-    avatarUrl: "",
+    avatarUrl: "/static/img/daca/joel-ruod.webp",
   }),
   Object.freeze({
     id: "thomas.kriegli",
     displayName: "Thomas Kriegli",
     organization: "Eidgenössische Steuerverwaltung ESTV",
+    organizationShort: "ESTV",
     email: "thomas.kriegli@estv.admin.ch",
     role: "Leiter Datenanalyse / Publication Approver",
-    avatarUrl: "",
+    avatarUrl: "/static/img/daca/thomas-kriegli.webp",
   }),
   Object.freeze({
     id: "sandro.wenger",
     displayName: "Sandro Wenger",
     organization: "Bundesamt für Zoll und Grenzsicherheit BAZG",
+    organizationShort: "BAZG",
     email: "sandro.wenger@bazg.admin.ch",
     role: "Data Owner / Data Consumer",
-    avatarUrl: "",
+    avatarUrl: "/static/img/daca/sandro-wenger.webp",
   }),
 ]);
 
@@ -82,21 +95,17 @@ function publishIdentity(user, { announce = true } = {}) {
     document.body.dataset.daaifDemoUser = user.id;
   }
 
-  document.querySelectorAll("[data-demo-user-select]").forEach((select) => {
-    if (select instanceof HTMLSelectElement) {
-      select.value = user.id;
-      select.setAttribute(
-        "aria-label",
-        `Demo-Benutzer wechseln. Aktuell ${user.displayName}, ${user.organization}.`
-      );
-    }
-  });
+  syncDemoUserProfile(user);
   document.querySelectorAll("[data-demo-user-avatar]").forEach((avatar) => {
     if (!(avatar instanceof HTMLImageElement)) {
       return;
     }
     avatar.hidden = !user.avatarUrl;
-    avatar.src = user.avatarUrl || "";
+    if (user.avatarUrl) {
+      avatar.src = user.avatarUrl;
+    } else {
+      avatar.removeAttribute("src");
+    }
     avatar.alt = "";
   });
   document.querySelectorAll("[data-demo-user-initials]").forEach((fallback) => {
@@ -138,20 +147,27 @@ export function selectDaaifDemoUser(userId, { announce = true } = {}) {
   } catch (_error) {
     // The demo remains usable when storage is unavailable.
   }
+  const contextUrl = new URL(window.location.href);
+  if (contextUrl.searchParams.has("demoUser")) {
+    contextUrl.searchParams.set("demoUser", user.id);
+    window.history.replaceState(window.history.state, "", contextUrl);
+  }
   publishIdentity(user, { announce });
   return user;
 }
 
 export function initializeDaaifDemoIdentity() {
-  document.querySelectorAll("[data-demo-user-select]").forEach((select) => {
-    if (!(select instanceof HTMLSelectElement) || select.dataset.bound === "true") {
-      return;
-    }
-    select.dataset.bound = "true";
-    select.addEventListener("change", () => selectDaaifDemoUser(select.value));
+  initializeDemoUserProfile({
+    users: DAAIF_DEMO_USERS,
+    currentUser: currentDaaifDemoUser,
+    selectUser: selectDaaifDemoUser,
   });
 
-  const user = userForId(storedUserId()) ?? userForId(DEFAULT_USER_ID);
+  const requested = new URL(window.location.href).searchParams.get("demoUser");
+  const user = userForId(requested) ?? userForId(storedUserId()) ?? userForId(DEFAULT_USER_ID);
+  if (requested && userForId(requested)) {
+    try { window.localStorage.setItem(DAAIF_DEMO_USER_STORAGE_KEY, user.id); } catch (_error) { /* optional storage */ }
+  }
   publishIdentity(user, { announce: true });
   return user;
 }

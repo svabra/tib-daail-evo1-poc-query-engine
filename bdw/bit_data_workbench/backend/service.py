@@ -1171,6 +1171,9 @@ class WorkbenchService:
     def public_data_product_stream(self, *, slug: str):
         return self._data_products.public_object_stream(slug=slug)
 
+    def download_data_product(self, *, slug: str, export_format: str):
+        return self._data_products.download(slug=slug, export_format=export_format)
+
     def data_product_by_slug(self, slug: str):
         return self._data_products.product_by_slug(slug)
 

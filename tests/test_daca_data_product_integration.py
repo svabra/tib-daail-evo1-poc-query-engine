@@ -409,6 +409,11 @@ class DacaMetadataPublicationClientTests(unittest.TestCase):
 
 
 class DacaPublicationCoordinatorTests(unittest.TestCase):
+    def setUp(self):
+        registration = patch.object(DacaMetadataPublicationClient, "ensure_http_formats")
+        self.format_registration = registration.start()
+        self.addCleanup(registration.stop)
+
     def coordinator(self, manager: FakeManager, handler) -> DacaPublicationCoordinator:
         return DacaPublicationCoordinator(
             manager=manager,  # type: ignore[arg-type]
@@ -442,6 +447,15 @@ class DacaPublicationCoordinatorTests(unittest.TestCase):
             f"http://localhost:8080/products/{PRODUCT_ID}/overview?demoUser=joel.ruod",
         )
         self.assertEqual(manager.cancelled, [])
+        self.format_registration.assert_called_once_with(product_id=PRODUCT_ID, owner_user_id="joel.ruod", public_path=f"/api/public/data-products/{JOURNEY_SLUG}")
+
+    def test_failed_format_registration_does_not_activate_local_product(self):
+        self.format_registration.side_effect = DacaPublicationError("Formats unavailable", kind="unavailable")
+        manager = FakeManager()
+        with self.assertRaises(DacaPublicationError):
+            self.coordinator(manager, lambda request: successful_response()).create_managed_product(**journey_create_args())
+        self.assertIsNone(manager.activated)
+        self.assertEqual(manager.cancelled, ["data-product-reserved"])
 
     def test_journey_aggregate_fields_keep_curated_business_descriptions(self) -> None:
         expected_fields = (
@@ -505,6 +519,9 @@ class DacaPublicationCoordinatorTests(unittest.TestCase):
 
     def test_reconcile_migrates_legacy_link_to_product_overview(self) -> None:
         class NoCatalogRequestClient:
+            def ensure_http_formats(self, **_kwargs):
+                pass
+
             def product_status(self, **_kwargs) -> None:
                 raise AssertionError("Published products need no status request")
 

@@ -214,6 +214,18 @@ class DacaMetadataPublicationClient:
             ) from exc
         return DacaPublicationResult.from_payload(response_payload)
 
+    def ensure_http_formats(self, *, product_id: str, owner_user_id: str, public_path: str) -> None:
+        from .http_formats import ensure_catalog_http_formats
+
+        try:
+            with httpx.Client(timeout=self._timeout_seconds, transport=self._transport) as client:
+                ensure_catalog_http_formats(client, base_url=self._base_url, product_id=product_id,
+                                            owner_user_id=owner_user_id, public_path=public_path)
+        except (ValueError, httpx.RequestError) as exc:
+            raise DacaPublicationError(
+                "DaCa could not confirm the product's four HTTP formats.", kind="unavailable"
+            ) from exc
+
     def product_status(self, *, product_id: str, owner_user_id: str) -> DacaProductStatus:
         try:
             uuid.UUID(str(product_id or "").strip())

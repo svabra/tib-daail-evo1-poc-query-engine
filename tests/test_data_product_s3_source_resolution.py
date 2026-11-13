@@ -257,6 +257,9 @@ class DataProductManagerS3ResolutionTests(unittest.TestCase):
         published_payloads: list[dict[str, object]] = []
 
         class RecordingClient:
+            def ensure_http_formats(self, **_kwargs):
+                pass
+
             def publish(self, payload: dict[str, object]) -> DacaPublicationResult:
                 published_payloads.append(payload)
                 return DacaPublicationResult(
@@ -482,6 +485,9 @@ class DataProductManagerS3ResolutionTests(unittest.TestCase):
         status_calls: list[tuple[str, str]] = []
 
         class StatusOnlyClient:
+            def ensure_http_formats(self, **_kwargs):
+                pass
+
             def publish(self, _payload: dict[str, object]) -> DacaPublicationResult:
                 raise AssertionError(
                     "Changing only the obsolete relation name must not replay DaCa metadata"

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.encoders import jsonable_encoder
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from starlette.background import BackgroundTask
+import shutil
 from pydantic import BaseModel, Field
 
 from ..backend.data_products import DEFAULT_PUBLIC_DATA_PRODUCT_LIMIT
@@ -374,3 +376,22 @@ def read_public_data_product(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     raise HTTPException(status_code=400, detail="Unsupported published data product.")
+
+
+@router.get("/api/public/data-products/{slug}/download/{export_format}", tags=["data-products-public"])
+def download_data_product(
+    slug: str, export_format: str, request: Request,
+    daca_user: str | None = Header(default=None, alias="X-DaCa-User"),
+    service: WorkbenchService = Depends(get_workbench_service),
+):
+    try:
+        product = service.data_product_by_slug(slug)
+    except KeyError as exc:
+        raise HTTPException(404, str(exc)) from exc
+    enforce_daca_policy(product=product, request=request, service=service, daca_user=daca_user)
+    try:
+        artifact = service.download_data_product(slug=slug, export_format=export_format)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    return FileResponse(artifact.local_path, filename=artifact.filename, media_type=artifact.content_type,
+                        background=BackgroundTask(shutil.rmtree, artifact.cleanup_dir, ignore_errors=True))

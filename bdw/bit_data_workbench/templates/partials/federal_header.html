@@ -21,21 +21,19 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5.7 10 6.7 3.9L19 10l.4.7-7 4-7-4z"></path></svg>
       </a>
 
-      <label class="federal-demo-user" title="Reiner PoC-Arbeitskontext; keine Anmeldung oder Mandantentrennung.">
-        <img data-demo-user-avatar src="" alt="" hidden>
+      <button
+        class="federal-demo-user"
+        type="button"
+        data-demo-user-profile
+        aria-label="Profil: Joel Ruod"
+        aria-haspopup="dialog"
+        aria-controls="demo-user-dialog"
+        aria-expanded="false"
+      >
+        <img data-demo-user-avatar alt="" hidden>
         <span class="federal-demo-user-initials" data-demo-user-initials aria-hidden="true">JR</span>
-        <span class="federal-demo-user-copy">
-          <span class="federal-demo-user-label">Demo-Benutzer/in</span>
-          <select data-demo-user-select aria-label="Demo-Benutzer wechseln">
-            <option value="kassandra.valdata">Kassandra Valdata · Eidgenössische Steuerverwaltung ESTV</option>
-            <option value="noemie.rochat">Noémie Rochat · Kanton Neuchâtel</option>
-            <option value="beat.stalder">Beat Stalder · Kanton St. Gallen</option>
-            <option value="joel.ruod" selected>Joel Ruod · Eidgenössische Steuerverwaltung ESTV</option>
-            <option value="thomas.kriegli">Thomas Kriegli · Eidgenössische Steuerverwaltung ESTV</option>
-          </select>
-          <span class="federal-demo-user-role" data-demo-user-role-copy>Data Analyst / Data Owner</span>
-        </span>
-      </label>
+        <strong class="federal-demo-user-name" data-demo-user-name>Joel Ruod</strong>
+      </button>
 
       <details class="topbar-notification-menu federal-authority-action" data-query-notifications>
         <summary
@@ -66,6 +64,9 @@
         DE
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5.7 10 6.7 3.9L19 10l.4.7-7 4-7-4z"></path></svg>
       </span>
+      <a class="federal-documentation-link" href="/documentation" aria-label="Dokumentation DAAIF" title="Dokumentation und User Journeys">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9.3"></circle><path d="M12 10.5v6M12 7.2h.01"></path></svg>
+      </a>
     </div>
   </div>
 

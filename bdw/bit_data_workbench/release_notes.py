@@ -16,6 +16,29 @@ CURRENT_FEATURE_LIST: dict[str, object] = {
     ),
     "features": [
         {
+            "title": "Ein Datenprodukt in vier HTTP-Formaten beziehen",
+            "description": "REST/JSON, CSV, Excel und Parquet verwenden dieselbe Produktfreigabe. DaCa katalogisiert vier HTTP-Formate an einem Produkt; die Formatauswahl startet den gewünschten Datenbezug direkt in DAAIF.",
+        },
+        {
+            "title": "MWST-Journey von Antrag bis Download durchspielen",
+            "description": (
+                "Das Informationssymbol öffnet Dokumentation und User Journeys. Jan Waser "
+                "stellt direkt in DaCa einen elektronischen Antrag für ein neues Datenprodukt. "
+                "Kassandra filtert im Notizbuch selbst auf SG und 2026 und veröffentlicht ihr "
+                "gespeichertes Parquet-Ergebnis. Sobald das kontrollierte Produkt für Jan "
+                "bereitsteht, schliesst sie den Auftrag ab. Die Ergebnisbenachrichtigung "
+                "führt zu Excel, Parquet und CSV; SLA und Zugriffsregeln bleiben in DaCa."
+            ),
+        },
+        {
+            "title": "Antragsbezug und Benutzerprofil über Anwendungen hinweg behalten",
+            "description": (
+                "Profilwahl, Foto und Rolle begleiten den Wechsel zwischen DaCa und DAAIF. "
+                "Notizbuch-Navigation und Veröffentlichung übernehmen den Erstellungsantrag "
+                "mit festen oder rollierenden Datengrundlagen, Zweck, Formaten und Updates."
+            ),
+        },
+        {
             "title": "Datenquellen finden und verstehen",
             "description": (
                 "Durchsuchen Sie S3-, PostgreSQL-, lokale und freigegebene Oracle-PoC-"
@@ -67,6 +90,27 @@ CURRENT_FEATURE_LIST: dict[str, object] = {
 # RELEASE_NOTES below remain the technical source of truth; this list omits
 # test-only, deployment, worker, lock, and rollback details.
 USER_FACING_FEATURE_HISTORY: list[dict[str, object]] = [
+    {
+        "version": "0.10.56",
+        "features": [
+            (
+                "Ein Datenprodukt in vier HTTP-Formaten bereitstellen",
+                "REST/JSON, CSV, Excel und Parquet sind in DaCa an einem Produkt registriert und verwenden dieselbe Produktfreigabe. Dateien enthalten den vollständigen Produktstand, REST unterstützt seitenweise Abrufe.",
+            ),
+            (
+                "Neue Datenprodukte direkt elektronisch beantragen",
+                "Jan beantragt in DaCa ein neues Produkt. Kassandra übernimmt den Auftrag, erstellt den SG-Ausschnitt in DAAIF und schliesst den Auftrag ab, sobald das veröffentlichte und freigegebene Produkt bereitsteht.",
+            ),
+            (
+                "Gespeicherte Ergebnisse mit Antragsbezug veröffentlichen",
+                "Abgeschlossene Parquet-Ergebnisse öffnen den Publikationsdialog mit festgelegter Quelldatei. Name, Zweck, feste oder rollierende Datengrundlage, Formate und Aktualisierung bleiben mit dem Antrag verbunden.",
+            ),
+            (
+                "Benutzerprofile zwischen DAAIF und DaCa wiedererkennen",
+                "Der Profilwähler zeigt Rolle, Organisation und lokale Porträts. Jan verwendet dasselbe synthetische Profilfoto in beiden Anwendungen; Identität und Antragsbezug bleiben beim Wechsel erhalten.",
+            ),
+        ],
+    },
     {
         "version": "0.10.55",
         "features": [
@@ -803,9 +847,19 @@ USER_FACING_FEATURE_HISTORY: list[dict[str, object]] = [
 ]
 
 
-# Derived from git history through version 0.10.55. Keep entries concise and
+# Derived from git history through version 0.10.56. Keep entries concise and
 # focused on user-visible improvements or severe reliability fixes.
 RELEASE_NOTES: list[dict[str, object]] = [
+    {
+        "version": "0.10.56",
+        "releasedAt": "2026-11-13T06:10:16+01:00",
+        "features": [
+            "Tabular products serve complete CSV, Excel and Parquet exports alongside paginated REST/JSON, with four HTTP endpoint descriptors on one DaCa product and shared fail-closed policy enforcement.",
+            "The MWST journey connects a direct electronic creation request to an editable SG filter, saved-result publication, independent SLA/publication review and order completion once the result is ready.",
+            "Creation-request context, fixed or rolling data-basis requirements and selected demo identities survive workspace and notebook navigation into the publication dialog.",
+            "The profile picker includes consistent role, organization and local portrait information, including Jan Waser's shared synthetic portrait in DAAIF and DaCa.",
+        ],
+    },
     {
         "version": "0.10.55",
         "releasedAt": "2026-08-24T11:02:28+02:00",

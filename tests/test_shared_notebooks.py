@@ -779,7 +779,6 @@ class SharedNotebookServiceTests(unittest.TestCase):
             import_shared_notebook_components()
         )
         from bit_data_workbench.models import (
-            NotebookVersionDefinition,
             SourceCatalog,
             SourceObject,
             SourceSchema,
@@ -948,7 +947,10 @@ class SharedNotebookServiceTests(unittest.TestCase):
         service._ensure_startup_shared_notebook_seeds()
 
         self.assertEqual(discovery.calls, [("s3", False)])
-        seeded = service._shared_notebook_store.list_notebooks()[0]
+        seeded = next(
+            notebook for notebook in service._shared_notebook_store.list_notebooks()
+            if notebook.notebook_id == "mwa-abrechnung-s3-parquet-pipeline"
+        )
         self.assertEqual(len(seeded.cells), 5)
         self.assertNotIn(
             "Run MWA Loader",

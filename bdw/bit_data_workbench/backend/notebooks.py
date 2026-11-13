@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from .mwst_notebook import build_mwst_journey_notebook
 from typing import Iterable
 
 from ..models import (
@@ -589,6 +590,7 @@ def build_restart_seeded_shared_notebooks(
         object_names=(RESULT_SET_STORAGE_SAMPLE_SOURCE_NAME,),
     )
     return [
+        build_mwst_journey_notebook(),
         build_mwa_s3_parquet_pipeline_notebook(
             mwa_s3_parquet_relations=mwa_s3_parquet_relations,
         ),

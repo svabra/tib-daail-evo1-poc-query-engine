@@ -1,0 +1,57 @@
+<dialog
+  id="demo-user-dialog"
+  class="demo-user-dialog"
+  data-demo-user-dialog
+  aria-labelledby="demo-user-dialog-title"
+  aria-describedby="demo-user-dialog-description"
+>
+  <div class="demo-user-dialog-card">
+    <header class="demo-user-dialog-heading">
+      <div>
+        <p class="demo-user-eyebrow">DAAIF · Lokale Arbeitsumgebung</p>
+        <h2 id="demo-user-dialog-title" data-demo-user-dialog-title tabindex="-1">Mein Profil</h2>
+      </div>
+      <button class="demo-user-dialog-close" type="button" data-demo-user-dialog-close aria-label="Schliessen">×</button>
+    </header>
+    <p id="demo-user-dialog-description" class="demo-user-dialog-description" data-demo-user-dialog-description>
+      Ihre Organisation und Rollen in DAAIF.
+    </p>
+    <section class="demo-user-profile" data-demo-user-profile-view aria-label="Aktuelles Benutzerprofil">
+      <div class="demo-user-profile-identity">
+        <span class="demo-user-portrait demo-user-portrait-large">
+          <img data-demo-user-avatar alt="" hidden>
+          <span data-demo-user-initials aria-hidden="true">JR</span>
+        </span>
+        <div class="demo-user-profile-copy">
+          <h3 data-demo-user-name>Joel Ruod</h3>
+          <p data-demo-user-organization>ESTV</p>
+          <a data-demo-user-email href="mailto:joel.ruod@estv.admin.ch">joel.ruod@estv.admin.ch</a>
+        </div>
+      </div>
+      <div class="demo-user-profile-roles">
+        <h3>Rollen</h3>
+        <p data-demo-user-role-copy>Data Analyst / Data Owner</p>
+      </div>
+      <button class="demo-user-button demo-user-button-secondary" type="button" data-demo-user-switch>
+        Benutzer wechseln
+      </button>
+    </section>
+    <div class="demo-user-options" data-demo-user-options hidden></div>
+    <template data-demo-user-option-template>
+      <article class="demo-user-option">
+        <div class="demo-user-option-identity">
+          <span class="demo-user-portrait">
+            <img data-demo-user-option-avatar alt="" hidden>
+            <span data-demo-user-option-initials aria-hidden="true"></span>
+          </span>
+          <div class="demo-user-option-copy">
+            <strong data-demo-user-option-name></strong>
+            <small data-demo-user-option-organization></small>
+          </div>
+          <small class="demo-user-current" data-demo-user-current hidden>Aktuell</small>
+        </div>
+        <button class="demo-user-button" type="button" data-demo-user-select>Auswählen →</button>
+      </article>
+    </template>
+  </div>
+</dialog>

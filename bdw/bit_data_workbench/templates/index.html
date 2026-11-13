@@ -3,6 +3,7 @@
 {% block body %}
   {# Runtime Storage remains available through data-open-runtime-storage in the federal header. #}
   {% include "partials/federal_header.html" %}
+  {% include "partials/demo_user_dialog.html" %}
   <div class="shell{% if shell_sidebar_hidden %} shell-sidebar-hidden{% endif %}" data-shell>
     {% include "partials/sidebar.html" %}
     <div

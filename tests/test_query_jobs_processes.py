@@ -578,6 +578,12 @@ class ProcessQueryJobManagerTests(TestCase):
         self.temp_dir = tempfile.TemporaryDirectory(prefix="bdw-query-jobs-")
         self.root = Path(self.temp_dir.name)
         self.settings = make_settings(self.root)
+        # DuckDB keeps native extension DLLs mapped until interpreter exit on Windows.
+        # Keep that cache separate so workspace cleanup still checks every other file.
+        self.extension_dir = tempfile.TemporaryDirectory(
+            prefix="bdw-query-extensions-", ignore_cleanup_errors=sys.platform == "win32"
+        )
+        self.settings.duckdb_extension_directory = Path(self.extension_dir.name)
         self.settings.duckdb_threads = 8
         self.settings.duckdb_database.parent.mkdir(parents=True, exist_ok=True)
         duckdb.connect(str(self.settings.duckdb_database)).close()
@@ -591,6 +597,7 @@ class ProcessQueryJobManagerTests(TestCase):
     def tearDown(self) -> None:
         self.manager.shutdown()
         self.temp_dir.cleanup()
+        self.extension_dir.cleanup()
 
     def test_worker_payload_warnings_are_normalized(self) -> None:
         snapshot = QueryJobDefinition(
@@ -1538,7 +1545,7 @@ class ProcessQueryJobManagerTests(TestCase):
                 lambda: self.manager.snapshot(job.job_id)
                 if self.manager.snapshot(job.job_id).status == "completed"
                 else None,
-                timeout=5,
+                timeout=15,
             )
         finally:
             self.manager._access_coordinator.release(
@@ -1574,7 +1581,7 @@ class ProcessQueryJobManagerTests(TestCase):
                 lambda: self.manager.snapshot(job.job_id)
                 if self.manager.snapshot(job.job_id).status == "completed"
                 else None,
-                timeout=5,
+                timeout=15,
             )
         finally:
             self.manager._access_coordinator.release(

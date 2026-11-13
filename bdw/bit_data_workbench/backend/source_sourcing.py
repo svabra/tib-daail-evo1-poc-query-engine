@@ -14,6 +14,7 @@ from ..models import SourceCatalog, SourceField, SourceObject, SourceSchema
 
 DEMO_USER_IDS = frozenset(
     {
+        "jan.waser",
         "joel.ruod",
         "kassandra.valdata",
         "noemie.rochat",
