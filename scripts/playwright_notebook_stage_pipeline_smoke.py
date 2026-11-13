@@ -171,7 +171,6 @@ def graph_payload(
 
     stage_ids = list(cell_index_by_id)
     fallback_order = topo_order(stage_ids, predecessors_by_id, cell_index_by_id)
-    fallback_index = {stage_id: index for index, stage_id in enumerate(fallback_order)}
     successors_by_id = {stage_id: [] for stage_id in stage_ids}
     edges = []
     for stage_id, predecessors in predecessors_by_id.items():

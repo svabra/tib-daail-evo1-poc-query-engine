@@ -58,7 +58,18 @@ async def expand_source_tree(page) -> None:
         }
         """
     )
-    await page.wait_for_timeout(250)
+    source = page.locator(
+        '[data-source-object]:not([data-source-option-id="workspace.local"])'
+    ).first
+    await source.wait_for(state="attached")
+    await source.evaluate(
+        """node => {
+          for (let parent = node.parentElement; parent; parent = parent.parentElement) {
+            if (parent instanceof HTMLDetailsElement) parent.open = true;
+          }
+        }"""
+    )
+    await source.wait_for(state="visible")
 
 
 async def query_source_in_new_notebook(page, timeout_ms: int) -> tuple[str, str, str]:

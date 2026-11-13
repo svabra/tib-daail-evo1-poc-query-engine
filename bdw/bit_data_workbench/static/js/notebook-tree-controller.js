@@ -11,6 +11,7 @@ export function createNotebookTreeController(helpers) {
     deriveFolderId,
     applyWorkbenchTitle = () => {},
     dropTargetAcceptsNotebookDrop,
+    ensureNotebookTreeLoaded = async () => {},
     folderCanDelete,
     folderCanEdit,
     folderIsShared,
@@ -48,8 +49,9 @@ export function createNotebookTreeController(helpers) {
 
     event.preventDefault();
     event.stopPropagation();
+    await ensureNotebookTreeLoaded();
     if (!notebookTreeRoot()) {
-      await refreshSidebar("notebook");
+      await refreshSidebar("notebook", { force: true, forceNotebookTree: true });
     }
 
     const shouldPromoteToQueryWorkbench = Boolean(
@@ -152,13 +154,23 @@ export function createNotebookTreeController(helpers) {
   }
 
   async function handleAddFolderClick(event) {
-    const addButton = event.target.closest("[data-add-tree-item]");
+    let addButton = event.target.closest("[data-add-tree-item]");
     if (!addButton) {
       return false;
     }
 
     event.preventDefault();
     event.stopPropagation();
+
+    await ensureNotebookTreeLoaded();
+    if (addButton.isConnected === false) {
+      addButton = notebookTreeRoot()
+        ?.closest("[data-notebook-section]")
+        ?.querySelector(":scope > summary [data-add-tree-item]");
+      if (!addButton) {
+        return true;
+      }
+    }
 
     const folderName = await showFolderNameDialog({
       title: "New folder",

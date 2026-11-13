@@ -7,6 +7,8 @@ import sys
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
 
+from playwright_query_source_validation_smoke import write_cell_sql
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -24,7 +26,7 @@ def parse_args() -> argparse.Namespace:
 
 async def open_local_csv_ingestor(page, base_url: str, timeout_ms: int) -> None:
     await page.goto(
-        f"{base_url.rstrip('/')}/ingestion-workbench",
+        f"{base_url.rstrip('/')}/ingestion-workbench/manual",
         wait_until="domcontentloaded",
         timeout=timeout_ms,
     )
@@ -377,50 +379,13 @@ async def assert_missing_local_alias_blocks_run(
     await enable_source_existence_validation(page, timeout_ms)
     missing_alias = "local.test.test_sub.missing_federal_tax_file.csv"
     cell = page.locator("[data-query-cell]:visible").first
-    await cell.evaluate(
-        """
-        (cell, sql) => {
-          const textarea = cell.querySelector("[data-editor-source]");
-          if (!(textarea instanceof HTMLTextAreaElement)) {
-            throw new Error("The visible SQL editor source could not be located.");
-          }
-          textarea.value = sql;
-          textarea.dispatchEvent(new Event("input", { bubbles: true }));
-          textarea.dispatchEvent(new Event("change", { bubbles: true }));
-        }
-        """,
-        f"select * from {missing_alias}",
-    )
-    await page.wait_for_function(
-        """
-        (missingAlias) => {
-          const cell = document.querySelector('[data-query-cell]');
-          const indicator = cell?.querySelector('[data-query-source-validation]');
-          const runButton = cell?.querySelector('[data-run-cell]');
-          return indicator?.dataset.querySourceValidationStatus === 'invalid'
-            && (indicator.textContent || '').includes(missingAlias)
-            && runButton instanceof HTMLButtonElement
-            && runButton.disabled
-            && (runButton.title || '').includes(missingAlias);
-        }
-        """,
-        arg=missing_alias,
-        timeout=timeout_ms,
-    )
-
+    await write_cell_sql(page, f"select * from {missing_alias}")
     query_job_posts.clear()
-    await cell.evaluate(
-        """
-        (cell) => {
-          const form = cell.querySelector("[data-query-form]");
-          if (!(form instanceof HTMLFormElement)) {
-            throw new Error("The query form could not be located.");
-          }
-          form.requestSubmit();
-        }
-        """
-    )
-    await page.wait_for_timeout(1000)
+    await cell.locator("[data-run-cell]").click()
+    error = cell.locator(".result-error")
+    await error.wait_for(state="visible", timeout=timeout_ms)
+    if missing_alias not in await error.inner_text():
+        raise RuntimeError("The Local Workspace error did not identify the missing alias.")
     if query_job_posts:
         raise RuntimeError("A missing readable Local Workspace alias still posted to /api/query-jobs.")
 

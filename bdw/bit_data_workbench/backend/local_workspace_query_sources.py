@@ -154,7 +154,7 @@ class LocalWorkspaceQuerySourceManager:
         shutil.rmtree(self._client_root(normalized_client_id), ignore_errors=True)
 
     def _schema_name(self, client_id: str) -> str:
-        return _normalized_identifier(client_id, prefix="workspace_local")
+        return f"workspace_local_{_normalized_identifier(client_id, prefix='client')}"
 
     def _table_name(self, entry_id: str) -> str:
         return _normalized_identifier(entry_id, prefix="entry")

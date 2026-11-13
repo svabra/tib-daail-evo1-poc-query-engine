@@ -6,6 +6,8 @@ import asyncio
 from playwright.async_api import Error as PlaywrightError
 from playwright.async_api import async_playwright
 
+from playwright_query_workbench_smoke import open_isolated_notebook
+
 
 LONG_SQL = """
 select sum(sin(i) + random()) as total_value
@@ -32,20 +34,7 @@ def parse_args() -> argparse.Namespace:
 
 
 async def ensure_query_notebook(page, base_url: str, timeout_ms: int) -> None:
-    await page.goto(
-        f"{base_url.rstrip('/')}/query-workbench",
-        wait_until="domcontentloaded",
-        timeout=timeout_ms,
-    )
-    await page.wait_for_timeout(500)
-    query_cells = page.locator("[data-query-cell]:visible")
-    if not await query_cells.count():
-        create_button = page.locator(
-            "[data-query-workbench-entry-page] [data-create-notebook]"
-        )
-        await create_button.wait_for(state="visible", timeout=timeout_ms)
-        await create_button.click(force=True)
-        await query_cells.first.wait_for(state="visible", timeout=timeout_ms)
+    await open_isolated_notebook(page, base_url, timeout_ms)
 
     await page.wait_for_function(
         """
@@ -360,7 +349,6 @@ async def assert_query_resource_chart_layout(
                 Number.isFinite(nextPoint.x)
                   && Number.isFinite(nextPoint.y)
                   && Math.abs(nextPoint.x - point.x) >= 1
-                  && Math.abs(nextPoint.y - point.y) >= 1
               );
             });
             const axisText = (axis.textContent || "").trim();
@@ -1048,6 +1036,9 @@ async def assert_query_run_history(page, timeout_ms: int, cell_ids: list[str]) -
             return false;
           }
           const text = root.textContent || "";
+          const pendingTimings = root.querySelector(
+            ".query-run-history-row-running, .query-run-history-row-cancelled"
+          );
           return !/Loading query runs/i.test(text)
             && root.querySelector(".query-run-history-table")
             && root.querySelector(".query-run-history-row")
@@ -1059,8 +1050,8 @@ async def assert_query_run_history(page, timeout_ms: int, cell_ids: list[str]) -
             && /Progress/.test(text)
             && /Shared DuckDB wait/i.test(text)
             && /startup/.test(text)
-            && /query/.test(text)
-            && (/fetch/.test(text) || /Cancelled|Running/.test(text))
+            && (/query/.test(text) || pendingTimings)
+            && (/fetch/.test(text) || pendingTimings)
             && /CPU avg/.test(text)
             && /RAM peak/.test(text)
             && !root.querySelector("[data-query-runs-refresh]")

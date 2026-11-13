@@ -4,7 +4,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import json
 import logging
-import mimetypes
 from pathlib import PurePosixPath
 import re
 from threading import RLock, Semaphore, Thread

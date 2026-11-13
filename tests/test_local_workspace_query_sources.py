@@ -20,6 +20,8 @@ from bit_data_workbench.backend.local_workspace_query_sources import (  # noqa: 
     LocalWorkspaceQuerySourceManager,
     normalize_local_workspace_query_format,
 )
+from bit_data_workbench.backend.service import WorkbenchService  # noqa: E402
+from bit_data_workbench.backend.query_jobs import QUERY_EXECUTION_DUCKDB_READ  # noqa: E402
 from bit_data_workbench.config import Settings  # noqa: E402
 from bit_data_workbench.version_info import current_repo_version  # noqa: E402
 
@@ -68,6 +70,35 @@ def make_settings(database_path: Path) -> Settings:
 
 
 class LocalWorkspaceQuerySourceManagerTests(TestCase):
+    def test_synced_file_can_be_read_without_opening_the_shared_database(self) -> None:
+        with TemporaryDirectory() as temp_dir:
+            settings = make_settings(Path(temp_dir) / "workspace.duckdb")
+            manager = LocalWorkspaceQuerySourceManager(settings=settings)
+            with duckdb.connect(str(settings.duckdb_database)) as shared:
+                result = manager.sync_source(
+                    conn=shared,
+                    client_id="client-alpha",
+                    entry_id="local-entry-1",
+                    logical_relation="workspace.local.saved_results.local-entry-1",
+                    file_name="office.csv",
+                    file_bytes=b"id,office\n1,Zurich\n",
+                )
+                service = WorkbenchService.__new__(WorkbenchService)
+                service.settings = settings
+                sources = service._local_workspace_source_summaries(
+                    {result.relation},
+                    local_relation_map={result.logical_relation: result.relation},
+                )
+                service._validate_isolated_read_sources(
+                    execution_mode=QUERY_EXECUTION_DUCKDB_READ,
+                    touched_relations=[result.relation],
+                    source_summaries=sources,
+                )
+                with duckdb.connect(":memory:") as isolated:
+                    self.assertEqual(
+                        isolated.execute(sources[0]["query_sql"]).fetchall(), [(1, "Zurich")]
+                    )
+
     def test_sync_source_creates_queryable_csv_view_with_header_metadata(self) -> None:
         with TemporaryDirectory() as temp_dir:
             database_path = Path(temp_dir) / "workspace.duckdb"

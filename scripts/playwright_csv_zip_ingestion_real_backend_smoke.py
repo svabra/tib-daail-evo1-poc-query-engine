@@ -123,7 +123,7 @@ def drop_pg_tables(pg_dsn: str, schema: str, tables: list[str]) -> None:
 
 async def open_csv_ingestion(page, base_url: str, timeout_ms: int) -> None:
     await page.goto(
-        f"{base_url.rstrip('/')}/ingestion-workbench",
+        f"{base_url.rstrip('/')}/ingestion-workbench/manual",
         wait_until="domcontentloaded",
         timeout=timeout_ms,
     )

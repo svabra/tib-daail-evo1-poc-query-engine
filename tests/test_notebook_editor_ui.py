@@ -584,9 +584,6 @@ class NotebookEditorUiRegressionTests(unittest.TestCase):
             encoding="utf-8"
         )
         app_source = (STATIC_ROOT / "js" / "app.js").read_text(encoding="utf-8")
-        realtime_source = (
-            STATIC_ROOT / "js" / "realtime-controller.js"
-        ).read_text(encoding="utf-8")
         css_source = (STATIC_ROOT / "css" / "app.css").read_text(encoding="utf-8")
         workspace_template = (
             REPO_ROOT / "bdw" / "bit_data_workbench" / "templates" / "partials" / "workspace.html"

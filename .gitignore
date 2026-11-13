@@ -230,6 +230,6 @@ k8s/duckdb-secret.yaml
 
 # Generated browser evidence (the cross-system runner archives this outside Git)
 .playwright-cli/
-output/playwright/
+output/
 playwright-report/
 test-results/

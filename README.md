@@ -22,6 +22,12 @@ using the information icon in the header. The repeatable setup uses
 normal SLA and publication approvals. Tabular products support full CSV, Excel and Parquet
 downloads with the same DaCa policy check as their REST endpoint.
 
+## Repository maintenance
+
+See [repository maintenance](docs/repository-maintenance.md) for the supported entry points,
+cleanup scope and verification commands. The implemented ingestion and publication flows are
+documented in this README and the linked journey/HTTP-format guides.
+
 ## TODO
 
 1. [AM-1] Formalize the audience model before introducing real multi-user isolation. See [AM-1] Audience Model below.

@@ -29,7 +29,6 @@ from ..common import (
     extract_archive_files_with_failures,
 )
 from ..csv.manager import (
-    duckdb_type_to_postgres_type,
     normalize_csv_columns,
     normalize_csv_identifier,
     normalize_csv_table_name,

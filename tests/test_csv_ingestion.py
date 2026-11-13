@@ -1070,7 +1070,7 @@ class CsvIngestionManagerTests(TestCase):
             "bit_data_workbench.backend.ingestion_types.csv.manager.inspect_csv_file",
             return_value=([("column_1", "INTEGER"), ("column_2", "DOUBLE")], 2),
         ) as inspect_csv_file:
-            payload = manager.import_csv_files(
+            manager.import_csv_files(
                 files=[upload],
                 target_id="pg_oltp",
                 schema_name="stage",

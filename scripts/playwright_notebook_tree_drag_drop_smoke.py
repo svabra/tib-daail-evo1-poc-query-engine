@@ -43,6 +43,9 @@ async def ensure_details_open(page, selector: str) -> None:
 
 
 async def ensure_sidebar_expanded(page) -> None:
+    await page.wait_for_function(
+        "document.documentElement.dataset.workbenchInteractive === 'true'"
+    )
     toggle = page.locator("[data-sidebar-toggle]").first
     await toggle.wait_for(state="visible")
     expanded = await toggle.get_attribute("aria-expanded")

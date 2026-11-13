@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import sys
+from uuid import uuid4
 
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from playwright.async_api import async_playwright
@@ -31,6 +33,9 @@ async def ensure_query_notebook(page, base_url: str, timeout_ms: int) -> None:
         wait_until="domcontentloaded",
         timeout=timeout_ms,
     )
+    await page.locator(
+        '[data-sse-connection-status][data-connection-status="connected"]'
+    ).wait_for(state="attached", timeout=timeout_ms)
     await page.wait_for_timeout(2000)
     query_cells = page.locator("[data-query-cell]:visible")
     if await query_cells.count():
@@ -41,8 +46,43 @@ async def ensure_query_notebook(page, base_url: str, timeout_ms: int) -> None:
         "[data-query-workbench-entry-page] [data-create-notebook]"
     )
     await create_button.wait_for(state="visible", timeout=timeout_ms)
-    await create_button.click(force=True)
+    await create_button.click()
     await query_cells.first.wait_for(state="visible", timeout=timeout_ms)
+
+
+async def open_isolated_notebook(page, base_url: str, timeout_ms: int) -> None:
+    notebook_id = f"local-notebook-smoke-{uuid4().hex[:12]}"
+    config = {
+        "notebookId": notebook_id,
+        "metadata": {
+            "title": "Isolated query smoke",
+            "summary": "Browser-local fixture for execution and monitoring checks.",
+            "pipelineMode": "exploration",
+            "cells": [{"cellId": f"cell-{uuid4().hex[:12]}", "language": "sql", "sql": "", "dataSources": []}],
+            "tags": ["playwright"],
+            "canEdit": True,
+            "canDelete": True,
+            "shared": False,
+            "deleted": False,
+            "versions": [],
+        },
+    }
+    await page.add_init_script(
+        """(() => {
+          const config = __CONFIG__;
+          const metadata = JSON.parse(localStorage.getItem('bdw.notebookMeta.v1') || '{}');
+          metadata[config.notebookId] = config.metadata;
+          localStorage.setItem('bdw.notebookMeta.v1', JSON.stringify(metadata));
+          localStorage.setItem('bdw.lastNotebook.v1', config.notebookId);
+        })();""".replace("__CONFIG__", json.dumps(config))
+    )
+    await page.goto(f"{base_url.rstrip('/')}/query-workbench", wait_until="domcontentloaded")
+    await page.locator(
+        f'[data-workspace-notebook][data-notebook-id="{notebook_id}"]'
+    ).wait_for(state="visible", timeout=timeout_ms)
+    await page.locator("[data-query-cell] .editor-ready").first.wait_for(
+        state="attached", timeout=timeout_ms
+    )
 
 
 async def write_smoke_sql(page, timeout_ms: int) -> None:

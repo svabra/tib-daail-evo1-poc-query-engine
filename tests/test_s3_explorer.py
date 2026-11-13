@@ -63,7 +63,6 @@ class _FakeListingClient:
 
     def list_objects_v2(self, **kwargs):
         bucket = kwargs["Bucket"]
-        prefix = str(kwargs.get("Prefix") or "")
         delimiter = str(kwargs.get("Delimiter") or "")
         if bucket != "client-bucket":
             return {"Contents": [], "CommonPrefixes": [], "IsTruncated": False}

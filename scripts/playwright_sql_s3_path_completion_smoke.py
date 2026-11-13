@@ -26,7 +26,6 @@ if str(BDW_ROOT) not in sys.path:
 
 from bit_data_workbench.backend.query_aliases import (  # noqa: E402
     normalize_query_alias_segment,
-    s3_query_alias,
 )
 from bit_data_workbench.backend.source_references import s3_source_reference  # noqa: E402
 

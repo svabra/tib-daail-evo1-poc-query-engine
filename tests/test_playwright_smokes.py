@@ -66,7 +66,7 @@ def test_playwright_smoke(smoke: dict[str, object]) -> None:
         "--base-url",
         os.environ.get("PLAYWRIGHT_BASE_URL", "http://127.0.0.1:8000"),
         "--timeout-ms",
-        os.environ.get("PLAYWRIGHT_TIMEOUT_MS", "30000"),
+        os.environ.get("PLAYWRIGHT_TIMEOUT_MS", str(smoke.get("timeoutMs", 30000))),
     ]
     if os.environ.get("PLAYWRIGHT_HEADED", "").strip().lower() in {
         "1",

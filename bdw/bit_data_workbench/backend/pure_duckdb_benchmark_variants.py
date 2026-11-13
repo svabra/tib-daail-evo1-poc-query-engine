@@ -12,7 +12,6 @@ from .notebook_presets import (
     _build_kostenbelege_pipeline_resolved_positions_sql,
 )
 from .pure_duckdb import (
-    FACT_BUPO_TARGET,
     KBHP_FULL_PATH,
     KBKP_FULL_PATH,
     KALENDER_PATH,

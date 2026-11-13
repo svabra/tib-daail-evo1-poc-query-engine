@@ -251,6 +251,12 @@
       "enabledByDefault": false
     },
     {
+      "id": "notebook-pipeline-real-execution",
+      "script": "playwright_notebook_pipeline_real_execution_regression.py",
+      "enabledByDefault": true,
+      "timeoutMs": 90000
+    },
+    {
       "id": "pipeline-copy-comment-regression",
       "script": "playwright_pipeline_copy_comment_regression.py",
       "enabledByDefault": true

@@ -30,7 +30,6 @@ from bit_data_workbench.backend.pure_duckdb import (  # noqa: E402
 )
 from bit_data_workbench.backend.pure_duckdb_benchmark_variants import (  # noqa: E402
     PureDuckDBBenchmarkVariant,
-    fact_scan_sql,
     pure_duckdb_q1_q2_benchmark_variants,
     pure_duckdb_q1_q2_comparison_columns,
 )

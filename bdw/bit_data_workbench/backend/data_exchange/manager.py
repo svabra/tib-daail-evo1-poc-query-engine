@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import mimetypes
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 import re
 from threading import RLock
 from uuid import uuid4
@@ -13,7 +13,7 @@ from boto3.s3.transfer import TransferConfig
 from ...config import Settings
 from ..ingestion_types.common.uploads import IngestionLocalSource
 from ..s3_hidden import (
-    is_data_exchange_bucket_name,
+    is_data_exchange_bucket_name as is_data_exchange_bucket_name,
     is_data_exchange_key,
     normalize_data_exchange_prefix,
     reject_hidden_s3_location,

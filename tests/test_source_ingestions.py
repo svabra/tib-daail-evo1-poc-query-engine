@@ -6,7 +6,6 @@ from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 import sys
-import time
 
 import pytest
 

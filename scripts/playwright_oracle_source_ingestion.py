@@ -239,7 +239,7 @@ async def verify_detail_and_second_run(
     definition_id: str,
     timeout_ms: int,
 ) -> dict[str, object]:
-    first = await wait_for_run_count(context, base_url, definition_id, 1, timeout_ms)
+    await wait_for_run_count(context, base_url, definition_id, 1, timeout_ms)
     detail = page.locator("[data-source-ingestion-detail]")
     await detail.wait_for(state="visible", timeout=timeout_ms)
     await page.wait_for_function(

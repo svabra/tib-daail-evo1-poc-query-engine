@@ -63,29 +63,28 @@ if (-not (Test-Path $manifestPath)) {
 }
 
 $manifest = Get-Content $manifestPath -Raw | ConvertFrom-Json
-$smokeScripts = @(
+$selectedSmokes = @(
     $manifest.smokes |
-        Where-Object { $All -or $_.enabledByDefault } |
-        ForEach-Object { $_.script }
+        Where-Object { $All -or $_.enabledByDefault }
 )
 
-if (-not $smokeScripts.Count) {
+if (-not $selectedSmokes.Count) {
     throw "The Playwright smoke manifest did not select any smoke scripts."
-}
-
-$scriptArgs = @(
-    "--base-url", $BaseUrl,
-    "--timeout-ms", $TimeoutMs
-)
-
-if ($Headed) {
-    $scriptArgs += "--headed"
 }
 
 Write-Host "Running Playwright regressions against $BaseUrl" -ForegroundColor Cyan
 Write-Host ("Scope: " + ($(if ($All) { "all" } else { "default" }))) -ForegroundColor Cyan
 
-foreach ($smokeScript in $smokeScripts) {
+foreach ($smoke in $selectedSmokes) {
+    $smokeScript = $smoke.script
+    $smokeTimeoutMs = $TimeoutMs
+    if (-not $PSBoundParameters.ContainsKey("TimeoutMs") -and $smoke.PSObject.Properties["timeoutMs"]) {
+        $smokeTimeoutMs = [int]$smoke.timeoutMs
+    }
+    $scriptArgs = @("--base-url", $BaseUrl, "--timeout-ms", $smokeTimeoutMs)
+    if ($Headed) {
+        $scriptArgs += "--headed"
+    }
     $scriptPath = Join-Path $PSScriptRoot $smokeScript
     if (-not (Test-Path $scriptPath)) {
         throw "Smoke script not found: $scriptPath"

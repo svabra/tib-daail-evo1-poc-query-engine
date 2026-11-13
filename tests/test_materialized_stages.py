@@ -4,7 +4,6 @@ from pathlib import Path
 from types import SimpleNamespace
 import sys
 import tempfile
-import threading
 import unittest
 
 import duckdb

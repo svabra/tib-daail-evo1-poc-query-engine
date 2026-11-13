@@ -800,7 +800,7 @@ class QuerySourceValidationTests(unittest.TestCase):
             ")\n"
             f"TO '{expected_target}' (FORMAT PARQUET)",
         )
-        self.assertNotIn(f'--SELECT * FROM s3.kbpoimports."kbpo2020.parquet") TO', payload["executionSql"])
+        self.assertNotIn('--SELECT * FROM s3.kbpoimports."kbpo2020.parquet") TO', payload["executionSql"])
 
     def test_prepare_query_sql_pipeline_stage_preview_normalizes_table_function_copy_target(self) -> None:
         service = WorkbenchService.__new__(WorkbenchService)

@@ -1287,6 +1287,7 @@ const {
   getDraggedNotebook: () => draggedNotebook,
   getHomePageRoot: homePageRoot,
   getQueryWorkbenchEntryPageRoot: queryWorkbenchEntryPageRoot,
+  ensureNotebookTreeLoaded: loadDeferredSidebarNotebookTree,
   isLocalNotebookId,
   isUnassignedFolder,
   notebookTreeRoot,
@@ -1823,7 +1824,7 @@ function loadDeferredSidebarNotebookTree() {
   }
 
   placeholder.classList.add("is-loading");
-  sidebarNotebookTreeLoadPromise = refreshSidebar("notebook")
+  sidebarNotebookTreeLoadPromise = refreshSidebar("notebook", { force: true, forceNotebookTree: true })
     .catch((error) => {
       console.error("Failed to load deferred notebook tree.", error);
     })

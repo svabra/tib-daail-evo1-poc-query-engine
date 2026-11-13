@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
 from ..models import SourceCatalog, SourceObject
-from .data_source_catalog import SUPPORTED_INGESTION_FORMATS, canonical_data_source_id
+from .data_source_catalog import canonical_data_source_id
 from .source_references import join_reference_parts, pg_source_reference, s3_source_reference
 from .source_sourcing import SourceSourcingCoordinator, SourceSourcingError
 
