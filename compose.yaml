@@ -83,7 +83,10 @@ services:
     restart: unless-stopped
 
   minio:
-    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
+    image: daaif-minio:RELEASE.2025-09-07T16-13-09Z
+    build:
+      context: ./docker/minio
+      target: server
     container_name: tib-daail-evo1-poc-query-engine-minio
     command: server /data --console-address :9001
     environment:
@@ -102,7 +105,10 @@ services:
     restart: unless-stopped
 
   minio-init:
-    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    image: daaif-minio-client:RELEASE.2025-08-13T08-35-41Z
+    build: &minio-client-build
+      context: ./docker/minio
+      target: client
     container_name: tib-daail-evo1-poc-query-engine-minio-init
     depends_on:
       minio:
@@ -114,7 +120,8 @@ services:
     restart: "no"
 
   minio-seed:
-    image: minio/mc:RELEASE.2025-08-13T08-35-41Z
+    image: daaif-minio-client:RELEASE.2025-08-13T08-35-41Z
+    build: *minio-client-build
     container_name: tib-daail-evo1-poc-query-engine-minio-seed
     depends_on:
       minio:

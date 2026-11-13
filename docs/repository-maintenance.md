@@ -97,3 +97,11 @@ Verified on 13 November 2026:
 
 Temporary runtime state and generated evidence are disposable. Ordinary workspace data and
 the volumes of the previously stopped application stacks are retained.
+
+## GitHub Actions infrastructure follow-up
+
+Fresh CI workers could no longer pull `minio/minio` or `minio/mc` from Docker Hub.
+`docker/minio/Dockerfile` builds both existing test versions from the official GitHub
+release assets, checks pinned upstream SHA-256 digests for amd64/arm64 and includes their
+licenses. Local Compose and the DaCa cross-system journey share these build targets.
+The local object-store services keep their existing names, ports and bucket setup.
