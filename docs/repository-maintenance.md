@@ -105,3 +105,8 @@ Fresh CI workers could no longer pull `minio/minio` or `minio/mc` from Docker Hu
 release assets, checks pinned upstream SHA-256 digests for amd64/arm64 and includes their
 licenses. Local Compose and the DaCa cross-system journey share these build targets.
 The local object-store services keep their existing names, ports and bucket setup.
+
+The publication workflow now runs the full backend regression suite on Python 3.12 before
+building an image. It installs the canonical requirements and generates coverage XML.
+Browser checks require live services and remain covered by the separately dispatched
+cross-system journey workflow in DaCa.
